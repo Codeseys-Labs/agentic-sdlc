@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic SDLC Orchestrator"
+  short_description: "Coordinate Codex, Claude Code, CAO, Seeds, and worktrees"
+  default_prompt: "Use $agentic-sdlc-orchestrator to run a Seeds-backed CAO/DWL implementation loop for this project."

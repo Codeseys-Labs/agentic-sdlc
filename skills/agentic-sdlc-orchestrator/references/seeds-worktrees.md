@@ -1,0 +1,77 @@
+# Seeds, Worktrees, and PR Flow
+
+Use this reference when converting the plan into parallel implementation work.
+
+## Seeds Queue
+
+Use Seeds as the authoritative dynamic queue:
+
+```bash
+sd prime
+sd ready --format json
+sd blocked --format json
+```
+
+Create or update Seeds for:
+
+- Original requested work.
+- Discovered bugs.
+- Review findings.
+- Missing tests/docs.
+- Blockers that need human approval or external credentials.
+
+Do not close a Seed from an agent message alone. Verify current files, gates, and acceptance criteria.
+
+## Wave Selection
+
+Choose a wave from ready Seeds:
+
+- Prefer independent Seeds with disjoint file ownership.
+- Keep broad architecture, CI, generated code, and shared contract changes separate.
+- If the main checkout is dirty, only inspect it or do narrow safe work there. Use clean worktrees for write-capable workers.
+- Cap parallel worktrees based on repo risk and machine capacity. Three to five is usually enough.
+
+## Worktree Pattern
+
+Recommended branch naming:
+
+```bash
+git worktree add ../<repo>-wt-<seed-id> -b work/<seed-id>-<slug>
+```
+
+Worker prompt must include:
+
+- Seed id and acceptance criteria.
+- Worktree absolute path.
+- Files/directories in scope.
+- Commands to run.
+- Explicit instruction to avoid unrelated changes.
+- Artifact path for the worker report.
+
+After worker completion:
+
+1. Inspect `git status --short` and `git diff`.
+2. Run targeted gates in the worktree.
+3. Commit the worktree branch if accepted.
+4. Rebase onto the integration branch.
+5. Squash merge or cherry-pick into the integration branch according to repo policy.
+
+## PR Flow
+
+Before opening a PR:
+
+- Run final gates from the integration branch.
+- Run `sd sync` if Seeds changed.
+- Confirm the integration branch diff matches the intended Seeds.
+- Include Seeds ids and test evidence in the PR body.
+
+Do not force-push or rewrite shared branches without explicit user approval.
+
+## Salvage Rules
+
+If a worker dies:
+
+- Inspect the worktree before relaunching.
+- If the worktree has useful changes, verify the diff and gates yourself.
+- Commit only after scope and acceptance are confirmed.
+- If two independent workers hit the same test failure, verify clean base before blaming either worker.
