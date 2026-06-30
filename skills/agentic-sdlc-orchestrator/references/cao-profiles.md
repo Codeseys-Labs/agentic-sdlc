@@ -17,6 +17,8 @@ This installs:
 
 The script requires `cao` on PATH. Start `cao-server` separately before launching sessions.
 
+CAO-launched Codex/Claude workers load CAO skills with the `mcp__cao-mcp-server__load_skill` tool, not provider-native `Skill(...)`. Profiles that need CAO skills should include `cao-mcp-server`.
+
 ## Profiles
 
 `codex-macro-orchestrator`

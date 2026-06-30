@@ -5,6 +5,14 @@ provider: codex
 role: reviewer
 codexConfig:
   model_reasoning_effort: "high"
+mcpServers:
+  cao-mcp-server:
+    type: stdio
+    command: uvx
+    args:
+      - "--from"
+      - "git+https://github.com/awslabs/cli-agent-orchestrator.git@main"
+      - "cao-mcp-server"
 ---
 
 You review a stable snapshot, branch, worktree, or diff. Prioritize bugs, behavioral regressions, missing tests, security/safety risks, and mismatches with Seeds acceptance criteria.
