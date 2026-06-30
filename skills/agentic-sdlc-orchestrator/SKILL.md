@@ -11,6 +11,15 @@ Use this skill to run a repeatable, project-generic implementation loop:
 
 Keep Codex as the macro conductor. Use CAO for durable cross-CLI sessions. Use Claude Code when a bounded workstream benefits from native subagents or dynamic workflows. Use Seeds as the queue of record.
 
+## Repo Location
+
+This skill is maintained in the private repo at `/mnt/e/CS/github/agentic-sdlc-orchestrator`.
+
+When this skill refers to bundled scripts, use the repo copies:
+
+- `/mnt/e/CS/github/agentic-sdlc-orchestrator/scripts/check-agentic-sdlc-prereqs.sh`
+- `/mnt/e/CS/github/agentic-sdlc-orchestrator/scripts/install-cao-kit.sh`
+
 ## First Moves
 
 1. Prime the project state:
