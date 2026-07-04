@@ -33,11 +33,21 @@ Agent entrypoint (Codex or Claude Code)
     Workflow vs Agent Team vs CAO; Codex role subagents vs exec-loops vs CAO; cost ladder).
   - `references/worktree-integration.md` — fan-in hazards: merge-base footprint, placeholder
     traps, re-gate-on-main, clean-apply ≠ semantic correctness, squash-scope discipline.
+  - `references/mission-loop.md` — the autonomous **backlog-zero doctrine**: 8-class
+    milestone classification (only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes,
+    WIP caps, priority math, the concurrent critique team, honest definition of done.
+  - `references/tiered-orchestration.md` — **model-tier assignment** (the multiplier
+    principle: frontier tier only on solo scale-setters — frame/plan/verdict), the 5-layer
+    conductor→provider-native→CAO→nested→cmux delegation map, **bounded backflow**
+    (verdict-only re-entry with three independent stops), chained-iterations vs mega-run,
+    worker lifecycle at scale (write-as-you-go, nudge→replace, salvage).
 - `agents/claude/sdlc-{planner,implementer,reviewer}.md`: Claude Code subagent definitions
   (symlinked into `~/.claude/agents/`).
 - `agents/codex/sdlc-{planner,implementer,reviewer}.toml`: Codex role TOMLs (symlinked into
   `$CODEX_HOME/agents/`; model intentionally unset — inherits the user's default).
-- `commands/sdlc-{frame,wave}.md`: Claude Code slash commands (`/sdlc-frame`, `/sdlc-wave`).
+- `commands/sdlc-{frame,wave,mission}.md`: Claude Code slash commands — `/sdlc-frame`
+  (frame one run), `/sdlc-wave` (one Seeds-backed worktree wave), `/sdlc-mission`
+  (autonomous backlog-zero mission with concurrent critique and bounded backflow).
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to

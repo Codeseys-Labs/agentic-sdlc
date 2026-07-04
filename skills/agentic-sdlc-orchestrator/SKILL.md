@@ -83,11 +83,14 @@ Read only what is needed:
 - `references/cmux-integration.md`: cmux as view layer + event bus (detection, tmux-attach workspaces, pub/sub with replay, sidebar dashboard). Only when `CMUX_WORKSPACE_ID` is set.
 - `references/delegation-planes.md`: per-provider decision matrices — Claude subagent vs Workflow vs Agent Team vs CAO; Codex role subagents vs exec-loops vs CAO; cost ladder; write-conflict rules.
 - `references/worktree-integration.md`: fan-in hazards — merge-base footprint (not HEAD diff), placeholder-trap assembly, re-gate-on-main (worktree-green ≠ main-green), clean 3-way apply ≠ semantic correctness, squash-scope discipline.
+- `references/mission-loop.md`: the autonomous backlog-zero doctrine — milestone-blocking classification (8 classes, only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes, WIP caps, priority math, concurrent critique team, honest definition of done. Read for MISSION-shaped assignments ("drive the backlog to zero", "keep going until done").
+- `references/tiered-orchestration.md`: model-tier assignment (the multiplier principle — frontier tier only on solo scale-setters: frame/plan/verdict), the 5-layer CAO/cmux delegation map, bounded backflow (verdict-only re-entry, three independent stops), chained-iterations vs mega-run, worker-lifecycle at scale (write-as-you-go, nudge→replace, salvage).
 
 Bundled role agents (installed by `scripts/install-skill-bundle.sh`): Claude Code
 `agents/claude/sdlc-{planner,implementer,reviewer}.md`; Codex
 `agents/codex/sdlc-{planner,implementer,reviewer}.toml`. Slash commands (Claude Code):
-`/sdlc-frame`, `/sdlc-wave`. Bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
+`/sdlc-frame`, `/sdlc-wave`, `/sdlc-mission` (autonomous backlog-zero run). Bus helper:
+`scripts/cmux-bus.sh` (pub/sub/seq).
 
 ## Hard Stops
 
