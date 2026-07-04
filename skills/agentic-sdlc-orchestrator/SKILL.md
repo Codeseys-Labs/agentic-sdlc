@@ -89,13 +89,14 @@ Read only what is needed:
 
 Bundled role agents (installed globally by `scripts/install-skill-bundle.sh`), each in
 Claude (`agents/claude/*.md`) and Codex (`agents/codex/*.toml`) form:
-`sdlc-planner`, `sdlc-implementer`, `sdlc-reviewer`, `sdlc-researcher` (bounded
-load-bearing-unknown resolution, stops-when-decided), `sdlc-critic` (the standing
-critique team — snapshot-only, classified seeds, attacks-never-fixes), and
-`sdlc-integrator` (the ONLY merging agent — merge-base footprints, placeholder-trap
-assembly, re-gate-on-integration). The wave wiring: planner → implementers (one per
-worktree) → reviewers → integrator, with the critic standing concurrent and researchers
-on demand. REPO-SCOPED extra roster: `agents/codex/research/` carries the 17-role
+`sdlc-cartographer` (read-only Discover mapper — file:line evidence, actual gate
+commands, unknowns-that-would-change-the-plan), `sdlc-planner`, `sdlc-implementer`,
+`sdlc-reviewer`, `sdlc-researcher` (bounded load-bearing-unknown resolution,
+stops-when-decided), `sdlc-critic` (the standing critique team — snapshot-only,
+classified seeds, attacks-never-fixes), and `sdlc-integrator` (the ONLY merging agent —
+merge-base footprints, placeholder-trap assembly, re-gate-on-integration). The full loop
+wiring: cartographers (parallel, per area) → planner → implementers (one per worktree)
+→ reviewers → integrator, with the critic standing concurrent and researchers on demand. REPO-SCOPED extra roster: `agents/codex/research/` carries the 17-role
 research team (see its README — installed per-repo via the codex-research-os scaffolder,
 never globally). Slash commands (Claude Code): `/sdlc-frame`, `/sdlc-wave`,
 `/sdlc-mission`. Bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
