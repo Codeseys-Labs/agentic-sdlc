@@ -2,12 +2,23 @@
 
 Reusable Codex + Claude Code + CAO operating kit for project-scale agentic software delivery.
 
-**Architecture: an open plugin.** One source tree, N skills, per-agent manifests — the repo
-is simultaneously (a) a set of `skills/<name>/` dirs in the cross-agent Agent Skills format
-(natively read by Claude Code, Codex, CAO, and ~40 other hosts), (b) a Claude Code
-plugin/marketplace via `.claude-plugin/`, and (c) a symlink bundle via the installer.
+**Architecture: an open plugin — the multi-host pattern, since no unified plugin standard
+exists (verified 2026-07).** The portable layer is the `skills/` tree (the
+[Agent Skills](https://agentskills.io) format, natively read by Claude Code, Codex, Gemini
+CLI, OpenCode, Cursor, Goose, Kiro, and ~40 hosts) + a root `AGENTS.md` router (read by
+Codex/Gemini/OpenCode). On top sit THIN per-host manifests, all version-locked by
+`scripts/bump-version.sh`:
+
+| Host | Manifest |
+|---|---|
+| Claude Code | `.claude-plugin/{plugin,marketplace}.json` |
+| Codex CLI | `.codex-plugin/plugin.json` + `.agents/plugins/marketplace.json` |
+| Gemini CLI | `gemini-extension.json` (contextFileName → AGENTS.md) |
+| OpenCode / Goose / Kiro / others | pure skills-tree discovery via the symlink installer |
+
 Adding a skill = adding a `skills/<name>/SKILL.md` dir; the installer, validator, and all
-three distribution planes pick it up automatically.
+distribution planes pick it up automatically. Never hand-edit one manifest's version —
+`scripts/bump-version.sh <x.y.z>` writes all of them; `--check` gates drift in CI.
 
 The intended shape:
 

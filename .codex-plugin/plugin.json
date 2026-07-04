@@ -1,0 +1,22 @@
+{
+  "name": "agentic-sdlc-orchestrator",
+  "version": "0.3.0",
+  "description": "Project-scale agentic SDLC kit: CAO fleet orchestration, Seeds queue, git worktree waves, evidence-graded research teams, optional cmux view layer",
+  "author": {
+    "name": "Baladithya Balamurugan"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agentic SDLC Orchestrator",
+    "shortDescription": "Multi-agent SDLC: CAO fleets, Seeds, worktree waves, research teams.",
+    "category": "Productivity",
+    "capabilities": [
+      "Write",
+      "Automation"
+    ],
+    "defaultPrompt": [
+      "Use $agentic-sdlc-orchestrator to frame this task and run a Seeds-backed worktree wave.",
+      "Run an sdlc mission: drive the active-milestone backlog to zero with concurrent critique."
+    ]
+  }
+}

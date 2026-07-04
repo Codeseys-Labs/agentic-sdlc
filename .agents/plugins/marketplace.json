@@ -1,0 +1,11 @@
+{
+  "name": "agentic-sdlc",
+  "description": "Private marketplace for the agentic-sdlc-orchestrator kit",
+  "plugins": [
+    {
+      "name": "agentic-sdlc-orchestrator",
+      "source": "./",
+      "description": "Project-scale agentic SDLC kit: CAO fleets, Seeds queue, worktree waves, research teams"
+    }
+  ]
+}
