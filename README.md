@@ -29,13 +29,31 @@ Agent entrypoint (Codex or Claude Code)
   - `references/cmux-integration.md` — cmux as view layer + event bus (detection,
     `tmux attach` viewer workspaces, pub/sub with replay + its two race gotchas, sidebar
     dashboard). Auto-skipped when not inside cmux.
+  - `references/delegation-planes.md` — per-provider decision matrices (Claude subagent vs
+    Workflow vs Agent Team vs CAO; Codex role subagents vs exec-loops vs CAO; cost ladder).
+  - `references/worktree-integration.md` — fan-in hazards: merge-base footprint, placeholder
+    traps, re-gate-on-main, clean-apply ≠ semantic correctness, squash-scope discipline.
+- `agents/claude/sdlc-{planner,implementer,reviewer}.md`: Claude Code subagent definitions
+  (symlinked into `~/.claude/agents/`).
+- `agents/codex/sdlc-{planner,implementer,reviewer}.toml`: Codex role TOMLs (symlinked into
+  `$CODEX_HOME/agents/`; model intentionally unset — inherits the user's default).
+- `commands/sdlc-{frame,wave}.md`: Claude Code slash commands (`/sdlc-frame`, `/sdlc-wave`).
+- `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
+  plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
+  `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to
+  symlinks. Both manifests pass `claude plugins validate --strict`.
 - `cao-profiles/`: CAO profile templates for macro orchestration, planning, implementation,
   review, and Claude Code nested dynamic workflows.
 - `scripts/check-agentic-sdlc-prereqs.sh`: preflight — required/recommended/optional tools,
   cao-server health, CAO timeout sanity, codex dir-trust check for the current repo.
 - `scripts/install-skill-bundle.sh`: **one-shot global install for every agent CLI present**
-  (Claude Code + Codex + CAO). Symlinks by default (live-updates with `git pull`); `--copy`
-  to copy.
+  (Claude Code skill+agents+commands, Codex skill+role TOMLs, CAO skill+profiles). Symlinks
+  by default (live-updates with `git pull`); `--copy` to copy. Never clobbers non-symlink files.
+- `scripts/validate-bundle.sh`: pre-commit/CI gate — SKILL.md frontmatter, name==dirname,
+  the 1024-char Codex description cap (silent-skip trap), broken references, TOML/JSON
+  parses, shell `bash -n`, plugin manifest validation, secret/internal-hostname sweep.
+- `scripts/cmux-bus.sh`: generic cmux event-bus pub/sub helper (pub/sub/seq) used by the
+  cmux integration reference.
 - `scripts/install-cao-kit.sh`: CAO-only install (skill + profiles).
 
 ## Install (all agents, one command)

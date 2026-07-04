@@ -81,6 +81,13 @@ Read only what is needed:
 - `references/cao-profiles.md`: CAO profile roles and install/run commands.
 - `references/cao-operations.md`: trial-verified CAO ops — env inheritance, per-worker models, nesting, timeouts/long-running, codex gotchas, headless drive, teardown order, cao-ops-mcp wiring.
 - `references/cmux-integration.md`: cmux as view layer + event bus (detection, tmux-attach workspaces, pub/sub with replay, sidebar dashboard). Only when `CMUX_WORKSPACE_ID` is set.
+- `references/delegation-planes.md`: per-provider decision matrices — Claude subagent vs Workflow vs Agent Team vs CAO; Codex role subagents vs exec-loops vs CAO; cost ladder; write-conflict rules.
+- `references/worktree-integration.md`: fan-in hazards — merge-base footprint (not HEAD diff), placeholder-trap assembly, re-gate-on-main (worktree-green ≠ main-green), clean 3-way apply ≠ semantic correctness, squash-scope discipline.
+
+Bundled role agents (installed by `scripts/install-skill-bundle.sh`): Claude Code
+`agents/claude/sdlc-{planner,implementer,reviewer}.md`; Codex
+`agents/codex/sdlc-{planner,implementer,reviewer}.toml`. Slash commands (Claude Code):
+`/sdlc-frame`, `/sdlc-wave`. Bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
 
 ## Hard Stops
 
