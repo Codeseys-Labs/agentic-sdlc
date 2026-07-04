@@ -69,10 +69,11 @@ Agent entrypoint (Codex or Claude Code)
     separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
     with a recorded next-action, greenfield/brownfield loops, the cheapest-decisive-
     experiment rule, gates-as-executables (no decorative model pins).
-- `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: six role agents in both CLI
-  forms (symlinked globally) — planner, implementer, reviewer, **researcher** (bounded
-  unknown-resolution), **critic** (standing snapshot-only critique team), **integrator**
-  (the only merging agent). Wave wiring: planner → implementers → reviewers → integrator,
+- `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: seven role agents in both CLI
+  forms (symlinked globally) — **cartographer** (read-only Discover mapper), planner,
+  implementer, reviewer, **researcher** (bounded unknown-resolution), **critic** (standing
+  snapshot-only critique team), **integrator** (the only merging agent). Full loop wiring:
+  cartographers (parallel, per area) → planner → implementers → reviewers → integrator,
   critic concurrent, researchers on demand. Model intentionally unset — inherits the
   user's default.
 - `agents/codex/research/`: the 17-role research-team TOMLs (repo-scoped reference
