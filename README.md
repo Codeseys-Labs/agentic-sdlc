@@ -41,6 +41,11 @@ Agent entrypoint (Codex or Claude Code)
     conductor→provider-native→CAO→nested→cmux delegation map, **bounded backflow**
     (verdict-only re-entry with three independent stops), chained-iterations vs mega-run,
     worker lifecycle at scale (write-as-you-go, nudge→replace, salvage).
+  - `references/research-team.md` — **evidence-graded research teams** for standing
+    research efforts: the evidence ladder (promote slowly, downgrade quickly), role
+    separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
+    with a recorded next-action, greenfield/brownfield loops, the cheapest-decisive-
+    experiment rule, gates-as-executables (no decorative model pins).
 - `agents/claude/sdlc-{planner,implementer,reviewer}.md`: Claude Code subagent definitions
   (symlinked into `~/.claude/agents/`).
 - `agents/codex/sdlc-{planner,implementer,reviewer}.toml`: Codex role TOMLs (symlinked into
