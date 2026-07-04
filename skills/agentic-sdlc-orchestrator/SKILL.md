@@ -1,6 +1,6 @@
 ---
 name: agentic-sdlc-orchestrator
-description: Coordinate a project-scale agentic SDLC loop across Codex, Claude Code, CAO, Seeds (`sd`), git worktrees, tests, and PRs. Use when Codex should act as the entrypoint/macro conductor while CAO launches Codex, Claude Code, or other CLI workers for discovery, research, planning, implementation, review, testing, backlog-zero, or repeatable multi-agent project execution.
+description: Coordinate a project-scale agentic SDLC loop across Codex, Claude Code, CAO, Seeds (`sd`), git worktrees, tests, and PRs — with optional cmux as view layer/event bus when CMUX_WORKSPACE_ID is set. Use when an agent should act as the entrypoint/macro conductor while CAO launches Codex, Claude Code, or other CLI workers for discovery, research, planning, implementation, review, testing, backlog-zero, or repeatable multi-agent project execution. Covers per-worker model pinning, nested supervisors, long-running work via assign/--async (timeouts never kill agents), codex trust/timeout gotchas, and cao-ops-mcp wiring.
 ---
 
 # Agentic SDLC Orchestrator
@@ -13,12 +13,15 @@ Keep Codex as the macro conductor. Use CAO for durable cross-CLI sessions. Use C
 
 ## Repo Location
 
-This skill is maintained in the private repo at `/mnt/e/CS/github/agentic-sdlc-orchestrator`.
+This skill is maintained in the private repo `baladithyab/agentic-sdlc-orchestrator`.
+Clone location varies per machine (e.g. `~/Documents/DevBox/agentic-sdlc-orchestrator` on
+macOS, `/mnt/e/CS/github/agentic-sdlc-orchestrator` on WSL). If absent:
+`gh repo clone baladithyab/agentic-sdlc-orchestrator`.
 
 When this skill refers to bundled scripts, use the repo copies:
 
-- `/mnt/e/CS/github/agentic-sdlc-orchestrator/scripts/check-agentic-sdlc-prereqs.sh`
-- `/mnt/e/CS/github/agentic-sdlc-orchestrator/scripts/install-cao-kit.sh`
+- `<repo>/scripts/check-agentic-sdlc-prereqs.sh`
+- `<repo>/scripts/install-cao-kit.sh`
 
 ## First Moves
 
@@ -26,15 +29,21 @@ When this skill refers to bundled scripts, use the repo copies:
    - Run `sd prime` if the repo uses Seeds.
    - Inspect `sd ready --format json`, `sd blocked --format json`, and repo docs/ADRs/roadmap.
    - Check `git status --short` before planning worktrees.
-2. Decide the run shape:
+2. Detect the environment:
+   - `test -n "$CMUX_WORKSPACE_ID"` → inside cmux: use it as the view layer and event bus
+     (see `references/cmux-integration.md`). Absent → skip all cmux steps; nothing depends on it.
+   - `command -v cao` + `curl -s -m1 localhost:9889/` → CAO available/running.
+   - Provider env (e.g. Bedrock) must be exported in the shell that starts `cao-server`
+     (see `references/cao-operations.md`, Environment inheritance).
+3. Decide the run shape:
    - Small fix: Codex handles it directly or uses one CAO handoff.
    - Multi-file implementation: CAO workers plus a Seeds-backed worktree wave.
    - Unclear architecture: discover -> research if needed -> plan -> act -> review.
    - Large backlog-zero work: bounded waves with continuous Seeds reconciliation.
-3. Install or verify CAO profiles from this repo if using CAO:
+4. Install or verify CAO profiles from this repo if using CAO:
    - See `references/cao-profiles.md`.
    - Run `scripts/check-agentic-sdlc-prereqs.sh` from the repo root for local checks.
-4. Create or update Seeds before implementation. Do not let findings live only in chat.
+5. Create or update Seeds before implementation. Do not let findings live only in chat.
 
 ## Control Contract
 
@@ -54,10 +63,14 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 ## Delegation Rules
 
 - Use CAO `handoff` for blocking tasks whose result gates the next phase.
-- Use CAO `assign` for parallel lanes; require each worker to write artifacts and call `send_message` when done.
+- Use CAO `assign` (or `--async` launch) for parallel lanes; require each worker to write artifacts and call `send_message` when done.
+- **Long-running work: always `assign`/`--async`, never `handoff`.** CAO timeouts stop the caller waiting — they never kill the agent (detached tmux runs to completion). Poll `cao session status` or read the worker's artifact file. Blocking tools' `timeout` arg has no upper cap if you must block.
 - Use Claude Code workers for nested dynamic workflow execution on one bounded workstream. Do not let a nested Claude workflow own the whole project queue unless explicitly requested.
 - Use Codex workers for implementation, refactors, tests, docs, repo inspection, and review when provider-native Claude workflows are not needed.
+- Nested orchestration is allowed (a `role: supervisor` worker can delegate further — CAO has no depth cap) but keep it to one mid-tier at most and give each tier an explicit worker list.
+- Per-worker model pinning: set `model:` in the profile frontmatter (forwarded as `--model` to claude/codex). Same agent name + different `--provider` OVERWRITES the profile — use distinct names to mix engines.
 - Keep one macro conductor responsible for Seeds, worktree ownership, merges, and final claims.
+- If inside cmux: surface run state on the sidebar and view workers via `tmux attach` workspaces (`references/cmux-integration.md`). cmux is optional; never block on it.
 
 ## References
 
@@ -66,6 +79,8 @@ Read only what is needed:
 - `references/sdlc-loop.md`: phase gates, backflow, done criteria.
 - `references/seeds-worktrees.md`: Seeds queue, worktree wave, squash/rebase, PR handling.
 - `references/cao-profiles.md`: CAO profile roles and install/run commands.
+- `references/cao-operations.md`: trial-verified CAO ops — env inheritance, per-worker models, nesting, timeouts/long-running, codex gotchas, headless drive, teardown order, cao-ops-mcp wiring.
+- `references/cmux-integration.md`: cmux as view layer + event bus (detection, tmux-attach workspaces, pub/sub with replay, sidebar dashboard). Only when `CMUX_WORKSPACE_ID` is set.
 
 ## Hard Stops
 
