@@ -97,12 +97,19 @@ for s in "$repo_root"/scripts/*.sh; do
   bash -n "$s" || err "scripts/$(basename "$s") does not parse"
 done
 
-# --- plugin/marketplace manifests ---
+# --- plugin/marketplace manifests (all hosts) ---
 if command -v claude >/dev/null 2>&1; then
   claude plugins validate "$repo_root" >/dev/null 2>&1 || err "claude plugins validate failed for repo root"
-else
-  python3 -c "import json;json.load(open('$repo_root/.claude-plugin/marketplace.json'));json.load(open('$repo_root/.claude-plugin/plugin.json'))" \
-    || err "manifest JSON invalid"
+fi
+for mf in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
+          .codex-plugin/plugin.json .agents/plugins/marketplace.json gemini-extension.json; do
+  [ -f "$repo_root/$mf" ] || continue
+  python3 -c "import json;json.load(open('$repo_root/$mf'))" || err "invalid JSON: $mf"
+done
+
+# --- version drift across manifests ---
+if [ -x "$repo_root/scripts/bump-version.sh" ]; then
+  "$repo_root/scripts/bump-version.sh" --check >/dev/null 2>&1 || err "manifest version drift — run scripts/bump-version.sh --check"
 fi
 
 # --- secrets / internal-hostname sweep (bundle must stay shareable) ---
