@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentic-sdlc",
+  "description": "Private marketplace for the agentic-sdlc-orchestrator kit",
+  "owner": {
+    "name": "Baladithya Balamurugan",
+    "url": "https://github.com/baladithyab"
+  },
+  "plugins": [
+    {
+      "name": "agentic-sdlc-orchestrator",
+      "description": "Project-scale agentic SDLC kit: CAO fleet orchestration, Seeds queue, git worktree waves, optional cmux view layer",
+      "source": "./",
+      "category": "workflow"
+    }
+  ]
+}

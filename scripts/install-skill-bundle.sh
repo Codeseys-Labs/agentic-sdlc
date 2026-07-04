@@ -30,9 +30,28 @@ install_into() {
   echo "✓ $label: $dest ($mode)"
 }
 
-# Claude Code (user-level skills)
+# Link one file/dir into a parent, replacing prior symlink; hard-stop on real dirs we don't own.
+link_item() {
+  local src="$1" dest_parent="$2" label="$3"
+  local dest="$dest_parent/$(basename "$src")"
+  mkdir -p "$dest_parent"
+  if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+    echo "  ! SKIP $label: $dest exists and is not a symlink (won't clobber)"; return 0
+  fi
+  rm -f "$dest"
+  if [ "$mode" = "link" ]; then ln -s "$src" "$dest"; else cp -R "$src" "$dest"; fi
+  echo "  ✓ $label: $dest"
+}
+
+# Claude Code (user-level: skill + role agents + slash commands)
 if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
-  install_into "$HOME/.claude/skills" "Claude Code"
+  install_into "$HOME/.claude/skills" "Claude Code skill"
+  for a in "$repo_root"/agents/claude/*.md; do
+    [ -e "$a" ] || continue; link_item "$a" "$HOME/.claude/agents" "Claude agent $(basename "$a" .md)"
+  done
+  for c in "$repo_root"/commands/*.md; do
+    [ -e "$c" ] || continue; link_item "$c" "$HOME/.claude/commands" "Claude command /$(basename "$c" .md)"
+  done
 else
   echo "- Claude Code not detected; skipped"
 fi
@@ -40,10 +59,13 @@ fi
 # Codex ($CODEX_HOME/skills — NOT ~/.agents/skills; docs are wrong about that path)
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 if [ -d "$codex_home" ] || command -v codex >/dev/null 2>&1; then
-  install_into "$codex_home/skills" "Codex"
+  install_into "$codex_home/skills" "Codex skill"
   # Codex caps skill description: at 1024 chars — warn if over (silently skipped otherwise).
   desc_len=$(awk '/^description:/{f=1} f&&/^---$/{exit} f' "$skill_src/SKILL.md" | wc -c | tr -d ' ')
   [ "$desc_len" -gt 1024 ] && echo "  ! WARNING: description ${desc_len} chars > Codex 1024 cap — skill will be silently skipped by Codex" || true
+  for t in "$repo_root"/agents/codex/*.toml; do
+    [ -e "$t" ] || continue; link_item "$t" "$codex_home/agents" "Codex role $(basename "$t" .toml)"
+  done
 else
   echo "- Codex not detected; skipped"
 fi

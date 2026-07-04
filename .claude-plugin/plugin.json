@@ -1,0 +1,20 @@
+{
+  "name": "agentic-sdlc-orchestrator",
+  "description": "Project-scale agentic SDLC kit: CAO fleet orchestration, Seeds queue, git worktree waves, optional cmux view layer — for Claude Code, Codex, and CAO workers",
+  "version": "0.2.0",
+  "author": {
+    "name": "Baladithya Balamurugan"
+  },
+  "homepage": "https://github.com/baladithyab/agentic-sdlc-orchestrator",
+  "repository": "https://github.com/baladithyab/agentic-sdlc-orchestrator",
+  "license": "UNLICENSED",
+  "keywords": [
+    "sdlc",
+    "orchestration",
+    "multi-agent",
+    "cao",
+    "seeds",
+    "worktrees",
+    "cmux"
+  ]
+}
