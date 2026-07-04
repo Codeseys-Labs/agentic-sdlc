@@ -74,7 +74,8 @@ for a in "$repo_root"/agents/claude/*.md; do
 done
 
 # --- codex role TOMLs (tomllib parse on py3.11+; grep fallback on older) ---
-for t in "$repo_root"/agents/codex/*.toml; do
+# Includes repo-scoped sets in subdirs (agents/codex/research/ etc.).
+for t in "$repo_root"/agents/codex/*.toml "$repo_root"/agents/codex/*/*.toml; do
   [ -e "$t" ] || continue
   if python3 -c 'import tomllib' 2>/dev/null; then
     python3 -c "import tomllib,sys; d=tomllib.load(open(sys.argv[1],'rb')); assert d.get('name') and d.get('description'), 'name/description required'" "$t" \
