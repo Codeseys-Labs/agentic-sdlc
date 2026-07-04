@@ -50,7 +50,15 @@ case "${1:-}" in
       elif [ -e "$tgt" ]; then echo "copy:    $tgt (not a symlink — copy mode or foreign file)"
       else echo "absent:  $tgt"; fi
     done < <(owned_targets)
-    command -v cao >/dev/null 2>&1 && { cao skills list 2>/dev/null | grep -q agentic-sdlc-orchestrator && echo "ok:      CAO skill store" || echo "absent:  CAO skill store"; }
+    # Buffer cao output first: `cao ... | grep -q` SIGPIPEs cao under pipefail (exit 120)
+    # and falsely reports absent (caught by the 2026-07-04 session audit). Check every skill.
+    if command -v cao >/dev/null 2>&1 && [ -z "${SKIP_CAO:-}" ]; then
+      cao_out="$(cao skills list 2>/dev/null || true)"
+      while IFS= read -r sdir; do
+        name="$(basename "$sdir")"
+        printf '%s' "$cao_out" | grep -qF "$name" && echo "ok:      CAO skill store: $name" || echo "absent:  CAO skill store: $name"
+      done < <(bundle_skills)
+    fi
     exit "$bad"
     ;;
   uninstall)
@@ -69,8 +77,11 @@ case "${1:-}" in
     HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0"
     HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0" status
     HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0" uninstall
-    # after uninstall, status must show nothing broken and nothing owned remaining as symlink
-    if HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" bash "$0" status | grep -q '^ok:.*symlink\|^BROKEN'; then
+    # after uninstall, EVERY owned target must be absent — any ok:/BROKEN:/copy: line is a
+    # leftover. (The old pattern '^ok:.*symlink' could never match real status output —
+    # 'ok:      /path' contains no 'symlink' — so this check was DEAD; caught by the
+    # 2026-07-04 session audit. SKIP_CAO also added: CAO store lines would false-positive.)
+    if HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0" status | grep -qE '^(ok|BROKEN|copy):'; then
       echo "self-test FAILED: leftovers after uninstall"; rm -rf "$tmp_home"; exit 1
     fi
     rm -rf "$tmp_home"

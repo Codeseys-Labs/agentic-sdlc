@@ -13,7 +13,7 @@ as the router.
   layer). Start at its `SKILL.md`; read `references/*.md` on demand only.
 - `skills/codex-research-os/` — repo-scaffolding installer for a 17-role research
   organization with claim ledgers and review gates.
-- `agents/` — six global SDLC role agents (planner, implementer, reviewer, researcher,
+- `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
   critic, integrator) in Claude `.md` and Codex `.toml` forms, plus the repo-scoped
   research roster under `agents/codex/research/`.
 - `commands/` — `/sdlc-frame`, `/sdlc-wave`, `/sdlc-mission` (Claude Code slash

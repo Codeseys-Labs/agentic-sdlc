@@ -66,7 +66,7 @@ mechanism does.
 ## The research stage: delegate to a pipeline, don't inline it
 
 When Research is more than a quick lookup, run it as a dedicated research pipeline
-(e.g. a hyperresearch-style skill chain, or the bundle's `sdlc-planner` + fetcher workers)
+(e.g. a hyperresearch-style skill chain, or the bundle's `sdlc-researcher` workers)
 via ONE orchestrating agent — never inline a multi-step research procedure into a single
 worker prompt (long procedures get compacted away mid-run; routers/skill-chains exist to
 load each step fresh). Research tiering: cheap tier for volume (fetch/sweep/per-topic
