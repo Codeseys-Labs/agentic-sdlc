@@ -60,10 +60,13 @@ EOF
   elif [ "$desc_len" -gt 1024 ]; then err "$dir: description ${desc_len} chars > 1024 — Codex will SILENTLY SKIP this skill"
   elif [ "$desc_len" -gt 900 ]; then warn "$dir: description ${desc_len} chars (nearing the 1024 Codex cap)"
   fi
-  # broken relative references
-  grep -oE '\breferences/[A-Za-z0-9._-]+\.md' "$skill" | sort -u | while read -r ref; do
-    [ -f "$(dirname "$skill")/$ref" ] || echo "MISSINGREF $dir $ref"
-  done | while read -r _ d r; do err "$d: referenced $r does not exist"; done
+  # broken relative references — NO pipeline-subshell: err() must mutate the real counter
+  # (a `... | while read` loop runs in a subshell and its errors+=1 is discarded — the
+  # gate then prints ERROR but exits 0; caught by the 2026-07-04 session audit).
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    [ -f "$(dirname "$skill")/$ref" ] || err "$dir: referenced $ref does not exist"
+  done < <(grep -oE '\breferences/[A-Za-z0-9._-]+\.md' "$skill" | sort -u)
 done
 
 # --- claude agents ---
