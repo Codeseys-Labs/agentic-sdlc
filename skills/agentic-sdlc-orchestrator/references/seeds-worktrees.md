@@ -67,6 +67,20 @@ Before opening a PR:
 
 Do not force-push or rewrite shared branches without explicit user approval.
 
+## Worktrees × CAO × cmux
+
+- Give each CAO worker its worktree path via `--working-directory` at launch (and repeat the
+  absolute path in the prompt). One worktree per write-capable worker — never share.
+- codex workers: each NEW worktree path must be trusted in `~/.codex/config.toml` before
+  launch or the worker hangs on codex's trust prompt (see `references/cao-operations.md`).
+  Batch-add trust entries when creating the wave's worktrees.
+- If inside cmux, open a viewer per active worker
+  (`cmux new-workspace --command "tmux attach -t cao-<session>"`) and pin a sidebar pill per
+  wave. Optional — never block the wave on cmux.
+- CAO stale-status tell: `processing` in `cao session list` while `tmux ls` says "no server
+  running" means the tmux backend died — the status is STALE. Treat the worker as dead;
+  scrollback snapshot survives under `~/.cao/logs/terminal/`.
+
 ## Salvage Rules
 
 If a worker dies:

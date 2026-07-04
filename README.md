@@ -5,36 +5,68 @@ Reusable Codex + Claude Code + CAO operating kit for project-scale agentic softw
 The intended shape:
 
 ```text
-Codex entrypoint
+Agent entrypoint (Codex or Claude Code)
   -> CAO fleet/session bus
-  -> Codex, Claude Code, and other CLI workers
+  -> Codex, Claude Code, and other CLI workers (per-worker model pinning, nested supervisors)
   -> Seeds queue
   -> git worktrees
   -> tests/review
   -> squash/rebase/PR
+  [+ cmux as optional view layer & event bus when CMUX_WORKSPACE_ID is set]
 ```
 
 ## Contents
 
-- `skills/agentic-sdlc-orchestrator/`: installable skill for Codex/CAO-compatible agents.
-- `cao-profiles/`: CAO profile templates for macro orchestration, planning, implementation, review, and Claude Code nested dynamic workflows.
-- `scripts/check-agentic-sdlc-prereqs.sh`: local prerequisite check.
-- `scripts/install-cao-kit.sh`: installs the skill and profiles into CAO.
+- `skills/agentic-sdlc-orchestrator/`: installable skill for any skill-capable CLI agent
+  (Claude Code, Codex, CAO workers).
+  - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
+  - `references/seeds-worktrees.md` — Seeds queue, worktree waves, PR flow, worktrees×CAO×cmux.
+  - `references/cao-profiles.md` — bundled CAO profile roles + launch pattern.
+  - `references/cao-operations.md` — **trial-verified** CAO ops: env inheritance (Bedrock),
+    per-worker `model:` pinning, nested supervisors (no depth cap), timeouts & long-running
+    work (`assign`/`--async` — timeouts never kill agents), codex trust/timeout gotchas,
+    headless drive, teardown order, `cao-ops-mcp` wiring.
+  - `references/cmux-integration.md` — cmux as view layer + event bus (detection,
+    `tmux attach` viewer workspaces, pub/sub with replay + its two race gotchas, sidebar
+    dashboard). Auto-skipped when not inside cmux.
+- `cao-profiles/`: CAO profile templates for macro orchestration, planning, implementation,
+  review, and Claude Code nested dynamic workflows.
+- `scripts/check-agentic-sdlc-prereqs.sh`: preflight — required/recommended/optional tools,
+  cao-server health, CAO timeout sanity, codex dir-trust check for the current repo.
+- `scripts/install-skill-bundle.sh`: **one-shot global install for every agent CLI present**
+  (Claude Code + Codex + CAO). Symlinks by default (live-updates with `git pull`); `--copy`
+  to copy.
+- `scripts/install-cao-kit.sh`: CAO-only install (skill + profiles).
 
-## Install Into CAO
+## Install (all agents, one command)
 
 ```bash
 ./scripts/check-agentic-sdlc-prereqs.sh
-./scripts/install-cao-kit.sh
+./scripts/install-skill-bundle.sh          # Claude Code + Codex + CAO, auto-detected
 ```
 
-Start CAO separately:
+This installs into:
+
+| Agent | Destination | Notes |
+|---|---|---|
+| Claude Code | `~/.claude/skills/agentic-sdlc-orchestrator` | symlink |
+| Codex | `$CODEX_HOME/skills/agentic-sdlc-orchestrator` (default `~/.codex/skills`) | symlink; NOT `~/.agents/skills` (docs are wrong). Codex silently skips skills whose `description:` exceeds 1024 chars — the installer warns. |
+| CAO | CAO skill store + `cao-profiles/*` | only if `cao` on PATH |
+
+cmux integration needs no install — the skill activates it when `CMUX_WORKSPACE_ID` is set.
+
+## Run
+
+Start CAO with your provider env exported in the SAME shell (workers inherit it; CAO's
+`--env` flag blocks `CLAUDE*`/`CODEX_*` prefixes, so inheritance is the only path):
 
 ```bash
-cao-server
+# example: Amazon Bedrock
+AWS_PROFILE=<profile> CLAUDE_CODE_USE_BEDROCK=1 cao-server
 ```
 
-Launch a Codex macro conductor:
+Launch a macro conductor (Codex entrypoint shown; a Claude Code entrypoint works the same
+with `--provider claude_code`):
 
 ```bash
 cao launch --agents codex-macro-orchestrator --provider codex --headless --yolo \
@@ -43,15 +75,27 @@ cao launch --agents codex-macro-orchestrator --provider codex --headless --yolo 
   'Use $agentic-sdlc-orchestrator to frame the task, prime Seeds, and run a bounded CAO/DWL worktree wave.'
 ```
 
+Long-running runs: launch with `--async` (or have the conductor use CAO `assign`) — CAO
+timeouts only stop the caller waiting; detached tmux agents run to completion regardless.
+
 ## UX From Codex
 
 There are two skill planes:
 
-1. Native Codex skill use. Symlink or copy `skills/agentic-sdlc-orchestrator/` into `~/.codex/skills/` when you want a normal Codex session to understand `Use $agentic-sdlc-orchestrator ...` before CAO is involved.
-2. CAO session skill use. Run `./scripts/install-cao-kit.sh`; CAO installs the skill into its own store and injects a CAO-only skill catalog into CAO-launched Codex/Claude/etc. workers. Those workers load the full skill body with `mcp__cao-mcp-server__load_skill`, not Codex's native `Skill(...)` command.
+1. Native Codex skill use. `install-skill-bundle.sh` symlinks the skill into
+   `$CODEX_HOME/skills/` so a normal Codex session understands
+   `Use $agentic-sdlc-orchestrator ...` before CAO is involved.
+2. CAO session skill use. CAO installs the skill into its own store and injects a CAO-only
+   skill catalog into CAO-launched Codex/Claude/etc. workers. Those workers load the full
+   skill body with `mcp__cao-mcp-server__load_skill`, not Codex's native `Skill(...)`.
 
-For direct Claude Code use outside CAO, also copy or symlink the skill into `~/.claude/skills/`. For Claude Code launched by CAO, the CAO skill plane is enough as long as the profile includes `cao-mcp-server`.
+For direct Claude Code use outside CAO, the bundle installer covers `~/.claude/skills/`.
+For Claude Code launched by CAO, the CAO skill plane is enough as long as the profile
+includes `cao-mcp-server`.
 
 ## Status
 
-Initial scaffold. Treat profiles as templates until validated on a real repository with CAO, Codex, Claude Code, Seeds, and tmux installed.
+Core CAO mechanics trial-verified 2026-07-04 on macOS + Amazon Bedrock (CAO v2.2.0):
+per-worker model pinning, nested supervisors, mixed Claude+Codex fleets, long-running
+semantics, codex provider gotchas, cmux attach/view and event-bus patterns. Profiles remain
+templates — validate on your repository before trusting a full unattended run.
