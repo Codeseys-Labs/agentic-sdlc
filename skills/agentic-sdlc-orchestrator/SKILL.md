@@ -87,11 +87,18 @@ Read only what is needed:
 - `references/tiered-orchestration.md`: model-tier assignment (the multiplier principle — frontier tier only on solo scale-setters: frame/plan/verdict), the 5-layer CAO/cmux delegation map, bounded backflow (verdict-only re-entry, three independent stops), chained-iterations vs mega-run, worker-lifecycle at scale (write-as-you-go, nudge→replace, salvage).
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 
-Bundled role agents (installed by `scripts/install-skill-bundle.sh`): Claude Code
-`agents/claude/sdlc-{planner,implementer,reviewer}.md`; Codex
-`agents/codex/sdlc-{planner,implementer,reviewer}.toml`. Slash commands (Claude Code):
-`/sdlc-frame`, `/sdlc-wave`, `/sdlc-mission` (autonomous backlog-zero run). Bus helper:
-`scripts/cmux-bus.sh` (pub/sub/seq).
+Bundled role agents (installed globally by `scripts/install-skill-bundle.sh`), each in
+Claude (`agents/claude/*.md`) and Codex (`agents/codex/*.toml`) form:
+`sdlc-planner`, `sdlc-implementer`, `sdlc-reviewer`, `sdlc-researcher` (bounded
+load-bearing-unknown resolution, stops-when-decided), `sdlc-critic` (the standing
+critique team — snapshot-only, classified seeds, attacks-never-fixes), and
+`sdlc-integrator` (the ONLY merging agent — merge-base footprints, placeholder-trap
+assembly, re-gate-on-integration). The wave wiring: planner → implementers (one per
+worktree) → reviewers → integrator, with the critic standing concurrent and researchers
+on demand. REPO-SCOPED extra roster: `agents/codex/research/` carries the 17-role
+research team (see its README — installed per-repo via the codex-research-os scaffolder,
+never globally). Slash commands (Claude Code): `/sdlc-frame`, `/sdlc-wave`,
+`/sdlc-mission`. Bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
 
 ## Hard Stops
 

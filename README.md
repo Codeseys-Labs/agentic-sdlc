@@ -58,10 +58,15 @@ Agent entrypoint (Codex or Claude Code)
     separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
     with a recorded next-action, greenfield/brownfield loops, the cheapest-decisive-
     experiment rule, gates-as-executables (no decorative model pins).
-- `agents/claude/sdlc-{planner,implementer,reviewer}.md`: Claude Code subagent definitions
-  (symlinked into `~/.claude/agents/`).
-- `agents/codex/sdlc-{planner,implementer,reviewer}.toml`: Codex role TOMLs (symlinked into
-  `$CODEX_HOME/agents/`; model intentionally unset — inherits the user's default).
+- `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: six role agents in both CLI
+  forms (symlinked globally) — planner, implementer, reviewer, **researcher** (bounded
+  unknown-resolution), **critic** (standing snapshot-only critique team), **integrator**
+  (the only merging agent). Wave wiring: planner → implementers → reviewers → integrator,
+  critic concurrent, researchers on demand. Model intentionally unset — inherits the
+  user's default.
+- `agents/codex/research/`: the 17-role research-team TOMLs (repo-scoped reference
+  copies — NOT globally installed; see its README; scaffolded per-repo by
+  codex-research-os).
 - `commands/sdlc-{frame,wave,mission}.md`: Claude Code slash commands — `/sdlc-frame`
   (frame one run), `/sdlc-wave` (one Seeds-backed worktree wave), `/sdlc-mission`
   (autonomous backlog-zero mission with concurrent critique and bounded backflow).
