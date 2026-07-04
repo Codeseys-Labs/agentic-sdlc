@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # cmux-bus.sh — pub/sub messaging over the cmux event bus (generic, no host-specific paths).
 #
 # cmux has a real event plane: `cmux events` streams newline-delimited JSON with monotonic

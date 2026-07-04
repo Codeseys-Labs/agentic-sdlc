@@ -61,7 +61,19 @@ Agent entrypoint (Codex or Claude Code)
 ```bash
 ./scripts/check-agentic-sdlc-prereqs.sh
 ./scripts/install-skill-bundle.sh          # Claude Code + Codex + CAO, auto-detected
+./scripts/install-skill-bundle.sh status   # link health per target (exit 1 on broken)
+./scripts/install-skill-bundle.sh uninstall
+./scripts/install-skill-bundle.sh self-test # install→status→uninstall in a throwaway HOME
 ```
+
+**Pick ONE Claude Code install path per machine** — either the symlink install above OR
+the marketplace path (`claude plugin marketplace add <repo>` + `claude plugin install
+agentic-sdlc-orchestrator@agentic-sdlc`), never both: dual-installing registers the skill
+twice (bare + plugin-namespaced). The symlink path live-updates with `git pull`; the
+marketplace path copies into Claude's plugin cache and updates via `claude plugin update`.
+
+**After `git pull`, re-run the installer** — the symlink planes update automatically, but
+the CAO plane COPIES (skill store + profiles) and goes stale otherwise.
 
 This installs into:
 

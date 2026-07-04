@@ -67,6 +67,22 @@ Before opening a PR:
 
 Do not force-push or rewrite shared branches without explicit user approval.
 
+## Config propagation into new worktrees
+
+`git worktree add` copies TRACKED files only. Untracked project config that workers may
+depend on does NOT follow:
+
+- `.claude/settings.local.json` (permission allowlists, hooks) — absent in the worktree;
+  workers fall back to user-level settings. Copy it in if the wave needs project hooks.
+- `.mcp.json` — if gitignored, worker sessions in the worktree see NO project MCP servers.
+  Copy or symlink it into each worktree when workers need those servers.
+- Codex per-path dir-trust — trust is keyed on the absolute path; every NEW worktree path
+  must be added to `~/.codex/config.toml` (`projects.'<path>'.trust_level='trusted'`) or
+  codex workers hang on the trust prompt. Batch-add when creating the wave.
+
+Wave-creation checklist: create worktree → copy untracked config the workers need →
+trust the path for codex → then launch.
+
 ## Worktrees × CAO × cmux
 
 - Give each CAO worker its worktree path via `--working-directory` at launch (and repeat the
