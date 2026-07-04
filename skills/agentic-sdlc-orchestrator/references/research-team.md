@@ -2,10 +2,18 @@
 
 Use this reference when the mission's Research phase is itself a PROJECT — sustained
 investigation with claims, experiments, and reviews — rather than a bounded lookup.
-Distilled from a proven repo-native "research OS" pattern (17-role Codex research team
-with claim ledgers and review gates); remade here for the bundle's stack. For a bounded
-research question, a delegated research pipeline (see `references/tiered-orchestration.md`)
-is enough; this reference is for standing research efforts.
+For a bounded research question, a delegated research pipeline (see
+`references/tiered-orchestration.md`) is enough; this reference is for standing research
+efforts.
+
+**The full implementation ships IN this bundle** as the sibling skill
+`skills/codex-research-os/` — its `scripts/install_research_os.py` scaffolds the complete
+repo-native OS into any target repo (17 role TOMLs incl. director/scout/novelty-auditor/
+theorist/counterexample-hunter/formalizer/experimentalist/benchmark-and-data-engineers/
+ablationist/replication-and-adversarial-reviewers/synthesis-writer/librarian/safety,
+plus ledgers, workflows, schemas, and Make gates). Use the installer for a standing
+effort; use this reference for the distilled principles when composing a smaller roster
+by hand.
 
 ## The evidence ladder (claim lifecycle)
 

@@ -2,6 +2,13 @@
 
 Reusable Codex + Claude Code + CAO operating kit for project-scale agentic software delivery.
 
+**Architecture: an open plugin.** One source tree, N skills, per-agent manifests — the repo
+is simultaneously (a) a set of `skills/<name>/` dirs in the cross-agent Agent Skills format
+(natively read by Claude Code, Codex, CAO, and ~40 other hosts), (b) a Claude Code
+plugin/marketplace via `.claude-plugin/`, and (c) a symlink bundle via the installer.
+Adding a skill = adding a `skills/<name>/SKILL.md` dir; the installer, validator, and all
+three distribution planes pick it up automatically.
+
 The intended shape:
 
 ```text
@@ -17,8 +24,13 @@ Agent entrypoint (Codex or Claude Code)
 
 ## Contents
 
-- `skills/agentic-sdlc-orchestrator/`: installable skill for any skill-capable CLI agent
-  (Claude Code, Codex, CAO workers).
+- `skills/agentic-sdlc-orchestrator/`: the flagship orchestration skill for any
+  skill-capable CLI agent (Claude Code, Codex, CAO workers).
+- `skills/codex-research-os/`: vendored research-team OS — a repo-scaffolding installer
+  (`scripts/install_research_os.py`) that bootstraps a 17-role research organization
+  (director + specialists), claim/experiment ledgers, greenfield/brownfield workflows,
+  schemas, and Make validation gates into any target repo. Pairs with the flagship's
+  `references/research-team.md` (the distilled principles).
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, worktree waves, PR flow, worktrees×CAO×cmux.
   - `references/cao-profiles.md` — bundled CAO profile roles + launch pattern.

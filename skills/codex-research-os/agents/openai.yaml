@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Research OS"
+  short_description: "Bootstrap disciplined research teams"
+  default_prompt: "Use $codex-research-os to install a research operating system in this repo."
