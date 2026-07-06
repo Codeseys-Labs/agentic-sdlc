@@ -56,6 +56,14 @@ Agent entrypoint (Codex or Claude Code)
   (pre-commit/pre-push enforcement, installed via mise `[tools]`), betterleaks (secrets
   gate incl. full-history scans). Includes the two verified worktree facts: hooks ARE
   shared into worktrees, mise trust is NOT. Pairs with `references/seeds-worktrees.md`.
+- `skills/stacked-prs/`: the tool-agnostic stacked-PR methodology — ship a chain of small
+  dependent PRs instead of one fat branch (small-batch rationale, stack structure,
+  bottom-up merge, the restack discipline, when NOT to stack). The PR-landing strategy for
+  dependent Seeds in a wave.
+- `skills/stacked-prs-gh-cli/`: the same with ONLY plain `gh` + git — no gt/spr/ghstack.
+  gh has no `stack` command (v2.95); GitHub's primitives are `--base` targeting + native
+  auto-retarget-on-merge. Covers the squash-merge `--onto` restack gotcha and
+  `--force-with-lease` safety. Pairs with `stacked-prs` and the jj-vcs reference.
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, worktree waves, PR flow, worktrees×CAO×cmux.
   - `references/cao-profiles.md` — bundled CAO profile roles + launch pattern.
