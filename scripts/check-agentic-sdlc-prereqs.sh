@@ -31,6 +31,18 @@ fi
 rec cao "fleet control disabled — install: uv tool install --python 3.13 'git+https://github.com/awslabs/cli-agent-orchestrator.git@main'"
 rec sd  "Seeds queue disabled — worktree waves will lack a queue of record"
 rec cmux "view layer disabled — runs fine without it"
+rec jj  "optional VCS for workspace waves — see skills/agentic-sdlc-orchestrator/references/jj-vcs.md"
+
+# jj version + colocated-repo detection (git hooks bypass reminder per jj-vcs reference)
+if command -v jj >/dev/null 2>&1; then
+  ver="$(jj --version 2>/dev/null | head -1)"
+  printf 'ok:       jj version: %s\n' "$ver"
+  root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  if [ -d "$root/.jj" ]; then
+    printf 'ok:       colocated jj repo detected at %s\n' "$root"
+    printf 'note:     git hooks do NOT fire on jj commits — mise run check + CI carry the gates (see references/jj-vcs.md)\n'
+  fi
+fi
 
 # cmux runtime state (presence of the binary != being inside cmux)
 if [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
