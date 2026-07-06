@@ -1,6 +1,6 @@
 {
   "name": "agentic-sdlc-orchestrator",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Project-scale agentic SDLC kit: CAO fleet orchestration, Seeds queue, git worktree waves, evidence-graded research teams",
   "contextFileName": "AGENTS.md"
 }

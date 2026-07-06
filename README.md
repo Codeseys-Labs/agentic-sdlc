@@ -99,9 +99,12 @@ Agent entrypoint (Codex or Claude Code)
 - `agents/codex/research/`: the 17-role research-team TOMLs (repo-scoped reference
   copies — NOT globally installed; see its README; scaffolded per-repo by
   codex-research-os).
-- `commands/sdlc-{frame,wave,mission}.md`: Claude Code slash commands — `/sdlc-frame`
-  (frame one run), `/sdlc-wave` (one Seeds-backed worktree wave), `/sdlc-mission`
-  (autonomous backlog-zero mission with concurrent critique and bounded backflow).
+- `commands/sdlc-{init,frame,wave,mission}.md`: Claude Code slash commands —
+  `/sdlc-init` (bootstrap a new/existing project onto the system: VCS incl. optional
+  jj colocation, Seeds queue, mise/lefthook/betterleaks gate stack with falsifiability
+  proof, trust, CLAUDE.md wiring — ends wave-ready), `/sdlc-frame` (frame one run),
+  `/sdlc-wave` (one Seeds-backed worktree wave), `/sdlc-mission` (autonomous
+  backlog-zero mission with concurrent critique and bounded backflow).
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to
