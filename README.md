@@ -51,6 +51,11 @@ Agent entrypoint (Codex or Claude Code)
   `cmux log --source msg:<topic>`, subscribe via `cmux events` with replay/resume, the
   claim-check pattern, both race gotchas). Pairs with `references/cmux-integration.md`
   and `scripts/cmux-bus.sh`.
+- `skills/repo-toolchain-gates/`: the standard local gate stack — mise (pinned toolchain
+  incl. CI-parity linter pins + task-runner; `mise run check` = THE gate), lefthook
+  (pre-commit/pre-push enforcement, installed via mise `[tools]`), betterleaks (secrets
+  gate incl. full-history scans). Includes the two verified worktree facts: hooks ARE
+  shared into worktrees, mise trust is NOT. Pairs with `references/seeds-worktrees.md`.
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, worktree waves, PR flow, worktrees×CAO×cmux.
   - `references/cao-profiles.md` — bundled CAO profile roles + launch pattern.
