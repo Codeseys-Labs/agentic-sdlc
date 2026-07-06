@@ -79,9 +79,13 @@ depend on does NOT follow:
 - Codex per-path dir-trust — trust is keyed on the absolute path; every NEW worktree path
   must be added to `~/.codex/config.toml` (`projects.'<path>'.trust_level='trusted'`) or
   codex workers hang on the trust prompt. Batch-add when creating the wave.
+- mise per-path trust — same pattern: a fresh worktree is untrusted even when the main repo
+  is trusted, so git hooks (which ARE shared from the main repo's gitdir) fail on any
+  mise-shimmed command with "config not trusted". Run `mise trust <worktree-path>` per
+  worktree. Full gate stack: `skills/repo-toolchain-gates/`.
 
 Wave-creation checklist: create worktree → copy untracked config the workers need →
-trust the path for codex → then launch.
+trust the path for codex AND mise → then launch.
 
 ## Worktrees × CAO × cmux
 
