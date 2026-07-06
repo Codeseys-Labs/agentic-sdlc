@@ -67,6 +67,7 @@ case "${1:-}" in
       elif [ -e "$tgt" ]; then echo "kept:    $tgt (not a symlink — remove manually if desired)"; fi
     done < <(owned_targets)
     echo "note: CAO store entries persist; remove with 'cao skills remove agentic-sdlc-orchestrator' if supported."
+    echo "note: 'cao install' also writes kiro mirrors to ~/.kiro/agents/<profile>.json — remove those manually if desired (this script never touches ~/.kiro)."
     exit 0
     ;;
   self-test)
