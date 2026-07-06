@@ -87,3 +87,29 @@ background `git fetch` (IDEs) can interleave imports — tolerable, but know it'
 Adopt incrementally: colocate one repo, run one wave with workspaces, keep CI untouched.
 If the repo needs commit-time hook enforcement or submodules/LFS, stay on git worktrees —
 both modes coexist in the same bundle doctrine.
+
+## First real wave — verified end-to-end recipe (2026-07-06, this repo)
+
+Two implementer agents, one jj workspace each, disjoint scopes; conductor integrated and
+pushed. The exact conductor sequence that worked:
+
+```sh
+jj git init --colocate                      # in the existing git checkout
+jj workspace add ../wave-<seed> --name <seed>   # per worker; then mise trust + codex-trust each path
+# workers: edit in their workspace, `jj commit -m …` (no add/stage step)
+jj log -r 'all() ~ ::main@origin'           # conductor reviews the whole wave graph
+jj diff -r <change-id> --git                # per-commit review (change IDs survive rebases)
+jj rebase -s <second> -d <first>            # linearize disjoint commits (no conflicts → lands clean)
+jj new <tip>                                # check out integrated stack in the conductor workspace
+mise run check                              # re-gate the INTEGRATED state before publishing
+jj bookmark track main --remote=origin      # ONCE per fresh colocation — else push errors
+                                            # "Non-tracking remote bookmark main@origin exists"
+jj bookmark move main --to <tip>
+jj git push --bookmark main                 # remote + CI see ordinary git commits
+jj workspace forget <seed>… && rm -rf ../wave-*   # teardown
+```
+
+Wave-observability bonus: `jj op log` showed each worker's commits tagged `<seed>@` in
+real time from the conductor workspace — no polling of worker output needed to see state.
+One more worker-prompt requirement: tell workers "commit with jj, NOT git; jj auto-tracks
+new files; no add/stage step exists" — agents trained on git will otherwise `git add`.
