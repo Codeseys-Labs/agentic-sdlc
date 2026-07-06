@@ -1,7 +1,7 @@
 {
   "name": "agentic-sdlc-orchestrator",
   "description": "Project-scale agentic SDLC kit: CAO fleet orchestration, Seeds queue, git worktree waves, evidence-graded research teams (codex-research-os), optional cmux view layer \u2014 for Claude Code, Codex, and CAO workers",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": {
     "name": "Baladithya Balamurugan"
   },

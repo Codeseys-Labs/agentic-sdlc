@@ -83,6 +83,12 @@ Agent entrypoint (Codex or Claude Code)
     separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
     with a recorded next-action, greenfield/brownfield loops, the cheapest-decisive-
     experiment rule, gates-as-executables (no decorative model pins).
+  - `references/jj-vcs.md` — **jj (Jujutsu) as the wave substrate** (verified on 0.43):
+    colocated adoption (CI sees plain git), workspaces as agent-grade worktrees with
+    op-log audit + stale detection, never-failing fan-in (conflicts = committed state),
+    auto-snapshot (uncommitted-work loss impossible) + `jj undo`; gotchas: git hooks
+    don't fire, `description("x")` exact-match trap, headless identity, snapshot
+    swallows non-gitignored secrets.
 - `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: seven role agents in both CLI
   forms (symlinked globally) — **cartographer** (read-only Discover mapper), planner,
   implementer, reviewer, **researcher** (bounded unknown-resolution), **critic** (standing
