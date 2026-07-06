@@ -123,6 +123,7 @@ Agent entrypoint (Codex or Claude Code)
 ## Install (all agents, one command)
 
 ```bash
+mise run check                             # full local gate (or run the two scripts below directly)
 ./scripts/check-agentic-sdlc-prereqs.sh
 ./scripts/install-skill-bundle.sh          # Claude Code + Codex + CAO, auto-detected
 ./scripts/install-skill-bundle.sh status   # link health per target (exit 1 on broken)

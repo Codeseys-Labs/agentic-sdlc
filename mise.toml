@@ -1,0 +1,11 @@
+[tasks.validate]
+description = "Run the bundle validator (CI gate)"
+run = "./scripts/validate-bundle.sh"
+
+[tasks.self-test]
+description = "Installer round-trip in a throwaway HOME"
+run = "./scripts/install-skill-bundle.sh self-test"
+
+[tasks.check]
+description = "The full local gate (validator + installer self-test)"
+depends = ["validate", "self-test"]
