@@ -33,6 +33,10 @@ Secondary test: if this agent is wrong, does the run **derail** (frontier), **de
 In the bundle, tier assignment is concrete: CAO profiles carry `model:` frontmatter
 (per-worker pinning, see `references/cao-operations.md`); Claude Workflow stages carry
 `model:` per agent() call; codex roles carry `model`/`model_reasoning_effort` in the TOML.
+The full four-tier policy — quota math, the decision ladder ("if this agent is wrong, does
+the run derail / degrade / just retry?"), alias plumbing, and concurrency budgets — ships
+as the sibling skill `skills/model-tier-rightsizing/` (re-derive its worked quota table per
+account).
 
 ## Scale-setter survival rules
 

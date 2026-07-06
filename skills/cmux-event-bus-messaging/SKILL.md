@@ -1,0 +1,107 @@
+---
+name: cmux-event-bus-messaging
+description: |
+  cmux has a real pub/sub event bus for worker→worker and worker→orchestrator PUSH
+  messaging — do NOT conclude "cmux is just a terminal, use polling/read-screen". Use when:
+  (1) orchestrating multiple ccode/codex worker sessions in cmux workspaces and you need
+  results pushed back without polling PTYs; (2) you want worker→worker coordination inside
+  cmux; (3) building a message/event plane on cmux; (4) `cmux events --limit 1` HANGS
+  forever on an idle bus and stalls your script; (5) deciding how a worker signals
+  completion (event bus > wait-for+file > read-screen polling). Covers: publishing via
+  `cmux log --source msg:<topic>` (base64 payload), subscribing via `cmux events` with
+  replay/resume/cursor, the claim-check pattern for >16KiB payloads, and the two race
+  gotchas (idle-bus hang on --limit N; lost-wakeup fixed by capturing latest_seq before spawn).
+author: Claude Code
+version: 1.0.0
+date: 2026-07-02
+---
+
+# cmux Event Bus Messaging
+
+## Problem
+When orchestrating multiple agent workers (`ccode`/`codex`) in cmux workspaces, the
+obvious-but-wrong approach is to scrape each worker's terminal with `cmux read-screen` in
+a poll loop, or conclude "cmux is a terminal multiplexer, not a message bus, so there's no
+push channel." **Both are wrong.** cmux exposes a genuine pub/sub event bus with replay and
+resume. Workers can push structured completion messages onto it; an orchestrator (or another
+worker) subscribes and receives them event-driven.
+
+## Context / Trigger Conditions
+- Fanning out `ccode -p '…'` / `codex exec '…'` workers across `cmux new-workspace --command`
+  and needing their results back.
+- Wanting worker→worker reactions, not just fan-in to one orchestrator.
+- Your orchestrator script hangs at startup on `cmux events --limit 1` (idle bus).
+- A worker finishes and signals before the subscriber is ready → completion lost.
+
+## Solution
+
+### The bus exists
+- `cmux events` — newline-delimited JSON stream: monotonic `seq`, retained replay
+  (`--after <seq>`, 4096 events in memory), durable cursor (`--cursor-file`), name/category
+  filters, `--reconnect` resume. Frame cap 16 KiB; slow subscribers dropped at 1024 pending.
+- Every event is also appended to `~/.cmuxterm/events.jsonl` (16 MiB rotation) — durable tail.
+- `cmux rpc <method>` exposes ~248 methods (`cmux capabilities` lists them).
+
+### Publishing (no free-form emit RPC — ride `cmux log`)
+There is NO "emit arbitrary JSON" method. `feed.push` needs a `session_id` (agent hook-feed
+items only). But **every `cmux log` call emits a `sidebar.log.appended` event.** So:
+- **publish:** `cmux log --level info --source "msg:<topic>" "MSGB64:$(printf '%s' "$msg" | base64 | tr -d '\n')"`
+- **subscribe:** `cmux events --category sidebar --name sidebar.log.appended` → for each frame,
+  read `payload.args`, extract the `MSGB64:<b64>` token, base64-decode, and route by the
+  `--source msg:<topic>` tag.
+- Base64 is required: it keeps spaces/quotes/newlines intact through the event's shell-quoted
+  `args` field (raw text gets mangled).
+
+### Claim-check for large payloads
+The 16 KiB frame cap means you must NOT put a full agent result on the bus. Worker writes its
+output to a FILE and publishes only `id=<n> status=<ok|err> file=<path>`; the subscriber reads
+the file for the real payload.
+
+### Gotcha 1 — idle-bus hang (this WILL bite you)
+`cmux events --limit N` waits for N real **event** frames; the initial `ack` frame does NOT
+count. On an idle bus it blocks forever. To read the current sequence number, grab the ack
+line instead:
+```sh
+START_SEQ="$(timeout 3 cmux events --no-heartbeat 2>/dev/null | head -1 \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin).get("resume",{}).get("latest_seq",0))')"
+```
+`head -1` closes the pipe after the ack — no waiting for a real event.
+
+### Gotcha 2 — lost wakeup
+Capture `latest_seq` BEFORE spawning workers, then subscribe with `--after <seq>`. A completion
+published before the subscriber is up gets **replayed**, not lost. Dedupe by worker id, because
+replay can re-deliver a frame.
+
+## Verification
+Live roundtrip (from inside cmux):
+```sh
+( cmux events --category sidebar --name sidebar.log.appended --no-ack --no-heartbeat --limit 1 \
+  | python3 -c 'import json,sys,base64,re;e=json.load(sys.stdin);a=e["payload"]["args"];print(base64.b64decode(re.search(r"MSGB64:([A-Za-z0-9+/=]+)",a).group(1)).decode())' ) &
+sleep 1
+cmux log --level info --source "msg:demo" "MSGB64:$(printf 'hello "world" & spaces' | base64 | tr -d '\n')"
+wait   # subscriber prints:  hello "world" & spaces
+```
+Confirms the message published by one process is received + decoded by another, intact.
+
+## Example
+Orchestrator fan-in: capture `START_SEQ`; spawn N workers whose command ends with
+`… > result.out 2>&1; cmux log --source "msg:$TOPIC" "MSGB64:$(printf 'id=%s status=ok file=%s' "$i" "$result" | base64 | tr -d '\n')"`;
+then one subscriber `cmux events --name sidebar.log.appended --after "$START_SEQ" --reconnect`,
+decode, dedupe by id, read each `file` for the payload. Working implementation:
+`scripts/cmux-bus.sh` in the agentic-sdlc-orchestrator bundle (pub/sub/seq helper).
+
+## Notes
+- Spawn workers with `cmux new-workspace --command "<text>"` — it types into the workspace's
+  INTERACTIVE zsh, so shell aliases (`ccode`) expand; no alias/config edit needed.
+- Teardown a workspace with `cmux close-workspace --workspace <ref>` — `workspace-action` has
+  NO `close` verb (only close-others/above/below).
+- Delegation-plane ranking: **Claude subagents** (results in-conversation) > **cmux event bus**
+  (visible workspaces, payloads, many-to-many, replay) > **wait-for+file** (wakeup only) >
+  **read-screen** (polling, last resort).
+- codex workers: run in a dir listed `trusted` in `~/.codex/config.toml` and append `< /dev/null`
+  so `codex exec` doesn't block on stdin.
+
+## References
+- cmux CLI contract: https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/cli-contract.md
+- `cmux docs api`, `cmux capabilities`, `cmux events --help`
+- See also: cmux-terminal skill (general cmux CLI), poll-wait-orchestrator-blocked-not-completion-terminal

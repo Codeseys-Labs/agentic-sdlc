@@ -42,6 +42,15 @@ Agent entrypoint (Codex or Claude Code)
   (director + specialists), claim/experiment ledgers, greenfield/brownfield workflows,
   schemas, and Make validation gates into any target repo. Pairs with the flagship's
   `references/research-team.md` (the distilled principles).
+- `skills/model-tier-rightsizing/`: the four-tier model policy for fleets — frontier =
+  solo scale-setters, judgment-workhorse = un-gated judgment, capable-volume = the
+  gated-parallel default, mechanical = gate-checked floor. Decision ladder
+  (derail/degrade/retry), alias plumbing, quota-aware concurrency math, worked quota
+  table (re-derive per account). Pairs with `references/tiered-orchestration.md`.
+- `skills/cmux-event-bus-messaging/`: the cmux event-bus pub/sub pattern (publish via
+  `cmux log --source msg:<topic>`, subscribe via `cmux events` with replay/resume, the
+  claim-check pattern, both race gotchas). Pairs with `references/cmux-integration.md`
+  and `scripts/cmux-bus.sh`.
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, worktree waves, PR flow, worktrees×CAO×cmux.
   - `references/cao-profiles.md` — bundled CAO profile roles + launch pattern.
