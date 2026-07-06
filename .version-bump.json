@@ -1,6 +1,6 @@
 {
   "note": "Every version-carrying file in the bundle. bump-version.sh writes them all in one shot; --check reports drift. Never hand-edit one manifest's version.",
-  "current": "0.5.0",
+  "current": "0.5.1",
   "targets": [
     {
       "file": ".claude-plugin/plugin.json",

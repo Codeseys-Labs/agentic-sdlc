@@ -103,9 +103,11 @@ pair with a repo-specific sweep (internal hostnames etc.) which generic rules wo
 
 ## Notes
 
-- jujutsu (jj) is deliberately NOT in this stack: `jj` disables git hooks entirely in
-  colocated repos and has its own workspace model — adopting it would need its own
-  integration story with the worktree-wave doctrine. Revisit only after real adoption.
+- jujutsu (jj) interacts with ONE layer of this stack: git hooks do not fire on jj
+  commits (verified — a blocking pre-commit hook is silently bypassed), so under jj the
+  lefthook layer drops out and `mise run check` + CI carry the full gate load. mise and
+  betterleaks are unaffected. Full jj integration story (colocated repos, workspaces as
+  worktrees, op-log recovery): the flagship skill's jj-vcs reference.
 - See also (in the flagship `agentic-sdlc-orchestrator` skill): the seeds-worktrees
   reference (config propagation into worktrees), the sdlc-loop reference (where gates sit
   in the loop), and the bundle's validate-bundle.sh (a worked example of a repo-specific
