@@ -12,12 +12,13 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
 3. Create one worktree per write-capable worker:
    `git worktree add ../<repo>-wt-<seed-id> -b work/<seed-id>-<slug>`
    If codex workers will run: pre-trust each worktree path in ~/.codex/config.toml.
-4. Launch workers (CAO `assign`/`--async` if available; provider-native subagents
-   otherwise). Each worker prompt must carry: Seed id + acceptance criteria, absolute
-   worktree path, files in scope, gates to run, artifact report path.
-5. If inside cmux: open a viewer workspace per worker
-   (`cmux new-workspace --command "tmux attach -t cao-<session>"`) and set a sidebar
-   pill for the wave. Optional — never block on cmux.
+4. Launch provider-native role agents or subagents by default. Use CAO `assign`/`--async`
+   only when the optional adapter was explicitly selected and is already healthy. Each
+   worker prompt must carry: Seed id + acceptance criteria, absolute worktree path, files
+   in scope, gates to run, artifact report path.
+5. If cmux is already active, optionally publish wave status. Open a `tmux attach` viewer
+   only for an existing CAO/tmux-backed worker session; native workers require neither
+   cmux nor tmux.
 6. Collect artifact reports. Review each worktree (diff + gates, not summaries) —
    use the sdlc-reviewer agent where available.
 7. Reconcile: convert findings to Seeds, close verified Seeds, run `sd sync`,

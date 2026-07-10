@@ -7,10 +7,12 @@ Initialize the current directory (or the path in $ARGUMENTS) as an agentic-sdlc 
 Idempotent: skip anything already present and say so. End state = a repo where
 `/sdlc-frame` can immediately plan a worktree/workspace wave.
 
-1. Load the `agentic-sdlc-orchestrator` skill, then run the bundled preflight from the
-   project root — resolve it through the skill symlink:
-   `"$(readlink ~/.claude/skills/agentic-sdlc-orchestrator)/../../scripts/check-agentic-sdlc-prereqs.sh"`.
-   Report missing required tools and stop if any are absent.
+1. Load the `agentic-sdlc-orchestrator` skill. Resolve its maintained repository checkout
+   from the skill's Repo Location section and run
+   `<repo>/scripts/check-agentic-sdlc-prereqs.sh` when available. If the checkout is not
+   present, inspect the required host tools directly and continue. Stop only for missing
+   baseline requirements; CAO, cmux, and tmux are optional and must never block init or
+   trigger installation/enabling.
 
 2. VCS baseline:
    - No `.git` → `git init -b main` and make an initial commit (empty is fine).

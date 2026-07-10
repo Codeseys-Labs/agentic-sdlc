@@ -1,15 +1,21 @@
 ---
 name: agentic-sdlc-orchestrator
-description: Coordinate a project-scale agentic SDLC loop across Codex, Claude Code, CAO, Seeds (`sd`), git worktrees, tests, and PRs — with optional cmux as view layer/event bus when CMUX_WORKSPACE_ID is set. Use when an agent should act as the entrypoint/macro conductor while CAO launches Codex, Claude Code, or other CLI workers for discovery, research, planning, implementation, review, testing, backlog-zero, or repeatable multi-agent project execution. Covers per-worker model pinning, nested supervisors, long-running work via assign/--async (timeouts never kill agents), codex trust/timeout gotchas, and cao-ops-mcp wiring.
+description: This skill should be used when the user asks to frame, plan, execute, review, or drive a project-scale agentic SDLC run, including Seeds-backed worktree waves, backlog-zero missions, multi-agent implementation, or concurrent critique. The baseline uses the current host's native agent and subagent capabilities and requires no CAO, cmux, or tmux. CAO is an optional adapter only when the user explicitly selects durable or mixed-engine sessions; cmux is an optional non-load-bearing view/event layer only when already active or explicitly requested.
 ---
 
 # Agentic SDLC Orchestrator
 
 Use this skill to run a repeatable, project-generic implementation loop:
 
-`Codex entrypoint -> CAO fleet/session bus -> Codex/Claude/other CLI workers -> Seeds queue -> worktrees -> tests -> squash/rebase -> PR`
+`Agent entrypoint -> provider-native delegation (or direct execution) -> Seeds queue -> worktrees -> tests/review -> squash/rebase -> PR`
 
-Keep Codex as the macro conductor. Use CAO for durable cross-CLI sessions. Use Claude Code when a bounded workstream benefits from native subagents or dynamic workflows. Use Seeds as the queue of record.
+Keep the active host session as the macro conductor and use its native delegation tools by
+default. The full Frame -> Ship loop works without CAO, cmux, or tmux. Add CAO only when
+the user explicitly selects durable or mixed-engine CAO sessions and CAO is already
+available. Add cmux
+only when it is already active and useful for visibility or event messaging. Never install,
+start, or enable CAO, cmux, or tmux merely to run this skill. Use Seeds as the queue of
+record.
 
 ## Repo Location
 
@@ -21,28 +27,31 @@ macOS, `/mnt/e/CS/github/agentic-sdlc-orchestrator` on WSL). If absent:
 When this skill refers to bundled scripts, use the repo copies:
 
 - `<repo>/scripts/check-agentic-sdlc-prereqs.sh`
-- `<repo>/scripts/install-cao-kit.sh`
+- `<repo>/scripts/install-cao-kit.sh` (optional CAO adapter only)
 
 ## First Moves
 
 1. Prime the project state:
-   - Run `sd prime` if the repo uses Seeds.
+   - Run `sd prime`.
    - Inspect `sd ready --format json`, `sd blocked --format json`, and repo docs/ADRs/roadmap.
    - Check `git status --short` before planning worktrees.
-2. Detect the environment:
-   - `test -n "$CMUX_WORKSPACE_ID"` → inside cmux: use it as the view layer and event bus
-     (see `references/cmux-integration.md`). Absent → skip all cmux steps; nothing depends on it.
-   - `command -v cao` + `curl -s -m1 localhost:9889/` → CAO available/running.
-   - Provider env (e.g. Bedrock) must be exported in the shell that starts `cao-server`
-     (see `references/cao-operations.md`, Environment inheritance).
+2. Detect the host-native execution plane first:
+   - Inventory direct execution, role agents/subagents, background delegation, and native
+     result or messaging channels available in the current host.
+   - Treat those capabilities as sufficient for every phase of the loop.
+   - Probe `cao` only after the user explicitly selects CAO for durable or mixed-engine
+     sessions. Select it only when installed and healthy; otherwise stay native.
+   - Probe cmux only when `command -v cmux` succeeds and `CMUX_WORKSPACE_ID` is set. If
+     either check fails, skip cmux silently. tmux is never part of the baseline probe.
 3. Decide the run shape:
-   - Small fix: Codex handles it directly or uses one CAO handoff.
-   - Multi-file implementation: CAO workers plus a Seeds-backed worktree wave.
+   - Small fix: handle directly or use one provider-native role/subagent.
+   - Multi-file implementation: use provider-native workers in a Seeds-backed worktree wave.
    - Unclear architecture: discover -> research if needed -> plan -> act -> review.
    - Large backlog-zero work: bounded waves with continuous Seeds reconciliation.
-4. Install or verify CAO profiles from this repo if using CAO:
-   - See `references/cao-profiles.md`.
-   - Run `scripts/check-agentic-sdlc-prereqs.sh` from the repo root for local checks.
+   - Durable or mixed-engine work: use healthy CAO only after the user explicitly selects it.
+4. Run `scripts/check-agentic-sdlc-prereqs.sh` from the repo root for local checks. Missing
+   optional adapters must not block the run. Load `references/cao-profiles.md` or
+   `references/cmux-integration.md` only after selecting the corresponding adapter.
 5. Create or update Seeds before implementation. Do not let findings live only in chat.
 
 ## Control Contract
@@ -62,15 +71,24 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 
 ## Delegation Rules
 
-- Use CAO `handoff` for blocking tasks whose result gates the next phase.
-- Use CAO `assign` (or `--async` launch) for parallel lanes; require each worker to write artifacts and call `send_message` when done.
-- **Long-running work: always `assign`/`--async`, never `handoff`.** CAO timeouts stop the caller waiting — they never kill the agent (detached tmux runs to completion). Poll `cao session status` or read the worker's artifact file. Blocking tools' `timeout` arg has no upper cap if you must block.
+- Prefer the host's native roles, subagents, workflows, teams, or background tasks. Keep
+  direct execution for work too small to justify delegation.
+- Require every delegated worker to write an artifact report; treat messages and summaries
+  as notifications, not acceptance evidence.
+- For long-running work, use the host's native background or persistent-task mechanism and
+  durable artifact files. Do not hold one blocking call open indefinitely.
+- When CAO has been explicitly selected, use `handoff` only for bounded blocking results
+  and `assign`/`--async` for parallel or long-running lanes. CAO timeout and tmux details
+  belong in `references/cao-operations.md`, not the native baseline.
 - Use Claude Code workers for nested dynamic workflow execution on one bounded workstream. Do not let a nested Claude workflow own the whole project queue unless explicitly requested.
 - Use Codex workers for implementation, refactors, tests, docs, repo inspection, and review when provider-native Claude workflows are not needed.
-- Nested orchestration is allowed (a `role: supervisor` worker can delegate further — CAO has no depth cap) but keep it to one mid-tier at most and give each tier an explicit worker list.
-- Per-worker model pinning: set `model:` in the profile frontmatter (forwarded as `--model` to claude/codex). Same agent name + different `--provider` OVERWRITES the profile — use distinct names to mix engines.
+- Keep nested orchestration to one mid-tier at most and give each tier an explicit worker list,
+  regardless of delegation backend.
+- Pin models through the current host's role/agent configuration. When CAO is selected,
+  profile frontmatter supplies its optional per-worker model mapping.
 - Keep one macro conductor responsible for Seeds, worktree ownership, merges, and final claims.
-- If inside cmux: surface run state on the sidebar and view workers via `tmux attach` workspaces (`references/cmux-integration.md`). cmux is optional; never block on it.
+- If already inside cmux, optionally surface run state. Attach a `tmux` viewer only for an
+  existing tmux-backed session; never create that dependency for a native run.
 
 ## References
 
@@ -78,13 +96,13 @@ Read only what is needed:
 
 - `references/sdlc-loop.md`: phase gates, backflow, done criteria.
 - `references/seeds-worktrees.md`: Seeds queue, worktree wave, squash/rebase, PR handling.
-- `references/cao-profiles.md`: CAO profile roles and install/run commands.
-- `references/cao-operations.md`: trial-verified CAO ops — env inheritance, per-worker models, nesting, timeouts/long-running, codex gotchas, headless drive, teardown order, cao-ops-mcp wiring.
-- `references/cmux-integration.md`: cmux as view layer + event bus (detection, tmux-attach workspaces, pub/sub with replay, sidebar dashboard). Only when `CMUX_WORKSPACE_ID` is set.
+- `references/cao-profiles.md`: optional CAO adapter profiles. Load only when CAO is selected.
+- `references/cao-operations.md`: optional, trial-verified CAO operations. Load only for an active CAO path.
+- `references/cmux-integration.md`: optional cmux view/event integration. Load only when cmux is already active or explicitly requested.
 - `references/delegation-planes.md`: per-provider decision matrices — Claude subagent vs Workflow vs Agent Team vs CAO; Codex role subagents vs exec-loops vs CAO; cost ladder; write-conflict rules.
 - `references/worktree-integration.md`: fan-in hazards — merge-base footprint (not HEAD diff), placeholder-trap assembly, re-gate-on-main (worktree-green ≠ main-green), clean 3-way apply ≠ semantic correctness, squash-scope discipline.
 - `references/mission-loop.md`: the autonomous backlog-zero doctrine — milestone-blocking classification (8 classes, only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes, WIP caps, priority math, concurrent critique team, honest definition of done. Read for MISSION-shaped assignments ("drive the backlog to zero", "keep going until done").
-- `references/tiered-orchestration.md`: model-tier assignment (the multiplier principle — frontier tier only on solo scale-setters: frame/plan/verdict), the 5-layer CAO/cmux delegation map, bounded backflow (verdict-only re-entry, three independent stops), chained-iterations vs mega-run, worker-lifecycle at scale (write-as-you-go, nudge→replace, salvage).
+- `references/tiered-orchestration.md`: model-tier assignment, the native-first capability ladder with optional adapters, bounded backflow, chained iterations, and worker lifecycle at scale.
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 - `references/jj-vcs.md`: jj (Jujutsu) as the wave substrate (verified on 0.43) — colocated git-compatible adoption, workspaces as agent-grade worktrees (per-workspace `@`, op-log audit, stale detection), never-failing fan-in (conflicts = committed state), auto-snapshot makes uncommitted-work loss impossible, `jj undo` recovery; gotchas: git hooks don't fire, exact-match revset trap, headless identity, snapshot swallows non-gitignored secrets.
 
@@ -100,12 +118,13 @@ wiring: cartographers (parallel, per area) → planner → implementers (one per
 → reviewers → integrator, with the critic standing concurrent and researchers on demand. REPO-SCOPED extra roster: `agents/codex/research/` carries the 17-role
 research team (see its README — installed per-repo via the codex-research-os scaffolder,
 never globally). Slash commands (Claude Code): `/sdlc-frame`, `/sdlc-wave`,
-`/sdlc-mission`. Bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
+`/sdlc-mission`. Optional cmux bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
 
 ## Hard Stops
 
 - Do not run write-capable workers in the user's dirty checkout. Use a clean worktree.
 - Do not close Seeds from worker claims alone. Verify files, tests, and acceptance criteria.
-- Do not treat CAO native workflow YAML as the execution engine unless the installed CAO version has a shipped run engine.
+- When CAO is selected, do not treat its native workflow YAML as the execution engine unless the installed version has a shipped run engine.
+- Do not install, start, or enable CAO, cmux, or tmux unless the user explicitly requests that environment change.
 - Do not recursively launch agents without a bound: cap workers, passes, and review/fix rounds.
 - Do not push, force-push, rewrite history, alter secrets, or change CI settings unless the user explicitly authorizes that action.

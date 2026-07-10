@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Validate the bundle before commit/release. Catches the cross-agent silent failures:
 #   - SKILL.md frontmatter missing name/description
 #   - skill name != directory name (breaks some hosts)
@@ -11,9 +11,23 @@
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bash_bin="${BASH:-/bin/bash}"
 errors=0; warns=0
 err() { echo "ERROR: $*" >&2; errors=$((errors+1)); }
 warn() { echo "warn:  $*"; warns=$((warns+1)); }
+
+# Use a real Python 3 interpreter on Unix and Windows (where only python or py may exist).
+python_cmd=()
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
+  python_cmd=(python3)
+elif command -v python >/dev/null 2>&1 && python -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
+  python_cmd=(python)
+elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
+  python_cmd=(py -3)
+else
+  echo "ERROR: Python 3.8+ is required to validate skill metadata and manifests" >&2
+  exit 1
+fi
 
 # --- skills ---
 for skill in "$repo_root"/skills/*/SKILL.md; do
@@ -23,9 +37,9 @@ for skill in "$repo_root"/skills/*/SKILL.md; do
   [ -n "$name" ] || err "$dir: SKILL.md missing 'name:'"
   [ "$name" = "$dir" ] || err "$dir: name '$name' != directory name '$dir'"
   # description length (block scalar or inline)
-  desc_len=$(python3 - "$skill" <<'EOF'
+  desc_len=$("${python_cmd[@]}" - "$skill" <<'EOF'
 import re, sys
-t = open(sys.argv[1]).read()
+t = open(sys.argv[1], encoding='utf-8').read()
 m = re.search(r'^---\n(.*?)\n---', t, re.S)
 fm = m.group(1) if m else ''
 d = re.search(r'^description:\s*\|?\s*\n?((?:(?:  .*|\S.*)\n?)*?)(?=^\S|\Z)', fm, re.M)
@@ -80,8 +94,8 @@ done
 # Includes repo-scoped sets in subdirs (agents/codex/research/ etc.).
 for t in "$repo_root"/agents/codex/*.toml "$repo_root"/agents/codex/*/*.toml; do
   [ -e "$t" ] || continue
-  if python3 -c 'import tomllib' 2>/dev/null; then
-    python3 -c "import tomllib,sys; d=tomllib.load(open(sys.argv[1],'rb')); assert d.get('name') and d.get('description'), 'name/description required'" "$t" \
+  if "${python_cmd[@]}" -c 'import tomllib' 2>/dev/null; then
+    "${python_cmd[@]}" -c "import tomllib,sys; d=tomllib.load(open(sys.argv[1],'rb')); assert d.get('name') and d.get('description'), 'name/description required'" "$t" \
       || err "agents/codex/$(basename "$t"): invalid TOML or missing name/description"
   else
     grep -q '^name = ' "$t" && grep -q '^description = ' "$t" \
@@ -97,7 +111,7 @@ done
 
 # --- shell scripts parse ---
 for s in "$repo_root"/scripts/*.sh; do
-  bash -n "$s" || err "scripts/$(basename "$s") does not parse"
+  "$bash_bin" -n "$s" || err "scripts/$(basename "$s") does not parse"
 done
 
 # --- plugin/marketplace manifests (all hosts) ---
@@ -107,13 +121,57 @@ fi
 for mf in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
           .codex-plugin/plugin.json .agents/plugins/marketplace.json gemini-extension.json; do
   [ -f "$repo_root/$mf" ] || continue
-  python3 -c "import json;json.load(open('$repo_root/$mf'))" || err "invalid JSON: $mf"
+  "${python_cmd[@]}" -c 'import json,sys;json.load(open(sys.argv[1], encoding="utf-8"))' "$repo_root/$mf" || err "invalid JSON: $mf"
 done
 
 # --- version drift across manifests ---
 if [ -x "$repo_root/scripts/bump-version.sh" ]; then
-  "$repo_root/scripts/bump-version.sh" --check >/dev/null 2>&1 || err "manifest version drift — run scripts/bump-version.sh --check"
+  "$bash_bin" "$repo_root/scripts/bump-version.sh" --check >/dev/null 2>&1 || err "manifest version drift — run scripts/bump-version.sh --check"
 fi
+
+# --- native-baseline policy (optional adapters must never become prerequisites) ---
+flagship="$repo_root/skills/agentic-sdlc-orchestrator/SKILL.md"
+preflight="$repo_root/scripts/check-agentic-sdlc-prereqs.sh"
+installer="$repo_root/scripts/install-skill-bundle.sh"
+openai_meta="$repo_root/skills/agentic-sdlc-orchestrator/agents/openai.yaml"
+
+if [ ! -f "$preflight" ]; then
+  err "native-baseline preflight is missing"
+else
+  grep -qE '^[[:space:]]*req[[:space:]]+(cao|cmux|tmux)([[:space:]]|$)' "$preflight" \
+    && err "preflight makes an optional adapter required (cao/cmux/tmux)"
+
+  # Behavioral regression: a native host with core tools and no adapters must pass.
+  policy_tmp="$(mktemp -d)"
+  for tool in git gh sd; do
+    printf '#!%s\nexit 0\n' "$bash_bin" > "$policy_tmp/$tool"
+    chmod +x "$policy_tmp/$tool"
+  done
+  if ! PATH="$policy_tmp" AGENTIC_SDLC_HOST_READY=1 CODEX_HOME="$policy_tmp/no-codex" \
+    "$bash_bin" "$preflight" >/dev/null 2>&1; then
+    err "preflight fails on a native host when cao, cmux, and tmux are absent"
+  fi
+  rm -rf -- "$policy_tmp"
+fi
+
+if [ ! -f "$installer" ]; then
+  err "bundle installer is missing"
+else
+  grep -qF 'elif [ "${INSTALL_CAO:-0}" != "1" ]; then' "$installer" \
+    || err "installer must require explicit INSTALL_CAO=1 opt-in before touching CAO"
+fi
+
+grep -qF "requires no CAO, cmux, or tmux" "$flagship" \
+  || err "flagship must declare the provider-native no-CAO/cmux/tmux baseline"
+grep -qF "provider-native" "$openai_meta" \
+  || err "flagship default prompt must lead with provider-native orchestration"
+grep -qF "CAO/DWL" "$openai_meta" \
+  && err "flagship default prompt must not require the CAO/DWL path"
+for mf in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
+          .codex-plugin/plugin.json .agents/plugins/marketplace.json gemini-extension.json; do
+  grep -qi "provider-native" "$repo_root/$mf" \
+    || err "$mf must describe the provider-native baseline"
+done
 
 # --- secrets / internal-hostname sweep (bundle must stay shareable) ---
 # Whole repo (audit fix: previously skipped README/AGENTS.md/manifests/.github), minus .git.

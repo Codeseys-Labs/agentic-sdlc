@@ -1,25 +1,27 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Install the agentic-sdlc-orchestrator skill bundle globally for every CLI agent
 # present on this machine. Idempotent; re-run after pulling updates.
 #
 #   Claude Code -> ~/.claude/skills + ~/.claude/agents + ~/.claude/commands (symlinks)
 #   Codex       -> $CODEX_HOME/skills + $CODEX_HOME/agents (symlinks; default ~/.codex)
-#   CAO         -> cao skills add + cao-profiles/ install (COPIES — re-run after git pull)
+#   Optional CAO adapter -> skill store + profiles only with INSTALL_CAO=1 (copies)
 #
 # USAGE:
 #   install-skill-bundle.sh            # install/refresh (symlink mode)
 #   install-skill-bundle.sh --copy     # copy instead of symlink (temporary clones)
 #   install-skill-bundle.sh status     # show link health per target, exit 1 if broken
-#   install-skill-bundle.sh uninstall  # remove everything this script installed
-#   install-skill-bundle.sh self-test  # run install+status+uninstall in a throwaway HOME
+#   install-skill-bundle.sh uninstall  # remove owned symlinks; report preserved copies/adapters
+#   install-skill-bundle.sh self-test  # verify install/status/uninstall safety in a throwaway HOME
+#   INSTALL_CAO=1 install-skill-bundle.sh  # explicitly add the optional CAO mirror
 #
-# Symlink planes live-update with `git pull`; the CAO plane COPIES into its store, so
-# re-run this script after pulling to refresh CAO. Don't dual-install: if you use the
-# marketplace path (`claude plugin marketplace add`), skip the skills symlink for that
-# machine or the skill registers twice (bare + namespaced).
+# Symlink planes live-update with `git pull`. If the optional CAO adapter was selected and
+# installed, re-run with INSTALL_CAO=1 after pulling because that adapter uses copies.
+# Don't dual-install: if you use the marketplace path (`claude plugin marketplace add`),
+# skip the skills symlink for that machine or the skill registers twice (bare + namespaced).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bash_bin="${BASH:-/bin/bash}"
 skill_src="$repo_root/skills/agentic-sdlc-orchestrator"
 [ -f "$skill_src/SKILL.md" ] || { echo "error: flagship skill not found at $skill_src" >&2; exit 1; }
 
@@ -52,7 +54,8 @@ case "${1:-}" in
     done < <(owned_targets)
     # Buffer cao output first: `cao ... | grep -q` SIGPIPEs cao under pipefail (exit 120)
     # and falsely reports absent (caught by the 2026-07-04 session audit). Check every skill.
-    if command -v cao >/dev/null 2>&1 && [ -z "${SKIP_CAO:-}" ]; then
+    if [ "${INSTALL_CAO:-0}" = "1" ] && command -v cao >/dev/null 2>&1 \
+      && [ -z "${SKIP_CAO:-}" ]; then
       cao_out="$(cao skills list 2>/dev/null || true)"
       while IFS= read -r sdir; do
         name="$(basename "$sdir")"
@@ -75,18 +78,32 @@ case "${1:-}" in
     echo "self-test in HOME=$tmp_home"
     mkdir -p "$tmp_home/.claude" "$tmp_home/.codex"
     # SKIP_CAO: cao's store is global (not HOME-keyed) — self-test must not touch it.
-    HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0"
-    HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0" status
-    HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0" uninstall
-    # after uninstall, EVERY owned target must be absent — any ok:/BROKEN:/copy: line is a
-    # leftover. (The old pattern '^ok:.*symlink' could never match real status output —
-    # 'ok:      /path' contains no 'symlink' — so this check was DEAD; caught by the
-    # 2026-07-04 session audit. SKIP_CAO also added: CAO store lines would false-positive.)
-    if HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 bash "$0" status | grep -qE '^(ok|BROKEN|copy):'; then
-      echo "self-test FAILED: leftovers after uninstall"; rm -rf "$tmp_home"; exit 1
+    HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 "$bash_bin" "$0"
+    status_before="$(HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 "$bash_bin" "$0" status 2>&1 || true)"
+    printf '%s\n' "$status_before"
+    if grep -q '^BROKEN:' <<<"$status_before"; then
+      echo "self-test FAILED: broken destination after install"; rm -rf "$tmp_home"; exit 1
+    fi
+
+    primary_target="$tmp_home/.codex/skills/agentic-sdlc-orchestrator"
+    link_mode=0
+    [ -L "$primary_target" ] && link_mode=1
+    HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 "$bash_bin" "$0" uninstall
+    status_after="$(HOME="$tmp_home" CODEX_HOME="$tmp_home/.codex" SKIP_CAO=1 "$bash_bin" "$0" status 2>&1 || true)"
+
+    if [ "$link_mode" -eq 1 ]; then
+      if grep -qE '^(ok|BROKEN|copy):' <<<"$status_after"; then
+        echo "self-test FAILED: symlink leftovers after uninstall"; rm -rf "$tmp_home"; exit 1
+      fi
+      result="symlink install removed cleanly"
+    else
+      if ! grep -q '^copy:' <<<"$status_before" || ! grep -q '^copy:' <<<"$status_after"; then
+        echo "self-test FAILED: copy-mode preservation policy changed"; rm -rf "$tmp_home"; exit 1
+      fi
+      result="platform copy fallback preserved safely for manual removal"
     fi
     rm -rf "$tmp_home"
-    echo "self-test PASSED (install → status → uninstall clean)"
+    echo "self-test PASSED ($result; optional CAO untouched)"
     exit 0
     ;;
 esac
@@ -137,11 +154,16 @@ else
   echo "- Codex not detected; skipped"
 fi
 
-# CAO (skills + profiles), only if installed. SKIP_CAO=1 skips (self-test: CAO's store is
-# global, not HOME-keyed — a sandboxed run must not write it).
+# CAO (skills + profiles) is explicit opt-in. SKIP_CAO=1 skips (self-test: CAO's store
+# is global, not HOME-keyed — a sandboxed run must not write it).
 if [ -n "${SKIP_CAO:-}" ]; then
-  echo "- CAO plane skipped (SKIP_CAO set)"
-elif command -v cao >/dev/null 2>&1; then
+  echo "- Optional CAO adapter skipped (SKIP_CAO set)"
+elif [ "${INSTALL_CAO:-0}" != "1" ]; then
+  echo "- Optional CAO adapter not selected (set INSTALL_CAO=1 to mirror into CAO)"
+elif ! command -v cao >/dev/null 2>&1; then
+  echo "error: INSTALL_CAO=1 was set, but cao is not available on PATH" >&2
+  exit 1
+else
   while IFS= read -r sdir; do
     cao skills add "$sdir" --force
   done < <(bundle_skills)
@@ -150,8 +172,7 @@ elif command -v cao >/dev/null 2>&1; then
     cao install "$profile"
   done
   echo "✓ CAO: $(bundle_skills | wc -l | tr -d ' ') skills + $(ls "$repo_root"/cao-profiles/*.md | wc -l | tr -d ' ') profiles"
-else
-  echo "- CAO not detected; skipped (install: uv tool install --python 3.13 'git+https://github.com/awslabs/cli-agent-orchestrator.git@main')"
 fi
 
-echo "done. cmux integration activates automatically when CMUX_WORKSPACE_ID is set — no install step."
+echo "done. Bundle install pass complete; native destination results are listed above."
+echo "optional: cmux activates only when its CLI and CMUX_WORKSPACE_ID are already present; no CAO/cmux/tmux setup is required."

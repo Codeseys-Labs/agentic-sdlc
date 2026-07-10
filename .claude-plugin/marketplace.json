@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "agentic-sdlc-orchestrator",
-      "description": "Project-scale agentic SDLC kit: CAO fleet orchestration, Seeds queue, git worktree waves, optional cmux view layer",
+      "description": "Provider-native multi-agent SDLC with Seeds and git worktree waves; optional CAO and cmux adapters",
       "source": "./",
       "category": "workflow"
     }

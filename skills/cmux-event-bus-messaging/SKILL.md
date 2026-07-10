@@ -1,22 +1,23 @@
 ---
 name: cmux-event-bus-messaging
 description: |
-  cmux has a real pub/sub event bus for worker→worker and worker→orchestrator PUSH
-  messaging — do NOT conclude "cmux is just a terminal, use polling/read-screen". Use when:
-  (1) orchestrating multiple ccode/codex worker sessions in cmux workspaces and you need
-  results pushed back without polling PTYs; (2) you want worker→worker coordination inside
-  cmux; (3) building a message/event plane on cmux; (4) `cmux events --limit 1` HANGS
-  forever on an idle bus and stalls your script; (5) deciding how a worker signals
-  completion (event bus > wait-for+file > read-screen polling). Covers: publishing via
-  `cmux log --source msg:<topic>` (base64 payload), subscribing via `cmux events` with
-  replay/resume/cursor, the claim-check pattern for >16KiB payloads, and the two race
-  gotchas (idle-bus hang on --limit N; lost-wakeup fixed by capturing latest_seq before spawn).
+  Use this cmux-only skill only when cmux is already active or the user explicitly requests
+  cmux integration. It covers cmux pub/sub for worker-to-worker and worker-to-orchestrator
+  push messaging, completion signaling inside cmux workspaces, `cmux log` publishing,
+  `cmux events` replay/resume/cursors, the claim-check pattern for payloads over 16 KiB,
+  and idle-bus or lost-wakeup races. Do not trigger it for native host orchestration or
+  completion signaling outside cmux; native collaboration requires no cmux setup.
 author: Claude Code
 version: 1.0.0
 date: 2026-07-02
 ---
 
 # cmux Event Bus Messaging
+
+This is an optional cmux-only add-on. Load it only when `cmux` is available and a cmux
+workspace is already active, or when the user explicitly requests cmux integration. If
+cmux is absent, do not install or start it unless the user explicitly requested that
+environment change; otherwise use the host's native collaboration messaging.
 
 ## Problem
 When orchestrating multiple agent workers (`ccode`/`codex`) in cmux workspaces, the

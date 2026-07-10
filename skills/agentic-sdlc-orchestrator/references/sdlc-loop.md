@@ -7,7 +7,8 @@ Use this reference when the task needs a full research, plan, implementation, re
 Frame:
 - State the exact done condition.
 - Read repo intent docs, roadmap, ADRs, and current queue state.
-- Decide whether the run is direct, one CAO handoff, a worktree wave, or a full CAO/DWL loop.
+- Decide whether the run is direct, a provider-native delegation, or a worktree wave.
+  Select the optional CAO adapter only for an explicit durable/mixed-engine need.
 - Set caps: worker count, worktree count, max review/fix rounds, and stop conditions.
 
 Discover:

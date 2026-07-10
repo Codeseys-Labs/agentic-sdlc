@@ -19,9 +19,10 @@ Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` an
 4. **Plan the wave**: workstreams with owner role, worktree, scope, gates, rollback;
    independent items parallel, dependent sequenced. Scale-setter decisions (frame, plan,
    verdicts) stay with you or a solo strongest-tier agent.
-5. **Execute** via `/sdlc-wave` semantics: workers in worktrees (CAO `assign`/`--async`
-   for long/durable/mixed-engine work; provider-native subagents for in-turn work),
-   WIP caps: impl ≤3, research ≤2, integration ≤1, critique ≤1, nesting ≤2.
+5. **Execute** via `/sdlc-wave` semantics: provider-native workers in worktrees by
+   default. Use CAO `assign`/`--async` only when the optional adapter was explicitly
+   selected and is already healthy for durable or mixed-engine work. WIP caps: impl ≤3,
+   research ≤2, integration ≤1, critique ≤1, nesting ≤2.
 6. **Concurrent critique**: one standing review team auditing each wave's SQUASH-MERGED
    snapshot (never live worktrees), filing classified Seeds in real time.
 7. **Reconcile + loop**: merge-base-validated fan-in, re-gate on main, close only with
