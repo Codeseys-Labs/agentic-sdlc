@@ -1,9 +1,10 @@
-# Tiered Orchestration (model tiers, backflow, and the CAO/cmux hierarchy)
+# Tiered Orchestration (model tiers, backflow, and a native-first capability ladder)
 
 Use this reference when composing a full mission run — assigning MODEL TIERS to stages,
 bounding BACKFLOW (later stages re-entering earlier phases), and choosing WHICH
 orchestration layer runs each piece. Distilled from a proven tiered deep-work-loop
-practice (multi-million-token runs); remade here for the bundle's CAO/cmux stack.
+practice (multi-million-token runs); adapted here for a provider-native baseline with
+optional durability and view adapters.
 
 ## The multiplier principle (where the frontier model goes)
 
@@ -30,9 +31,10 @@ Everything else splits two ways:
 Secondary test: if this agent is wrong, does the run **derail** (frontier), **degrade**
 (workhorse), or just **retry** (cheap)?
 
-In the bundle, tier assignment is concrete: CAO profiles carry `model:` frontmatter
-(per-worker pinning, see `references/cao-operations.md`); Claude Workflow stages carry
-`model:` per agent() call; codex roles carry `model`/`model_reasoning_effort` in the TOML.
+In the bundle, tier assignment starts with native host configuration: Claude Workflow
+stages carry `model:` per agent() call, and Codex roles carry
+`model`/`model_reasoning_effort` in TOML. When the optional CAO adapter is selected, its
+profiles can also carry per-worker `model:` frontmatter.
 The full four-tier policy — quota math, the decision ladder ("if this agent is wrong, does
 the run derail / degrade / just retry?"), alias plumbing, and concurrency budgets — ships
 as the sibling skill `skills/model-tier-rightsizing/` (re-derive its worked quota table per
@@ -50,22 +52,21 @@ account).
    highest-stakes verdicts into the main loop (read the disk artifacts, decide yourself)
    instead of spawning a frontier agent.
 
-## The layer map (which mechanism runs which piece)
+## The capability ladder (which mechanism runs which piece)
 
-The bundle offers FIVE nested delegation layers. Assign by lifetime + visibility need:
+The baseline has two complete layers; optional adapters add durability or visibility:
 
 | Layer | Runs | Use for |
 |---|---|---|
-| **Conductor** (interactive session or CAO macro-orchestrator profile) | frame, plan adoption, verdicts, Seeds/merge ownership | All scale-setter decisions |
-| **Provider-native fan-out** (Claude Workflow/subagents; codex role subagents) | in-conversation phases: discovery, review panels, research | Work whose results the conductor consumes THIS turn |
-| **CAO sessions** (supervisor→worker, mixed engines) | long-lived waves, the CONCURRENT CRITIQUE TEAM, cross-CLI fleets | Work that outlives the turn or mixes engines; drive via cao-ops-mcp tools or `assign`/`--async` |
-| **CAO workers' own subagents** (a worker profile with role: supervisor, or a Claude worker running its own Workflow) | nested sub-fan-out inside one bounded workstream | Depth ≤ 2 from the conductor; give mid-tier leads explicit worker lists |
-| **cmux** (view layer + event bus) | watching any of the above; non-agent notifications | Never load-bearing; see `references/cmux-integration.md` |
+| **Conductor** (interactive host session) | frame, plan adoption, verdicts, Seeds/merge ownership | All scale-setter decisions |
+| **Provider-native fan-out** (roles, subagents, workflows, teams, background tasks) | discovery, research, implementation waves, review panels, critique | All delegated work within the host's supported lifetime |
+| **Optional CAO adapter** | durable or mixed-engine sessions | Select only when explicitly needed and already healthy |
+| **Optional cmux adapter** | view/event layer for already-active sessions | Never load-bearing; no installation or enablement step |
 
-Rule of thumb: **phases the conductor must judge run provider-native (fast, in-context);
-waves and standing teams run on CAO (durable, observable); cmux watches.**
-The practical delegation ceiling is ~3 real levels — coordination quality runs out before
-mechanism does.
+Rule of thumb: **keep phases and waves provider-native unless a concrete durability or
+mixed-engine requirement selects CAO. Use cmux only for visibility when it is already
+active.** The practical delegation ceiling is about three real levels; coordination quality
+runs out before mechanism does.
 
 ## The research stage: delegate to a pipeline, don't inline it
 
@@ -96,9 +97,10 @@ Guardrails (so "keep going until done" stays bounded):
 4. **Ceiling-hit without done = honest stop**: report state + resume hints. Never fake
    completion. ("Loop until done" means "until done OR a bound proves non-convergence.")
 
-In CAO terms: the conductor holds the backflow cursor; re-entry = launching scoped
-workers back into an earlier phase's profile (`assign`, async), folding their artifacts
-into the accumulated state before re-running the forward phases as cheap re-validation.
+The conductor holds the backflow cursor. Re-entry launches a scoped provider-native worker,
+folds its artifact into accumulated state, then re-runs forward phases as cheap
+re-validation. When CAO is selected, `assign`/async is one optional implementation of the
+same artifact-backed pattern.
 
 ## Iteration shape: chained runs vs one mega-run
 

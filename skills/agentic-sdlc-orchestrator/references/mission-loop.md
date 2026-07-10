@@ -57,8 +57,9 @@ On merge conflict between workers: sequence and re-plan, don't fight it in paral
 
 ## The concurrent critique team
 
-Run ONE review team in parallel with execution — as a separate CAO session (or a
-background review agent) that audits **stable snapshots** (the squash-merged commit of
+Run ONE provider-native background review agent or team in parallel with execution. When
+the optional CAO adapter was selected, this may instead be a separate CAO session. It
+audits **stable snapshots** (the squash-merged commit of
 each wave), never live worktrees. It files findings as classified Seeds in real time;
 only findings classified blocking re-enter the active queue. Critique lenses:
 correctness, regression, security/secrets, edge cases, tests, docs, CI/workflow changes,
@@ -99,7 +100,8 @@ remaining non-blocking backlog, and assumptions.
 ## Anti-patterns
 
 Infinite zero-backlog chasing · broad dirty branches · overlapping worker write scopes ·
-vague worker prompts (see the delegation contract in `references/cao-profiles.md` /
-`delegation-planes.md`) · implementing from partial research · toolchain churn (respect
+vague worker prompts (see the native-first delegation contract in
+`references/delegation-planes.md`; load `references/cao-profiles.md` only when the
+optional CAO adapter is selected) · implementing from partial research · toolchain churn (respect
 the repo's mise/uv/bun choices; changing toolchains needs an ADR) · local-only proof for
 platform claims · review findings that never become Seeds.

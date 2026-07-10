@@ -3,7 +3,7 @@ description = "Run the bundle validator (CI gate)"
 run = "./scripts/validate-bundle.sh"
 
 [tasks.self-test]
-description = "Installer round-trip in a throwaway HOME"
+description = "Verify installer lifecycle policy in a throwaway HOME"
 run = "./scripts/install-skill-bundle.sh self-test"
 
 [tasks.check]

@@ -5,7 +5,7 @@
     {
       "name": "agentic-sdlc-orchestrator",
       "source": "./",
-      "description": "Project-scale agentic SDLC kit: CAO fleets, Seeds queue, worktree waves, research teams"
+      "description": "Provider-native multi-agent SDLC with Seeds, worktree waves, and research teams; optional CAO and cmux adapters"
     }
   ]
 }

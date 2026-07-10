@@ -7,10 +7,11 @@ as the router.
 
 ## What this bundle provides
 
-- `skills/agentic-sdlc-orchestrator/` — the flagship skill: project-scale agentic SDLC
-  (CAO fleet orchestration, Seeds queue, git worktree waves, mission/backlog-zero
-  doctrine, tiered orchestration, evidence-graded research teams, optional cmux view
-  layer). Start at its `SKILL.md`; read `references/*.md` on demand only.
+- `skills/agentic-sdlc-orchestrator/` — the flagship skill: provider-native,
+  project-scale agentic SDLC with Seeds, git worktree waves, mission/backlog-zero
+  doctrine, tiered orchestration, and evidence-graded research teams. CAO and cmux are
+  optional adapters; tmux is never a baseline requirement. Start at its `SKILL.md`;
+  read `references/*.md` on demand only.
 - `skills/codex-research-os/` — repo-scaffolding installer for a 17-role research
   organization with claim ledgers and review gates.
 - `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
@@ -18,7 +19,7 @@ as the router.
   research roster under `agents/codex/research/`.
 - `commands/` — `/sdlc-frame`, `/sdlc-wave`, `/sdlc-mission` (Claude Code slash
   commands; other hosts: invoke the flagship skill with the same intents).
-- `cao-profiles/` — CAO supervisor/worker profile templates.
+- `cao-profiles/` — optional CAO adapter profile templates.
 
 ## Working on THIS repo
 

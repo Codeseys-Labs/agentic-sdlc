@@ -1,5 +1,8 @@
 # CAO Operations (trial-verified)
 
+This is an optional CAO-only reference. Load it only after the user has explicitly selected
+CAO. It is not part of the bundle's baseline prerequisites.
+
 Use this reference when launching, monitoring, or debugging CAO sessions. Everything here
 was verified live against CAO v2.2.0 on macOS with Claude Code + Codex on Amazon Bedrock
 (2026-07-04); mechanisms cited from source where non-obvious.
@@ -10,7 +13,7 @@ was verified live against CAO v2.2.0 on macOS with Claude Code + Codex on Amazon
 uv tool install --python 3.13 "git+https://github.com/awslabs/cli-agent-orchestrator.git@main"
 cao init                      # seeds builtin skills + DB
 cao install <profile> --provider <claude_code|codex|...>
-cao-server                    # REQUIRED before launch/ops; localhost:9889
+cao-server                    # required only after CAO mode is selected; localhost:9889
 ```
 
 `uv tool install --python 3.13` matters when the system Python is < 3.10.

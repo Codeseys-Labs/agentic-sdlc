@@ -94,19 +94,18 @@ depend on does NOT follow:
 Wave-creation checklist: create worktree → copy untracked config the workers need →
 trust the path for codex AND mise → then launch.
 
-## Worktrees × CAO × cmux
+## Worker substrates and optional viewers
 
-- Give each CAO worker its worktree path via `--working-directory` at launch (and repeat the
-  absolute path in the prompt). One worktree per write-capable worker — never share.
-- codex workers: each NEW worktree path must be trusted in `~/.codex/config.toml` before
-  launch or the worker hangs on codex's trust prompt (see `references/cao-operations.md`).
-  Batch-add trust entries when creating the wave's worktrees.
-- If inside cmux, open a viewer per active worker
-  (`cmux new-workspace --command "tmux attach -t cao-<session>"`) and pin a sidebar pill per
-  wave. Optional — never block the wave on cmux.
-- CAO stale-status tell: `processing` in `cao session list` while `tmux ls` says "no server
-  running" means the tmux backend died — the status is STALE. Treat the worker as dead;
-  scrollback snapshot survives under `~/.cao/logs/terminal/`.
+- Launch provider-native workers by default. Give every write-capable worker one worktree,
+  its absolute path, and an artifact report path. Never share a write worktree.
+- Codex workers on any substrate need each new worktree path trusted in
+  `~/.codex/config.toml`; batch-add trust entries when creating the wave.
+- When the optional CAO adapter is selected, pass the worktree with
+  `--working-directory`. CAO-specific stale `processing` versus dead tmux diagnostics
+  live in `references/cao-operations.md`.
+- When cmux is already active, optionally publish wave status. Attach a
+  `tmux attach -t cao-<session>` viewer only for an existing CAO/tmux-backed worker;
+  native workers require neither cmux nor tmux.
 
 ## Salvage Rules
 

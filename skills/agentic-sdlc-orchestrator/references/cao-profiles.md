@@ -1,5 +1,8 @@
 # CAO Profiles
 
+This is an optional adapter reference. Load it only after the user has explicitly selected
+CAO. Nothing in the baseline SDLC loop depends on CAO, cmux, or tmux.
+
 Use this reference when installing or selecting the CAO profiles bundled with this repo.
 
 ## Install
@@ -61,7 +64,7 @@ cao-server
 cao launch --agents codex-macro-orchestrator --provider codex --headless --yolo \
   --session-name agentic-sdlc-<slug> \
   --working-directory '/absolute/path/to/project' \
-  "Use $agentic-sdlc-orchestrator to frame this project task, prime Seeds, and run a bounded CAO/DWL worktree wave."
+  "Use $agentic-sdlc-orchestrator to frame this project task, prime Seeds, and run a bounded worktree wave with the selected CAO adapter."
 ```
 
 Use `CAO_ENABLE_WORKING_DIRECTORY=true` when workers need explicit worktree paths through MCP tools.

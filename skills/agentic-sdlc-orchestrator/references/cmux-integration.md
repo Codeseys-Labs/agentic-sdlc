@@ -1,8 +1,9 @@
 # cmux Integration
 
-Use this reference when `CMUX_WORKSPACE_ID` is set (the session runs inside the cmux
-terminal). cmux is the VIEW layer and general event bus; CAO stays the control layer.
-If cmux is absent, skip this file — nothing in the loop depends on it.
+This is an optional adapter reference. Load it only when `command -v cmux` succeeds and
+`CMUX_WORKSPACE_ID` is set, or when the user explicitly requests cmux integration. cmux
+is only a view/event layer; the selected provider-native or optional CAO plane remains the
+control layer. If cmux is absent, do not install or start it — skip this file.
 
 ## Detection
 
@@ -14,8 +15,8 @@ test -n "$CMUX_WORKSPACE_ID" && echo "in cmux"
 
 | Concern | Owner |
 |---|---|
-| Spawn/route/collect agent fleets, roles, schedules | **CAO** (tmux sessions + MCP) |
-| Watch/steer a live worker TUI, sidebar status, notifications, browser panes | **cmux** |
+| Spawn/route/collect workers | **Provider-native host** by default; optional CAO when selected |
+| Watch/steer an already-active worker TUI, sidebar status, notifications, browser panes | **cmux** |
 | Non-agent notifications and cross-cutting pub/sub | **cmux event bus** |
 
 ## View a CAO worker inside cmux (works, no setup)
@@ -58,7 +59,8 @@ Gotchas (both verified the hard way):
    only `id=<n> status=<ok|err> file=<path>`.
 
 Use the bus for non-agent traffic (progress pings, sidebar status, notify-on-done). Agent
-coordination should ride CAO's `handoff`/`assign`/`send_message` instead.
+coordination should use the selected provider-native result/messaging channel. When CAO is
+selected, its `handoff`/`assign`/`send_message` channel fills that role.
 
 ## Sidebar as a run dashboard
 
@@ -71,20 +73,19 @@ cmux notify --title "Wave done" --body "3/3 seeds closed"          # desktop not
 Useful pattern: the conductor sets a pill per wave (`wave=2/4 ⏳`) and notifies when gates
 pass, so a human can glance at the sidebar instead of tailing logs.
 
-## Spawning raw CLI workers in cmux (fallback when CAO is absent)
+## Spawning raw CLI workers in cmux (advanced opt-in)
 
-`cmux new-workspace --command "<text>"` TYPES text+Enter into the new workspace's
-interactive zsh — shell aliases expand as if hand-typed, so existing `ccode`/`codex`
-launchers work unmodified. Collect via the event bus (above) or a result file. This is a
-valid no-install fallback for a small fleet, but prefer CAO when installed: structured
-`handoff`/`assign`, state tracking, provider profiles.
+Prefer provider-native delegation. If the user explicitly chooses raw cmux workspaces,
+`cmux new-workspace --command "<text>"` types text+Enter into the new workspace's
+interactive shell. Collect via the event bus or an artifact file. This is an advanced
+cmux-specific path, not a fallback the baseline requires.
 
 ## Delegation decision matrix (inside cmux, all layers available)
 
 | Situation | Use |
 |---|---|
-| Results needed in THIS conversation | provider-native subagents (Claude Task/Workflow; Codex role subagents) |
-| Durable cross-CLI fleet, roles, mixed engines | CAO |
-| Human wants to watch/steer live worker TUIs | CAO + cmux `tmux attach` workspaces |
+| Results or implementation needed in this host | provider-native roles/subagents/workflows |
+| Explicit durable or mixed-engine need with healthy CAO | optional CAO adapter |
+| Existing CAO/tmux worker and active cmux | optional cmux `tmux attach` viewer |
 | Non-agent notifications / cross-cutting events | cmux event bus |
-| Tiny fleet, CAO not installed | cmux `new-workspace` + event-bus collection |
+| Explicit raw-workspace experiment | cmux `new-workspace` + artifact/event collection |
