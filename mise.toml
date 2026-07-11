@@ -1,10 +1,18 @@
+[tools]
+# Upstream bundle tooling. Tool availability is pinned; lefthook installation and
+# jj colocation remain explicit per-repository actions.
+lefthook = "2.1.10"
+jj = "0.43.0"
+
 [tasks.validate]
 description = "Run the bundle validator (CI gate)"
 run = "./scripts/validate-bundle.sh"
+run_windows = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-git-bash.ps1 scripts/validate-bundle.sh"
 
 [tasks.self-test]
 description = "Verify installer lifecycle policy in a throwaway HOME"
 run = "./scripts/install-skill-bundle.sh self-test"
+run_windows = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-git-bash.ps1 scripts/install-skill-bundle.sh self-test"
 
 [tasks.check]
 description = "The full local gate (validator + installer self-test)"

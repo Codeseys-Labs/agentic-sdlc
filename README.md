@@ -143,7 +143,16 @@ or weakens the native path.
 The native baseline requires `git`, `gh`, `sd` (Seeds), and any skill-capable host.
 CAO, cmux, and tmux are not baseline tools and are never installed or enabled implicitly.
 
+This upstream repository's root `mise.toml` manages exact versions of both
+`lefthook` (`2.1.10`) and `jj` (`0.43.0`). `mise install` makes both CLIs reproducible
+across contributor machines. That manages tool availability only: hooks still require a
+`lefthook.yml` plus `lefthook install`, and jj remains opt-in until a clone explicitly runs
+`jj git init --colocate`. On Windows, the checked-in mise tasks route the bundle's Bash
+scripts through Git Bash with `scripts/run-git-bash.ps1`; they never select the WSL
+`bash.exe` launcher accidentally.
+
 ```bash
+mise install                               # install pinned upstream lefthook + jj CLIs
 mise run check                             # full local gate (or run the two scripts below directly)
 ./scripts/check-agentic-sdlc-prereqs.sh
 ./scripts/install-skill-bundle.sh          # native hosts; never enables optional adapters
