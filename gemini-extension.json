@@ -1,6 +1,6 @@
 {
   "name": "agentic-sdlc-orchestrator",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Provider-native multi-agent SDLC with Seeds, git worktree waves, and evidence-graded research teams; optional CAO and cmux adapters",
   "contextFileName": "AGENTS.md"
 }

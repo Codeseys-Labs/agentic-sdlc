@@ -18,11 +18,12 @@ Idempotent: skip anything already present and say so. End state = a repo where
    - No `.git` → `git init -b main` and make an initial commit (empty is fine).
    - Ask ONE question if not derivable: greenfield or existing code? For greenfield,
      scaffold README.md stub before the initial commit.
-   - jj (optional, recommended when `jj` is installed and the repo has no
-     submodules/LFS): `jj git init --colocate`, then
-     `jj bookmark track main --remote=origin` IF a remote exists. Per
-     `references/jj-vcs.md`: workspaces replace worktrees, hooks won't fire on jj
-     commits, and worker prompts must say "commit with jj, no add/stage step".
+   - jj is opt-in: select it only when the user explicitly requests it or repository
+     documentation/config already declares it. Binary availability alone is never
+     consent. When selected and the repo has no submodules/LFS, run
+     `jj git init --colocate`, then `jj bookmark track main --remote=origin` IF a remote
+     exists. Per `references/jj-vcs.md`: workspaces replace worktrees, hooks won't fire
+     on jj commits, and worker prompts must say "commit with jj, no add/stage step".
 
 3. Seeds queue of record: `sd init` if `.seeds/` absent. Then convert the project's
    starting intent into first Seeds: for greenfield, one Seed per bootstrap milestone;
@@ -31,8 +32,10 @@ Idempotent: skip anything already present and say so. End state = a repo where
 
 4. Gate stack (`skills/repo-toolchain-gates/`):
    - Write `mise.toml`: `[tools]` pinning the project's language toolchain + linters at
-     CI-parity versions (+ `lefthook` if git-substrate), tasks for fmt/lint/test, and
-     `[tasks.check]` depending on all of them. `mise trust` the repo.
+     CI-parity versions (+ `lefthook` if git-substrate; + `jj` when the repo supports the
+     optional jj substrate), tasks for fmt/lint/test, and `[tasks.check]` depending on all
+     of them. A jj pin manages only the binary; never initialize `.jj/` implicitly.
+     `mise trust` the repo.
    - Git substrate only: `lefthook.yml` (pre-commit = fast staged-file subset,
      pre-push = heavier subset) + `lefthook install`. Colocated jj → SKIP lefthook,
      note that `mise run check` + CI carry the gates.

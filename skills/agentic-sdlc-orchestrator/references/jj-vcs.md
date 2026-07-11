@@ -5,6 +5,23 @@ worktree-wave mechanics. jj is git-compatible (colocated mode), and several of i
 design choices map DIRECTLY onto failure modes this bundle already documents. All facts
 below verified live on jj 0.43.0 (2026-07-05) unless marked docs-only.
 
+## Mise-managed binary, opt-in substrate
+
+Manage jj's executable through the same checked-in mise toolchain as lefthook:
+
+```toml
+[tools]
+lefthook = "2.1.10"
+jj = "0.43.0"
+```
+
+The upstream bundle's root `mise.toml` uses these exact pins. `mise install` therefore
+provides the reviewed jj version on each contributor machine, but it does **not** create a
+`.jj/` directory or change repository behavior. Only an explicit `jj git init --colocate`
+selects jj for a clone. Likewise, a mise-managed lefthook binary enforces nothing until a
+Git-substrate repo supplies `lefthook.yml` and runs `lefthook install`; jj commits still do
+not invoke those Git hooks.
+
 ## Why jj fits agent fleets (the four structural wins)
 
 1. **Uncommitted-work loss becomes structurally impossible.** Every jj command

@@ -1,7 +1,7 @@
 {
   "name": "agentic-sdlc-orchestrator",
   "description": "Provider-native multi-agent SDLC with Seeds, git worktree waves, and evidence-graded research teams; optional CAO and cmux adapters for supported hosts",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "author": {
     "name": "Baladithya Balamurugan"
   },

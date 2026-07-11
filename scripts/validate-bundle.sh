@@ -176,7 +176,7 @@ done
 # --- secrets / internal-hostname sweep (bundle must stay shareable) ---
 # Whole repo (audit fix: previously skipped README/AGENTS.md/manifests/.github), minus .git.
 if grep -rInE '(AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH) PRIVATE KEY|amazon\.com/[a-z]|\.a2z\.com|aws\.dev/)' \
-    --include='*.md' --include='*.sh' --include='*.toml' --include='*.json' --include='*.yml' --include='*.yaml' --include='*.py' \
+    --include='*.md' --include='*.sh' --include='*.ps1' --include='*.toml' --include='*.json' --include='*.yml' --include='*.yaml' --include='*.py' \
     --exclude-dir='.git' \
     "$repo_root" 2>/dev/null | grep -v 'validate-bundle.sh'; then
   err "possible secret or internal hostname found (above)"
