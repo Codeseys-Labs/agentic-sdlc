@@ -1,6 +1,7 @@
 #!/bin/bash
 # Preflight for the agentic-sdlc-orchestrator kit.
-# Required: git, gh, and sd (Seeds queue).
+# Required baseline: git and sd (Seeds queue).
+# Set AGENTIC_SDLC_GITHUB_REQUIRED=1 only for an authorized GitHub operation; then gh is required.
 # The current skill-capable host is detected informationally because not every provider
 # exposes a stable CLI executable name.
 # Optional enhancements: tmux (adapter backend) and cmux (active view/event layer).
@@ -23,8 +24,12 @@ opt() {
 }
 
 req git
-req gh
 req sd
+if [ "${AGENTIC_SDLC_GITHUB_REQUIRED:-0}" = "1" ]; then
+  req gh
+else
+  rec gh "GitHub publication adapter skipped; local Git orchestration is unaffected"
+fi
 
 # Known agent CLIs are useful evidence, but execution may already be inside another
 # skill-capable native host. AGENTIC_SDLC_HOST_READY=1 makes that context explicit.
