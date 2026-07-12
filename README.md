@@ -115,11 +115,13 @@ or weakens the native path.
   copies — NOT globally installed; see its README; scaffolded per-repo by
   codex-research-os).
 - `commands/sdlc-{init,frame,wave,mission}.md`: Claude Code slash commands —
-  `/sdlc-init` (bootstrap a new/existing project onto the system: VCS incl. optional
-  jj colocation, Seeds queue, mise/lefthook/betterleaks gate stack with falsifiability
-  proof, trust, CLAUDE.md wiring — ends wave-ready), `/sdlc-frame` (frame one run),
-  `/sdlc-wave` (one Seeds-backed worktree wave), `/sdlc-mission` (autonomous
-  backlog-zero mission with concurrent critique and bounded backflow).
+  `/sdlc-init` activates Agentic SDLC inside a repository without reinstalling global
+  capabilities. It establishes a reviewed tracked Git baseline, Seeds queue,
+  mise/lefthook/betterleaks gate stack, per-worktree trust policy, cross-host `AGENTS.md`
+  guidance, and CI parity. It is idempotent and preserves existing project policy; jj
+  workspace Waves remain a later conformance milestone. `/sdlc-frame` frames one run,
+  `/sdlc-wave` runs one Seeds-backed Git-worktree wave, and `/sdlc-mission` runs an
+  autonomous backlog-zero mission with concurrent critique and bounded backflow.
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to
