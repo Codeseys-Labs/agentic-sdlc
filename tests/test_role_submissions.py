@@ -135,6 +135,27 @@ class RoleSubmissionContractTests(unittest.TestCase):
                         with self.assertRaises(AssertionError):
                             self.assert_no_authorized_fanin_execution(implementer_mutation)
 
+    def test_critics_are_advisory_and_cannot_mutate_seeds(self) -> None:
+        for host, text, sandbox in (
+            ("claude", self.read_claude("critic"), None),
+            ("codex", self.read_codex("critic")[0], self.read_codex("critic")[1]["sandbox_mode"]),
+        ):
+            with self.subTest(host=host):
+                self.assertRegex(text, r"(?i)seed-shaped recommendation")
+                self.assertRegex(text, r"(?i)never invoke `sd`|never .*mutate the queue")
+                self.assertNotRegex(text, r"(?i)file them|only writes are .*Seeds")
+                if sandbox is not None:
+                    self.assertEqual(sandbox, "read-only")
+
+    def test_read_only_codex_roles_return_artifacts_for_conductor_capture(self) -> None:
+        for role in ("cartographer", "planner"):
+            text, config = self.read_codex(role)
+            with self.subTest(role=role):
+                self.assertEqual(config["sandbox_mode"], "read-only")
+                self.assertRegex(text, r"(?is)return the complete .+?structured\s+submission")
+                self.assertRegex(text, r"(?i)conductor persists")
+                self.assertNotRegex(text, r"(?i)your only writes? (?:are|is)|write the .+ artifact")
+
     def test_hosts_keep_role_names_and_submission_capture_guidance(self) -> None:
         for role in ROLE_NAMES:
             claude = self.read_claude(role)
