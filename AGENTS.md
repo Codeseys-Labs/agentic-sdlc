@@ -17,13 +17,16 @@ as the router.
 - `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
   critic, integrator) in Claude `.md` and Codex `.toml` forms, plus the repo-scoped
   research roster under `agents/codex/research/`.
-- `commands/` — `/sdlc-frame`, `/sdlc-wave`, `/sdlc-mission` (Claude Code slash
-  commands; other hosts: invoke the flagship skill with the same intents).
+- `commands/` — `/sdlc-init` activates repository-specific DevEx, tracked baseline,
+  gates, trust, and shared guidance; `/sdlc-frame`, `/sdlc-wave`, and `/sdlc-mission`
+  run the delivery loop (Claude Code slash commands; other hosts invoke the flagship skill
+  with the same intents). Global installation and per-repository activation are separate
+  lifecycle planes.
 - `cao-profiles/` — optional CAO adapter profile templates.
 
 ## Working on THIS repo
 
-- Run `./scripts/validate-bundle.sh` before any commit — it gates frontmatter,
+- Run `mise run check` before any commit — it uses mise-managed uv/Python to validate
   name==dirname, the Codex 1024-char description cap, broken references, TOML/JSON
   parses, shell syntax, manifests, and secrets.
 - Run `./scripts/install-skill-bundle.sh self-test` after installer changes.

@@ -11,7 +11,10 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
    their own serial wave.
 3. Create one worktree per write-capable worker:
    `git worktree add ../<repo>-wt-<seed-id> -b work/<seed-id>-<slug>`
-   If codex workers will run: pre-trust each worktree path in ~/.codex/config.toml.
+   Before launching any worker, run `mise trust <absolute-worktree-path>` after verifying
+   that worktree's checked-in mise config. If Codex workers will run, also pre-trust each
+   worktree path in `~/.codex/config.toml`. Stop the Wave if either required trust step
+   fails; do not let workers bypass the repository gate.
 4. Launch provider-native role agents or subagents by default. Use CAO `assign`/`--async`
    only when the optional adapter was explicitly selected and is already healthy. Each
    worker prompt must carry: Seed id + acceptance criteria, absolute worktree path, files

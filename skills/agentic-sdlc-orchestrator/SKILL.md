@@ -15,7 +15,10 @@ the user explicitly selects durable or mixed-engine CAO sessions and CAO is alre
 available. Add cmux
 only when it is already active and useful for visibility or event messaging. Never install,
 start, or enable CAO, cmux, or tmux merely to run this skill. Use Seeds as the queue of
-record.
+record. Global distribution (`mise` → pinned `uv` → pinned Python installer) is separate
+from project activation: use `/sdlc-init` (or the same intent on non-Claude hosts) to
+establish a tracked Git baseline, Seeds, repository gates, trust, and shared `AGENTS.md`
+guidance before the first Frame/Wave.
 
 ## Repo Location
 
@@ -117,8 +120,8 @@ merge-base footprints, placeholder-trap assembly, re-gate-on-integration). The f
 wiring: cartographers (parallel, per area) → planner → implementers (one per worktree)
 → reviewers → integrator, with the critic standing concurrent and researchers on demand. REPO-SCOPED extra roster: `agents/codex/research/` carries the 17-role
 research team (see its README — installed per-repo via the codex-research-os scaffolder,
-never globally). Slash commands (Claude Code): `/sdlc-frame`, `/sdlc-wave`,
-`/sdlc-mission`. Optional cmux bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
+never globally). Slash commands (Claude Code): `/sdlc-init`, `/sdlc-frame`, `/sdlc-wave`,
+`/sdlc-mission`. Other hosts invoke the flagship skill with the same activation/frame/wave/mission intents. Optional cmux bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).
 
 ## Hard Stops
 
