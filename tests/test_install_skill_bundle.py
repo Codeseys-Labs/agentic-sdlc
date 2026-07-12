@@ -84,7 +84,29 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(installer.uninstall(config).exit_code, 0)
             self.assertFalse(destination.exists())
 
-    def test_modified_owned_copy_is_not_refreshed_or_uninstalled(self) -> None:
+    def test_owned_link_is_retargeted_to_current_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old = root / "old"
+            current = root / "current"
+            self.make_repo(old)
+            self.make_repo(current)
+            config = installer.Config(current, root / "home", root / "codex", "link", False, "claude", root / "state")
+            destination = config.home / ".claude" / "skills" / "example"
+            destination.parent.mkdir(parents=True)
+            destination.symlink_to(old / "skills" / "example")
+            state = installer.load_state(config.state_path)
+            state["entries"][str(destination)] = installer.entry_record(
+                installer.Entry("claude", "skill", "example", old / "skills" / "example"), "link"
+            )
+            installer.write_state(config.state_path, state, False)
+
+            result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(os.path.samefile(destination.resolve(), current / "skills" / "example"))
+            self.assertTrue(any(message.startswith(f"retargeted: {destination} (") for message in result.messages))
+
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.make_repo(root)

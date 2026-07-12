@@ -348,7 +348,25 @@ def install(config: Config) -> Result:
                         owned[key] = entry_record(entry, "copy")
                         messages.append(f"refreshed: {destination}")
                 else:
-                    messages.append(f"ok: {destination}")
+                    recorded_source = Path(str(record.get("source", "")))
+                    desired_source = entry.source.resolve()
+                    if recorded_source != desired_source:
+                        if config.dry_run:
+                            messages.append(f"would retarget: {destination}")
+                        else:
+                            remove_path(destination)
+                            try:
+                                mode = create_destination(entry, destination, config)
+                            except (OSError, subprocess.CalledProcessError) as exc:
+                                try:
+                                    link_item(recorded_source, destination)
+                                except (OSError, subprocess.CalledProcessError):
+                                    pass
+                                raise InstallerError(f"cannot retarget {destination}: {exc}") from exc
+                            owned[key] = entry_record(entry, mode)
+                            messages.append(f"retargeted: {destination} ({mode})")
+                    else:
+                        messages.append(f"ok: {destination}")
                 continue
 
             target = current_link_target(destination)
