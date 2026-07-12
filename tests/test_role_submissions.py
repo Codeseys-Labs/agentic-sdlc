@@ -19,6 +19,31 @@ ROLE_NAMES = (
     "researcher",
 )
 READ_ONLY_ROLES = ("cartographer", "planner", "reviewer", "critic", "researcher")
+EXPECTED_SUBMISSION_HEADINGS = (
+    "role",
+    "scope",
+    "findings",
+    "evidence",
+    "recommendation",
+    "blockers",
+    "unknowns",
+    "next_action",
+)
+SUBMISSION_SECTION = re.compile(
+    r"(?ms)^## STRUCTURED SUBMISSION\s*$\n(?P<body>.*?)(?=^##\s|\Z)"
+)
+AUTHORIZED_FANIN_EXECUTION = re.compile(
+    r"(?i)\balready[- ]authorized\b.*\bfan[- ]in\b.*\b(?:execute|perform|apply|merge|mutation)\b"
+)
+FINAL_VERDICT_TOKEN = re.compile(
+    r"(?i)\b(?:SHIP(?:-WITH-NITS)?|CLEAN)\b"
+)
+FINAL_VERDICT_INSTRUCTION = re.compile(
+    r"(?i)\b(?:verdict|release status|final decision)\s*[:=-]\s*"
+    r"(?:APPROVED|BLOCK(?:ED)?|PASS|FAIL)\b|"
+    r"\b(?:end|finish|conclude|return)\b.{0,40}\b"
+    r"(?:APPROVED|BLOCK(?:ED)?|PASS|FAIL)\b"
+)
 
 
 class RoleSubmissionContractTests(unittest.TestCase):
@@ -30,21 +55,28 @@ class RoleSubmissionContractTests(unittest.TestCase):
         text = path.read_text()
         return text, tomllib.loads(text)
 
+    def submission_body(self, text: str) -> str:
+        match = SUBMISSION_SECTION.search(text)
+        self.assertIsNotNone(match, "missing delimited structured submission section")
+        return match.group("body")
+
     def assert_submission_contract(self, text: str) -> None:
-        self.assertIn("STRUCTURED SUBMISSION", text)
-        for field in (
-            "role",
-            "scope",
-            "findings",
-            "evidence",
-            "recommendation",
-            "blockers",
-            "unknowns",
-            "next_action",
-        ):
-            self.assertRegex(text, rf"(?m)^\s*[-*]?\s*`?{field}`?\b")
-        self.assertIn("conductor", text.lower())
-        self.assertIn("authorization", text.lower())
+        body = self.submission_body(text)
+        headings = tuple(re.findall(r"(?m)^\s*-\s*`([^`]+)`\s*:", body))
+        self.assertEqual(headings, EXPECTED_SUBMISSION_HEADINGS)
+        self.assertIn("conductor", body.lower())
+        self.assertIn("authorization", body.lower())
+
+    def assert_no_authorized_fanin_execution(self, text: str) -> None:
+        self.assertNotRegex(text, AUTHORIZED_FANIN_EXECUTION)
+        reversed_order = re.compile(
+            r"(?i)\b(?:execute|perform|apply|merge)\b.*\balready[- ]authorized\b.*\bfan[- ]in\b"
+        )
+        self.assertNotRegex(text, reversed_order)
+
+    def assert_no_final_verdict_instruction(self, text: str) -> None:
+        self.assertNotRegex(text, FINAL_VERDICT_TOKEN)
+        self.assertNotRegex(text, FINAL_VERDICT_INSTRUCTION)
 
     def test_every_role_declares_structured_submission(self) -> None:
         for role in ROLE_NAMES:
@@ -64,6 +96,7 @@ class RoleSubmissionContractTests(unittest.TestCase):
                 with self.subTest(host=host, role=role):
                     self.assertIn("recommendation", text.lower())
                     self.assertNotRegex(text, forbidden)
+                    self.assert_no_authorized_fanin_execution(text)
                     self.assertNotRegex(text, r"(?m)^\s*`?(?:SHIP|CLEAN|APPROVED|BLOCK)`?\s*$")
 
     def test_reviewer_and_critic_recommendations_are_not_verdicts(self) -> None:
@@ -73,8 +106,17 @@ class RoleSubmissionContractTests(unittest.TestCase):
                     self.assertIn("recommend", text.lower())
                     self.assertIn("conductor", text.lower())
                     self.assertRegex(text, r"(?i)do not .*decide|never .*decide|not .*authority")
-                    self.assertNotIn("verdict: `SHIP`", text)
-                    self.assertNotIn("verdict: SHIP", text)
+                    self.assert_no_final_verdict_instruction(text)
+
+                    # A forbidden instruction must be caught without mutating a role file.
+                    for mutation in (
+                        f"{text}\nEnd with SHIP.",
+                        f"{text}\nEnd with CLEAN.",
+                        f"{text}\nEnd with SHIP-WITH-NITS.",
+                        f"{text}\nverdict: SHIP",
+                    ):
+                        with self.assertRaises(AssertionError):
+                            self.assert_no_final_verdict_instruction(mutation)
 
     def test_only_integrator_can_execute_authorized_fanin(self) -> None:
         for role in ROLE_NAMES:
@@ -85,7 +127,13 @@ class RoleSubmissionContractTests(unittest.TestCase):
                         self.assertRegex(text, r"(?i)already[- ]authorized")
                         self.assertRegex(text, r"(?i)never .*user.*authority|does not .*user.*authority")
                     else:
-                        self.assertNotRegex(text, r"(?i)only .*integrator.*(?:execute|mutation)")
+                        self.assert_no_authorized_fanin_execution(text)
+                        implementer_mutation = (
+                            f"{text}\nOnly the implementer may execute an already-authorized "
+                            "fan-in mutation."
+                        )
+                        with self.assertRaises(AssertionError):
+                            self.assert_no_authorized_fanin_execution(implementer_mutation)
 
     def test_hosts_keep_role_names_and_submission_capture_guidance(self) -> None:
         for role in ROLE_NAMES:
