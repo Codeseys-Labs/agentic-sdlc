@@ -1,6 +1,6 @@
 [tools]
-# Upstream bundle tooling. Tool availability is pinned; lefthook installation and
-# jj colocation remain explicit per-repository actions.
+# Tool availability is pinned; hook installation and jj colocation remain explicit.
+uv = "0.11.17"
 lefthook = "2.1.10"
 jj = "0.43.0"
 
@@ -9,11 +9,111 @@ description = "Run the bundle validator (CI gate)"
 run = "./scripts/validate-bundle.sh"
 run_windows = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-git-bash.ps1 scripts/validate-bundle.sh"
 
+[tasks."bundle:install"]
+description = "Install the skill bundle on this host"
+run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
+
+[tasks."bundle:status"]
+description = "Report this host's skill-bundle lifecycle status"
+run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py status"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
+
+[tasks."bundle:uninstall"]
+description = "Uninstall skill-bundle entries owned on this host"
+run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
+
+[tasks."bundle:install:claude"]
+description = "Install the skill bundle for Claude on this host"
+run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent claude"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent claude"
+
+[tasks."bundle:install:codex"]
+description = "Install the skill bundle for Codex on this host"
+run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent codex"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent codex"
+
+[tasks."bundle:install:all-hosts"]
+description = "Install on WSL and the paired native Windows host"
+run = '''set -u
+repo_root="${MISE_PROJECT_ROOT:?mise did not provide the project root}"
+powershell="$(command -v powershell.exe || true)"
+if [ -z "$powershell" ]; then
+  powershell="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+fi
+if [ ! -x "$powershell" ]; then
+  printf '%s\n' "error: native Windows PowerShell was not found" >&2
+  exit 2
+fi
+if ! command -v wslpath >/dev/null 2>&1; then
+  printf '%s\n' "error: bundle:install:all-hosts requires WSL" >&2
+  exit 2
+fi
+native_repo="$(wslpath -w "$repo_root")"
+args_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
+printf '%s\n' '=== WSL host: install ==='
+wsl_exit=0
+mise -C "$repo_root" run bundle:install "$@" || wsl_exit=$?
+printf '%s\n' '=== Native Windows host: install ==='
+windows_exit=0
+"$powershell" -NoProfile -ExecutionPolicy Bypass -File "$native_repo\scripts\run-windows-mise.ps1" -RepoRoot "$native_repo" -Task bundle:install -TaskArgsJson "$args_json" || windows_exit=$?
+printf '=== Host summary: WSL=%s Windows=%s ===\n' "$wsl_exit" "$windows_exit"
+if [ "$wsl_exit" -gt "$windows_exit" ]; then exit "$wsl_exit"; fi
+exit "$windows_exit"'''
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
+
+[tasks."bundle:status:all-hosts"]
+description = "Report lifecycle status on WSL and the paired native Windows host"
+run = '''set -u
+repo_root="${MISE_PROJECT_ROOT:?mise did not provide the project root}"
+powershell="$(command -v powershell.exe || true)"
+if [ -z "$powershell" ]; then
+  powershell="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+fi
+if [ ! -x "$powershell" ]; then
+  printf '%s\n' "error: native Windows PowerShell was not found" >&2
+  exit 2
+fi
+if ! command -v wslpath >/dev/null 2>&1; then
+  printf '%s\n' "error: bundle:status:all-hosts requires WSL" >&2
+  exit 2
+fi
+native_repo="$(wslpath -w "$repo_root")"
+args_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
+printf '%s\n' '=== WSL host: status ==='
+wsl_exit=0
+mise -C "$repo_root" run bundle:status "$@" || wsl_exit=$?
+printf '%s\n' '=== Native Windows host: status ==='
+windows_exit=0
+"$powershell" -NoProfile -ExecutionPolicy Bypass -File "$native_repo\scripts\run-windows-mise.ps1" -RepoRoot "$native_repo" -Task bundle:status -TaskArgsJson "$args_json" || windows_exit=$?
+printf '=== Host summary: WSL=%s Windows=%s ===\n' "$wsl_exit" "$windows_exit"
+if [ "$wsl_exit" -gt "$windows_exit" ]; then exit "$wsl_exit"; fi
+exit "$windows_exit"'''
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
+
+[tasks.test]
+description = "Run the Python installer tests"
+run = "uv run --python 3.12.11 --script tests/test_install_skill_bundle.py"
+run_windows = "uv.exe run --python 3.12.11 --script tests/test_install_skill_bundle.py"
+
 [tasks.self-test]
-description = "Verify installer lifecycle policy in a throwaway HOME"
-run = "./scripts/install-skill-bundle.sh self-test"
-run_windows = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-git-bash.ps1 scripts/install-skill-bundle.sh self-test"
+description = "Verify installer lifecycle safety in a throwaway home"
+run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
+
+[tasks."hooks:install"]
+description = "Install this repository's lefthook hooks"
+run = "lefthook install"
+
+[tasks."jj:init"]
+description = "Explicitly colocate this repository with Jujutsu"
+run = "jj git init --colocate"
+
+[tasks.setup]
+description = "Install this host's bundle and Git hooks"
+depends = ["bundle:install", "hooks:install"]
 
 [tasks.check]
-description = "The full local gate (validator + installer self-test)"
-depends = ["validate", "self-test"]
+description = "Run validation, installer tests, and lifecycle self-test"
+depends = ["validate", "test", "self-test"]
