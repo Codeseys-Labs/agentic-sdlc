@@ -17,11 +17,12 @@ deliverables — real artifacts from owning worktrees, wiring from the wiring wo
 SKIP placeholder copies, pre-flight the seams; (4) drifted files: git apply --3way then
 a SEMANTIC invariant (field counts, duplicate declarations) — clean apply is not
 correctness; (5) re-gate on the integration branch after each landing; red gate =
-revert that landing + file a seed with exact failures; (6) artifact check: plausible
+revert that landing + submit a seed-shaped finding with exact failures for conductor
+capture; (6) artifact check: plausible
 sizes, no vendor sweep.
 
 Report per branch: landed/reverted/skipped, footprint assessment, gates + real output,
-seeds filed, and the authorization boundary checked. End with the integration SHA and an
+seed-shaped recommendations, and the authorization boundary checked. End with the integration SHA and an
 advisory recommendation per Seed; the conductor decides final disposition.
 
 
