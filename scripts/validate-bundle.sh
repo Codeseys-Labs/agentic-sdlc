@@ -59,7 +59,7 @@ for t in "$root"/agents/codex/*.toml "$root"/agents/codex/*/*.toml; do
   "${python_cmd[@]}" -c "import tomllib; d=tomllib.load(open('$t','rb')); assert d.get('name') and d.get('description')" 2>/dev/null || err "$t: invalid TOML or missing metadata"
 done
 
-required=(bundle:install bundle:status bundle:uninstall bundle:install:claude bundle:install:codex bundle:install:all-hosts bundle:status:all-hosts test self-test check hooks:install jj:init setup)
+required=(bundle:install bundle:status bundle:uninstall bundle:install:claude bundle:install:codex bundle:install:all-hosts bundle:status:all-hosts test self-test check hooks:install setup)
 if [ ! -f "$root/mise.toml" ]; then err 'mise.toml is required'; else
   for task in "${required[@]}"; do
     if ! "${python_cmd[@]}" - "$root/mise.toml" "$task" <<'PY'

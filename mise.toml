@@ -2,7 +2,6 @@
 # mise is the only user prerequisite. It installs every pinned repository tool.
 uv = "0.11.17"
 lefthook = "2.1.10"
-jj = "0.43.0"
 
 [tasks.validate]
 description = "Run the portable bundle validator"
@@ -61,10 +60,6 @@ depends = ["validate", "test", "self-test"]
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"
 run = "lefthook install"
-
-[tasks."jj:init"]
-description = "Explicitly colocate this repository with Jujutsu"
-run = "jj git init --colocate"
 
 [tasks.setup]
 description = "Install this host's bundle and Git hooks"

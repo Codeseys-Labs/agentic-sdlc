@@ -43,23 +43,6 @@ fi
 opt tmux "session/view backend skipped; native orchestration is unaffected"
 opt cmux "view/event adapter skipped; native orchestration is unaffected"
 
-# jj version + colocated-repo detection (an unusable optional binary never fails preflight)
-if command -v jj >/dev/null 2>&1; then
-  ver="$(jj --version 2>/dev/null | head -1 || true)"
-  if [ -n "$ver" ]; then
-    printf 'optional: jj version: %s\n' "$ver"
-    root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    if [ -d "$root/.jj" ]; then
-      printf 'optional: colocated jj repo detected at %s\n' "$root"
-      printf 'note:     git hooks do NOT fire on jj commits — mise run check + CI carry the gates (see references/jj-vcs.md)\n'
-    fi
-  else
-    printf 'optional: jj command is present but unusable; git worktrees remain available\n'
-  fi
-else
-  printf 'optional: jj not found; git worktrees remain the default substrate\n'
-fi
-
 # cmux is usable only when both its CLI and an active workspace are already present.
 if command -v cmux >/dev/null 2>&1 && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
   printf 'optional: active cmux view/event adapter detected\n'

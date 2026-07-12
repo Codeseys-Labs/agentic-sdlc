@@ -54,7 +54,7 @@ otherwise inherited or unresolved.
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`
 - `bundle:install:all-hosts`, `bundle:status:all-hosts`
-- `test`, `self-test`, `check`, `hooks:install`, `jj:init`, `setup`
+- `test`, `self-test`, `check`, `hooks:install`, `setup`
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim
@@ -69,10 +69,9 @@ retargeted, and modified entries are preserved, while unchanged owned copies may
 Native Windows runs the current-host task normally. From WSL, all-host tasks run WSL first,
 then invoke native Windows mise and report the two hosts separately. `hooks:install` installs
 lefthook's validate pre-commit and test/self-test pre-push subsets; hooks are best-effort
-convenience, not release authority. `jj:init` is explicit; jj bypasses Git hooks, so run the
-checks explicitly. The Bash installer is a mise-backed compatibility wrapper retaining
+convenience, not release authority. The Bash installer is a mise-backed compatibility wrapper retaining
 positional `status`, `uninstall`, `self-test`, legacy `--copy`, and retired `INSTALL_CAO=1`
-opt-in. For Claude, use either direct install or the marketplace, never both; marketplace
+which exits 2 before native installation. For Claude, use either direct install or the marketplace, never both; marketplace
 overlap blocks only Claude. No local status, gate, reviewer label, or conductor choice grants
 authority for push, publication, PR mutation, merge, deployment, credential, or other outward
 effect; each requires explicit operation-specific authorization.

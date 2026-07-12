@@ -33,7 +33,6 @@ REQUIRED_TASKS = {
     "self-test",
     "check",
     "hooks:install",
-    "jj:init",
     "setup",
 }
 

@@ -73,7 +73,7 @@ start, or enable cmux or tmux merely to use this bundle.
 - `skills/stacked-prs-gh-cli/`: the same with ONLY plain `gh` + git — no gt/spr/ghstack.
   gh has no `stack` command (v2.95); GitHub's primitives are `--base` targeting + explicit
   retarget/requery/restack. Covers the squash-merge `--onto` restack gotcha and
-  `--force-with-lease` safety. Pairs with `stacked-prs` and the jj-vcs reference.
+  `--force-with-lease` safety. Pairs with `stacked-prs`.
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, native worktree waves, PR flow, and
     optional worker/view adapters.
@@ -94,12 +94,6 @@ start, or enable cmux or tmux merely to use this bundle.
     separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
     with a recorded next-action, greenfield/brownfield loops, the cheapest-decisive-
     experiment rule, gates-as-executables (no decorative model pins).
-  - `references/jj-vcs.md` — **jj (Jujutsu) as the wave substrate** (verified on 0.43):
-    colocated adoption (CI sees plain git), workspaces as agent-grade worktrees with
-    op-log audit + stale detection, never-failing fan-in (conflicts = committed state),
-    auto-snapshot (uncommitted-work loss impossible) + `jj undo`; gotchas: git hooks
-    don't fire, `description("x")` exact-match trap, headless identity, snapshot
-    swallows non-gitignored secrets.
 - `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: seven role agents in both CLI
   forms (symlinked globally) — **cartographer** (read-only Discover mapper), planner,
   implementer, reviewer, **researcher** (bounded unknown-resolution), **critic** (standing
@@ -115,8 +109,7 @@ start, or enable cmux or tmux merely to use this bundle.
   capabilities. It establishes a reviewed tracked Git baseline, Seeds queue,
   mise/lefthook/betterleaks gate stack, per-worktree trust policy, cross-host `AGENTS.md`
   guidance, and CI parity. It is a reviewed runbook: claims of idempotence or Git-wave readiness
-  require observed evidence; it preserves existing project policy and stops on ambiguity. jj
-  workspace Waves remain a later conformance milestone. `/sdlc-frame` frames one run,
+  require observed evidence; it preserves existing project policy and stops on ambiguity. `/sdlc-frame` frames one run,
   `/sdlc-wave` runs one Seeds-backed Git-worktree wave, and `/sdlc-mission` runs an
   autonomous backlog-zero mission with concurrent critique and bounded backflow.
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
@@ -165,7 +158,6 @@ The public task surface is intentionally small:
 | `self-test` | Exercise install/status/uninstall in an isolated home. |
 | `check` | Run the authoritative validation, tests, and self-test gate. |
 | `hooks:install` | Install the checked-in lefthook hooks. |
-| `jj:init` | Explicitly initialize a colocated jj repository. |
 | `setup` | Bootstrap the pinned toolchain and repository setup. |
 
 A normal Unix install uses symlinks. On Windows, automatic mode uses directory junctions
@@ -208,16 +200,12 @@ by `claude plugin install`). Marketplace overlap blocks only the Claude plane; o
 planes can still be managed. Do not register both, because the same skill would appear once
 as a bare skill and again under the plugin namespace.
 
-### Hooks and jj
+### Hooks
 
 `hooks:install` installs the lefthook subsets from this repository: pre-commit runs
 `mise run validate`; pre-push runs `mise run test` and `mise run self-test`. These hooks are
 best-effort convenience only; `mise run check` remains the complete local gate and the
 command CI mirrors.
-
-`jj:init` is explicit and is not a dependency of `setup`. A colocated jj repository keeps
-Git interoperability, but jj commands bypass Git hooks; run `mise run check` (and any
-relevant task) explicitly when working through jj.
 
 ### Compatibility wrapper and optional adapters
 
