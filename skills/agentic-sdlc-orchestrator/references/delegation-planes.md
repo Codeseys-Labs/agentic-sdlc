@@ -3,9 +3,11 @@
 Use this reference when choosing HOW to delegate a workstream — before choosing WHO
 (profile/role). The wrong plane wastes tokens, hides results, or causes write conflicts.
 
-Provider-native delegation is the complete baseline. CAO is an optional durability and
+Provider-native delegation is the complete baseline only after required capability and trust
+probes succeed. It is a mechanism, not authority: CAO is an optional durability and
 mixed-engine adapter; cmux is an optional view/event layer. Never install or enable either
-to satisfy an ordinary delegation need.
+to satisfy an ordinary delegation need. Missing, unpinned, untrusted, or ambiguous required
+capability fails closed.
 
 ## Claude Code entrypoint
 
@@ -48,9 +50,15 @@ needs, (c) lifetime beyond the conversation, (d) engine mixing.
 
 ## Universal rules
 
-- One conductor owns the queue (Seeds), merges, and final claims — regardless of plane.
+- One conductor owns the queue (Seeds), merges, and evidence-backed recommendations — regardless of plane.
+- Roles, status, gate results, and reviewer/critic labels are advisory; they do not authorize
+  outward effects. The integrator is the only delegated mutation executor during fan-in and
+  never acquires user authority. Push, publication, PR mutation, merge, deployment,
+  credential, and evidence-store operations each require explicit operation-specific approval.
 - Write-capable workers get their own worktree; read-only workers can share.
 - Long-running: use the selected host's native background/persistent mechanism plus
   artifact files. When CAO is selected, use `assign`/`--async` and consult
   `references/cao-operations.md`. Never hold a blocking call open for hours.
 - Results land in FILES at assigned artifact paths; chat summaries are hints, not evidence.
+- Requested semantic model tier and resolved provider/model are different facts. Record the
+  resolved value only after adapter readback; otherwise record inherited or unresolved.

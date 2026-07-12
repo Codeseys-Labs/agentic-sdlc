@@ -3,24 +3,30 @@ name: sdlc-init
 description: Safely activate Agentic SDLC inside a new or existing repository — tracked VCS baseline, Seeds, pinned gates, trust, shared agent guidance, and CI — ending Git-wave-ready
 ---
 
-Initialize the current directory (or the path in $ARGUMENTS) as an Agentic SDLC project.
+Initialize the current directory (or the path in $ARGUMENTS) as an Agentic SDLC project using
+this **reviewed runbook**. It is a host procedure, not a deterministic activation engine:
+inspect, propose, apply only approved changes, verify the result, and stop on ambiguity.
 This is the **project activation plane**. Global skills, commands, agents, and scripts are
 installed separately by `mise run bundle:install`; do not install or mutate global agent
 homes here.
 
-Idempotency means inspect, adopt, or surgically merge. Never overwrite an existing
-`mise.toml`, `lefthook.yml`, `AGENTS.md`, `CLAUDE.md`, CI workflow, `.seeds/`, or VCS
-configuration. If an existing file cannot be merged without changing unrelated policy,
-report the conflict and stop before claiming wave readiness.
+Idempotency is a claim requiring observed evidence, not an implementation assumption: inspect,
+adopt, or surgically merge. Never overwrite an existing `mise.toml`, `lefthook.yml`,
+`AGENTS.md`, `CLAUDE.md`, CI workflow, `.seeds/`, or VCS configuration. If an existing file
+cannot be merged without changing unrelated policy, report the conflict and stop before
+claiming wave readiness.
 
 1. **Preflight and snapshot**
    - Load `agentic-sdlc-orchestrator` and the `repo-toolchain-gates` skill.
    - Resolve the target repository, then record `git status --short`, tracked/untracked
      files, current branch/HEAD, remotes, existing task runner, hooks, CI, instruction
      files, and language/toolchain manifests.
-   - Run the maintained prerequisite checker when available. Missing CAO, cmux, tmux, jj,
-     or betterleaks never triggers implicit installation. `mise` is the sole required
-     bootstrap tool; repository tools are pinned through it.
+   - Run the maintained prerequisite checker when available. Missing, unpinned, untrusted,
+     or ambiguous required capability fails closed; missing optional CAO, cmux, tmux, or jj
+     never triggers implicit installation. `mise` is the managed-tool bootstrap, not the sole
+     readiness prerequisite; repository tools are pinned through it. Record the selected
+     adapter and its capability/model readback, or record inherited/unresolved when it cannot
+     prove the resolved provider/model.
    - If the repository is dirty, do not commit, stage, or absorb pre-existing changes.
      Produce the activation proposal and ask the user to commit/stash/select an explicit
      activation worktree before write steps.
@@ -87,5 +93,8 @@ report the conflict and stop before claiming wave readiness.
      Never include the user’s pre-existing changes.
    - Report tracked-baseline evidence, gate fail→pass proof, initial Seeds, trust actions,
      remaining conflicts, and `/sdlc-frame <first milestone>` as the next step.
-   - Claim **Git-wave-ready** only when: clean tracked baseline, non-empty Seeds queue,
-     `mise run check` passes, guidance/CI agree, and worktree trust policy is recorded.
+   - Claim **Git-wave-ready** only when observed evidence shows: clean tracked baseline,
+     non-empty Seeds queue, `mise run check` passes, guidance/CI agree, required capability
+     and worktree trust are verified, and any selected adapter/model is read back. This local
+     claim does not authorize push, publication, PR mutation, merge, deployment, credentials,
+     or another outward effect; each operation needs explicit operation-specific approval.

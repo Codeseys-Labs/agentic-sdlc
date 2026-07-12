@@ -8,8 +8,11 @@ optional durability and view adapters.
 
 ## The multiplier principle (where the frontier model goes)
 
-Agents are not interchangeable. Reserve the scarcest/strongest tier for
-**scale-setters** — decisions that multiply:
+Agents are not interchangeable, and model tier is a requested semantic, not proof of the
+provider/model actually used. Reserve the scarcest/strongest tier for **scale-setters** —
+decisions that multiply. Record resolved provider/model only after adapter readback; otherwise
+record inherited or unresolved. A tier choice, verdict, or gate result never authorizes an
+outward effect.
 
 - **Frame/Decompose** (multiplies FORWARD: every later token is spent inside this frame)
 - **Plan** (its `workstreams[]` IS the worker fleet's work list)
@@ -58,7 +61,7 @@ The baseline has two complete layers; optional adapters add durability or visibi
 
 | Layer | Runs | Use for |
 |---|---|---|
-| **Conductor** (interactive host session) | frame, plan adoption, verdicts, Seeds/merge ownership | All scale-setter decisions |
+| **Conductor** (interactive host session) | frame, plan adoption, verdict recommendations, Seeds/merge ownership | All scale-setter decisions; no outward authority |
 | **Provider-native fan-out** (roles, subagents, workflows, teams, background tasks) | discovery, research, implementation waves, review panels, critique | All delegated work within the host's supported lifetime |
 | **Optional CAO adapter** | durable or mixed-engine sessions | Select only when explicitly needed and already healthy |
 | **Optional cmux adapter** | view/event layer for already-active sessions | Never load-bearing; no installation or enablement step |
@@ -100,7 +103,8 @@ Guardrails (so "keep going until done" stays bounded):
 The conductor holds the backflow cursor. Re-entry launches a scoped provider-native worker,
 folds its artifact into accumulated state, then re-runs forward phases as cheap
 re-validation. When CAO is selected, `assign`/async is one optional implementation of the
-same artifact-backed pattern.
+same artifact-backed pattern. A verdict or backflow directive is advisory and does not grant
+permission for an outward operation.
 
 ## Iteration shape: chained runs vs one mega-run
 

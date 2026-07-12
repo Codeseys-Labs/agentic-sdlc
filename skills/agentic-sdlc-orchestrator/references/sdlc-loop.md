@@ -8,7 +8,9 @@ Frame:
 - State the exact done condition.
 - Read repo intent docs, roadmap, ADRs, and current queue state.
 - Decide whether the run is direct, a provider-native delegation, or a worktree wave.
-  Select the optional CAO adapter only for an explicit durable/mixed-engine need.
+  Select the optional CAO adapter only for an explicit durable/mixed-engine need. Treat
+  discovered capabilities as candidates until required probes, trust, and adapter readback
+  succeed; missing, unpinned, untrusted, or ambiguous capability fails closed.
 - Set caps: worker count, worktree count, max review/fix rounds, and stop conditions.
 
 Discover:
@@ -23,6 +25,9 @@ Research:
 
 Plan:
 - Emit workstreams with owner role, target worktree, dependencies, files in scope, gates, and rollback.
+  Roles and verdicts are advisory submissions; record requested model tier separately from
+  actual provider/model resolution. Record resolved only after adapter readback, otherwise
+  inherited or unresolved.
 - Convert every actionable finding into a Seed before Act.
 - Mark workstreams that require Claude Code dynamic workflows.
 
@@ -38,13 +43,17 @@ Review:
 
 Reconcile:
 - Run gates from the root and from affected packages as needed.
-- Close or update Seeds only after acceptance evidence is verified.
+- Turn findings into advisory Seeds and close or update them only after acceptance evidence is verified.
+  Only the integrator may execute an already authorized fan-in mutation; local status, passing
+  gates, worker reports, reviewer recommendations, and conductor choices never grant authority.
 - Run `sd sync` when the repo uses Seeds and queue state changed.
 
 Ship:
-- Squash/rebase worktree branches into an integration branch.
+- Squash/rebase worktree branches into an integration branch only within the authorized scope.
 - Preserve a clear commit message tying work to Seeds.
-- Open a PR if the repo expects review; otherwise commit locally and report gates.
+- Open a PR if the repo expects review; otherwise commit locally and report gates. Push,
+  publication, PR mutation, merge, deployment, credential, and evidence-store operations
+  require explicit operation-specific authorization.
 
 ## Backflow
 

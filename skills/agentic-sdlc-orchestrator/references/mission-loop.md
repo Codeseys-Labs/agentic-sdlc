@@ -18,7 +18,9 @@ WIP caps, priority math, and an honest definition of done.
 
 ## Classification (every item, every finding)
 
-Every backlog item and every new discovery gets exactly one class:
+Every backlog item and every new discovery gets exactly one class. Classification and priority
+are advisory conductor records, not execution authority:
+
 
 `ACTIVE_MILESTONE` | `BLOCKED_CI` | `BLOCKED_DESIGN` | `BLOCKED_DEPENDENCY` |
 `POST_MILESTONE` | `OUT_OF_SCOPE` | `DUPLICATE` | `INVALID`
