@@ -6,11 +6,16 @@ errors=0; warns=0
 err(){ printf 'ERROR: %s\n' "$*" >&2; errors=$((errors+1)); }
 warn(){ printf 'warn:  %s\n' "$*"; warns=$((warns+1)); }
 python_cmd=()
-for candidate in python3 python; do
-  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; assert sys.version_info >= (3,8)' >/dev/null 2>&1; then python_cmd=("$candidate"); break; fi
-done
-if [ "${#python_cmd[@]}" -eq 0 ] && command -v py >/dev/null 2>&1 && py -3 -c 'import sys; assert sys.version_info >= (3,8)' >/dev/null 2>&1; then python_cmd=(py -3); fi
-[ "${#python_cmd[@]}" -gt 0 ] || { err 'Python 3.8+ is required'; python_cmd=(false); }
+if command -v uv >/dev/null 2>&1 && uv run --python 3.12.11 python -c 'import sys; assert sys.version_info >= (3,12)' >/dev/null 2>&1; then
+  python_cmd=(uv run --python 3.12.11 python)
+else
+  # Bootstrap CI may validate source before mise installs uv. Public mise tasks use uv above.
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; assert sys.version_info >= (3,8)' >/dev/null 2>&1; then python_cmd=("$candidate"); break; fi
+  done
+  if [ "${#python_cmd[@]}" -eq 0 ] && command -v py >/dev/null 2>&1 && py -3 -c 'import sys; assert sys.version_info >= (3,8)' >/dev/null 2>&1; then python_cmd=(py -3); fi
+fi
+[ "${#python_cmd[@]}" -gt 0 ] || { err 'uv-managed Python 3.12.11 is required (or Python 3.8+ for direct bootstrap validation)'; python_cmd=(false); }
 
 for skill in "$root"/skills/*/SKILL.md; do
   [ -e "$skill" ] || continue
