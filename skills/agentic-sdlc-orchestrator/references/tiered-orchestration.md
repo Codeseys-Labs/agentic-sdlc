@@ -113,8 +113,9 @@ permission for an outward operation.
   belongs to the conductor. Each completed iteration is a durable checkpoint + a steering
   point for the human.
 - **One mega-run** (backflow controller inside): headless/cron missions, well-trodden
-  shapes, explicit fire-and-forget. Delegate ship authority to the final verdict
-  (commit-never-push) and keep the honest-exit contract.
+  shapes, explicit fire-and-forget. Treat the final verdict as a recommendation only;
+  ship, commit, push, and every other outward effect still require operation-specific
+  authorization. Keep the honest-exit contract.
 - **Hybrid scout trick:** do cheap discovery inline FIRST (list files, find seams) so the
   run's prompts reference real names instead of spending their first phase rediscovering.
 
