@@ -38,6 +38,24 @@ as the router.
 
 ## Installing this bundle
 
-`./scripts/check-agentic-sdlc-prereqs.sh` then `./scripts/install-skill-bundle.sh`
-(symlinks; `status`/`uninstall`/`self-test` subcommands). Claude Code alternative:
-`claude plugin marketplace add <this repo>` — pick ONE path per machine, not both.
+mise is the sole prerequisite. It pins uv, and uv supplies Python 3.12.11 for the stdlib
+installer. Use the exact public task surface:
+
+- `bundle:install`, `bundle:status`, `bundle:uninstall`
+- `bundle:install:claude`, `bundle:install:codex`
+- `bundle:install:all-hosts`, `bundle:status:all-hosts`
+- `test`, `self-test`, `check`, `hooks:install`, `jj:init`, `setup`
+
+Unix installs use symlinks. Windows automatic mode tries directory junctions and file
+symlinks, then falls back to copies; strict link mode has no fallback. Ownership state lives
+under `XDG_STATE_HOME` on Unix or `LOCALAPPDATA` on Windows. Dry-run migration writes neither
+entries nor state. Exact legacy links and byte-identical copies can be adopted; foreign,
+retargeted, and modified entries are preserved, while unchanged owned copies may refresh.
+
+Native Windows runs the current-host task normally. From WSL, all-host tasks run WSL first,
+then invoke native Windows mise and report the two hosts separately. `hooks:install` installs
+lefthook's validate pre-commit and test/self-test pre-push subsets. `jj:init` is explicit;
+jj bypasses Git hooks, so run the checks explicitly. The Bash installer is a mise-backed
+compatibility wrapper retaining positional `status`, `uninstall`, `self-test`, legacy
+`--copy`, and explicit `INSTALL_CAO=1` opt-in. For Claude, use either direct install or the
+marketplace, never both; marketplace overlap blocks only Claude.
