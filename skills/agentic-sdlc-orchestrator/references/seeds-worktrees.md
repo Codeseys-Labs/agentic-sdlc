@@ -76,8 +76,7 @@ Do not force-push or rewrite shared branches without explicit user approval.
 them as a stack (A's PR base main, B's base A, merge bottom-up) rather than merging both
 into one mega-branch or blocking B until A merges. Independent Seeds in the same wave land
 as parallel PRs. Mechanics: the `stacked-prs` skill (methodology) and `stacked-prs-gh-cli`
-(raw gh/git, incl. the squash-merge restack gotcha); on jj, descendants auto-rebase
-(`references/jj-vcs.md`).
+(raw gh/git, incl. the squash-merge restack gotcha).
 
 ## Config propagation into new worktrees
 

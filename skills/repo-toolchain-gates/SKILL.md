@@ -28,7 +28,7 @@ verified stack for all three.
 ## The shape
 
 ```
-mise.toml   [tools]  → pins EVERYTHING: language, uv, linters, lefthook, optional VCS CLIs
+mise.toml   [tools]  → pins EVERYTHING: language, uv, linters, lefthook
             [tasks]  → fmt / vet / lint / test / … and ONE aggregate:
             [tasks.check]  depends = ["fmt","vet","lint","test",…]   ← THE gate
 lefthook.yml           → pre-commit = fast staged-file subset; pre-push = heavier subset
@@ -50,14 +50,9 @@ never the other way around.
   # Pinned to match .github/workflows/ci.yml golangci-lint-action version.
   golangci-lint = "2.12.2"
   lefthook = "2.1.10"
-  jj = "0.43.0" # Binary availability only; does not initialize `.jj/`.
   ```
 - **Install lefthook via `[tools]`, not brew/npm** — the hook manager itself is then
   version-pinned and present in CI and every worker without a separate install step.
-- **Manage jj through `[tools]` when the repo supports it.** This pins the CLI just like
-  lefthook; it does not select jj as the repository substrate. Adoption remains the
-  explicit, reversible `jj git init --colocate` step. This bundle's upstream root
-  `mise.toml` pins both CLIs while leaving hook installation and jj colocation opt-in.
 - **A `setup` task owns bootstrap**: `run = ["uv sync --all-extras --dev", "lefthook install"]`.
 - Python repos: reuse the existing uv venv via `[env] _.python.venv = {path=".venv"}` —
   never let mise create a parallel one.
@@ -109,14 +104,8 @@ pair with a repo-specific sweep (internal hostnames etc.) which generic rules wo
 ## Notes
 
 - The upstream bundle demonstrates the distinction directly: mise manages the lefthook
-  and jj binaries, while repository activation is separate. A lefthook binary does nothing
-  until hooks are configured and installed; a jj binary does nothing until colocation is
-  explicitly initialized.
-- jujutsu (jj) interacts with ONE layer of this stack: git hooks do not fire on jj
-  commits (verified — a blocking pre-commit hook is silently bypassed), so under jj the
-  lefthook layer drops out and `mise run check` + CI carry the full gate load. mise and
-  betterleaks are unaffected. Full jj integration story (colocated repos, workspaces as
-  worktrees, op-log recovery): the flagship skill's jj-vcs reference.
+  binary, while repository activation is separate. A lefthook binary does nothing
+  until hooks are configured and installed.
 - See also (in the flagship `agentic-sdlc-orchestrator` skill): the seeds-worktrees
   reference (config propagation into worktrees), the sdlc-loop reference (where gates sit
   in the loop), and the bundle's validate-bundle.sh (a worked example of a repo-specific
@@ -126,5 +115,4 @@ pair with a repo-specific sweep (internal hostnames etc.) which generic rules wo
 
 - mise docs: https://mise.jdx.dev (tools, tasks, trust)
 - lefthook docs: https://lefthook.dev (config reference)
-- jj installation docs: https://docs.jj-vcs.dev/latest/install-and-setup/
 - betterleaks: https://betterleaks.com (gitleaks-compatible; `--validation`)

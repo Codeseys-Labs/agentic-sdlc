@@ -113,7 +113,8 @@ Read only what is needed:
 - `references/mission-loop.md`: the autonomous backlog-zero doctrine — milestone-blocking classification (8 classes, only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes, WIP caps, priority math, concurrent critique team, honest definition of done. Read for MISSION-shaped assignments ("drive the backlog to zero", "keep going until done").
 - `references/tiered-orchestration.md`: model-tier assignment, the native-first capability ladder with optional adapters, bounded backflow, chained iterations, and worker lifecycle at scale.
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
-- `references/jj-vcs.md`: jj (Jujutsu) as the wave substrate (verified on 0.43) — colocated git-compatible adoption, workspaces as agent-grade worktrees (per-workspace `@`, op-log audit, stale detection), never-failing fan-in (conflicts = committed state), auto-snapshot makes uncommitted-work loss impossible, `jj undo` recovery; gotchas: git hooks don't fire, exact-match revset trap, headless identity, snapshot swallows non-gitignored secrets.
+- `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
+  alternate VCS substrate is activated by this bundle.
 
 Bundled role agents (installed globally by `scripts/install-skill-bundle.sh`), each in
 Claude (`agents/claude/*.md`) and Codex (`agents/codex/*.toml`) form:

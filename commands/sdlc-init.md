@@ -22,7 +22,7 @@ claiming wave readiness.
      files, current branch/HEAD, remotes, existing task runner, hooks, CI, instruction
      files, and language/toolchain manifests.
    - Run the maintained prerequisite checker when available. Missing, unpinned, untrusted,
-     or ambiguous required capability fails closed; missing optional cmux, tmux, or jj
+     or ambiguous required capability fails closed; missing optional cmux or tmux
      never triggers implicit installation. `mise` is the managed-tool bootstrap, not the sole
      readiness prerequisite; repository tools are pinned through it. Record the selected
      adapter and its capability/model readback, or record inherited/unresolved when it cannot
@@ -42,9 +42,8 @@ claiming wave readiness.
    - Existing Git repository: preserve its branch/history policy. Do not create an
      activation commit until the pre-activation tree is clean and every activation diff is
      explicitly enumerated.
-   - **Supported Wave substrate is Git worktrees.** A pre-existing colocated jj repository
-     is compatible at the Git boundary, but `/sdlc-init` must not initialize jj or claim a
-     jj-workspace Wave is supported. jj substrate graduation is a later conformance gate.
+   - **Supported Wave substrate is Git worktrees.** Keep activation and Waves on Git
+     worktrees; this runbook neither initializes nor promotes another VCS substrate.
 
 3. **Seeds queue of record**
    - Run `sd init` only when `.seeds/` is absent. Preserve existing queue/configuration.
