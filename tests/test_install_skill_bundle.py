@@ -216,7 +216,21 @@ class InstallSkillBundleTests(unittest.TestCase):
             with self.assertRaises(installer.InstallerError):
                 installer.install(config)
 
-    def test_missing_owned_entry_is_conflict_not_silent_reinstall(self) -> None:
+    def test_uninstall_removes_owned_dangling_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "link", False, "claude", root / "state")
+            installer.install(config)
+            destination = config.home / ".claude" / "skills" / "example"
+            installer.remove_path(root / "skills" / "example")
+
+            result = installer.uninstall(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertFalse(destination.is_symlink())
+            self.assertNotIn(str(destination), installer.load_state(config.state_path)["entries"])
+
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.make_repo(root)

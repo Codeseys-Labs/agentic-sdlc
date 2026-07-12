@@ -259,17 +259,33 @@ def entry_record(
     }
 
 
-def entry_matches_record(destination: Path, record: dict[str, Any]) -> bool:
-    """Whether the on-disk entry still has the exact owned identity."""
+def link_identity_matches(destination: Path, record: dict[str, Any]) -> bool:
+    """Match an owned link even when its recorded source no longer exists."""
     mode = record.get("mode")
     source_value = record.get("source")
     if not isinstance(source_value, str) or not source_value:
         return False
     source = Path(source_value)
-    if mode == "junction":
-        return is_junction(destination) and destination.resolve() == source
-    if mode == "link":
-        return current_link_target(destination) == source
+    if mode == "junction" and is_junction(destination):
+        try:
+            return os.path.samefile(destination, source)
+        except OSError:
+            return destination.resolve(strict=False) == source
+    if mode == "link" and destination.is_symlink():
+        try:
+            return os.path.samefile(destination, source)
+        except OSError:
+            raw_target = Path(os.readlink(destination))
+            target = raw_target if raw_target.is_absolute() else destination.parent / raw_target
+            return target.resolve(strict=False) == source
+    return False
+
+
+def entry_matches_record(destination: Path, record: dict[str, Any]) -> bool:
+    """Whether the on-disk entry still has the exact owned identity."""
+    mode = record.get("mode")
+    if mode in {"link", "junction"}:
+        return link_identity_matches(destination, record)
     if mode == "copy" and destination.exists() and not destination.is_symlink():
         return digest(destination) == record.get("digest")
     return False

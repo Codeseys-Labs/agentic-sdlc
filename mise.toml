@@ -36,66 +36,18 @@ run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle
 
 [tasks."bundle:install:all-hosts"]
 description = "Install on WSL and the paired native Windows host"
-run = '''set -u
-repo_root="${MISE_PROJECT_ROOT:?mise did not provide the project root}"
-powershell="$(command -v powershell.exe || true)"
-if [ -z "$powershell" ]; then
-  powershell="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-fi
-if [ ! -x "$powershell" ]; then
-  printf '%s\n' "error: native Windows PowerShell was not found" >&2
-  exit 2
-fi
-if ! command -v wslpath >/dev/null 2>&1; then
-  printf '%s\n' "error: bundle:install:all-hosts requires WSL" >&2
-  exit 2
-fi
-native_repo="$(wslpath -w "$repo_root")"
-args_json="$(uv run --python 3.12.11 python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
-printf '%s\n' '=== WSL host: install ==='
-wsl_exit=0
-mise -C "$repo_root" run bundle:install -- "$@" || wsl_exit=$?
-printf '%s\n' '=== Native Windows host: install ==='
-windows_exit=0
-"$powershell" -NoProfile -ExecutionPolicy Bypass -File "$native_repo\scripts\run-windows-mise.ps1" -RepoRoot "$native_repo" -Task bundle:install -TaskArgsJson "$args_json" || windows_exit=$?
-printf '=== Host summary: WSL=%s Windows=%s ===\n' "$wsl_exit" "$windows_exit"
-if [ "$wsl_exit" -gt "$windows_exit" ]; then exit "$wsl_exit"; fi
-exit "$windows_exit"'''
+run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py install"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 
 [tasks."bundle:status:all-hosts"]
 description = "Report lifecycle status on WSL and the paired native Windows host"
-run = '''set -u
-repo_root="${MISE_PROJECT_ROOT:?mise did not provide the project root}"
-powershell="$(command -v powershell.exe || true)"
-if [ -z "$powershell" ]; then
-  powershell="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-fi
-if [ ! -x "$powershell" ]; then
-  printf '%s\n' "error: native Windows PowerShell was not found" >&2
-  exit 2
-fi
-if ! command -v wslpath >/dev/null 2>&1; then
-  printf '%s\n' "error: bundle:status:all-hosts requires WSL" >&2
-  exit 2
-fi
-native_repo="$(wslpath -w "$repo_root")"
-args_json="$(uv run --python 3.12.11 python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
-printf '%s\n' '=== WSL host: status ==='
-wsl_exit=0
-mise -C "$repo_root" run bundle:status -- "$@" || wsl_exit=$?
-printf '%s\n' '=== Native Windows host: status ==='
-windows_exit=0
-"$powershell" -NoProfile -ExecutionPolicy Bypass -File "$native_repo\scripts\run-windows-mise.ps1" -RepoRoot "$native_repo" -Task bundle:status -TaskArgsJson "$args_json" || windows_exit=$?
-printf '=== Host summary: WSL=%s Windows=%s ===\n' "$wsl_exit" "$windows_exit"
-if [ "$wsl_exit" -gt "$windows_exit" ]; then exit "$wsl_exit"; fi
-exit "$windows_exit"'''
+run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 
 [tasks.test]
 description = "Run the Python installer tests"
-run = "uv run --python 3.12.11 --script tests/test_install_skill_bundle.py"
-run_windows = "uv.exe run --python 3.12.11 --script tests/test_install_skill_bundle.py"
+run = "uv run --python 3.12.11 python -m unittest discover -s tests"
+run_windows = "uv.exe run --python 3.12.11 python -m unittest discover -s tests"
 
 [tasks.self-test]
 description = "Verify installer lifecycle safety in a throwaway home"
