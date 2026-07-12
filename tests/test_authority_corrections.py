@@ -21,11 +21,33 @@ SURFACES = [
     ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "tiered-orchestration.md",
 ]
 
+UNSAFE_AUTHORITY_PATTERNS = (
+    re.compile(r"(?i)\ba local status authorizes a remote push\b"),
+    re.compile(
+        r"(?i)\b(?:a\s+)?local\s+status\s+(?:authori[sz](?:e|es|ed)?|grants?)\s+(?:a\s+)?(?:remote\s+)?(?:push|outward\s+effect)\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:a\s+)?(?:green|passing)\s+gate\s+(?:authori[sz](?:e|es|ed)?|grants?)\s+(?:a\s+)?(?:remote\s+)?(?:push|outward\s+effect)\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:the\s+)?final\s+verdict\s+(?:authori[sz](?:e|es|ed)?|grants?|delegates?)\s+(?:ship\s+authority|(?:a\s+)?(?:remote\s+)?(?:push|outward\s+effect)|remote\s+authorization)\b"
+    ),
+)
+UNSAFE_AUTHORITY_MUTATIONS = (
+    "A local status authorizes a remote push.",
+    "A green gate authorizes a remote push.",
+    "The final verdict authorizes remote authorization.",
+)
+
 
 class AuthorityCorrectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.text = "\n".join(path.read_text() for path in SURFACES)
+        cls.surface_text = {
+            path: path.read_text()
+            for path in SURFACES
+        }
+        cls.text = "\n".join(cls.surface_text.values())
 
     def test_public_loop_preserves_frame_wave_mission(self) -> None:
         for name in ("sdlc-frame", "sdlc-wave", "sdlc-mission"):
@@ -62,6 +84,25 @@ class AuthorityCorrectionTests(unittest.TestCase):
         self.assertRegex(self.text, r"(?i)(?:push|publish|merge|PR|deployment).{0,120}(?:explicit|exact).{0,80}authori")
         self.assertRegex(self.text, r"(?i)(?:status|gate|reviewer|critic|conductor).{0,100}(?:does not|never).{0,100}(?:authori|grant)")
         self.assertRegex(self.text, r"(?i)integrator.{0,100}(?:delegated mutation|authorized fan-in)")
+
+    def test_every_surface_rejects_unsafe_authority_claims(self) -> None:
+        for path, text in self.surface_text.items():
+            with self.subTest(surface=path):
+                self._assert_safe_authority(text)
+
+    def _assert_safe_authority(self, text: str) -> None:
+        for pattern in UNSAFE_AUTHORITY_PATTERNS:
+            self.assertIsNone(
+                pattern.search(text),
+                f"unsafe authority claim: {pattern.pattern}",
+            )
+
+    def test_mutation_of_local_status_claim_is_caught(self) -> None:
+        target = next(iter(self.surface_text.values()))
+        for mutation in UNSAFE_AUTHORITY_MUTATIONS:
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(AssertionError):
+                    self._assert_safe_authority(target + "\n" + mutation)
 
 
 if __name__ == "__main__":
