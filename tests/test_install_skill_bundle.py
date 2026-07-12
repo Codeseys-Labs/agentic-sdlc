@@ -114,10 +114,27 @@ class InstallSkillBundleTests(unittest.TestCase):
             agent_destination.symlink_to(root / "agents" / "claude" / "role.md")
 
             adopted = installer.install(config)
-            self.assertIn(f"adopted: {copy_destination}", adopted.messages)
+            self.assertIn(f"adopted (preserved on uninstall): {copy_destination}", adopted.messages)
             self.assertIn(f"adopted: {agent_destination}", adopted.messages)
 
-    def test_dry_run_does_not_create_destination_or_state(self) -> None:
+    def test_adopts_line_ending_only_copy_but_preserves_it_on_uninstall(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "codex")
+            destination = config.codex_home / "skills" / "example"
+            destination.mkdir(parents=True)
+            source_bytes = (root / "skills" / "example" / "SKILL.md").read_bytes().replace(b"\r\n", b"\n")
+            (destination / "SKILL.md").write_bytes(source_bytes.replace(b"\n", b"\r\n"))
+
+            result = installer.install(config)
+            removed = installer.uninstall(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn(f"adopted (preserved on uninstall): {destination}", result.messages)
+            self.assertIn(f"kept: {destination} (adopted pre-existing entry)", removed.messages)
+            self.assertTrue(destination.exists())
+
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.make_repo(root)
