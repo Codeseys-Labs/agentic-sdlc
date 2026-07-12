@@ -162,6 +162,29 @@ def digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def text_bytes_equal(left: bytes, right: bytes) -> bool:
+    """Treat UTF-8 text with host-specific line endings as equivalent."""
+    if left == right:
+        return True
+    try:
+        return left.decode("utf-8").replace("\r\n", "\n") == right.decode("utf-8").replace("\r\n", "\n")
+    except UnicodeDecodeError:
+        return False
+
+
+def content_equivalent(left: Path, right: Path) -> bool:
+    """Compare files or trees, allowing only UTF-8 CRLF/LF differences."""
+    if left.is_dir() != right.is_dir():
+        return False
+    if left.is_file():
+        return right.is_file() and text_bytes_equal(left.read_bytes(), right.read_bytes())
+    left_files = {path.relative_to(left).as_posix(): path for path in left.rglob("*") if path.is_file()}
+    right_files = {path.relative_to(right).as_posix(): path for path in right.rglob("*") if path.is_file()}
+    if left_files.keys() != right_files.keys():
+        return False
+    return all(text_bytes_equal(left_files[name].read_bytes(), right_files[name].read_bytes()) for name in left_files)
+
+
 def current_link_target(path: Path) -> Path | None:
     if not path.is_symlink():
         return None
@@ -223,13 +246,16 @@ def link_item(source: Path, destination: Path) -> str:
     return "link"
 
 
-def entry_record(entry: Entry, mode: str) -> dict[str, str]:
+def entry_record(
+    entry: Entry, mode: str, *, removable: bool = True, installed_digest: str | None = None
+) -> dict[str, str | bool]:
     return {
         "agent": entry.agent,
         "kind": entry.kind,
         "source": str(entry.source.resolve()),
         "mode": mode,
-        "digest": digest(entry.source),
+        "digest": installed_digest or digest(entry.source),
+        "removable": removable,
     }
 
 
@@ -312,7 +338,9 @@ def install(config: Config) -> Result:
         if destination.exists() or destination.is_symlink():
             if isinstance(record, dict):
                 if record.get("mode") == "copy":
-                    if config.dry_run:
+                    if record.get("removable", True) is False:
+                        messages.append(f"ok (preserved on uninstall): {destination}")
+                    elif config.dry_run:
                         messages.append(f"would refresh: {destination}")
                     else:
                         remove_path(destination)
@@ -329,10 +357,10 @@ def install(config: Config) -> Result:
                     owned[key] = entry_record(entry, "link")
                 messages.append(f"adopted: {destination}")
                 continue
-            if not destination.is_symlink() and destination.exists() and digest(destination) == digest(entry.source):
+            if not destination.is_symlink() and destination.exists() and content_equivalent(destination, entry.source):
                 if not config.dry_run:
-                    owned[key] = entry_record(entry, "copy")
-                messages.append(f"adopted: {destination}")
+                    owned[key] = entry_record(entry, "copy", removable=False, installed_digest=digest(destination))
+                messages.append(f"adopted (preserved on uninstall): {destination}")
                 continue
             partial = True
             messages.append(f"conflict: {destination}")
@@ -343,7 +371,7 @@ def install(config: Config) -> Result:
             continue
         try:
             mode = create_destination(entry, destination, config)
-        except OSError as exc:
+        except (OSError, subprocess.CalledProcessError) as exc:
             raise InstallerError(f"cannot install {destination}: {exc}") from exc
         owned[key] = entry_record(entry, mode)
         messages.append(f"installed: {destination} ({mode})")
@@ -393,6 +421,9 @@ def uninstall(config: Config) -> Result:
         if not entry_matches_record(destination, record):
             partial = True
             messages.append(f"conflict: {destination}")
+            continue
+        if record.get("removable", True) is False:
+            messages.append(f"kept: {destination} (adopted pre-existing entry)")
             continue
         if config.dry_run:
             messages.append(f"would remove: {destination}")
