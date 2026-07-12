@@ -138,94 +138,107 @@ or weakens the native path.
 - `scripts/cmux-bus.sh`: optional cmux-only event-bus helper (pub/sub/seq).
 - `scripts/install-cao-kit.sh`: optional CAO-only adapter install (skill + profiles).
 
-## Install (all agents, one command)
+## Install and run the bundle
 
-The native baseline requires `git`, `gh`, `sd` (Seeds), and any skill-capable host.
-CAO, cmux, and tmux are not baseline tools and are never installed or enabled implicitly.
+**mise is the sole prerequisite.** The checked-in `mise.toml` pins `uv`; `uv` supplies the
+pinned Python `3.12.11` runtime used by the stdlib installer. You do not need to install
+Python, uv, Bash, or a host-specific Python environment separately. Optional CAO, cmux, and
+tmux adapters are never installed or enabled by setup.
 
-This upstream repository's root `mise.toml` manages exact versions of both
-`lefthook` (`2.1.10`) and `jj` (`0.43.0`). `mise install` makes both CLIs reproducible
-across contributor machines. That manages tool availability only: hooks still require a
-`lefthook.yml` plus `lefthook install`, and jj remains opt-in until a clone explicitly runs
-`jj git init --colocate`. On Windows, the checked-in mise tasks route the bundle's Bash
-scripts through Git Bash with `scripts/run-git-bash.ps1`; they never select the WSL
-`bash.exe` launcher accidentally.
+Bootstrap the repository and inspect the available lifecycle tasks:
 
 ```bash
-mise install                               # install pinned upstream lefthook + jj CLIs
-mise run check                             # full local gate (or run the two scripts below directly)
-./scripts/check-agentic-sdlc-prereqs.sh
-./scripts/install-skill-bundle.sh          # native hosts; never enables optional adapters
-./scripts/install-skill-bundle.sh status   # link health per target (exit 1 on broken)
-./scripts/install-skill-bundle.sh uninstall # removes owned symlinks; preserves copies/adapters
-./scripts/install-skill-bundle.sh self-test # verifies symlink removal/copy preservation safely
+mise install
+mise tasks
 ```
 
-**Pick ONE Claude Code install path per machine** — either the symlink install above OR
-the marketplace path (`claude plugin marketplace add <repo>` + `claude plugin install
-agentic-sdlc-orchestrator@agentic-sdlc`), never both: dual-installing registers the skill
-twice (bare + plugin-namespaced). The symlink path live-updates with `git pull`; the
-marketplace path copies into Claude's plugin cache and updates via `claude plugin update`.
+The public task surface is intentionally small:
 
-**After `git pull`, symlinked native skill planes update automatically.** Existing
-copy-mode destinations are deliberately not overwritten; remove or move only the
-bundle-owned copy you intend to refresh, then rerun with `--copy`. If you explicitly
-maintain a CAO mirror, refresh it separately with
-`INSTALL_CAO=1 ./scripts/install-skill-bundle.sh`.
+| Task | Purpose |
+|---|---|
+| `bundle:install` / `bundle:status` / `bundle:uninstall` | Install, inspect, or remove entries for the current host. |
+| `bundle:install:claude` | Install only the Claude Code plane on the current host. |
+| `bundle:install:codex` | Install only the Codex plane on the current host. |
+| `bundle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
+| `bundle:status:all-hosts` | Report current-host and native-Windows state when run from WSL. |
+| `test` | Run the installer test suite. |
+| `self-test` | Exercise install/status/uninstall in an isolated home. |
+| `check` | Run the authoritative validation, tests, and self-test gate. |
+| `hooks:install` | Install the checked-in lefthook hooks. |
+| `jj:init` | Explicitly initialize a colocated jj repository. |
+| `setup` | Bootstrap the pinned toolchain and repository setup. |
 
-This installs into:
+A normal Unix install uses symlinks. On Windows, automatic mode uses directory junctions
+for directories and file symlinks for files; when the host cannot create those links it
+falls back to copies. Strict link mode does not use that fallback. The installer records
+per-entry ownership in the platform state directory (`XDG_STATE_HOME` on Unix,
+`LOCALAPPDATA` on Windows), so lifecycle operations can distinguish bundle entries from
+user files.
 
-| Agent | Destination | Notes |
-|---|---|---|
-| Claude Code | `~/.claude/skills/agentic-sdlc-orchestrator` | symlink |
-| Codex | `$CODEX_HOME/skills/agentic-sdlc-orchestrator` (default `~/.codex/skills`) | symlink; NOT `~/.agents/skills` (docs are wrong). Codex silently skips skills whose `description:` exceeds 1024 chars — the installer warns. |
-| Optional CAO adapter | CAO skill store + `cao-profiles/*` | explicit opt-in only: `INSTALL_CAO=1`; never selected by detection alone |
+```bash
+mise run bundle:install
+mise run bundle:status
+mise run check
+```
 
-cmux needs no bundle setup. Its optional integration activates only when the cmux CLI and
-`CMUX_WORKSPACE_ID` are already present or the user explicitly requests it.
+The native Windows path runs the ordinary current-host task; it does not invoke WSL. When
+`bundle:install:all-hosts` or `bundle:status:all-hosts` is run from WSL, it runs the WSL
+current-host lifecycle first and then invokes the native Windows mise task. The two host
+summaries remain separate, and the native task's arguments and exit code are preserved.
 
-## Run (native baseline)
+### Safe migration and lifecycle rules
 
-Invoke the skill directly from any installed host:
+Use the installer's dry-run option before migrating an existing installation. The dry-run
+sequence is:
+
+1. inspect the current entries and ownership state;
+2. report links, copies, adoptions, and conflicts without changing files or state;
+3. review the plan, then run the same operation without dry-run;
+4. run `bundle:status` (or `bundle:status:all-hosts`) and `check`.
+
+Collection directories are never replaced. An exact legacy bundle link or byte-identical
+copy may be adopted into ownership. Foreign entries, retargeted links, and modified copies
+are preserved and reported as conflicts. Owned copies are refreshed only while they remain
+unchanged from the last recorded bundle content; user modifications are never overwritten.
+Uninstall removes only owned entries and leaves conflicts and foreign files in place.
+
+For Claude Code, choose exactly one distribution plane per machine: either the direct
+bundle install or the Claude marketplace install (`claude plugin marketplace add` followed
+by `claude plugin install`). Marketplace overlap blocks only the Claude plane; other host
+planes can still be managed. Do not register both, because the same skill would appear once
+as a bare skill and again under the plugin namespace.
+
+### Hooks and jj
+
+`hooks:install` installs the lefthook subsets from this repository: pre-commit runs
+`mise run validate`; pre-push runs `mise run test` and `mise run self-test`. `mise run check`
+remains the complete local gate and is the command CI mirrors.
+
+`jj:init` is explicit and is not a dependency of `setup`. A colocated jj repository keeps
+Git interoperability, but jj commands bypass Git hooks; run `mise run check` (and any
+relevant task) explicitly when working through jj.
+
+### Compatibility wrapper and optional adapters
+
+`scripts/install-skill-bundle.sh` remains a compatibility wrapper for existing automation.
+It requires mise, invokes the pinned uv/Python installer, forwards supported arguments, and
+retains positional `status`, `uninstall`, and `self-test` plus legacy `--copy` behavior.
+It does not select CAO automatically. `INSTALL_CAO=1` is an explicit opt-in for the
+separate CAO mirror after the native install; CAO, cmux, and tmux are never prerequisites.
+
+The native host path is complete without an adapter:
 
 ```text
 Use $agentic-sdlc-orchestrator to frame this task and run a bounded,
 Seeds-backed worktree wave using the host's native agents.
 ```
 
-The conductor uses direct execution or provider-native roles, subagents, workflows, teams,
-and background tasks. This is the complete path; CAO, cmux, and tmux are not setup steps.
+If CAO was explicitly selected and is already installed, use its separate adapter flow and
+load `references/cao-operations.md` for CAO-specific behavior. Do not apply CAO, cmux, or
+tmux requirements to native runs.
 
-### Optional CAO adapter
+## Run (native baseline)
 
-Use this only when CAO was explicitly selected and is already installed for durable or
-mixed-engine sessions. Start `cao-server` with the provider environment in the same shell,
-then launch the optional macro profile:
-
-```bash
-cao launch --agents codex-macro-orchestrator --provider codex --headless --yolo \
-  --session-name agentic-sdlc-demo \
-  --working-directory '/absolute/path/to/project' \
-  'Use $agentic-sdlc-orchestrator to run a bounded worktree wave with the selected CAO adapter.'
-```
-
-For CAO-specific environment inheritance, timeouts, and tmux-backed session behavior, load
-`references/cao-operations.md`. Do not apply those requirements to native runs.
-
-## UX From Codex
-
-Native Codex skill use is the baseline and complete path. `install-skill-bundle.sh`
-installs the skill into `$CODEX_HOME/skills/`, so a normal Codex session can run the full
-loop with provider-native roles and subagents.
-
-If the optional CAO adapter is explicitly selected, opt into its separate mirror with
-`INSTALL_CAO=1 ./scripts/install-skill-bundle.sh`. That mirror is an integration detail,
-not a prerequisite or a second setup step for ordinary Codex use.
-
-## Optional integration status
-
-The native provider path is the supported baseline. Optional CAO mechanics were
-trial-verified 2026-07-04 on macOS + Amazon Bedrock (CAO v2.2.0), including per-worker model
-pinning, mixed-engine fleets, and long-running semantics. Optional cmux view/event patterns
-were also trial-verified. These adapters remain templates; validate them on the target
-repository before using them for unattended runs.
+Native host agents, provider-native roles, subagents, workflows, teams, and background tasks
+are the complete supported path. CAO, cmux, and tmux are optional integrations, not setup
+steps or hidden dependencies.
