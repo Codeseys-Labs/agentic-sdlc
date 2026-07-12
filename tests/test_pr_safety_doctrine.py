@@ -64,6 +64,19 @@ class PrSafetyDoctrineTests(unittest.TestCase):
                 self.assertIn("fresh review", document)
                 self.assertIn("re-gate", document)
                 self.assertRegex(document, re.compile(r"target/base/head/state drift invalidates|target/base/head.*state.*invalidates", re.I))
+    def test_gh_rechecks_topology_immediately_before_rewrite_push(self) -> None:
+        document = self.documents["stacked-prs-gh-cli"]
+        restack = document.split("## Restack and exact rewrite lease", 1)[1]
+        before_push = restack.split("git push --force-with-lease", 1)[0]
+        self.assertRegex(before_push, re.compile(r"immediately before the push", re.I))
+        for evidence in (
+            "PR base/head/state",
+            "open-child usage",
+            "required checks",
+            "governance",
+            "remote branch OID",
+        ):
+            self.assertIn(evidence, before_push)
 
 
 if __name__ == "__main__":
