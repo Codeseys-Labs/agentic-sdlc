@@ -64,9 +64,11 @@ missing or stale; UNKNOWN is not approval.
 
 ## Restack and exact rewrite lease
 
-For each rewritten branch, preserve its saved old parent, save its remote OID immediately
-before the final race check, rebase, inspect the diff, gate, and review. Push only with the
-exact saved-boundary lease:
+For each rewritten branch, preserve its saved old parent and save its remote OID. Rebase,
+inspect the diff, gate, and obtain fresh review. **Immediately before the push**, repeat the
+full race check: re-query PR base/head/state, open-child usage, required checks, governance,
+and the remote branch OID. Push only if every value still matches the reviewed candidate,
+using the exact saved-boundary lease:
 
 ```sh
 git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin <branch>
