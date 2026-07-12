@@ -85,6 +85,21 @@ class AuthorityCorrectionTests(unittest.TestCase):
         self.assertRegex(self.text, r"(?i)(?:status|gate|reviewer|critic|conductor).{0,100}(?:does not|never).{0,100}(?:authori|grant)")
         self.assertRegex(self.text, r"(?i)integrator.{0,100}(?:delegated mutation|authorized fan-in)")
 
+    def test_conductor_captures_read_only_artifacts_and_owns_seeds(self) -> None:
+        flagship = (ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").read_text()
+        mission = (
+            ROOT
+            / "skills"
+            / "agentic-sdlc-orchestrator"
+            / "references"
+            / "mission-loop.md"
+        ).read_text()
+        self.assertRegex(flagship, r"(?is)read-only worker.{0,100}conductor persists")
+        self.assertNotRegex(flagship, r"(?i)every delegated worker to write")
+        self.assertRegex(mission, r"(?i)conductor is the sole queue writer")
+        self.assertRegex(mission, r"(?is)workers and the critique team.{0,80}never.{0,40}mutate Seeds")
+        self.assertNotRegex(mission, r"(?i)critique team.{0,80}files findings as classified Seeds")
+
     def test_every_surface_rejects_unsafe_authority_claims(self) -> None:
         for path, text in self.surface_text.items():
             with self.subTest(surface=path):
