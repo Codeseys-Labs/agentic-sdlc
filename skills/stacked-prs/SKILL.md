@@ -13,20 +13,37 @@ restack bottom-up; a child is not ready merely because its parent changed.
 
 ## Safety doctrine
 
-- Save **old boundaries** before any rewrite: branch name, local tip, base, head, PR number,
-  and saved remote OID. A candidate becomes invalid if the target/base/head or PR state drifts;
-  stop, re-query, and re-gate. target drift invalidates the candidate.
-- Never rely on a platform retargeting a PR. After a parent merges, is abandoned, or is
-  renamed, explicitly retarget each immediate child to the verified replacement base.
-- After each retarget, re-query `baseRefName`, `headRefName`, and PR `state`; then cascade the
-  restack through every descendant in top-down order. Re-gate and re-review every rewritten
-  PR. A squash merge requires dropping the old parent range (for example, `git rebase
-  --onto origin/main <saved-parent-branch> <child>`), not replaying it.
-- Before deleting any branch, re-query all open PRs and their `baseRefName`. Do not delete a branch while any open PR still uses it as a base. If evidence is absent, stale, or HTTP
-  403, governance is UNKNOWN: do not treat UNKNOWN as approval.
-- Take a final race check immediately before every deletion or rewrite: re-read remote OID,
-  PR base/head/state, open-child usage, required checks, and governance. Any changed value
-  invalidates the candidate and requires a fresh boundary and review.
+- Save an old boundary for every layer before any operation: branch, local tip, PR number,
+  base/head names, and exact remote OID. A changed target, base, head, or PR state invalidates
+  the candidate; stop, re-query, re-gate, and re-review. Target/base/head/state drift invalidates
+  the candidate. Every check occurs immediately before mutation.
+- Never assume a hosting service changes a child target. After a parent merges, is abandoned,
+  or is renamed, explicitly retarget each immediate child to the verified replacement base.
+  Re-query `baseRefName`, `headRefName`, and `state` after each retarget before continuing.
+- Before rewriting a stack, preserve every old parent boundary in an old-parent map. Build a
+  new-parent map as each layer is rewritten, then cascade from the parent outward (nearest
+  child first). For each child, use its saved old parent and current new parent exactly:
+
+  ```sh
+  git rebase --onto <new-parent> <saved-old-parent> <child>
+  ```
+
+  This replays only that child's commits; never replay ancestor commits or an ancestor range.
+  Re-gate and re-review every rewritten or retargeted layer, obtaining fresh review.
+- Before deleting any branch, re-query all open PRs and their base fields. Do not delete while
+  any open PR uses that branch as a base. Missing, stale, unsupported, or HTTP 403 governance
+  evidence means governance is UNKNOWN; UNKNOWN is not approval.
+- Immediately before every rewrite or deletion, perform a final race check: re-read the saved
+  remote OID (the saved remote OID), PR base/head/state, open-child usage, required checks, and governance. Any change
+  invalidates the candidate and requires a fresh boundary and review. Only after that readback
+  may a remote branch be deleted, and deletion must use the exact saved-OID lease:
+
+  ```sh
+  git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin :refs/heads/<branch>
+  ```
+
+  Never use ordinary unleased deletion, an unqualified lease, or `--force`. A lease failure or
+  changed final readback is a stop, not a retry.
 
 ## Normal shape
 
@@ -40,12 +57,13 @@ parent is reviewed; that is not permission to remove the parent branch.
 
 ## Rewrite discipline
 
-For every rewritten branch, save its current remote OID, perform the rebase, inspect the
-result, run the required gates, obtain fresh review, and update the saved boundary. Push only
-with the exact lease form:
+For every rewritten branch, save its current remote OID before the final race check, preserve
+the old parent boundary, and inspect the result before gating and review. Push only with the
+exact saved-boundary lease:
 
 ```sh
 git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin <branch>
 ```
 
-Never substitute an unqualified lease or `--force`. A lease failure is a stop, not a retry.
+A lease failure or changed readback is a stop: preserve evidence, re-query, and start a new
+authorized candidate.

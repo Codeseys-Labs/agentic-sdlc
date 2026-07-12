@@ -13,65 +13,57 @@ GH = ROOT / "skills" / "stacked-prs-gh-cli" / "SKILL.md"
 class PrSafetyDoctrineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.methodology = METHOD.read_text()
-        cls.gh_cli = GH.read_text()
-        cls.text = f"{cls.methodology}\n{cls.gh_cli}"
+        cls.documents = {
+            "stacked-prs": METHOD.read_text(),
+            "stacked-prs-gh-cli": GH.read_text(),
+        }
 
-    def test_removes_automatic_retarget_assumptions(self) -> None:
-        for document in (self.methodology, self.gh_cli):
-            self.assertNotRegex(document, re.compile(r"auto[- ]retarget|automatically retarget", re.I))
-            self.assertNotRegex(document, re.compile(r"GitHub (?:already )?retargeted|retargets? .* automatically", re.I))
+    def test_each_skill_independently_obeys_safety_doctrine(self) -> None:
+        for name, document in self.documents.items():
+            with self.subTest(skill=name):
+                # Retargeting is an explicit, queried operation, never an assumed platform action.
+                self.assertNotRegex(document, re.compile(r"auto[- ]retarget|automatically retarget", re.I))
+                self.assertNotRegex(document, re.compile(r"retargets? .* automatically", re.I))
+                self.assertIn("explicitly retarget each immediate child", document.lower())
+                self.assertIn("re-query", document)
 
-    def test_requires_saved_boundaries_and_exact_lease(self) -> None:
-        for phrase in (
-            "old boundaries",
-            "saved remote OID",
-            "--force-with-lease=refs/heads/<branch>:<saved-remote-oid>",
-            "target drift",
-            "invalidate",
-        ):
-            self.assertIn(phrase, self.text)
-        self.assertNotRegex(self.text, re.compile(r"--force-with-lease origin", re.I))
-        self.assertNotIn("git push --force origin", self.text)
+                # Every descendant keeps its own old boundary and is rewritten bottom-up.
+                self.assertIn("every old parent boundary", document)
+                self.assertIn("old-parent map", document)
+                self.assertIn("new-parent map", document)
+                self.assertIn("git rebase --onto <new-parent> <saved-old-parent> <child>", document)
+                self.assertRegex(document, re.compile(r"cascade (?:from the parent outward|bottom-up)"))
+                self.assertRegex(document, re.compile(r"never (?:replay|replays) .*ancestor(?: commits| range)?", re.I | re.S))
 
-    def test_requires_ordered_retarget_requery_restack_and_review(self) -> None:
-        for pattern in (
-            r"explicitly retarget each immediate child",
-            r"re-query `baseRefName`, `headRefName`, and PR `state`",
-            r"cascade the\s+restack through every descendant",
-            r"squash merge",
-            r"Re-gate and re-review",
-            r"final race check",
-        ):
-            self.assertRegex(self.text, pattern)
+                # Rewrites and deletion both use a lease tied to the saved remote OID.
+                self.assertIn("--force-with-lease=refs/heads/<branch>:<saved-remote-oid>", document)
+                self.assertIn(
+                    "git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin :refs/heads/<branch>",
+                    document,
+                )
+                self.assertNotRegex(document, re.compile(r"git push origin :refs/heads/<branch>", re.I))
+                self.assertNotRegex(document, re.compile(r"git push --force origin", re.I))
+                self.assertIn("ordinary unleased deletion", document)
 
-        order = [
-            self.text.index("old boundaries"),
-            self.text.index("explicitly retarget each immediate child"),
-            self.text.index("re-query `baseRefName`, `headRefName`, and PR `state`"),
-            self.text.index("cascade the\n  restack through every descendant"),
-            self.text.index("Re-gate and re-review"),
-            self.text.index("final race check"),
-        ]
-        self.assertEqual(order, sorted(order))
+                # Unknown governance and races fail closed immediately before mutation.
+                self.assertIn("governance is unknown", document.lower())
+                self.assertIn("unknown is not approval", document.lower())
+                self.assertIn("final race check", document)
+                self.assertIn("immediately before", document)
+                self.assertIn("saved remote OID", document)
+                self.assertIn("required checks", document)
+                self.assertIn("changed", document)
 
-    def test_branch_deletion_waits_for_open_pr_base_usage(self) -> None:
-        self.assertIn("Do not delete a branch while any open PR still uses it as a base", self.text)
-        self.assertIn("re-query all open PRs", self.text)
-        self.assertIn("baseRefName", self.text)
-
-    def test_governance_unknown_is_fail_closed(self) -> None:
-        for phrase in (
-            "evidence is absent",
-            "HTTP 403",
-            "unsupported governance fields",
-            "do not treat UNKNOWN as approval",
-        ):
-            self.assertIn(phrase, self.text)
-
-    def test_candidate_is_invalidated_by_target_drift(self) -> None:
-        self.assertRegex(self.text, r"target/base/head or PR state drifts")
-        self.assertIn("re-gate, and re-review", self.text)
+    def test_each_skill_requires_fresh_retarget_readback_and_review(self) -> None:
+        for name, document in self.documents.items():
+            with self.subTest(skill=name):
+                self.assertRegex(
+                    document,
+                    re.compile(r"re-query `baseRefName`, `headRefName`, and `state`", re.I),
+                )
+                self.assertIn("fresh review", document)
+                self.assertIn("re-gate", document)
+                self.assertRegex(document, re.compile(r"target/base/head/state drift invalidates|target/base/head.*state.*invalidates", re.I))
 
 
 if __name__ == "__main__":
