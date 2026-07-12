@@ -31,10 +31,14 @@ if (-not $mise) {
 }
 
 $taskArgs = [Collections.Generic.List[string]]::new()
-try {
-    $decodedArgs = ConvertFrom-Json -InputObject $TaskArgsJson
-} catch {
-    throw "TaskArgsJson must be a JSON array: $($_.Exception.Message)"
+if ($TaskArgsJson.Trim() -eq '[]') {
+    $decodedArgs = @()
+} else {
+    try {
+        $decodedArgs = @(ConvertFrom-Json -InputObject $TaskArgsJson)
+    } catch {
+        throw "TaskArgsJson must be a JSON array: $($_.Exception.Message)"
+    }
 }
 if ($null -eq $decodedArgs -or $decodedArgs -isnot [System.Array]) {
     throw 'TaskArgsJson must be a JSON array.'

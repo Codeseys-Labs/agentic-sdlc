@@ -79,8 +79,8 @@ class InstallSkillBundleTests(unittest.TestCase):
             destination = config.home / ".claude" / "skills" / "example"
 
             self.assertEqual(result.exit_code, 0)
-            self.assertTrue(destination.is_symlink())
-            self.assertEqual(destination.resolve(), root / "skills" / "example")
+            self.assertTrue(destination.is_symlink() or installer.is_junction(destination))
+            self.assertTrue(os.path.samefile(destination.resolve(), root / "skills" / "example"))
             self.assertEqual(installer.uninstall(config).exit_code, 0)
             self.assertFalse(destination.exists())
 
@@ -143,6 +143,29 @@ class InstallSkillBundleTests(unittest.TestCase):
                 with self.assertRaises(installer.InstallerError):
                     installer.install(strict)
 
+    def test_auto_falls_back_to_copy_for_failed_windows_junction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "auto", False, "claude")
+
+            with mock.patch.object(installer, "platform_system", return_value="Windows"), mock.patch.object(
+                installer, "make_junction", side_effect=installer.subprocess.CalledProcessError(1, ["cmd"])
+            ):
+                result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue((config.home / ".claude" / "skills" / "example").is_dir())
+
+    def test_cli_rejects_empty_codex_home(self) -> None:
+        with mock.patch.dict(os.environ, {"CODEX_HOME": ""}), mock.patch("sys.stderr"):
+            self.assertEqual(installer.main(["status"]), 2)
+
+    def test_cli_rejects_duplicate_agent_selectors(self) -> None:
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
+            installer.parse_args(["install", "--agent", "claude", "--agent", "codex"])
+        self.assertEqual(raised.exception.code, 2)
+
     def test_invalid_state_is_fatal(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -197,11 +220,12 @@ class InstallSkillBundleTests(unittest.TestCase):
     def test_cli_returns_fatal_code_for_invalid_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            state_root = root / "home" / ".local" / "state" / "agentic-sdlc-installer"
-            state_root.mkdir(parents=True)
-            (state_root / "state.json").write_text("invalid")
+            state_root = root / "state"
+            state_path = state_root / "agentic-sdlc-installer" / "state.json"
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text("invalid")
 
-            with mock.patch.object(installer, "__file__", str(SCRIPT)), mock.patch("sys.stderr"):
+            with mock.patch.object(installer, "state_directory", return_value=state_root), mock.patch("sys.stderr"):
                 self.assertEqual(installer.main(["status", "--home", str(root / "home")]), 2)
 
     def test_self_test_runs_isolated_lifecycle(self) -> None:
