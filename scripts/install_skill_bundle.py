@@ -28,6 +28,15 @@ class InstallerError(RuntimeError):
     """Raised for errors that make an installer command fatal."""
 
 
+class SingleAgentAction(argparse.Action):
+    """Reject duplicate selectors so fixed mise tasks cannot be overridden."""
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace, value: str, option_string: str | None = None) -> None:
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error(f"{option_string} may be specified only once")
+        setattr(namespace, self.dest, value)
+
+
 @dataclass(frozen=True)
 class Entry:
     agent: str
@@ -67,7 +76,9 @@ def state_directory(home: Path) -> Path:
     """Return a user-local state root without creating it."""
     if platform_system() == "Windows":
         local_app_data = os.environ.get("LOCALAPPDATA")
-        return Path(local_app_data) if local_app_data else home / "AppData" / "Local"
+        if local_app_data and home.resolve() == Path.home().resolve():
+            return Path(local_app_data)
+        return home / "AppData" / "Local"
     xdg_state = os.environ.get("XDG_STATE_HOME")
     return Path(xdg_state) if xdg_state else home / ".local" / "state"
 
@@ -265,7 +276,7 @@ def create_destination(entry: Entry, destination: Path, config: Config) -> str:
         return "copy"
     try:
         return link_item(entry.source, destination)
-    except OSError:
+    except (OSError, subprocess.CalledProcessError):
         if config.mode == "link":
             raise
         copy_item(entry.source, destination)
@@ -420,7 +431,7 @@ def self_test(config: Config) -> Result:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("install", "status", "uninstall", "self-test"), nargs="?", default="install")
-    parser.add_argument("--agent", choices=("all", "claude", "codex"), default="all")
+    parser.add_argument("--agent", choices=("all", "claude", "codex"), action=SingleAgentAction)
     parser.add_argument("--mode", choices=("auto", "link", "copy"), default="auto")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--home", type=Path, default=Path.home())
@@ -431,8 +442,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     home = args.home.expanduser()
-    codex_home = (args.codex_home or Path(os.environ.get("CODEX_HOME", home / ".codex"))).expanduser()
-    config = Config(Path(__file__).resolve().parents[1], home, codex_home, args.mode, args.dry_run, args.agent)
+    codex_home_value = args.codex_home
+    if codex_home_value is None:
+        environment_value = os.environ.get("CODEX_HOME")
+        if environment_value is not None and not environment_value.strip():
+            print("fatal: CODEX_HOME must not be empty", file=sys.stderr)
+            return 2
+        codex_home_value = Path(environment_value) if environment_value else home / ".codex"
+    codex_home = codex_home_value.expanduser().resolve()
+    config_repo_root = Path(__file__).resolve().parents[1]
+    if codex_home == config_repo_root:
+        print("fatal: Codex home must not be the repository root", file=sys.stderr)
+        return 2
+    config = Config(config_repo_root, home, codex_home, args.mode, args.dry_run, args.agent or "all")
     try:
         operation = {"install": install, "status": status, "uninstall": uninstall, "self-test": self_test}[args.command]
         result = operation(config)

@@ -5,9 +5,9 @@ lefthook = "2.1.10"
 jj = "0.43.0"
 
 [tasks.validate]
-description = "Run the bundle validator (bootstrap CI gate)"
-run = "./scripts/validate-bundle.sh"
-run_windows = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-git-bash.ps1 scripts/validate-bundle.sh"
+description = "Run the portable bundle validator"
+run = "uv run --python 3.12.11 --script scripts/validate_bundle.py"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/validate_bundle.py"
 
 [tasks."bundle:install"]
 description = "Install the skill bundle on this host"
