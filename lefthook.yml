@@ -1,0 +1,11 @@
+pre-commit:
+  commands:
+    validate:
+      run: mise run validate
+
+pre-push:
+  commands:
+    test:
+      run: mise run test
+    self-test:
+      run: mise run self-test

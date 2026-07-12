@@ -1,18 +1,35 @@
 name: validate-bundle
+
 on:
   push:
     branches: [main]
   pull_request:
 
 jobs:
-  validate:
+  direct-bootstrap:
+    name: Direct bootstrap validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate portable installer source directly
+        shell: bash
+        run: |
+          test -f scripts/install_skill_bundle.py
+          python3 -m py_compile scripts/install_skill_bundle.py
+          find . -type f -name '*.pyc' -not -path './.git/*' -delete
+          python3 scripts/install_skill_bundle.py --help
+
+  check:
+    name: mise check (${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Static validation (frontmatter, caps, refs, manifests, secrets)
-        run: ./scripts/validate-bundle.sh
-      - name: Installer self-test (install -> status -> uninstall in throwaway HOME)
-        run: ./scripts/install-skill-bundle.sh self-test
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+      - name: Run authoritative check
+        run: mise run check

@@ -1,11 +1,11 @@
 [tools]
-# Tool availability is pinned; hook installation and jj colocation remain explicit.
+# mise is the only user prerequisite. It installs every pinned repository tool.
 uv = "0.11.17"
 lefthook = "2.1.10"
 jj = "0.43.0"
 
 [tasks.validate]
-description = "Run the bundle validator (CI gate)"
+description = "Run the bundle validator (bootstrap CI gate)"
 run = "./scripts/validate-bundle.sh"
 run_windows = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-git-bash.ps1 scripts/validate-bundle.sh"
 
@@ -51,10 +51,10 @@ if ! command -v wslpath >/dev/null 2>&1; then
   exit 2
 fi
 native_repo="$(wslpath -w "$repo_root")"
-args_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
+args_json="$(uv run --python 3.12.11 python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
 printf '%s\n' '=== WSL host: install ==='
 wsl_exit=0
-mise -C "$repo_root" run bundle:install "$@" || wsl_exit=$?
+mise -C "$repo_root" run bundle:install -- "$@" || wsl_exit=$?
 printf '%s\n' '=== Native Windows host: install ==='
 windows_exit=0
 "$powershell" -NoProfile -ExecutionPolicy Bypass -File "$native_repo\scripts\run-windows-mise.ps1" -RepoRoot "$native_repo" -Task bundle:install -TaskArgsJson "$args_json" || windows_exit=$?
@@ -80,10 +80,10 @@ if ! command -v wslpath >/dev/null 2>&1; then
   exit 2
 fi
 native_repo="$(wslpath -w "$repo_root")"
-args_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
+args_json="$(uv run --python 3.12.11 python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@")"
 printf '%s\n' '=== WSL host: status ==='
 wsl_exit=0
-mise -C "$repo_root" run bundle:status "$@" || wsl_exit=$?
+mise -C "$repo_root" run bundle:status -- "$@" || wsl_exit=$?
 printf '%s\n' '=== Native Windows host: status ==='
 windows_exit=0
 "$powershell" -NoProfile -ExecutionPolicy Bypass -File "$native_repo\scripts\run-windows-mise.ps1" -RepoRoot "$native_repo" -Task bundle:status -TaskArgsJson "$args_json" || windows_exit=$?
@@ -102,6 +102,10 @@ description = "Verify installer lifecycle safety in a throwaway home"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
 
+[tasks.check]
+description = "Run validation, installer tests, and lifecycle self-test"
+depends = ["validate", "test", "self-test"]
+
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"
 run = "lefthook install"
@@ -113,7 +117,3 @@ run = "jj git init --colocate"
 [tasks.setup]
 description = "Install this host's bundle and Git hooks"
 depends = ["bundle:install", "hooks:install"]
-
-[tasks.check]
-description = "Run validation, installer tests, and lifecycle self-test"
-depends = ["validate", "test", "self-test"]
