@@ -33,16 +33,17 @@ Execute by milestone impact, not raw "ready" order.
 
 ## Seeds-first (the no-inline-fixes rule)
 
-Discoveries NEVER get fixed inline. File a Seed first:
+Discoveries NEVER get fixed inline. Return a seed-shaped recommendation first; the
+macro conductor validates, classifies, and durably records accepted items:
 
 ```
 {title, type, severity, blocking?, found_by, source, evidence, acceptance, class, rationale}
 ```
 
-Then: blocking → the active queue at its priority; non-blocking → classified + recorded.
-This applies to the conductor AND every worker AND the critique team. The queue is dynamic —
-items enter at any time, in any order, placed by priority. A finding that lives only in chat
-is lost work.
+Then the conductor decides: blocking → the active queue at its priority; non-blocking →
+classified + recorded. Workers and the critique team submit recommendations and never
+mutate Seeds directly. The conductor is the sole queue writer. A finding that exists only
+in an uncaptured response is lost work.
 
 ## WIP caps (bound the fan-out)
 
@@ -62,8 +63,9 @@ On merge conflict between workers: sequence and re-plan, don't fight it in paral
 Run ONE provider-native background review agent or team in parallel with execution. When
 the optional CAO adapter was selected, this may instead be a separate CAO session. It
 audits **stable snapshots** (the squash-merged commit of
-each wave), never live worktrees. It files findings as classified Seeds in real time;
-only findings classified blocking re-enter the active queue. Critique lenses:
+each wave), never live worktrees. It returns classified seed-shaped recommendations in
+real time; the conductor decides which blocking findings re-enter the active queue and
+persists the rest. Critique lenses:
 correctness, regression, security/secrets, edge cases, tests, docs, CI/workflow changes,
 platform-claim evidence, tracker/ADR hygiene.
 

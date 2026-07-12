@@ -87,8 +87,10 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 
 - Prefer the host's native roles, subagents, workflows, teams, or background tasks. Keep
   direct execution for work too small to justify delegation.
-- Require every delegated worker to write an artifact report; treat messages, status, and
-  summaries as advisory notifications, not acceptance evidence or authority.
+- Require every delegated worker to return a structured report for conductor capture. A
+  write-capable worker may also maintain its assigned artifact; for a read-only worker, the
+  conductor persists the captured submission. Treat messages, status, and summaries as
+  advisory notifications, not acceptance evidence or authority.
 - For long-running work, use the host's native background or persistent-task mechanism and
   durable artifact files. Do not hold one blocking call open indefinitely.
 - When CAO has been explicitly selected, use `handoff` only for bounded blocking results
