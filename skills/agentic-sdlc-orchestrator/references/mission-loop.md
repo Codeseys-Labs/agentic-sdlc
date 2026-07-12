@@ -60,8 +60,7 @@ On merge conflict between workers: sequence and re-plan, don't fight it in paral
 
 ## The concurrent critique team
 
-Run ONE provider-native background review agent or team in parallel with execution. When
-the optional CAO adapter was selected, this may instead be a separate CAO session. It
+Run ONE provider-native background review agent or team in parallel with execution. This remains a provider-native review session. It
 audits **stable snapshots** (the squash-merged commit of
 each wave), never live worktrees. It returns classified seed-shaped recommendations in
 real time; the conductor decides which blocking findings re-enter the active queue and
@@ -104,8 +103,7 @@ remaining non-blocking backlog, and assumptions.
 ## Anti-patterns
 
 Infinite zero-backlog chasing · broad dirty branches · overlapping worker write scopes ·
-vague worker prompts (see the native-first delegation contract in
-`references/delegation-planes.md`; load `references/cao-profiles.md` only when the
-optional CAO adapter is selected) · implementing from partial research · toolchain churn (respect
+vague worker prompts (see the native delegation contract in
+`references/delegation-planes.md`) · implementing from partial research · toolchain churn (respect
 the repo's mise/uv/bun choices; changing toolchains needs an ADR) · local-only proof for
 platform claims · review findings that never become Seeds.

@@ -79,8 +79,14 @@ for s in "$root"/scripts/*.sh; do [ -e "$s" ] || continue; bash -n "$s" || err "
 if command -v pwsh >/dev/null 2>&1; then for p in "$root"/scripts/*.ps1; do [ -e "$p" ] || continue; pwsh -NoProfile -NonInteractive -Command "[System.Management.Automation.Language.Parser]::ParseFile('$p',[ref]\$null,[ref]\$null)" >/dev/null || err "$p does not parse"; done; fi
 for mf in .claude-plugin/plugin.json .claude-plugin/marketplace.json .codex-plugin/plugin.json .agents/plugins/marketplace.json gemini-extension.json; do [ -f "$root/$mf" ] || continue; "${python_cmd[@]}" -c 'import json,sys; json.load(open(sys.argv[1]))' "$root/$mf" || err "invalid JSON: $mf"; done
 
-# Optional CAO remains opt-in; retain an explicit policy check even on partial branches.
-if [ -f "$root/scripts/install-skill-bundle.sh" ]; then grep -q 'INSTALL_CAO' "$root/scripts/install-skill-bundle.sh" || err 'CAO opt-in check missing'; fi
+# CAO compatibility surfaces are retained as one-release exit-2 tombstones.
+if [ -f "$root/scripts/install-cao-kit.sh" ]; then
+  grep -qF 'CAO has been retired; use native Frame/Wave/Mission instead.' "$root/scripts/install-cao-kit.sh" || err 'CAO tombstone message missing'
+  grep -qF 'exit 2' "$root/scripts/install-cao-kit.sh" || err 'CAO tombstone exit code missing'
+fi
+if [ -f "$root/scripts/install-skill-bundle.sh" ]; then
+  grep -qF 'INSTALL_CAO' "$root/scripts/install-skill-bundle.sh" || err 'CAO retirement compatibility check missing'
+fi
 if grep -rInE '(AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH) PRIVATE KEY|amazon\.com/[a-z]|\.a2z\.com|aws\.dev/)' --include='*.md' --include='*.sh' --include='*.ps1' --include='*.toml' --include='*.json' --include='*.yml' --include='*.yaml' --include='*.py' --exclude-dir=.git "$root" 2>/dev/null | grep -v validate-bundle.sh; then err 'possible secret or internal hostname found'; fi
 printf '\nvalidate-bundle: %d error(s), %d warning(s)\n' "$errors" "$warns"
 exit "$([ "$errors" -gt 0 ] && echo 1 || echo 0)"

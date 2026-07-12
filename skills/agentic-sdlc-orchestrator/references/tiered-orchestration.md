@@ -36,8 +36,7 @@ Secondary test: if this agent is wrong, does the run **derail** (frontier), **de
 
 In the bundle, tier assignment starts with native host configuration: Claude Workflow
 stages carry `model:` per agent() call, and Codex roles carry
-`model`/`model_reasoning_effort` in TOML. When the optional CAO adapter is selected, its
-profiles can also carry per-worker `model:` frontmatter.
+`model`/`model_reasoning_effort` in TOML.
 The full four-tier policy — quota math, the decision ladder ("if this agent is wrong, does
 the run derail / degrade / just retry?"), alias plumbing, and concurrency budgets — ships
 as the sibling skill `skills/model-tier-rightsizing/` (re-derive its worked quota table per
@@ -63,12 +62,10 @@ The baseline has two complete layers; optional adapters add durability or visibi
 |---|---|---|
 | **Conductor** (interactive host session) | frame, plan adoption, verdict recommendations, Seeds/merge ownership | All scale-setter decisions; no outward authority |
 | **Provider-native fan-out** (roles, subagents, workflows, teams, background tasks) | discovery, research, implementation waves, review panels, critique | All delegated work within the host's supported lifetime |
-| **Optional CAO adapter** | durable or mixed-engine sessions | Select only when explicitly needed and already healthy |
 | **Optional cmux adapter** | view/event layer for already-active sessions | Never load-bearing; no installation or enablement step |
 
-Rule of thumb: **keep phases and waves provider-native unless a concrete durability or
-mixed-engine requirement selects CAO. Use cmux only for visibility when it is already
-active.** The practical delegation ceiling is about three real levels; coordination quality
+Rule of thumb: **keep phases and waves provider-native. Use cmux only for visibility when it
+is already active.** The practical delegation ceiling is about three real levels; coordination quality
 runs out before mechanism does.
 
 ## The research stage: delegate to a pipeline, don't inline it
@@ -102,8 +99,7 @@ Guardrails (so "keep going until done" stays bounded):
 
 The conductor holds the backflow cursor. Re-entry launches a scoped provider-native worker,
 folds its artifact into accumulated state, then re-runs forward phases as cheap
-re-validation. When CAO is selected, `assign`/async is one optional implementation of the
-same artifact-backed pattern. A verdict or backflow directive is advisory and does not grant
+re-validation. A verdict or backflow directive is advisory and does not grant
 permission for an outward operation.
 
 ## Iteration shape: chained runs vs one mega-run

@@ -1,7 +1,7 @@
 # Agentic SDLC Orchestrator
 
 Reusable, provider-native operating kit for project-scale agentic software delivery across
-Codex, Claude Code, and other skill-capable hosts. CAO and cmux are optional adapters;
+Codex, Claude Code, and other skill-capable hosts. cmux is an optional view/event layer;
 tmux is never a baseline requirement.
 
 **Architecture: an open plugin — the multi-host pattern, since no unified plugin standard
@@ -33,7 +33,6 @@ Agent entrypoint (Codex, Claude Code, or another capable host)
   -> squash/rebase/PR
 
 Optional adapters:
-  + CAO for explicitly selected durable or mixed-engine sessions
   + cmux for an already-active view/event layer
   + tmux only when an optional adapter uses it
 ```
@@ -42,13 +41,12 @@ Optional adapters:
 required Git, Seeds, gate, trust, and selected-adapter capabilities are present, pinned where
 applicable, and verified. Missing, untrusted, unpinned, or ambiguous required capability
 fails closed; an unselected optional adapter does not block the native path. Never install,
-start, or enable CAO, cmux, or tmux merely to use this bundle.
+start, or enable cmux or tmux merely to use this bundle.
 
 ## Contents
 
 - `skills/agentic-sdlc-orchestrator/`: the flagship, provider-native orchestration skill
-  for any skill-capable CLI agent. CAO workers can also consume it when that optional
-  adapter is selected.
+  for any skill-capable CLI agent.
 - `skills/codex-research-os/`: vendored research-team OS — a repo-scaffolding installer
   (`scripts/install_research_os.py`) that bootstraps a 17-role research organization
   (director + specialists), claim/experiment ledgers, greenfield/brownfield workflows,
@@ -79,9 +77,6 @@ start, or enable CAO, cmux, or tmux merely to use this bundle.
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, native worktree waves, PR flow, and
     optional worker/view adapters.
-  - `references/cao-profiles.md` — optional CAO adapter profiles + launch pattern.
-  - `references/cao-operations.md` — optional, **trial-verified** CAO operations. Load only
-    after selecting an active CAO path.
   - `references/cmux-integration.md` — optional cmux view/event integration. Load only when
     cmux is already active or explicitly requested.
   - `references/delegation-planes.md` — native-first per-provider decision matrices plus
@@ -128,19 +123,17 @@ start, or enable CAO, cmux, or tmux merely to use this bundle.
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to
   symlinks. Both manifests pass `claude plugins validate --strict`.
-- `cao-profiles/`: optional CAO adapter templates for macro orchestration, planning,
-  implementation, review, and nested dynamic workflows.
+- `cao-profiles/`: retained one-release CAO compatibility tombstones; use native Frame/Wave/Mission.
 - `scripts/check-agentic-sdlc-prereqs.sh`: native-baseline preflight plus informational
-  checks for optional adapters. Missing CAO, cmux, or tmux never fails it.
+  checks for optional adapters. Missing cmux or tmux never fails it.
 - `scripts/install-skill-bundle.sh`: **one-shot global install for every native agent CLI
-  present** (Claude Code skill+agents+commands, Codex skill+role TOMLs). Optional CAO
-  mirroring requires the explicit `INSTALL_CAO=1` opt-in. Symlinks by default; `--copy`
+  present** (Claude Code skill+agents+commands, Codex skill+role TOMLs). Symlinks by default; `--copy`
   to copy. Never clobbers non-symlink files.
 - `scripts/validate-bundle.sh`: pre-commit/CI gate — SKILL.md frontmatter, name==dirname,
   the 1024-char Codex description cap (silent-skip trap), broken references, TOML/JSON
   parses, shell `bash -n`, plugin manifest validation, secret/internal-hostname sweep.
 - `scripts/cmux-bus.sh`: optional cmux-only event-bus helper (pub/sub/seq).
-- `scripts/install-cao-kit.sh`: optional CAO-only adapter install (skill + profiles).
+- `scripts/install-cao-kit.sh`: retained CAO compatibility tombstone (exit code 2).
 
 ## Install and run the bundle
 
@@ -231,8 +224,8 @@ relevant task) explicitly when working through jj.
 `scripts/install-skill-bundle.sh` remains a compatibility wrapper for existing automation.
 It requires mise, invokes the pinned uv/Python installer, forwards supported arguments, and
 retains positional `status`, `uninstall`, and `self-test` plus legacy `--copy` behavior.
-It does not select CAO automatically. `INSTALL_CAO=1` is an explicit opt-in for the
-separate CAO mirror after the native install; CAO, cmux, and tmux are never prerequisites.
+`INSTALL_CAO=1` is a retired compatibility path and exits 2 before native installation.
+CAO is retired; cmux and tmux are never prerequisites.
 
 The native host path is available only after capability probes and trust checks succeed:
 
@@ -245,13 +238,12 @@ A capability probe or local status is evidence about that run only; it does not 
 authority for an outward effect. Push, tag, PR, merge, deployment, ruleset, credential, and
 external evidence-store operations each require explicit operation-specific authorization.
 
-If CAO was explicitly selected and is already installed, use its separate adapter flow and
-load `references/cao-operations.md` for CAO-specific behavior. Do not apply CAO, cmux, or
-tmux requirements to native runs. Adapter capability and model resolution must be read back;
-configuration alone is not proof.
+Use the native Frame/Wave/Mission flow. cmux remains an independent view/event layer only
+when it is already active or explicitly requested; tmux is never required. Adapter capability
+and model resolution must be read back; configuration alone is not proof.
 
 ## Run (native baseline)
 
 Native host agents, provider-native roles, subagents, workflows, teams, and background tasks
-are the supported execution mechanisms after capability and trust verification. CAO, cmux,
-and tmux are optional integrations, not setup steps or hidden dependencies.
+are the supported execution mechanisms after capability and trust verification. cmux and tmux
+are optional integrations, not setup steps or hidden dependencies.

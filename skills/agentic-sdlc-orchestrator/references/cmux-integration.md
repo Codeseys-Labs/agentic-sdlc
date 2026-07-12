@@ -2,7 +2,7 @@
 
 This is an optional adapter reference. Load it only when `command -v cmux` succeeds and
 `CMUX_WORKSPACE_ID` is set, or when the user explicitly requests cmux integration. cmux
-is only a view/event layer; the selected provider-native or optional CAO plane remains the
+is only a view/event layer; the selected provider-native plane remains the
 control layer. If cmux is absent, do not install or start it — skip this file.
 
 ## Detection
@@ -15,18 +15,9 @@ test -n "$CMUX_WORKSPACE_ID" && echo "in cmux"
 
 | Concern | Owner |
 |---|---|
-| Spawn/route/collect workers | **Provider-native host** by default; optional CAO when selected |
+| Spawn/route/collect workers | **Provider-native host** |
 | Watch/steer an already-active worker TUI, sidebar status, notifications, browser panes | **cmux** |
 | Non-agent notifications and cross-cutting pub/sub | **cmux event bus** |
-
-## View a CAO worker inside cmux (works, no setup)
-
-CAO workers live in detached tmux sessions named `cao-<session>`. Render any of them as a
-cmux workspace:
-
-```bash
-cmux new-workspace --name "CAO: <session>" --command "tmux attach -t cao-<session>" --focus false
-```
 
 The workspace shows the live agent TUI (interactive — you can type to steer). Close with
 `cmux close-workspace --workspace <ref>` (NOT `workspace-action`, which has no close verb).
@@ -59,8 +50,7 @@ Gotchas (both verified the hard way):
    only `id=<n> status=<ok|err> file=<path>`.
 
 Use the bus for non-agent traffic (progress pings, sidebar status, notify-on-done). Agent
-coordination should use the selected provider-native result/messaging channel. When CAO is
-selected, its `handoff`/`assign`/`send_message` channel fills that role.
+coordination should use the selected provider-native result/messaging channel.
 
 ## Sidebar as a run dashboard
 
@@ -85,7 +75,5 @@ cmux-specific path, not a fallback the baseline requires.
 | Situation | Use |
 |---|---|
 | Results or implementation needed in this host | provider-native roles/subagents/workflows |
-| Explicit durable or mixed-engine need with healthy CAO | optional CAO adapter |
-| Existing CAO/tmux worker and active cmux | optional cmux `tmux attach` viewer |
 | Non-agent notifications / cross-cutting events | cmux event bus |
 | Explicit raw-workspace experiment | cmux `new-workspace` + artifact/event collection |

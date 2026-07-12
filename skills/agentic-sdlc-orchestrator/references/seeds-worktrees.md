@@ -108,11 +108,7 @@ trust the path for codex AND mise → then launch.
   share a write worktree.
 - Codex workers on any substrate need each new worktree path trusted in
   `~/.codex/config.toml`; batch-add trust entries when creating the wave.
-- When the optional CAO adapter is selected, pass the worktree with
-  `--working-directory`. CAO-specific stale `processing` versus dead tmux diagnostics
-  live in `references/cao-operations.md`.
 - When cmux is already active, optionally publish wave status. Attach a
-  `tmux attach -t cao-<session>` viewer only for an existing CAO/tmux-backed worker;
   native workers require neither cmux nor tmux.
 
 ## Salvage Rules

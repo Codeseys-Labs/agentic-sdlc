@@ -11,8 +11,8 @@ as the router.
   project-scale agentic SDLC with Seeds, git worktree waves, mission/backlog-zero
   doctrine, tiered orchestration, and evidence-graded research teams. Roles and verdicts
   are advisory submissions; the conductor records evidence, and only an authorized
-  integrator executes an already authorized fan-in mutation. CAO and cmux are optional
-  adapters; tmux is never a baseline requirement. Start at its `SKILL.md`; read
+  integrator executes an already authorized fan-in mutation. cmux is an optional independent
+  view/event layer; tmux is never a baseline requirement. Start at its `SKILL.md`; read
   `references/*.md` on demand only.
 - `skills/codex-research-os/` — repo-scaffolding installer for a 17-role research
   organization with claim ledgers and review gates.
@@ -24,7 +24,7 @@ as the router.
   run the delivery loop (Claude Code slash commands; other hosts invoke the flagship skill
   with the same intents). Global installation and per-repository activation are separate
   lifecycle planes.
-- `cao-profiles/` — optional CAO adapter profile templates.
+- `cao-profiles/` — retained one-release CAO compatibility tombstones; use native Frame/Wave/Mission.
 
 ## Working on THIS repo
 
@@ -71,7 +71,7 @@ then invoke native Windows mise and report the two hosts separately. `hooks:inst
 lefthook's validate pre-commit and test/self-test pre-push subsets; hooks are best-effort
 convenience, not release authority. `jj:init` is explicit; jj bypasses Git hooks, so run the
 checks explicitly. The Bash installer is a mise-backed compatibility wrapper retaining
-positional `status`, `uninstall`, `self-test`, legacy `--copy`, and explicit `INSTALL_CAO=1`
+positional `status`, `uninstall`, `self-test`, legacy `--copy`, and retired `INSTALL_CAO=1`
 opt-in. For Claude, use either direct install or the marketplace, never both; marketplace
 overlap blocks only Claude. No local status, gate, reviewer label, or conductor choice grants
 authority for push, publication, PR mutation, merge, deployment, credential, or other outward

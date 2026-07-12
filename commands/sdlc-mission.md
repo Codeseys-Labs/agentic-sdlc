@@ -23,8 +23,7 @@ Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` an
    resolved provider/model: resolve only with adapter readback, otherwise inherited or
    unresolved.
 5. **Execute** via `/sdlc-wave` semantics: provider-native workers in worktrees by
-   default. Use CAO `assign`/`--async` only when the optional adapter was explicitly
-   selected and is already healthy for durable or mixed-engine work. WIP caps: impl ≤3,
+   default. Use provider-native background or persistent tasks for bounded work. WIP caps: impl ≤3,
    research ≤2, integration ≤1, critique ≤1, nesting ≤2.
 6. **Concurrent critique**: one standing review team auditing each wave's SQUASH-MERGED
    snapshot (never live worktrees), filing classified advisory Seeds in real time. A

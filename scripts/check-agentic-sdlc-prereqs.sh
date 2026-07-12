@@ -3,9 +3,8 @@
 # Required: git, gh, and sd (Seeds queue).
 # The current skill-capable host is detected informationally because not every provider
 # exposes a stable CLI executable name.
-# Optional enhancements: cao (durable/mixed-engine sessions), tmux (adapter backend),
-# cmux (active view/event layer), and jj (workspace substrate). Native orchestration
-# remains fully supported when every optional enhancement is absent.
+# Optional enhancements: tmux (adapter backend) and cmux (active view/event layer).
+# Native orchestration remains fully supported when optional enhancements are absent.
 set -euo pipefail
 
 missing=0
@@ -41,7 +40,6 @@ if [ "$host_found" -eq 0 ] && [ "${AGENTIC_SDLC_HOST_READY:-0}" = "1" ]; then
 elif [ "$host_found" -eq 0 ]; then
   printf 'warn:     no known host CLI found; continue from the current skill-capable host or set AGENTIC_SDLC_HOST_READY=1\n'
 fi
-opt cao  "durable cross-CLI adapter skipped; native orchestration is unaffected"
 opt tmux "session/view backend skipped; native orchestration is unaffected"
 opt cmux "view/event adapter skipped; native orchestration is unaffected"
 
@@ -67,21 +65,6 @@ if command -v cmux >/dev/null 2>&1 && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
   printf 'optional: active cmux view/event adapter detected\n'
 fi
 
-# Inspect CAO-specific health only when its optional server is already running.
-if command -v cao >/dev/null 2>&1; then
-  if curl -sf -m 2 http://localhost:9889/sessions >/dev/null 2>&1; then
-    printf 'optional: active cao-server detected at http://localhost:9889\n'
-    # CAO default 30s init timeouts can be too short for slow backends.
-    t="$(cao config get server.mcp_request_timeout 2>/dev/null || echo 30)"
-    if [ "${t:-30}" -lt 180 ] 2>/dev/null; then
-      printf 'note:     CAO adapter timeout=%s; raise it only if this run selects CAO on a slow backend\n' "$t"
-    else
-      printf 'optional: CAO adapter timeout configured (mcp_request_timeout=%s)\n' "$t"
-    fi
-  else
-    printf 'optional: cao is installed but inactive; native orchestration remains fully supported\n'
-  fi
-fi
 
 # codex dir-trust preflight: workers hang on the trust prompt in untrusted dirs.
 if command -v codex >/dev/null 2>&1 && [ -f "${CODEX_HOME:-$HOME/.codex}/config.toml" ]; then
