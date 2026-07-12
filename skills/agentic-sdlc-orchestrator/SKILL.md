@@ -5,19 +5,27 @@ description: This skill should be used when the user asks to frame, plan, execut
 
 # Agentic SDLC Orchestrator
 
-Use this skill to run a repeatable, project-generic implementation loop:
+Use this skill to run a repeatable, project-generic implementation loop. The skill is
+policy and coordination guidance, not an actor, credential, permission grant, evidence
+store, Git executor, or validator:
 
 `Agent entrypoint -> provider-native delegation (or direct execution) -> Seeds queue -> worktrees -> tests/review -> squash/rebase -> PR`
 
+Roles submit findings or candidate changes. Reviewer and critic labels are recommendations;
+they never authorize an outward effect. One macro conductor records evidence and keeps the
+queue; only the integrator may execute an already authorized fan-in mutation, and the
+integrator never acquires the user's authority.
+
 Keep the active host session as the macro conductor and use its native delegation tools by
-default. The full Frame -> Ship loop works without CAO, cmux, or tmux. Add CAO only when
-the user explicitly selects durable or mixed-engine CAO sessions and CAO is already
-available. Add cmux
-only when it is already active and useful for visibility or event messaging. Never install,
-start, or enable CAO, cmux, or tmux merely to run this skill. Use Seeds as the queue of
-record. Global distribution (`mise` → pinned `uv` → pinned Python installer) is separate
-from project activation: use `/sdlc-init` (or the same intent on non-Claude hosts) to
-establish a tracked Git baseline, Seeds, repository gates, trust, and shared `AGENTS.md`
+default. The full Frame -> Ship loop is available only after required Git, Seeds, gate,
+trust, and selected-adapter capabilities are probed and verified. Missing, unpinned,
+untrusted, or ambiguous required capability fails closed. Add CAO only when the user
+explicitly selects durable or mixed-engine CAO sessions and CAO is already available. Add
+cmux only when it is already active and useful for visibility or event messaging. Never
+install, start, or enable CAO, cmux, or tmux merely to run this skill. Use Seeds as the
+queue of record. Global distribution (`mise` → pinned `uv` → pinned Python installer) is
+separate from project activation: use `/sdlc-init` (or the same intent on non-Claude hosts)
+to establish a tracked Git baseline, Seeds, repository gates, trust, and shared `AGENTS.md`
 guidance before the first Frame/Wave.
 
 ## Repo Location
@@ -41,13 +49,16 @@ When this skill refers to bundled scripts, use the repo copies:
 2. Detect the host-native execution plane first:
    - Inventory direct execution, role agents/subagents, background delegation, and native
      result or messaging channels available in the current host.
-   - Treat those capabilities as sufficient for every phase of the loop.
+   - Treat those capabilities as candidates, not proof of readiness: probe required
+     capability, trust, and adapter/model readback before selecting the path. Missing,
+     unpinned, untrusted, or ambiguous capability is a fail-closed stop.
    - Probe `cao` only after the user explicitly selects CAO for durable or mixed-engine
      sessions. Select it only when installed and healthy; otherwise stay native.
    - Probe cmux only when `command -v cmux` succeeds and `CMUX_WORKSPACE_ID` is set. If
      either check fails, skip cmux silently. tmux is never part of the baseline probe.
 3. Decide the run shape:
-   - Small fix: handle directly or use one provider-native role/subagent.
+   - Small fix: handle directly or use one provider-native role/subagent after capability
+     checks pass.
    - Multi-file implementation: use provider-native workers in a Seeds-backed worktree wave.
    - Unclear architecture: discover -> research if needed -> plan -> act -> review.
    - Large backlog-zero work: bounded waves with continuous Seeds reconciliation.
@@ -76,8 +87,8 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 
 - Prefer the host's native roles, subagents, workflows, teams, or background tasks. Keep
   direct execution for work too small to justify delegation.
-- Require every delegated worker to write an artifact report; treat messages and summaries
-  as notifications, not acceptance evidence.
+- Require every delegated worker to write an artifact report; treat messages, status, and
+  summaries as advisory notifications, not acceptance evidence or authority.
 - For long-running work, use the host's native background or persistent-task mechanism and
   durable artifact files. Do not hold one blocking call open indefinitely.
 - When CAO has been explicitly selected, use `handoff` only for bounded blocking results
@@ -89,7 +100,11 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
   regardless of delegation backend.
 - Pin models through the current host's role/agent configuration. When CAO is selected,
   profile frontmatter supplies its optional per-worker model mapping.
-- Keep one macro conductor responsible for Seeds, worktree ownership, merges, and final claims.
+- Keep one macro conductor responsible for Seeds, worktree ownership, merges, and evidence-backed
+  recommendations. The integrator is only the delegated mutation executor during fan-in and
+  never acquires user authority. Push, publication, PR mutation, merge, deployment,
+  credential, and external evidence-store operations require explicit operation-specific
+  authorization.
 - If already inside cmux, optionally surface run state. Attach a `tmux` viewer only for an
   existing tmux-backed session; never create that dependency for a native run.
 

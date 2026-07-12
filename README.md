@@ -38,9 +38,11 @@ Optional adapters:
   + tmux only when an optional adapter uses it
 ```
 
-**Baseline invariant:** one capable host can run the full Frame -> Ship loop. Never install,
-start, or enable CAO, cmux, or tmux merely to use this bundle; their absence never blocks
-or weakens the native path.
+**Capability-negotiated baseline:** a host may run the native Frame -> Ship loop only after the
+required Git, Seeds, gate, trust, and selected-adapter capabilities are present, pinned where
+applicable, and verified. Missing, untrusted, unpinned, or ambiguous required capability
+fails closed; an unselected optional adapter does not block the native path. Never install,
+start, or enable CAO, cmux, or tmux merely to use this bundle.
 
 ## Contents
 
@@ -71,8 +73,8 @@ or weakens the native path.
   bottom-up merge, the restack discipline, when NOT to stack). The PR-landing strategy for
   dependent Seeds in a wave.
 - `skills/stacked-prs-gh-cli/`: the same with ONLY plain `gh` + git — no gt/spr/ghstack.
-  gh has no `stack` command (v2.95); GitHub's primitives are `--base` targeting + native
-  auto-retarget-on-merge. Covers the squash-merge `--onto` restack gotcha and
+  gh has no `stack` command (v2.95); GitHub's primitives are `--base` targeting + explicit
+  retarget/requery/restack. Covers the squash-merge `--onto` restack gotcha and
   `--force-with-lease` safety. Pairs with `stacked-prs` and the jj-vcs reference.
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, native worktree waves, PR flow, and
@@ -89,9 +91,8 @@ or weakens the native path.
   - `references/mission-loop.md` — the autonomous **backlog-zero doctrine**: 8-class
     milestone classification (only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes,
     WIP caps, priority math, the concurrent critique team, honest definition of done.
-  - `references/tiered-orchestration.md` — **model-tier assignment** (the multiplier
-    principle: frontier tier only on solo scale-setters — frame/plan/verdict), a native-first
-    capability ladder with optional adapters, **bounded backflow**, chained iterations,
+  - `references/tiered-orchestration.md` — model-tier assignment, honest provider/model
+    resolution, the native-first capability ladder with optional adapters, bounded backflow,
     and worker lifecycle at scale.
   - `references/research-team.md` — **evidence-graded research teams** for standing
     research efforts: the evidence ladder (promote slowly, downgrade quickly), role
@@ -118,7 +119,8 @@ or weakens the native path.
   `/sdlc-init` activates Agentic SDLC inside a repository without reinstalling global
   capabilities. It establishes a reviewed tracked Git baseline, Seeds queue,
   mise/lefthook/betterleaks gate stack, per-worktree trust policy, cross-host `AGENTS.md`
-  guidance, and CI parity. It is idempotent and preserves existing project policy; jj
+  guidance, and CI parity. It is a reviewed runbook: claims of idempotence or Git-wave readiness
+  require observed evidence; it preserves existing project policy and stops on ambiguity. jj
   workspace Waves remain a later conformance milestone. `/sdlc-frame` frames one run,
   `/sdlc-wave` runs one Seeds-backed Git-worktree wave, and `/sdlc-mission` runs an
   autonomous backlog-zero mission with concurrent critique and bounded backflow.
@@ -142,10 +144,13 @@ or weakens the native path.
 
 ## Install and run the bundle
 
-**mise is the sole prerequisite.** The checked-in `mise.toml` pins `uv`; `uv` supplies the
-pinned Python `3.12.11` runtime used by the stdlib installer. You do not need to install
-Python, uv, Bash, or a host-specific Python environment separately. Optional CAO, cmux, and
-tmux adapters are never installed or enabled by setup.
+**Mise is the managed-tool bootstrap, not the sole readiness prerequisite.** The checked-in
+`mise.toml` pins `uv`; `uv` supplies the pinned Python `3.12.11` runtime for the stdlib
+installer. Git, a documented Seeds distribution, supported trust behavior, and the selected
+adapter are also prerequisites. Resolve and record the actual provider/model only when the
+adapter proves it; otherwise record inherited or unresolved. A passing local status or gate
+never authorizes push, publication, PR mutation, merge, deployment, credential, or other
+outward effect.
 
 Bootstrap the repository and inspect the available lifecycle tasks:
 
@@ -213,8 +218,9 @@ as a bare skill and again under the plugin namespace.
 ### Hooks and jj
 
 `hooks:install` installs the lefthook subsets from this repository: pre-commit runs
-`mise run validate`; pre-push runs `mise run test` and `mise run self-test`. `mise run check`
-remains the complete local gate and is the command CI mirrors.
+`mise run validate`; pre-push runs `mise run test` and `mise run self-test`. These hooks are
+best-effort convenience only; `mise run check` remains the complete local gate and the
+command CI mirrors.
 
 `jj:init` is explicit and is not a dependency of `setup`. A colocated jj repository keeps
 Git interoperability, but jj commands bypass Git hooks; run `mise run check` (and any
@@ -228,19 +234,24 @@ retains positional `status`, `uninstall`, and `self-test` plus legacy `--copy` b
 It does not select CAO automatically. `INSTALL_CAO=1` is an explicit opt-in for the
 separate CAO mirror after the native install; CAO, cmux, and tmux are never prerequisites.
 
-The native host path is complete without an adapter:
+The native host path is available only after capability probes and trust checks succeed:
 
 ```text
 Use $agentic-sdlc-orchestrator to frame this task and run a bounded,
 Seeds-backed worktree wave using the host's native agents.
 ```
 
+A capability probe or local status is evidence about that run only; it does not grant
+authority for an outward effect. Push, tag, PR, merge, deployment, ruleset, credential, and
+external evidence-store operations each require explicit operation-specific authorization.
+
 If CAO was explicitly selected and is already installed, use its separate adapter flow and
 load `references/cao-operations.md` for CAO-specific behavior. Do not apply CAO, cmux, or
-tmux requirements to native runs.
+tmux requirements to native runs. Adapter capability and model resolution must be read back;
+configuration alone is not proof.
 
 ## Run (native baseline)
 
 Native host agents, provider-native roles, subagents, workflows, teams, and background tasks
-are the complete supported path. CAO, cmux, and tmux are optional integrations, not setup
-steps or hidden dependencies.
+are the supported execution mechanisms after capability and trust verification. CAO, cmux,
+and tmux are optional integrations, not setup steps or hidden dependencies.
