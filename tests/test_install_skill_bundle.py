@@ -1,0 +1,221 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+SCRIPT = Path(__file__).parents[1] / "scripts" / "install_skill_bundle.py"
+spec = importlib.util.spec_from_file_location("installer", SCRIPT)
+assert spec and spec.loader
+installer = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = installer
+spec.loader.exec_module(installer)
+
+
+class InstallSkillBundleTests(unittest.TestCase):
+    def make_repo(self, root: Path) -> None:
+        (root / "skills" / "example").mkdir(parents=True)
+        (root / "skills" / "example" / "SKILL.md").write_text("---\nname: example\n---\n")
+        (root / "agents" / "claude").mkdir(parents=True)
+        (root / "agents" / "claude" / "role.md").write_text("agent")
+        (root / "agents" / "codex" / "research").mkdir(parents=True)
+        (root / "agents" / "codex" / "role.toml").write_text("role = true")
+        (root / "agents" / "codex" / "research" / "excluded.toml").write_text("excluded")
+        (root / "commands").mkdir()
+        (root / "commands" / "command.md").write_text("command")
+
+    def test_discovers_only_supported_top_level_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+
+            entries = installer.discover_entries(root)
+
+            self.assertEqual(
+                [(entry.agent, entry.kind, entry.name) for entry in entries],
+                [
+                    ("claude", "skill", "example"),
+                    ("codex", "skill", "example"),
+                    ("claude", "agent", "role.md"),
+                    ("claude", "command", "command.md"),
+                    ("codex", "agent", "role.toml"),
+                ],
+            )
+
+    def test_copy_lifecycle_tracks_state_and_uninstalls_owned_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            codex_home = root / "codex"
+            self.make_repo(root)
+            config = installer.Config(root, home, codex_home, "copy", False, "all")
+
+            result = installer.install(config)
+            destination = home / ".claude" / "skills" / "example"
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(destination.is_dir())
+            self.assertFalse(destination.is_symlink())
+            state = installer.load_state(config.state_path)
+            self.assertIn(str(destination), state["entries"])
+
+            removed = installer.uninstall(config)
+            self.assertEqual(removed.exit_code, 0)
+            self.assertFalse(destination.exists())
+            self.assertEqual(installer.load_state(config.state_path)["entries"], {})
+
+    def test_link_lifecycle_creates_symlinks_when_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "link", False, "all")
+
+            result = installer.install(config)
+            destination = config.home / ".claude" / "skills" / "example"
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(destination.is_symlink())
+            self.assertEqual(destination.resolve(), root / "skills" / "example")
+            self.assertEqual(installer.uninstall(config).exit_code, 0)
+            self.assertFalse(destination.exists())
+
+    def test_modified_owned_copy_is_not_refreshed_or_uninstalled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            installer.install(config)
+            destination = config.home / ".claude" / "skills" / "example"
+            (destination / "SKILL.md").write_text("locally modified")
+
+            install_result = installer.install(config)
+            uninstall_result = installer.uninstall(config)
+
+            self.assertEqual(install_result.exit_code, 1)
+            self.assertIn(f"conflict: {destination}", install_result.messages)
+            self.assertEqual(uninstall_result.exit_code, 1)
+            self.assertTrue(destination.exists())
+
+    def test_adopts_identical_copy_and_exact_legacy_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            copy_destination = config.home / ".claude" / "skills" / "example"
+            copy_destination.parent.mkdir(parents=True)
+            installer.copy_item(root / "skills" / "example", copy_destination)
+            agent_destination = config.home / ".claude" / "agents" / "role.md"
+            agent_destination.parent.mkdir(parents=True, exist_ok=True)
+            agent_destination.symlink_to(root / "agents" / "claude" / "role.md")
+
+            adopted = installer.install(config)
+            self.assertIn(f"adopted: {copy_destination}", adopted.messages)
+            self.assertIn(f"adopted: {agent_destination}", adopted.messages)
+
+    def test_dry_run_does_not_create_destination_or_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", True, "all")
+
+            result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertFalse((config.home / ".claude").exists())
+            self.assertFalse(config.state_path.exists())
+            self.assertTrue(any(message.startswith("would install:") for message in result.messages))
+
+    def test_auto_falls_back_to_copy_but_link_mode_is_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            auto = installer.Config(root, root / "auto-home", root / "auto-codex", "auto", False, "claude")
+            strict = installer.Config(root, root / "link-home", root / "link-codex", "link", False, "claude")
+
+            with mock.patch.object(installer, "link_item", side_effect=OSError("not permitted")):
+                self.assertEqual(installer.install(auto).exit_code, 0)
+                self.assertTrue((auto.home / ".claude" / "skills" / "example").is_dir())
+                with self.assertRaises(installer.InstallerError):
+                    installer.install(strict)
+
+    def test_invalid_state_is_fatal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "all")
+            config.state_path.parent.mkdir(parents=True)
+            config.state_path.write_text("not-json")
+
+            with self.assertRaises(installer.InstallerError):
+                installer.install(config)
+
+    def test_missing_owned_entry_is_conflict_not_silent_reinstall(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            installer.install(config)
+            destination = config.home / ".claude" / "skills" / "example"
+            installer.remove_path(destination)
+
+            result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn(f"conflict: {destination}", result.messages)
+            self.assertFalse(destination.exists())
+
+    def test_marketplace_overlap_skips_only_claude(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "all")
+            marketplace = config.home / ".claude" / "plugins" / "marketplaces" / "agentic-sdlc"
+            marketplace.mkdir(parents=True)
+
+            result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertFalse((config.home / ".claude" / "skills" / "example").exists())
+            self.assertTrue((config.codex_home / "skills" / "example").exists())
+
+    def test_windows_prefers_junction_for_directories_and_symlink_for_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "link", False, "all")
+            with mock.patch.object(installer, "platform_system", return_value="Windows"), mock.patch.object(installer, "make_junction") as junction, mock.patch.object(installer, "make_file_symlink") as file_link:
+                installer.install(config)
+
+            self.assertGreaterEqual(junction.call_count, 2)
+            self.assertGreaterEqual(file_link.call_count, 3)
+
+    def test_cli_returns_fatal_code_for_invalid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            state_root = root / "home" / ".local" / "state" / "agentic-sdlc-installer"
+            state_root.mkdir(parents=True)
+            (state_root / "state.json").write_text("invalid")
+
+            with mock.patch.object(installer, "__file__", str(SCRIPT)), mock.patch("sys.stderr"):
+                self.assertEqual(installer.main(["status", "--home", str(root / "home")]), 2)
+
+    def test_self_test_runs_isolated_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "all")
+
+            result = installer.self_test(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertEqual(result.messages, ("self-test passed",))
+            self.assertFalse(config.home.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
