@@ -38,12 +38,13 @@ Per branch, follow the worktree-integration discipline exactly:
    new identifiers) — a clean apply is not correctness.
 5. **Re-gate on the integration branch** after each landing. Worktree-green ≠
    integration-green; trust only gates you ran. Red gate = revert that landing
-   (`git reset --hard <pre-landing sha>`), file a seed with the exact failures, move on.
+   (`git reset --hard <pre-landing sha>`), then submit a seed-shaped finding with the exact
+   failures for conductor capture and move on.
 6. **Artifact check:** sizes plausible (`wc -l` the load-bearing files), no
    node_modules/vendor sweep in `git show --stat`.
 
 Report per branch: landed/reverted/skipped, footprint assessment, gates run + real output,
-seeds filed, and the authorization boundary checked. End with the integration branch SHA
+seed-shaped recommendations, and the authorization boundary checked. End with the integration branch SHA
 and a recommendation per Seed; the conductor decides final disposition.
 
 

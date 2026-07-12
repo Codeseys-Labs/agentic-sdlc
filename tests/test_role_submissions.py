@@ -156,6 +156,16 @@ class RoleSubmissionContractTests(unittest.TestCase):
                 self.assertRegex(text, r"(?i)conductor persists")
                 self.assertNotRegex(text, r"(?i)your only writes? (?:are|is)|write the .+ artifact")
 
+    def test_roles_submit_seed_recommendations_instead_of_mutating_queue(self) -> None:
+        for role in ("critic", "integrator", "researcher"):
+            for host, text in (
+                ("claude", self.read_claude(role)),
+                ("codex", self.read_codex(role)[0]),
+            ):
+                with self.subTest(host=host, role=role):
+                    self.assertRegex(text, r"(?i)seed-shaped")
+                    self.assertNotRegex(text, r"(?i)file (?:a |them as )?seeds?|seeds filed")
+
     def test_hosts_keep_role_names_and_submission_capture_guidance(self) -> None:
         for role in ROLE_NAMES:
             claude = self.read_claude(role)
