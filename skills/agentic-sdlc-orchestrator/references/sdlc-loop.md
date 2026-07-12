@@ -8,7 +8,6 @@ Frame:
 - State the exact done condition.
 - Read repo intent docs, roadmap, ADRs, and current queue state.
 - Decide whether the run is direct, a provider-native delegation, or a worktree wave.
-  Select the optional CAO adapter only for an explicit durable/mixed-engine need. Treat
   discovered capabilities as candidates until required probes, trust, and adapter readback
   succeed; missing, unpinned, untrusted, or ambiguous capability fails closed.
 - Set caps: worker count, worktree count, max review/fix rounds, and stop conditions.

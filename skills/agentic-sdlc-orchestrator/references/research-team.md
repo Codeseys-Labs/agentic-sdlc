@@ -56,7 +56,7 @@ Compose the roster to fit — a small effort might collapse to
 scout / theorist-experimentalist / adversarial-reviewer / synthesizer — but keep the
 CANNOTs: the attack role never fixes; the writing role never originates; the proposing
 role never approves. Map onto the bundle's planes: roles = provider-native role agents
-(see `agents/`) by default, or optional CAO profiles when that adapter is selected; the
+(see `agents/`) by default; the
 director = the conductor; reviews = the concurrent critique team graded by the ladder.
 
 ## The one-loop discipline
@@ -92,8 +92,7 @@ before any synthesis ships:
 - `validate-agents` — role configs contain only known keys, names match files, and any
   explicit `model` pins are ALLOWLISTED. **No decorative model pins**: by default omit
   `model` so roles inherit the host's configured default — a pinned model that doesn't
-  exist on the host fails silently or 404s. CAO-specific pinning belongs only in the
-  optional CAO references.
+  exist on the host fails silently or 404s.
 
 This mirrors the bundle's validate-bundle.sh philosophy: silent failure modes get a
 gate, not a guideline.
@@ -101,8 +100,7 @@ gate, not a guideline.
 ## Wiring into the mission loop
 
 In `references/mission-loop.md` terms: a standing research effort is ONE research track
-(WIP cap: ≤2), run by a provider-native director/supervisor by default or by an optional
-CAO session when that adapter is selected. Its claims ledger is the research twin of the
+(WIP cap: ≤2), run by a provider-native director/supervisor. Its claims ledger is the research twin of the
 Seeds queue; its review gates are the critique team's rubric; its next-action file is the
 checkpoint. Research findings that imply code work
 become Seeds; code findings that imply research questions become ledger ideas. The two

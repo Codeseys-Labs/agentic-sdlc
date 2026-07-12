@@ -22,7 +22,7 @@ claiming wave readiness.
      files, current branch/HEAD, remotes, existing task runner, hooks, CI, instruction
      files, and language/toolchain manifests.
    - Run the maintained prerequisite checker when available. Missing, unpinned, untrusted,
-     or ambiguous required capability fails closed; missing optional CAO, cmux, tmux, or jj
+     or ambiguous required capability fails closed; missing optional cmux, tmux, or jj
      never triggers implicit installation. `mise` is the managed-tool bootstrap, not the sole
      readiness prerequisite; repository tools are pinned through it. Record the selected
      adapter and its capability/model readback, or record inherited/unresolved when it cannot

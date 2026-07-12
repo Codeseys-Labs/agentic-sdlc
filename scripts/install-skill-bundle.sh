@@ -7,6 +7,13 @@
 #   INSTALL_CAO=1 install-skill-bundle.sh [legacy install options]
 set -euo pipefail
 
+retirement_message='CAO has been retired; use native Frame/Wave/Mission instead.'
+
+if [ "${INSTALL_CAO:-0}" = "1" ]; then
+  printf '%s\n' "$retirement_message" >&2
+  exit 2
+fi
+
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v mise >/dev/null 2>&1; then
@@ -46,24 +53,4 @@ case "$command" in
     ;;
 esac
 
-if [ "$core_exit" -ne 0 ]; then
-  exit "$core_exit"
-fi
-
-if [ "$command" != install ]; then
-  exit 0
-elif [ "${INSTALL_CAO:-0}" != "1" ]; then
-  exit 0
-elif ! command -v cao >/dev/null 2>&1; then
-  printf '%s\n' 'error: INSTALL_CAO=1 was set, but cao is not available on PATH' >&2
-  exit 2
-else
-  while IFS= read -r skill; do
-    cao skills add "$skill" --force
-  done < <(find "$repo_root/skills" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -printf '%h\n' | sort)
-  for profile in "$repo_root"/cao-profiles/*.md; do
-    [ -e "$profile" ] || continue
-    cao install "$profile"
-  done
-  printf '%s\n' 'CAO adapter installed explicitly after the core bundle lifecycle.'
-fi
+exit "$core_exit"
