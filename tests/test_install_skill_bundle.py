@@ -322,19 +322,29 @@ class InstallSkillBundleTests(unittest.TestCase):
             root = Path(temp)
             self.make_repo(root)
             config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
-            commands = config.home / ".claude" / "commands"
-            commands.parent.mkdir(parents=True)
-            commands.write_text("blocks collection")
+            original = installer.create_destination
+            calls = 0
 
-            with self.assertRaises(installer.InstallerError):
-                installer.install(config)
+            def fail_second(
+                entry: installer.Entry, destination: Path, current: installer.Config
+            ) -> str:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("disk full")
+                return original(entry, destination, current)
+
+            with mock.patch.object(installer, "create_destination", side_effect=fail_second):
+                with self.assertRaisesRegex(installer.InstallerError, "cannot install"):
+                    installer.install(config)
 
             destination = config.home / ".claude" / "skills" / "example"
+            failed = config.home / ".claude" / "agents" / "role.md"
             state = installer.load_state(config.state_path)
             self.assertTrue(destination.exists())
             self.assertTrue(state["entries"][str(destination)]["removable"])
+            self.assertNotIn(str(failed), state["entries"])
 
-            commands.unlink()
             self.assertEqual(installer.uninstall(config).exit_code, 0)
             self.assertFalse(destination.exists())
 
@@ -374,6 +384,25 @@ class InstallSkillBundleTests(unittest.TestCase):
                 installer.uninstall(config)
 
             self.assertTrue((external / "example").exists())
+
+    def test_marketplace_skip_does_not_validate_unused_claude_collections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "all")
+            marketplace = config.home / ".claude" / "plugins" / "marketplaces" / "agentic-sdlc"
+            marketplace.mkdir(parents=True)
+            external = root / "external"
+            external.mkdir()
+            collection = config.home / ".claude" / "skills"
+            collection.parent.mkdir(parents=True, exist_ok=True)
+            collection.symlink_to(external, target_is_directory=True)
+
+            result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertTrue(config.codex_home.joinpath("skills", "example").exists())
+            self.assertEqual(list(external.iterdir()), [])
 
     def test_uninstall_removes_owned_dangling_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

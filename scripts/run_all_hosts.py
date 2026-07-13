@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import subprocess
 import sys
@@ -28,15 +28,22 @@ def run_host(label: str, command: list[str]) -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def is_wsl_absolute(value: str) -> bool:
+    """Identify WSL absolute spelling without depending on the test host OS."""
+    return PurePosixPath(value).is_absolute() and not PureWindowsPath(value).is_absolute()
+
+
 def windows_arguments(arguments: list[str], wslpath: str) -> list[str]:
     """Translate WSL absolute values for installer path options."""
     converted = list(arguments)
     index = 0
     while index < len(converted):
         argument = converted[index]
+        if argument == "--":
+            break
         if argument in {"--home", "--codex-home"} and index + 1 < len(converted):
             value = converted[index + 1]
-            if Path(value).is_absolute():
+            if is_wsl_absolute(value):
                 converted[index + 1] = subprocess.run(
                     [wslpath, "-w", value],
                     check=True,
@@ -49,7 +56,7 @@ def windows_arguments(arguments: list[str], wslpath: str) -> list[str]:
             prefix = f"{option}="
             if argument.startswith(prefix):
                 value = argument[len(prefix) :]
-                if Path(value).is_absolute():
+                if is_wsl_absolute(value):
                     native = subprocess.run(
                         [wslpath, "-w", value],
                         check=True,
@@ -65,7 +72,12 @@ def windows_arguments(arguments: list[str], wslpath: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("install", "status"))
-    args, forwarded = parser.parse_known_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if not raw or raw[0] in {"-h", "--help"}:
+        parser.parse_args(raw)
+    if raw[0] not in {"install", "status"}:
+        parser.error(f"argument operation: invalid choice: {raw[0]!r}")
+    operation, forwarded = raw[0], raw[1:]
 
     if sys.platform == "win32" or not Path("/proc/sys/fs/binfmt_misc/WSLInterop").exists():
         parser.error("this coordinator must run inside WSL")
@@ -75,9 +87,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("native Windows PowerShell and wslpath are required")
 
     repo = Path(__file__).resolve().parents[1]
-    task = f"bundle:{args.operation}"
+    task = f"bundle:{operation}"
     wsl_exit = run_host(
-        f"WSL host: {args.operation}",
+        f"WSL host: {operation}",
         ["mise", "--cd", str(repo), "run", task, "--", *forwarded],
     )
     native_repo = subprocess.run(
@@ -85,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     ).stdout.strip()
     native_forwarded = windows_arguments(forwarded, wslpath)
     windows_exit = run_host(
-        f"Native Windows host: {args.operation}",
+        f"Native Windows host: {operation}",
         [
             powershell,
             "-NoProfile",

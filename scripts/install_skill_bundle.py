@@ -426,7 +426,6 @@ def install(config: Config) -> Result:
         if config.agent != "all" and entry.agent != config.agent:
             continue
         destination = destination_for(entry, config)
-        assert_safe_collection(entry, destination, config)
         key = str(destination)
         record = owned.get(key)
 
@@ -434,6 +433,8 @@ def install(config: Config) -> Result:
             partial = True
             messages.append(f"marketplace overlap: {destination}")
             continue
+
+        assert_safe_collection(entry, destination, config)
 
         if isinstance(record, dict) and not entry_matches_record(destination, record):
             partial = True
@@ -532,7 +533,6 @@ def install(config: Config) -> Result:
         save_owned_entry(config, state, key, entry_record(entry, mode))
         messages.append(f"installed: {destination} ({mode})")
 
-    write_state(config.state_path, state, config.dry_run)
     return Result(1 if partial else 0, tuple(messages))
 
 
@@ -548,13 +548,6 @@ def status(config: Config) -> Result:
         if not destination_is_configured(key, record, config):
             continue
         destination = Path(key)
-        entry = Entry(
-            record["agent"],
-            record["kind"],
-            record.get("name", destination.name),
-            Path(record["source"]),
-        )
-        assert_safe_collection(entry, destination, config)
         if not destination.exists() and not destination.is_symlink():
             partial = True
             messages.append(f"absent: {destination}")

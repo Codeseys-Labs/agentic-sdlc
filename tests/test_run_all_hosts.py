@@ -62,6 +62,41 @@ class RunAllHostsTests(unittest.TestCase):
             ["--home=C:\\native-home", "--codex-home", "relative-codex", "--dry-run"],
         )
 
+    def test_preserves_windows_unc_and_delimited_values(self) -> None:
+        with mock.patch.object(all_hosts.subprocess, "run") as run:
+            arguments = [
+                "--home",
+                "C:\\Users\\person",
+                "--codex-home=//server/share/codex",
+                "--",
+                "--home",
+                "/tmp/literal",
+            ]
+            result = all_hosts.windows_arguments(arguments, "wslpath")
+
+        self.assertEqual(result, arguments)
+        run.assert_not_called()
+
+    def test_main_preserves_delimiter_tail(self) -> None:
+        completed: list[list[str]] = []
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            completed.append(command)
+            if command[0] == "wslpath":
+                return subprocess.CompletedProcess(command, 0, "E:\\repo\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(all_hosts.sys, "platform", "linux"), mock.patch.object(
+            all_hosts.Path, "exists", return_value=True
+        ), mock.patch.object(all_hosts, "powershell_path", return_value="powershell.exe"), mock.patch.object(
+            all_hosts.shutil, "which", return_value="wslpath"
+        ), mock.patch.object(all_hosts.subprocess, "run", side_effect=run):
+            self.assertEqual(all_hosts.main(["status", "--", "--home", "/tmp/literal"]), 0)
+
+        windows = next(command for command in completed if command[0] == "powershell.exe")
+        encoded = windows[windows.index("-TaskArgsJson") + 1]
+        self.assertEqual(json.loads(encoded), ["--", "--home", "/tmp/literal"])
+
     def test_returns_worst_host_exit_code(self) -> None:
         exits = iter((1, 0))
 
