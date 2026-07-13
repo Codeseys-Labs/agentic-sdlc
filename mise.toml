@@ -1,5 +1,10 @@
+min_version = "2026.4.27"
+
+[settings]
+locked = true
+
 [tools]
-# mise is the only user prerequisite. It installs every pinned repository tool.
+# mise is the only managed-tool bootstrap. Runtime readiness is checked separately.
 uv = "0.11.17"
 lefthook = "2.1.10"
 
@@ -42,6 +47,11 @@ run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle
 description = "Report lifecycle status on WSL and the paired native Windows host"
 run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
+
+[tasks."research-os:install"]
+description = "Install the repo-scoped Codex Research OS"
+run = "uv run --python 3.12.11 --script skills/codex-research-os/scripts/install_research_os.py"
+run_windows = "uv.exe run --python 3.12.11 --script skills/codex-research-os/scripts/install_research_os.py"
 
 [tasks.test]
 description = "Run the Python installer tests"

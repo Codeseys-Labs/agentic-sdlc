@@ -99,6 +99,41 @@ def load_state(path: Path) -> dict[str, Any]:
     return state
 
 
+def validate_owned_entries(config: Config, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Reject state records that do not identify a canonical bundle destination."""
+    entries = state["entries"]
+    for key, record in entries.items():
+        agent = record.get("agent")
+        kind = record.get("kind")
+        name = record.get("name", Path(key).name)
+        identity_valid = (
+            agent in {"claude", "codex"}
+            and kind in {"skill", "agent", "command"}
+            and not (agent == "codex" and kind == "command")
+            and isinstance(name, str)
+            and name not in {"", ".", ".."}
+            and Path(name).name == name
+        )
+        expected = (
+            destination_for(Entry(agent, kind, name, Path(str(record.get("source", "")))), config)
+            if identity_valid
+            else None
+        )
+        valid = (
+            expected is not None
+            and Path(key) == expected
+            and record.get("mode") in {"copy", "link", "junction"}
+            and isinstance(record.get("source"), str)
+            and bool(record["source"])
+            and isinstance(record.get("digest"), str)
+            and len(record["digest"]) == 64
+            and isinstance(record.get("removable", True), bool)
+        )
+        if not valid:
+            raise InstallerError(f"invalid ownership record for {key}")
+    return entries
+
+
 def write_state(path: Path, state: dict[str, Any], dry_run: bool) -> None:
     """Atomically replace the state file, unless dry-run was requested."""
     if dry_run:
@@ -141,7 +176,7 @@ def discover_entries(repo_root: Path) -> list[Entry]:
 
 
 def destination_for(entry: Entry, config: Config) -> Path:
-    root = config.home / ".claude" if entry.agent == "claude" else config.codex_home
+    root = (config.home / ".claude" if entry.agent == "claude" else config.codex_home).resolve()
     collection = {"skill": "skills", "agent": "agents", "command": "commands"}[entry.kind]
     return root / collection / entry.name
 
@@ -217,9 +252,13 @@ def copy_item(source: Path, destination: Path) -> None:
 
 
 def make_junction(source: Path, destination: Path) -> None:
-    """Create a Windows directory junction without shell interpolation."""
+    """Create a Windows directory junction, rejecting cmd.exe metacharacters."""
+    unsafe = "&|<>()^%!"
+    if any(character in str(source) or character in str(destination) for character in unsafe):
+        raise OSError("junction paths contain unsupported cmd.exe metacharacters")
+    command = f'mklink /J "{destination}" "{source}"'
     subprocess.run(
-        ["cmd", "/c", "mklink", "/J", str(destination), str(source)],
+        ["cmd", "/d", "/v:off", "/s", "/c", command],
         check=True,
         capture_output=True,
         text=True,
@@ -252,6 +291,7 @@ def entry_record(
     return {
         "agent": entry.agent,
         "kind": entry.kind,
+        "name": entry.name,
         "source": str(entry.source.resolve()),
         "mode": mode,
         "digest": installed_digest or digest(entry.source),
@@ -328,8 +368,7 @@ def create_destination(entry: Entry, destination: Path, config: Config) -> str:
 def install(config: Config) -> Result:
     """Install selected entries, adopting only exact legacy entries and reporting conflicts."""
     state = load_state(config.state_path)
-    owned = state["entries"]
-    assert isinstance(owned, dict)
+    owned = validate_owned_entries(config, state)
     messages: list[str] = []
     partial = False
     claude_blocked = config.agent in {"all", "claude"} and marketplace_overlap(config.home)
@@ -417,8 +456,7 @@ def install(config: Config) -> Result:
 def status(config: Config) -> Result:
     """Report exact ownership health, preserving every on-disk entry."""
     state = load_state(config.state_path)
-    owned = state["entries"]
-    assert isinstance(owned, dict)
+    owned = validate_owned_entries(config, state)
     messages: list[str] = []
     partial = False
     for key, record in owned.items():
@@ -439,8 +477,7 @@ def status(config: Config) -> Result:
 def uninstall(config: Config) -> Result:
     """Remove only entries that still exactly match recorded ownership."""
     state = load_state(config.state_path)
-    owned = state["entries"]
-    assert isinstance(owned, dict)
+    owned = validate_owned_entries(config, state)
     messages: list[str] = []
     partial = False
     for key, record in list(owned.items()):

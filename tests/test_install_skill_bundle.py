@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -10,6 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "install_skill_bundle.py"
+WRAPPER = SCRIPT.with_name("install-skill-bundle.sh")
+BASH = shutil.which("bash")
 spec = importlib.util.spec_from_file_location("installer", SCRIPT)
 assert spec and spec.loader
 installer = importlib.util.module_from_spec(spec)
@@ -280,6 +284,68 @@ class InstallSkillBundleTests(unittest.TestCase):
 
             with mock.patch.object(installer, "state_directory", return_value=state_root), mock.patch("sys.stderr"):
                 self.assertEqual(installer.main(["status", "--home", str(root / "home")]), 2)
+
+    def test_uninstall_rejects_noncanonical_state_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "all")
+            victim = root / "outside-victim"
+            victim.write_text("owned-looking")
+            state = installer.load_state(config.state_path)
+            state["entries"][str(victim)] = {
+                "agent": "claude",
+                "kind": "agent",
+                "name": victim.name,
+                "source": str(victim),
+                "mode": "copy",
+                "digest": installer.digest(victim),
+                "removable": True,
+            }
+            installer.write_state(config.state_path, state, False)
+
+            with self.assertRaisesRegex(installer.InstallerError, "invalid ownership record"):
+                installer.uninstall(config)
+
+            self.assertTrue(victim.exists())
+
+    def test_windows_junction_rejects_cmd_metacharacters(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="agentic-sdlc-&-") as temp:
+            with self.assertRaisesRegex(OSError, "unsupported cmd.exe metacharacters"):
+                installer.make_junction(Path(temp) / "source", Path(temp) / "destination")
+
+    def test_compatibility_wrapper_preserves_lifecycle_dispatch(self) -> None:
+        if not BASH:
+            self.skipTest("Bash is required for the compatibility wrapper test")
+        cases = {
+            (): "run bundle:install --",
+            ("status",): "run bundle:status --",
+            ("uninstall",): "run bundle:uninstall --",
+            ("self-test",): "run self-test --",
+            ("--copy",): "run bundle:install -- --mode copy",
+            ("status", "-n", ":::", "escaped"): "run bundle:status -- -n ::: escaped",
+        }
+        for args, expected in cases.items():
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as temp:
+                bin_dir = Path(temp) / "bin"
+                bin_dir.mkdir()
+                trace = Path(temp) / "trace"
+                mise = bin_dir / "mise"
+                mise.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TRACE\"\n")
+                mise.chmod(0o755)
+                result = subprocess.run(
+                    [BASH, str(WRAPPER), *args],
+                    cwd=SCRIPT.parents[1],
+                    env=os.environ
+                    | {"PATH": os.pathsep.join((str(bin_dir), os.environ["PATH"])), "TRACE": str(trace)},
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = trace.read_text().splitlines()
+                self.assertTrue(lines[0].endswith(expected), lines[0])
+                self.assertEqual(len(lines), 1)
 
     def test_self_test_runs_isolated_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -29,12 +29,93 @@ REQUIRED_TASKS = {
     "bundle:install:codex",
     "bundle:install:all-hosts",
     "bundle:status:all-hosts",
+    "research-os:install",
     "test",
     "self-test",
     "check",
     "hooks:install",
     "setup",
 }
+MIN_MISE_VERSION = "2026.4.27"
+UV_VERSION = "0.11.17"
+PYTHON_VERSION = "3.12.11"
+LEFTHOOK_VERSION = "2.1.10"
+LOCK_PLATFORMS = {"linux-x64", "macos-arm64", "macos-x64", "windows-x64"}
+LOCK_ARTIFACTS = {
+    "uv": {
+        "backend": "aqua:astral-sh/uv",
+        "linux-x64": ("uv-x86_64-unknown-linux-musl.tar.gz", "4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e"),
+        "macos-arm64": ("uv-aarch64-apple-darwin.tar.gz", "2a162f6b90ff3691a2f9cae1622e066a3ce592e110f66670cdcc841324b28226"),
+        "macos-x64": ("uv-x86_64-apple-darwin.tar.gz", "6c66e41eaf4d15abeda58d3f268161b6e3f742d98390341b174a7cfc1b48841d"),
+        "windows-x64": ("uv-x86_64-pc-windows-msvc.zip", "35fc29e03e62f3cda769bc12773f3cb70ce305d0d36c0d8bd0c117dd0b3fcd14"),
+    },
+    "lefthook": {
+        "backend": "aqua:evilmartians/lefthook",
+        "linux-x64": ("lefthook_2.1.10_Linux_x86_64.gz", "0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f"),
+        "macos-arm64": ("lefthook_2.1.10_MacOS_arm64.gz", "1dd4dc7b4c50efb1f9d9122cd6535c793738d6e59751c228d49f768ec9dbb604"),
+        "macos-x64": ("lefthook_2.1.10_MacOS_x86_64.gz", "49d905f28ca46442cb236060058b252da650b5f7b864bd275b61aa46945e8c4a"),
+        "windows-x64": ("lefthook_2.1.10_Windows_x86_64.gz", "beabbce824641ae71229ed11dd8634f47148921cb649d25c90441b737481494a"),
+    },
+}
+TASK_COMMANDS = {
+    "validate": "--script scripts/validate_bundle.py",
+    "bundle:install": "--script scripts/install_skill_bundle.py install",
+    "bundle:status": "--script scripts/install_skill_bundle.py status",
+    "bundle:uninstall": "--script scripts/install_skill_bundle.py uninstall",
+    "bundle:install:claude": "--script scripts/install_skill_bundle.py install --agent claude",
+    "bundle:install:codex": "--script scripts/install_skill_bundle.py install --agent codex",
+    "bundle:install:all-hosts": "--script scripts/run_all_hosts.py install",
+    "bundle:status:all-hosts": "--script scripts/run_all_hosts.py status",
+    "research-os:install": "--script skills/codex-research-os/scripts/install_research_os.py",
+    "test": "python -m unittest discover -s tests",
+    "self-test": "--script scripts/install_skill_bundle.py self-test",
+}
+VALIDATOR_WRAPPER = """#!/usr/bin/env bash
+# Compatibility entrypoint; the authoritative task is `mise run validate`.
+set -euo pipefail
+root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+exec mise -C "$root" exec -- uv run --python 3.12.11 --script scripts/validate_bundle.py "$@"
+"""
+BUMP_PREFIX = """#!/bin/bash
+# Bump every version-carrying manifest in one shot (targets declared in .version-bump.json).
+#   bump-version.sh <new-version>   # write all targets + update .version-bump.json current
+#   bump-version.sh --check         # exit 1 if any target disagrees with current
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+manifest="$repo_root/.version-bump.json"
+
+command -v mise >/dev/null 2>&1 || {
+  echo "error: mise 2026.4.27+ is required to update version manifests" >&2
+  exit 2
+}
+
+mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest" "$repo_root" "${1:-}" <<'PY'
+"""
+EXPECTED_WORKFLOW = """name: validate-bundle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: mise check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # jdx/mise-action v2.4.7
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+        with:
+          install: true
+      - name: Run authoritative check
+        run: mise run check
+"""
 
 
 class Validation:
@@ -59,10 +140,20 @@ def metadata_value(metadata: str, name: str) -> str:
     if not match:
         return ""
     value = match.group(1).strip()
-    if value not in {"|", ">", "|-", ">-"}:
+    if value not in {"|", ">", "|-", ">-"} and not re.fullmatch(r"[|>](?:[+-]?[1-9]|[1-9][+-]?)", value):
         return value
-    continuation = metadata[match.end() :].splitlines()
-    return " ".join(line.strip() for line in continuation if line.startswith("  ")).strip()
+    continuation: list[str] = []
+    lines = metadata[match.end() :].splitlines()
+    if lines and not lines[0]:
+        lines = lines[1:]
+    for line in lines:
+        if not line.strip():
+            continuation.append("")
+            continue
+        if not line.startswith((" ", "\t")):
+            break
+        continuation.append(line.strip())
+    return " ".join(continuation).strip()
 
 
 def validate_skills(root: Path, result: Validation) -> None:
@@ -127,12 +218,125 @@ def validate_mise(root: Path, result: Validation) -> None:
         result.error("mise.toml is required")
         return
     try:
-        tasks = tomllib.loads(path.read_text(encoding="utf-8")).get("tasks", {})
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        tasks = config.get("tasks", {})
     except (OSError, tomllib.TOMLDecodeError) as exc:
         result.error(f"mise.toml is invalid: {exc}")
         return
     for task in sorted(REQUIRED_TASKS - set(tasks)):
         result.error(f"mise.toml missing task {task}")
+
+    if config.get("min_version") != MIN_MISE_VERSION:
+        result.error(f"mise.toml must require mise {MIN_MISE_VERSION}")
+    if config.get("settings", {}).get("locked") is not True:
+        result.error("mise.toml must enable locked tool resolution")
+    expected_tools = {"uv": UV_VERSION, "lefthook": LEFTHOOK_VERSION}
+    if config.get("tools") != expected_tools:
+        result.error(f"mise.toml tools must equal {expected_tools}")
+
+    for name, suffix in TASK_COMMANDS.items():
+        task = tasks.get(name, {})
+        windows_suffix = suffix
+        if name == "bundle:install:all-hosts":
+            windows_suffix = "--script scripts/install_skill_bundle.py install"
+        elif name == "bundle:status:all-hosts":
+            windows_suffix = "--script scripts/install_skill_bundle.py status"
+        for field, executable, command_suffix in (
+            ("run", "uv", suffix),
+            ("run_windows", "uv.exe", windows_suffix),
+        ):
+            expected = f"{executable} run --python {PYTHON_VERSION} {command_suffix}"
+            if task.get(field) != expected:
+                result.error(f"mise.toml task {name}.{field} must equal {expected!r}")
+    expected_check = {
+        "description": "Run validation, installer tests, and lifecycle self-test",
+        "depends": ["validate", "test", "self-test"],
+    }
+    if tasks.get("check") != expected_check:
+        result.error("mise.toml check must contain only its description and exact validate/test/self-test dependencies")
+
+    lock_path = root / "mise.lock"
+    if not lock_path.is_file():
+        result.error("mise.lock is required")
+        return
+    try:
+        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        result.error(f"mise.lock is invalid: {exc}")
+        return
+    locked_tools = lock.get("tools", {})
+    for name, version in expected_tools.items():
+        entries = locked_tools.get(name, [])
+        if len(entries) != 1 or entries[0].get("version") != version:
+            result.error(f"mise.lock must resolve {name} {version}")
+            continue
+        if entries[0].get("backend") != LOCK_ARTIFACTS[name]["backend"]:
+            result.error(f"mise.lock {name} backend must equal {LOCK_ARTIFACTS[name]['backend']}")
+        platforms = {
+            key.removeprefix("platforms."): value
+            for key, value in entries[0].items()
+            if key.startswith("platforms.")
+        }
+        if set(platforms) != LOCK_PLATFORMS:
+            result.error(f"mise.lock {name} platforms must equal {sorted(LOCK_PLATFORMS)}")
+        for platform, record in platforms.items():
+            if platform not in LOCK_ARTIFACTS[name]:
+                continue
+            release = f"https://github.com/{'astral-sh/uv' if name == 'uv' else 'evilmartians/lefthook'}/releases/download/"
+            expected_version = version if name == "uv" else f"v{version}"
+            artifact, checksum = LOCK_ARTIFACTS[name][platform]
+            expected_url = f"{release}{expected_version}/{artifact}"
+            if record.get("url") != expected_url:
+                result.error(f"mise.lock {name} {platform} URL must equal {expected_url}")
+            if record.get("checksum") != f"sha256:{checksum}":
+                result.error(f"mise.lock {name} {platform} checksum must equal the reviewed SHA-256")
+            if record.get("provenance") != "github-attestations":
+                result.error(f"mise.lock {name} {platform} provenance must equal github-attestations")
+
+
+def validate_gate_graph(root: Path, result: Validation) -> None:
+    wrapper = root / "scripts" / "validate-bundle.sh"
+    if not wrapper.is_file() or wrapper.read_text(encoding="utf-8") != VALIDATOR_WRAPPER:
+        result.error("scripts/validate-bundle.sh must be the exec-only pinned mise/uv wrapper")
+
+    bump = root / "scripts" / "bump-version.sh"
+    if not bump.is_file():
+        result.error("scripts/bump-version.sh is required")
+    else:
+        bump_text = bump.read_text(encoding="utf-8")
+        if not bump_text.startswith(BUMP_PREFIX) or not bump_text.endswith("\nPY\n"):
+            result.error("scripts/bump-version.sh must use only the pinned mise/uv Python launcher")
+        heredoc_end = bump_text.rfind("\nPY\n")
+        if heredoc_end != len(bump_text) - 4:
+            result.error("scripts/bump-version.sh must end at the pinned Python heredoc")
+
+    hooks = root / "lefthook.yml"
+    expected_hooks = """pre-commit:
+  commands:
+    validate:
+      run: mise run validate
+
+pre-push:
+  commands:
+    test:
+      run: mise run test
+    self-test:
+      run: mise run self-test
+"""
+    if not hooks.is_file() or hooks.read_text(encoding="utf-8") != expected_hooks:
+        result.error("lefthook.yml must contain the documented best-effort gate subsets")
+
+    workflow = root / ".github" / "workflows" / "validate.yml"
+    if not workflow.is_file():
+        result.error(".github/workflows/validate.yml is required")
+    else:
+        workflow_text = workflow.read_text(encoding="utf-8")
+        if workflow_text != EXPECTED_WORKFLOW:
+            result.error("CI workflow must equal the single authoritative mise run check graph")
+
+    claude = root / "CLAUDE.md"
+    if not claude.is_file() or not claude.read_text(encoding="utf-8").startswith("@AGENTS.md\n"):
+        result.error("CLAUDE.md must begin with @AGENTS.md")
 
 
 def validate_versions(root: Path, result: Validation) -> None:
@@ -309,6 +513,7 @@ def validate(root: Path) -> Validation:
     validate_python(root, result)
     validate_agents(root, result)
     validate_mise(root, result)
+    validate_gate_graph(root, result)
     validate_versions(root, result)
     validate_scripts(root, result)
     validate_manifests(root, result)

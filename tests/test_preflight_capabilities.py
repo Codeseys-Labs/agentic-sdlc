@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -9,10 +10,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "check-agentic-sdlc-prereqs.sh"
+BASH = shutil.which("bash")
 
 
 class PreflightCapabilityTests(unittest.TestCase):
     def run_preflight(self, *, github_required: bool) -> subprocess.CompletedProcess[str]:
+        if not BASH:
+            self.skipTest("Bash is required for prerequisite shell tests")
         with tempfile.TemporaryDirectory() as temp:
             bin_dir = Path(temp) / "bin"
             bin_dir.mkdir()
@@ -27,7 +31,7 @@ class PreflightCapabilityTests(unittest.TestCase):
                 "HOME": temp,
             }
             return subprocess.run(
-                ["/bin/bash", str(SCRIPT)],
+                [BASH, str(SCRIPT)],
                 cwd=ROOT,
                 env=env,
                 text=True,

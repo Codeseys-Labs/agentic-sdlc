@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 MESSAGE = "CAO has been retired; use native Frame/Wave/Mission instead."
+BASH = shutil.which("bash")
 
 
 class CAORetirementTests(unittest.TestCase):
@@ -22,8 +23,13 @@ class CAORetirementTests(unittest.TestCase):
 
     def run_script(self, repo: Path, script_name: str, *, env: dict[str, str], args: list[str] | None = None) -> subprocess.CompletedProcess[str]:
         script = repo / "scripts" / script_name
+        command = [str(script), *(args or [])]
+        if script.suffix == ".sh":
+            if not BASH:
+                self.skipTest("Bash is required for shell compatibility tests")
+            command.insert(0, BASH)
         return subprocess.run(
-            [str(script), *(args or [])],
+            command,
             cwd=repo,
             env=env,
             text=True,
@@ -38,7 +44,7 @@ class CAORetirementTests(unittest.TestCase):
 
     def isolated_env(self, root: Path, bin_dir: Path, trace: Path, **extra: str) -> dict[str, str]:
         return os.environ | {
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "PATH": os.pathsep.join((str(bin_dir), os.environ["PATH"])),
             "TRACE": str(trace),
             "HOME": str(root / "home"),
             "XDG_CONFIG_HOME": str(root / "xdg-config"),
