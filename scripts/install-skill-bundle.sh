@@ -36,19 +36,19 @@ args+=("$@")
 
 case "$command" in
   install)
-    mise -C "$repo_root" run bundle:install -- "${args[@]}"
+    mise -C "$repo_root" run bundle:install -- ${args[@]+"${args[@]}"}
     core_exit=$?
     ;;
   status)
-    mise -C "$repo_root" run bundle:status -- "${args[@]}"
+    mise -C "$repo_root" run bundle:status -- ${args[@]+"${args[@]}"}
     core_exit=$?
     ;;
   uninstall)
-    mise -C "$repo_root" run bundle:uninstall -- "${args[@]}"
+    mise -C "$repo_root" run bundle:uninstall -- ${args[@]+"${args[@]}"}
     core_exit=$?
     ;;
   self-test)
-    mise -C "$repo_root" run self-test -- "${args[@]}"
+    mise -C "$repo_root" run self-test -- ${args[@]+"${args[@]}"}
     core_exit=$?
     ;;
 esac
