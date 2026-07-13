@@ -102,6 +102,7 @@ class GateGraphTests(unittest.TestCase):
                 "MISE_STATE_DIR": str(Path(temp) / "mise-state"),
                 "MISE_CACHE_DIR": str(Path(temp) / "mise-cache"),
                 "MISE_CONFIG_DIR": str(Path(temp) / "mise-config"),
+                "MISE_TRUSTED_CONFIG_PATHS": "",
             }
             before = subprocess.run(["mise", "-C", str(repo), "tasks"], env=env, text=True, capture_output=True, check=False)
             self.assertNotEqual(before.returncode, 0)

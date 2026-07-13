@@ -121,7 +121,7 @@ def validate_owned_entries(config: Config, state: dict[str, Any]) -> dict[str, d
         )
         valid = (
             expected is not None
-            and Path(key) == expected
+            and os.path.normcase(os.path.abspath(key)) == os.path.normcase(os.path.abspath(expected))
             and record.get("mode") in {"copy", "link", "junction"}
             and isinstance(record.get("source"), str)
             and bool(record["source"])
@@ -176,7 +176,7 @@ def discover_entries(repo_root: Path) -> list[Entry]:
 
 
 def destination_for(entry: Entry, config: Config) -> Path:
-    root = (config.home / ".claude" if entry.agent == "claude" else config.codex_home).resolve()
+    root = config.home / ".claude" if entry.agent == "claude" else config.codex_home
     collection = {"skill": "skills", "agent": "agents", "command": "commands"}[entry.kind]
     return root / collection / entry.name
 
@@ -253,12 +253,11 @@ def copy_item(source: Path, destination: Path) -> None:
 
 def make_junction(source: Path, destination: Path) -> None:
     """Create a Windows directory junction, rejecting cmd.exe metacharacters."""
-    unsafe = "&|<>()^%!"
+    unsafe = "&|<>()^%!\""
     if any(character in str(source) or character in str(destination) for character in unsafe):
         raise OSError("junction paths contain unsupported cmd.exe metacharacters")
-    command = f'mklink /J "{destination}" "{source}"'
     subprocess.run(
-        ["cmd", "/d", "/v:off", "/s", "/c", command],
+        ["cmd", "/d", "/v:off", "/c", "mklink", "/J", str(destination), str(source)],
         check=True,
         capture_output=True,
         text=True,

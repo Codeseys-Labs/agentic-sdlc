@@ -134,7 +134,8 @@ class CAORetirementTests(unittest.TestCase):
                 if command.startswith("INSTALL_CAO=1")
                 else f"active CAO command or claim remains: {relative_path}"
             )
-            self.assertIn(expected, result.stderr)
+            normalized_stderr = result.stderr.replace("\\", "/")
+            self.assertIn(expected, normalized_stderr)
 
     def test_validator_rejects_active_cao_install_command(self) -> None:
         mutations = (

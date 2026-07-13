@@ -37,7 +37,7 @@ ACTIVE_JJ_PATTERNS = (
 class JjRetirementTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.surface_text = {path: path.read_text() for path in SURFACES}
+        cls.surface_text = {path: path.read_text(encoding="utf-8") for path in SURFACES}
 
     def test_public_task_graph_has_no_jj_init(self) -> None:
         result = subprocess.run(
