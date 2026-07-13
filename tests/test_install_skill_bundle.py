@@ -156,12 +156,16 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(self.install_only(config, entry).exit_code, 0)
             destination = installer.destination_for(entry, config)
             original_identity = installer.link_identity(destination)
+            replacement = destination.with_name("replacement")
+            installer.link_item(entry.source, replacement)
+            replacement_identity = installer.link_identity(replacement)
             installer.remove_path(destination)
-            installer.link_item(entry.source, destination)
+            replacement.rename(destination)
 
             result = self.uninstall_only(config, entry)
 
-            self.assertNotEqual(installer.link_identity(destination), original_identity)
+            self.assertNotEqual(replacement_identity, original_identity)
+            self.assertEqual(installer.link_identity(destination), replacement_identity)
             self.assertEqual(result.exit_code, 1)
             self.assertIn(f"conflict: {destination}", result.messages)
             self.assertTrue(destination.is_symlink() or installer.is_junction(destination))
