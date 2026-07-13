@@ -130,9 +130,10 @@ start, or enable cmux or tmux merely to use this bundle.
 
 ## Install and run the bundle
 
-**Mise is the managed-tool bootstrap, not the sole readiness prerequisite.** The checked-in
-`mise.toml` pins `uv`; `uv` supplies the pinned Python `3.12.11` runtime for the stdlib
-installer. Git, a documented Seeds distribution, supported trust behavior, and the selected
+**Mise 2026.4.27 or newer is the managed-tool bootstrap, not the sole readiness prerequisite.**
+The checked-in `mise.toml` pins `uv`; `mise.lock` records source URLs and SHA-256 checksums
+for Linux, macOS, and Windows; `uv` supplies Python `3.12.11` for every authoritative Python
+entrypoint. Git, a documented Seeds distribution, supported trust behavior, and the selected
 adapter are also prerequisites. Resolve and record the actual provider/model only when the
 adapter proves it; otherwise record inherited or unresolved. A passing local status or gate
 never authorizes push, publication, PR mutation, merge, deployment, credential, or other
@@ -141,9 +142,15 @@ outward effect.
 Bootstrap the repository and inspect the available lifecycle tasks:
 
 ```bash
+mise trust mise.toml
 mise install
 mise tasks
 ```
+
+Mise trust is scoped to each absolute config path, so every linked worktree must trust its own
+`mise.toml` after reviewing the diff. `MISE_PARANOID=1` deliberately rejects an untrusted
+worktree; approve it with `MISE_PARANOID=1 mise trust <worktree>/mise.toml`, then rerun the
+command. Locked resolution fails closed when the current platform is absent from `mise.lock`.
 
 The public task surface is intentionally small:
 
@@ -154,6 +161,7 @@ The public task surface is intentionally small:
 | `bundle:install:codex` | Install only the Codex plane on the current host. |
 | `bundle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
 | `bundle:status:all-hosts` | Report current-host and native-Windows state when run from WSL. |
+| `research-os:install` | Scaffold the repo-scoped research OS through pinned uv/Python; pass installer arguments after `--`. |
 | `test` | Run the installer test suite. |
 | `self-test` | Exercise install/status/uninstall in an isolated home. |
 | `check` | Run the authoritative validation, tests, and self-test gate. |

@@ -44,17 +44,19 @@ as the router.
 
 ## Installing this bundle
 
-mise is the managed-tool bootstrap, not the sole readiness prerequisite. It pins uv, and uv
-supplies Python 3.12.11 for the stdlib installer. Git, a documented Seeds distribution,
-supported trust behavior, and any selected adapter must be present and verified; missing,
-unpinned, untrusted, or ambiguous capability means not Git-ready. The requested model tier
-and resolved provider/model are separate facts: record resolved only after adapter readback,
-otherwise inherited or unresolved.
+mise 2026.4.27+ is the managed-tool bootstrap, not the sole readiness prerequisite. It pins
+uv, consumes the checked-in cross-platform `mise.lock`, and uv supplies Python 3.12.11 for
+all authoritative Python entrypoints. Git, a documented Seeds distribution, supported trust
+behavior, and any selected adapter must be present and verified; missing, unpinned, untrusted,
+or ambiguous capability means not Git-ready. Trust is scoped to each absolute config path:
+every linked worktree must review and trust its own `mise.toml`; `MISE_PARANOID=1` fails closed
+until that explicit trust step. The requested model tier and resolved provider/model are
+separate facts: record resolved only after adapter readback, otherwise inherited or unresolved.
 
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`
 - `bundle:install:all-hosts`, `bundle:status:all-hosts`
-- `test`, `self-test`, `check`, `hooks:install`, `setup`
+- `research-os:install`, `test`, `self-test`, `check`, `hooks:install`, `setup`
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim

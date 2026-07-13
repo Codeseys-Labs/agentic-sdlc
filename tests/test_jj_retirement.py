@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
+BASH = shutil.which("bash")
 SURFACES = (
     ROOT / "mise.toml",
     ROOT / "README.md",
@@ -49,8 +51,10 @@ class JjRetirementTests(unittest.TestCase):
         self.assertNotIn("jj:init", {task["name"] for task in tasks})
 
     def test_legacy_validator_accepts_retired_task_graph(self) -> None:
+        if not BASH:
+            self.skipTest("Bash is required for the legacy validator wrapper")
         result = subprocess.run(
-            [str(ROOT / "scripts" / "validate-bundle.sh")],
+            [BASH, str(ROOT / "scripts" / "validate-bundle.sh")],
             cwd=ROOT,
             check=False,
             capture_output=True,

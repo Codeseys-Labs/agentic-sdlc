@@ -19,10 +19,10 @@ Use this skill to install or run a portable research organization inside a repo:
 
 ## Install
 
-From the skill directory:
+From the bundle root:
 
 ```bash
-python3 scripts/install_research_os.py --target /path/to/repo --project-name "Project Name"
+mise run research-os:install -- --target /path/to/repo --project-name "Project Name"
 ```
 
 Default behavior is conservative:
