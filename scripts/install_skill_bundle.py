@@ -285,7 +285,9 @@ def stat_birth_identity(path: Path, *, follow_symlinks: bool = True) -> str | No
     return f"{metadata.stx_btime.tv_sec}.{metadata.stx_btime.tv_nsec}"
 
 
-def windows_file_identity(path: Path) -> tuple[int, int, int] | None:
+def windows_file_identity(
+    path: Path, *, follow_symlinks: bool = True
+) -> tuple[int, int, int] | None:
     if os.name != "nt":
         return None
     from ctypes import wintypes
@@ -317,7 +319,7 @@ def windows_file_identity(path: Path) -> tuple[int, int, int] | None:
         0x00000001 | 0x00000002 | 0x00000004,
         None,
         3,
-        0x02000000,
+        0x02000000 | (0 if follow_symlinks else 0x00200000),
         None,
     )
     if handle == wintypes.HANDLE(-1).value:
@@ -354,12 +356,22 @@ def stat_identity(path: Path) -> str:
 
 
 def link_identity(path: Path) -> str:
-    """Return an identity for a link object without following its target."""
+    """Return a stable identity for a link object without following its target."""
+    if platform_system() == "Windows":
+        windows_identity = windows_file_identity(path, follow_symlinks=False)
+        if windows_identity is not None:
+            volume, file_index, creation = windows_identity
+            return f"{IDENTITY_VERSION}:{volume}:{file_index}:{creation}"
     try:
         metadata = os.lstat(path)
     except OSError as exc:
         raise InstallerError(f"cannot identify {path}: {exc}") from exc
-    return f"{IDENTITY_VERSION}:{metadata.st_dev}:{metadata.st_ino}:{metadata.st_ctime_ns}"
+    generation = stat_birth_identity(path, follow_symlinks=False)
+    if generation is None:
+        raise InstallerError(
+            f"filesystem does not expose stable link identity for {path}"
+        )
+    return f"{IDENTITY_VERSION}:{metadata.st_dev}:{metadata.st_ino}:{generation}"
 
 
 def identity_matches(path: Path, expected: Any) -> bool:
@@ -429,12 +441,10 @@ def record_structure_valid(key: str, record: dict[str, Any]) -> bool:
         and len(record["digest"]) == 64
         and all(character in "0123456789abcdef" for character in record["digest"])
         and isinstance(record.get("removable", True), bool)
+        and identity_token_valid(record.get("destination_identity"))
         and (
             record.get("mode") != "copy"
-            or (
-                record.get("destination_type") in {"file", "directory"}
-                and identity_token_valid(record.get("destination_identity"))
-            )
+            or record.get("destination_type") in {"file", "directory"}
         )
         and identity_token_valid(record.get("root_identity"))
         and identity_token_valid(record.get("collection_identity"))
@@ -979,18 +989,18 @@ def entry_record(
         "root_identity": root_identity,
         "collection_identity": collection_identity,
     }
+    if installed_path is None:
+        raise InstallerError("entry_record requires an installed path")
+    record["destination_identity"] = (
+        link_identity(installed_path)
+        if mode in {"link", "junction"}
+        else stat_identity(installed_path)
+    )
     if mode == "copy":
-        if installed_path is None:
-            raise InstallerError("copy entry_record requires an installed path")
         record["destination_type"] = (
             "directory"
             if installed_path.is_dir() and not installed_path.is_symlink()
             else "file"
-        )
-        record["destination_identity"] = (
-            link_identity(installed_path)
-            if installed_path.is_symlink()
-            else stat_identity(installed_path)
         )
     return record
 
@@ -1046,7 +1056,15 @@ def entry_matches_record(
     """Whether the on-disk entry still has the exact recorded identity."""
     mode = record.get("mode")
     if mode in {"link", "junction"}:
-        return link_identity_matches(destination, record, link_origin=link_origin)
+        try:
+            same_object = link_identity(destination) == record.get(
+                "destination_identity"
+            )
+        except InstallerError:
+            return False
+        return same_object and link_identity_matches(
+            destination, record, link_origin=link_origin
+        )
     if mode == "copy" and destination.exists() and not destination.is_symlink():
         if not copy_record_identity_matches(destination, record):
             return False
@@ -1201,7 +1219,7 @@ def upgrade_v1_record(key: str, record: dict[str, Any]) -> dict[str, Any]:
         stat_identity(collection),
         removable=bool(record.get("removable", True)),
         installed_digest=str(record["digest"]),
-        installed_path=destination if record.get("mode") == "copy" else None,
+        installed_path=destination,
     )
 
 
@@ -1460,7 +1478,7 @@ def stage_candidate(
             root_token,
             collection_token,
             installed_digest=installed_digest,
-            installed_path=artifact.payload if mode == "copy" else None,
+            installed_path=artifact.payload,
         )
         if artifact_payload_status(artifact, record) != "exact":
             raise InstallerError(f"staged candidate validation failed for {destination}")
@@ -2354,7 +2372,11 @@ def _install(config: Config) -> Result:
             legacy_mode = legacy_link_mode(destination, entry.source)
             if legacy_mode is not None:
                 legacy_record = entry_record(
-                    entry, legacy_mode, root_token, collection_token
+                    entry,
+                    legacy_mode,
+                    root_token,
+                    collection_token,
+                    installed_path=destination,
                 )
                 if config.mode == "copy":
                     if config.dry_run:

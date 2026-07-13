@@ -145,6 +145,27 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(installer.uninstall(config).exit_code, 0)
             self.assertFalse(destination.exists())
 
+    def test_uninstall_preserves_replaced_same_target_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "link", False, "claude"
+            )
+            entry = self.only_entry(root)
+            self.assertEqual(self.install_only(config, entry).exit_code, 0)
+            destination = installer.destination_for(entry, config)
+            original_identity = installer.link_identity(destination)
+            installer.remove_path(destination)
+            installer.link_item(entry.source, destination)
+
+            result = self.uninstall_only(config, entry)
+
+            self.assertNotEqual(installer.link_identity(destination), original_identity)
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn(f"conflict: {destination}", result.messages)
+            self.assertTrue(destination.is_symlink() or installer.is_junction(destination))
+
     def test_owned_link_is_retargeted_to_current_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -167,6 +188,7 @@ class InstallSkillBundleTests(unittest.TestCase):
                 "link",
                 root_identity,
                 collection_identity,
+                installed_path=destination,
             )
             installer.write_state(config.state_path, state, False)
 

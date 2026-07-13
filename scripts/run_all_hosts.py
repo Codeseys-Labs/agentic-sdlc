@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         ],
     )
     print(f"=== Host summary: WSL={wsl_exit} Windows={windows_exit} ===")
-    return max(wsl_exit, windows_exit)
+    return max(1 if wsl_exit < 0 else wsl_exit, 1 if windows_exit < 0 else windows_exit)
 
 
 if __name__ == "__main__":

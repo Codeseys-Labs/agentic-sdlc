@@ -35,7 +35,7 @@ if ($TaskArgsJson.Trim() -eq '[]') {
     $decodedArgs = @()
 } else {
     try {
-        $decodedArgs = @(ConvertFrom-Json -InputObject $TaskArgsJson)
+        $decodedArgs = ConvertFrom-Json -InputObject $TaskArgsJson
     } catch {
         throw "TaskArgsJson must be a JSON array: $($_.Exception.Message)"
     }
