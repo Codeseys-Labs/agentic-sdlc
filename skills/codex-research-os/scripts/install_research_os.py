@@ -731,7 +731,7 @@ def core_files(project_name: str) -> dict[str, str]:
         "research/memory/repo_map.md": "# Repository Map\n",
         "Makefile": clean(
             """
-            PYTHON ?= python3
+            PYTHON := mise x uv@0.11.17 -- uv run --python 3.12.11 python
             TITLE ?= untitled experiment
 
             .PHONY: status validate-agents validate-claims validate-experiments review-gates new-experiment compare-runs scaffold-check research-check

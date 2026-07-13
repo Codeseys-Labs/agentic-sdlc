@@ -1,7 +1,7 @@
 # Agentic SDLC Orchestrator
 
 Reusable, provider-native operating kit for project-scale agentic software delivery across
-Codex, Claude Code, and other skill-capable hosts. CAO and cmux are optional adapters;
+Codex, Claude Code, and other skill-capable hosts. cmux is an optional view/event layer;
 tmux is never a baseline requirement.
 
 **Architecture: an open plugin — the multi-host pattern, since no unified plugin standard
@@ -33,20 +33,20 @@ Agent entrypoint (Codex, Claude Code, or another capable host)
   -> squash/rebase/PR
 
 Optional adapters:
-  + CAO for explicitly selected durable or mixed-engine sessions
   + cmux for an already-active view/event layer
   + tmux only when an optional adapter uses it
 ```
 
-**Baseline invariant:** one capable host can run the full Frame -> Ship loop. Never install,
-start, or enable CAO, cmux, or tmux merely to use this bundle; their absence never blocks
-or weakens the native path.
+**Capability-negotiated baseline:** a host may run the native Frame -> Ship loop only after the
+required Git, Seeds, gate, trust, and selected-adapter capabilities are present, pinned where
+applicable, and verified. Missing, untrusted, unpinned, or ambiguous required capability
+fails closed; an unselected optional adapter does not block the native path. Never install,
+start, or enable cmux or tmux merely to use this bundle.
 
 ## Contents
 
 - `skills/agentic-sdlc-orchestrator/`: the flagship, provider-native orchestration skill
-  for any skill-capable CLI agent. CAO workers can also consume it when that optional
-  adapter is selected.
+  for any skill-capable CLI agent.
 - `skills/codex-research-os/`: vendored research-team OS — a repo-scaffolding installer
   (`scripts/install_research_os.py`) that bootstraps a 17-role research organization
   (director + specialists), claim/experiment ledgers, greenfield/brownfield workflows,
@@ -71,15 +71,12 @@ or weakens the native path.
   bottom-up merge, the restack discipline, when NOT to stack). The PR-landing strategy for
   dependent Seeds in a wave.
 - `skills/stacked-prs-gh-cli/`: the same with ONLY plain `gh` + git — no gt/spr/ghstack.
-  gh has no `stack` command (v2.95); GitHub's primitives are `--base` targeting + native
-  auto-retarget-on-merge. Covers the squash-merge `--onto` restack gotcha and
-  `--force-with-lease` safety. Pairs with `stacked-prs` and the jj-vcs reference.
+  gh has no `stack` command (v2.95); GitHub's primitives are `--base` targeting + explicit
+  retarget/requery/restack. Covers the squash-merge `--onto` restack gotcha and
+  `--force-with-lease` safety. Pairs with `stacked-prs`.
   - `references/sdlc-loop.md` — phase gates, backflow, done criteria.
   - `references/seeds-worktrees.md` — Seeds queue, native worktree waves, PR flow, and
     optional worker/view adapters.
-  - `references/cao-profiles.md` — optional CAO adapter profiles + launch pattern.
-  - `references/cao-operations.md` — optional, **trial-verified** CAO operations. Load only
-    after selecting an active CAO path.
   - `references/cmux-integration.md` — optional cmux view/event integration. Load only when
     cmux is already active or explicitly requested.
   - `references/delegation-planes.md` — native-first per-provider decision matrices plus
@@ -89,21 +86,14 @@ or weakens the native path.
   - `references/mission-loop.md` — the autonomous **backlog-zero doctrine**: 8-class
     milestone classification (only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes,
     WIP caps, priority math, the concurrent critique team, honest definition of done.
-  - `references/tiered-orchestration.md` — **model-tier assignment** (the multiplier
-    principle: frontier tier only on solo scale-setters — frame/plan/verdict), a native-first
-    capability ladder with optional adapters, **bounded backflow**, chained iterations,
+  - `references/tiered-orchestration.md` — model-tier assignment, honest provider/model
+    resolution, the native-first capability ladder with optional adapters, bounded backflow,
     and worker lifecycle at scale.
   - `references/research-team.md` — **evidence-graded research teams** for standing
     research efforts: the evidence ladder (promote slowly, downgrade quickly), role
     separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
     with a recorded next-action, greenfield/brownfield loops, the cheapest-decisive-
     experiment rule, gates-as-executables (no decorative model pins).
-  - `references/jj-vcs.md` — **jj (Jujutsu) as the wave substrate** (verified on 0.43):
-    colocated adoption (CI sees plain git), workspaces as agent-grade worktrees with
-    op-log audit + stale detection, never-failing fan-in (conflicts = committed state),
-    auto-snapshot (uncommitted-work loss impossible) + `jj undo`; gotchas: git hooks
-    don't fire, `description("x")` exact-match trap, headless identity, snapshot
-    swallows non-gitignored secrets.
 - `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: seven role agents in both CLI
   forms (symlinked globally) — **cartographer** (read-only Discover mapper), planner,
   implementer, reviewer, **researcher** (bounded unknown-resolution), **critic** (standing
@@ -115,117 +105,162 @@ or weakens the native path.
   copies — NOT globally installed; see its README; scaffolded per-repo by
   codex-research-os).
 - `commands/sdlc-{init,frame,wave,mission}.md`: Claude Code slash commands —
-  `/sdlc-init` (bootstrap a new/existing project onto the system: VCS incl. optional
-  jj colocation, Seeds queue, mise/lefthook/betterleaks gate stack with falsifiability
-  proof, trust, CLAUDE.md wiring — ends wave-ready), `/sdlc-frame` (frame one run),
-  `/sdlc-wave` (one Seeds-backed worktree wave), `/sdlc-mission` (autonomous
-  backlog-zero mission with concurrent critique and bounded backflow).
+  `/sdlc-init` activates Agentic SDLC inside a repository without reinstalling global
+  capabilities. It establishes a reviewed tracked Git baseline, Seeds queue,
+  mise/lefthook/betterleaks gate stack, per-worktree trust policy, cross-host `AGENTS.md`
+  guidance, and CI parity. It is a reviewed runbook: claims of idempotence or Git-wave readiness
+  require observed evidence; it preserves existing project policy and stops on ambiguity. `/sdlc-frame` frames one run,
+  `/sdlc-wave` runs one Seeds-backed Git-worktree wave, and `/sdlc-mission` runs an
+  autonomous backlog-zero mission with concurrent critique and bounded backflow.
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to
   symlinks. Both manifests pass `claude plugins validate --strict`.
-- `cao-profiles/`: optional CAO adapter templates for macro orchestration, planning,
-  implementation, review, and nested dynamic workflows.
+- `cao-profiles/`: retained one-release CAO compatibility tombstones; use native Frame/Wave/Mission.
 - `scripts/check-agentic-sdlc-prereqs.sh`: native-baseline preflight plus informational
-  checks for optional adapters. Missing CAO, cmux, or tmux never fails it.
+  checks for optional adapters. Missing cmux or tmux never fails it.
 - `scripts/install-skill-bundle.sh`: **one-shot global install for every native agent CLI
-  present** (Claude Code skill+agents+commands, Codex skill+role TOMLs). Optional CAO
-  mirroring requires the explicit `INSTALL_CAO=1` opt-in. Symlinks by default; `--copy`
+  present** (Claude Code skill+agents+commands, Codex skill+role TOMLs). Symlinks by default; `--copy`
   to copy. Never clobbers non-symlink files.
 - `scripts/validate-bundle.sh`: pre-commit/CI gate — SKILL.md frontmatter, name==dirname,
   the 1024-char Codex description cap (silent-skip trap), broken references, TOML/JSON
   parses, shell `bash -n`, plugin manifest validation, secret/internal-hostname sweep.
 - `scripts/cmux-bus.sh`: optional cmux-only event-bus helper (pub/sub/seq).
-- `scripts/install-cao-kit.sh`: optional CAO-only adapter install (skill + profiles).
+- `scripts/install-cao-kit.sh`: retained CAO compatibility tombstone (exit code 2).
 
-## Install (all agents, one command)
+## Install and run the bundle
 
-The native baseline requires `git`, `gh`, `sd` (Seeds), and any skill-capable host.
-CAO, cmux, and tmux are not baseline tools and are never installed or enabled implicitly.
+**Mise 2026.4.27 or newer is the managed-tool bootstrap, not the sole readiness prerequisite.**
+The checked-in `mise.toml` pins `uv`; `mise.lock` records source URLs and SHA-256 checksums
+for Linux, macOS, and Windows; `uv` supplies Python `3.12.11` for every authoritative Python
+entrypoint. Git, a documented Seeds distribution, supported trust behavior, and the selected
+adapter are also prerequisites. Resolve and record the actual provider/model only when the
+adapter proves it; otherwise record inherited or unresolved. A passing local status or gate
+never authorizes push, publication, PR mutation, merge, deployment, credential, or other
+outward effect.
 
-This upstream repository's root `mise.toml` manages exact versions of both
-`lefthook` (`2.1.10`) and `jj` (`0.43.0`). `mise install` makes both CLIs reproducible
-across contributor machines. That manages tool availability only: hooks still require a
-`lefthook.yml` plus `lefthook install`, and jj remains opt-in until a clone explicitly runs
-`jj git init --colocate`. On Windows, the checked-in mise tasks route the bundle's Bash
-scripts through Git Bash with `scripts/run-git-bash.ps1`; they never select the WSL
-`bash.exe` launcher accidentally.
+Bootstrap the repository and inspect the available lifecycle tasks:
 
 ```bash
-mise install                               # install pinned upstream lefthook + jj CLIs
-mise run check                             # full local gate (or run the two scripts below directly)
-./scripts/check-agentic-sdlc-prereqs.sh
-./scripts/install-skill-bundle.sh          # native hosts; never enables optional adapters
-./scripts/install-skill-bundle.sh status   # link health per target (exit 1 on broken)
-./scripts/install-skill-bundle.sh uninstall # removes owned symlinks; preserves copies/adapters
-./scripts/install-skill-bundle.sh self-test # verifies symlink removal/copy preservation safely
+mise trust mise.toml
+mise install
+mise tasks
 ```
 
-**Pick ONE Claude Code install path per machine** — either the symlink install above OR
-the marketplace path (`claude plugin marketplace add <repo>` + `claude plugin install
-agentic-sdlc-orchestrator@agentic-sdlc`), never both: dual-installing registers the skill
-twice (bare + plugin-namespaced). The symlink path live-updates with `git pull`; the
-marketplace path copies into Claude's plugin cache and updates via `claude plugin update`.
+Mise trust is scoped to each absolute config path, so every linked worktree must trust its own
+`mise.toml` after reviewing the diff. `MISE_PARANOID=1` deliberately rejects an untrusted
+worktree; approve it with `MISE_PARANOID=1 mise trust <worktree>/mise.toml`, then rerun the
+command. Locked resolution fails closed when the current platform is absent from `mise.lock`.
 
-**After `git pull`, symlinked native skill planes update automatically.** Existing
-copy-mode destinations are deliberately not overwritten; remove or move only the
-bundle-owned copy you intend to refresh, then rerun with `--copy`. If you explicitly
-maintain a CAO mirror, refresh it separately with
-`INSTALL_CAO=1 ./scripts/install-skill-bundle.sh`.
+The public task surface is intentionally small:
 
-This installs into:
+| Task | Purpose |
+|---|---|
+| `bundle:install` / `bundle:status` / `bundle:uninstall` | Install, inspect, or remove entries for the current host. |
+| `bundle:install:claude` | Install only the Claude Code plane on the current host. |
+| `bundle:install:codex` | Install only the Codex plane on the current host. |
+| `bundle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
+| `bundle:status:all-hosts` | Report current-host and native-Windows state when run from WSL. |
+| `research-os:install` | Scaffold the repo-scoped research OS through pinned uv/Python; pass installer arguments after `--`. |
+| `test` | Run the installer test suite. |
+| `self-test` | Exercise install/status/uninstall in an isolated home. |
+| `check` | Run the authoritative validation, tests, and self-test gate. |
+| `hooks:install` | Install the checked-in lefthook hooks. |
+| `setup` | Bootstrap the pinned toolchain and repository setup. |
 
-| Agent | Destination | Notes |
-|---|---|---|
-| Claude Code | `~/.claude/skills/agentic-sdlc-orchestrator` | symlink |
-| Codex | `$CODEX_HOME/skills/agentic-sdlc-orchestrator` (default `~/.codex/skills`) | symlink; NOT `~/.agents/skills` (docs are wrong). Codex silently skips skills whose `description:` exceeds 1024 chars — the installer warns. |
-| Optional CAO adapter | CAO skill store + `cao-profiles/*` | explicit opt-in only: `INSTALL_CAO=1`; never selected by detection alone |
+A normal Unix install uses symlinks. On Windows, automatic mode uses directory junctions
+for directories and file symlinks for files; when the host cannot create those links it
+falls back to copies. Strict link mode does not use that fallback. The installer records
+per-entry ownership in the platform state directory (`XDG_STATE_HOME` on Unix,
+`LOCALAPPDATA` on Windows), so lifecycle operations can distinguish bundle entries from
+user files. Write-capable lifecycle commands are serialized per state file. Linux lifecycle
+mutation requires glibc 2.28+ and a filesystem exposing `statx` birth time; unsupported
+identity or no-replace primitives fail closed rather than weakening ownership authority.
 
-cmux needs no bundle setup. Its optional integration activates only when the cmux CLI and
-`CMUX_WORKSPACE_ID` are already present or the user explicitly requests it.
+```bash
+mise run bundle:install
+mise run bundle:status
+mise run check
+```
 
-## Run (native baseline)
+The native Windows path runs the ordinary current-host task; it does not invoke WSL. When
+`bundle:install:all-hosts` or `bundle:status:all-hosts` is run from WSL, it runs the WSL
+current-host lifecycle first and then invokes the native Windows mise task. The two host
+summaries remain separate, and the native task's arguments and exit code are preserved.
 
-Invoke the skill directly from any installed host:
+### Safe migration and lifecycle rules
+
+Use the installer to inspect v1 ownership before explicitly migrating it:
+
+```bash
+mise run bundle:status
+mise run bundle:install -- --migrate-state --dry-run
+mise run bundle:install -- --migrate-state
+mise run bundle:status
+mise run check
+```
+
+`status` and ordinary lifecycle commands never rewrite v1 state and block mutation while a
+known v1 document is outstanding. `--migrate-state --dry-run` validates every record from the
+operator state path and the configured home's distinct legacy path without changing files or
+state. The write-enabled command converts all exact, structurally valid records—including
+mixed-agent and historical-home records—into one central v2 document. Migration is state-only:
+it does not install, refresh, or otherwise reconcile current bundle entries. A distinct legacy
+source is retired only after the central v2 write is durable and the source is rechecked; retry
+is idempotent if retirement was interrupted. Migration fails closed on changed object types,
+conflicting records, changed sources, or unsafe roots.
+
+Linux and macOS require their supported filesystem durability barriers; failures stop the
+operation. macOS uses `F_FULLFSYNC` for file content and directory fsync for namespace changes.
+Native Windows uses handle-bound, no-replace renames and supports process-crash recovery, but
+does not claim sudden-power-loss durability for namespace transitions. Concurrent external
+mutation of managed paths during a write command is unsupported; detected identity or content
+changes are preserved and reported as conflicts.
+
+Collection directories are never replaced. An exact legacy bundle link or byte-identical
+copy may be adopted into ownership. Foreign entries, retargeted links, and modified copies
+are preserved and reported as conflicts. Owned copies are refreshed only while they remain
+unchanged from the last recorded bundle content; user modifications are never overwritten.
+Uninstall removes only owned entries and leaves conflicts and foreign files in place.
+
+For Claude Code, choose exactly one distribution plane per machine: either the direct
+bundle install or the Claude marketplace install (`claude plugin marketplace add` followed
+by `claude plugin install`). Marketplace overlap blocks only the Claude plane; other host
+planes can still be managed. Do not register both, because the same skill would appear once
+as a bare skill and again under the plugin namespace.
+
+### Hooks
+
+`hooks:install` installs the lefthook subsets from this repository: pre-commit runs
+`mise run validate`; pre-push runs `mise run test` and `mise run self-test`. These hooks are
+best-effort convenience only; `mise run check` remains the complete local gate and the
+command CI mirrors.
+
+### Compatibility wrapper and optional adapters
+
+`scripts/install-skill-bundle.sh` remains a compatibility wrapper for existing automation.
+It requires mise, invokes the pinned uv/Python installer, forwards supported arguments, and
+retains positional `status`, `uninstall`, and `self-test` plus legacy `--copy` behavior.
+`INSTALL_CAO=1` is a retired compatibility path and exits 2 before native installation.
+CAO is retired; cmux and tmux are never prerequisites.
+
+The native host path is available only after capability probes and trust checks succeed:
 
 ```text
 Use $agentic-sdlc-orchestrator to frame this task and run a bounded,
 Seeds-backed worktree wave using the host's native agents.
 ```
 
-The conductor uses direct execution or provider-native roles, subagents, workflows, teams,
-and background tasks. This is the complete path; CAO, cmux, and tmux are not setup steps.
+A capability probe or local status is evidence about that run only; it does not grant
+authority for an outward effect. Push, tag, PR, merge, deployment, ruleset, credential, and
+external evidence-store operations each require explicit operation-specific authorization.
 
-### Optional CAO adapter
+Use the native Frame/Wave/Mission flow. cmux remains an independent view/event layer only
+when it is already active or explicitly requested; tmux is never required. Adapter capability
+and model resolution must be read back; configuration alone is not proof.
 
-Use this only when CAO was explicitly selected and is already installed for durable or
-mixed-engine sessions. Start `cao-server` with the provider environment in the same shell,
-then launch the optional macro profile:
+## Run (native baseline)
 
-```bash
-cao launch --agents codex-macro-orchestrator --provider codex --headless --yolo \
-  --session-name agentic-sdlc-demo \
-  --working-directory '/absolute/path/to/project' \
-  'Use $agentic-sdlc-orchestrator to run a bounded worktree wave with the selected CAO adapter.'
-```
-
-For CAO-specific environment inheritance, timeouts, and tmux-backed session behavior, load
-`references/cao-operations.md`. Do not apply those requirements to native runs.
-
-## UX From Codex
-
-Native Codex skill use is the baseline and complete path. `install-skill-bundle.sh`
-installs the skill into `$CODEX_HOME/skills/`, so a normal Codex session can run the full
-loop with provider-native roles and subagents.
-
-If the optional CAO adapter is explicitly selected, opt into its separate mirror with
-`INSTALL_CAO=1 ./scripts/install-skill-bundle.sh`. That mirror is an integration detail,
-not a prerequisite or a second setup step for ordinary Codex use.
-
-## Optional integration status
-
-The native provider path is the supported baseline. Optional CAO mechanics were
-trial-verified 2026-07-04 on macOS + Amazon Bedrock (CAO v2.2.0), including per-worker model
-pinning, mixed-engine fleets, and long-running semantics. Optional cmux view/event patterns
-were also trial-verified. These adapters remain templates; validate them on the target
-repository before using them for unattended runs.
+Native host agents, provider-native roles, subagents, workflows, teams, and background tasks
+are the supported execution mechanisms after capability and trust verification. cmux and tmux
+are optional integrations, not setup steps or hidden dependencies.

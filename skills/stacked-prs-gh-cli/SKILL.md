@@ -1,146 +1,88 @@
 ---
 name: stacked-prs-gh-cli
 description: |
-  Create and manage stacked pull requests with ONLY the plain `gh` CLI + git — no
-  Graphite/gt/spr/ghstack. Use when: (1) you want a stack of dependent PRs on GitHub and
-  have gh but no stacking tool; (2) building each PR on the branch below via
-  `gh pr create --base <parent-branch>`; (3) a lower PR got review changes and you must
-  rebase + force-push the whole stack; (4) the base PR MERGED and you need to know what
-  GitHub retargets automatically vs by hand; (5) confused why `gh pr` has no `stack`
-  subcommand ("GitHub supports stacked PRs" — the platform primitive is base-targeting +
-  auto-retarget, NOT a gh command). Covers: gh has NO native stack command (v2.95),
-  --base per PR, native auto-retarget-on-merge, the squash-merge restack gotcha,
-  --force-with-lease safety, gh pr edit --base manual retarget.
-author: Claude Code
-version: 1.0.0
-date: 2026-07-06
+  Use when managing dependent GitHub pull requests with plain `gh` and git, especially when
+  a parent changes or merges, a child must change base, a branch is being rewritten, or
+  governance/check evidence is incomplete.
 ---
 
-# Stacked PRs with raw `gh` CLI + git
+# Stacked PRs with plain `gh` + git
 
-Methodology and when-to-stack live in the sibling `stacked-prs` skill (see it for the
-*why*, structure, and when NOT to stack). This skill is the mechanics with no extra tooling.
+Use GitHub's explicit base-branch fields; `gh` has no stack command. Every outward mutation
+requires operation-specific authorization and fresh readback. Missing governance data,
+unsupported fields, or HTTP 403 is UNKNOWN, never approval.
 
-## First, the fact that trips everyone
-
-**`gh` has NO `stack` subcommand** (verified gh 2.95.0, 2026-06). "GitHub supports stacked
-PRs" is half-true and worth being precise about — GitHub provides two *primitives*, not a
-workflow:
-
-1. **Arbitrary base branch:** any PR can target any branch as its base
-   (`gh pr create --base <branch>` / `gh pr edit --base <branch>`). That's how you express
-   a stack.
-2. **Auto-retarget on merge:** when a base branch is merged (and deleted), GitHub
-   automatically retargets any open PR that pointed at it to *that branch's* base — so a
-   child PR moves up to the grandparent (usually `main`) with no action. Stable GitHub
-   behavior since 2020.
-
-Everything else — rebasing the stack after a lower change, keeping child branches current —
-is manual. That manual overhead is the entire reason Graphite/gt/spr/jj exist.
-
-## Create a stack
+## Create and record boundaries
 
 ```sh
 git switch main && git switch -c feat-a
-# … commit layer A …
+# commit A
 git push -u origin feat-a
-gh pr create --base main --head feat-a --title "A: …"
+gh pr create --base main --head feat-a --title 'A'
 
-git switch -c feat-b            # branches OFF feat-a
-# … commit layer B …
+git switch -c feat-b
+# commit B
 git push -u origin feat-b
-gh pr create --base feat-a --head feat-b --title "B: …"   # base = the branch below
-
-git switch -c feat-c
-# … commit layer C …
-git push -u origin feat-c
-gh pr create --base feat-b --head feat-c --title "C: …"
+gh pr create --base feat-a --head feat-b --title 'B'
 ```
 
-Each PR's diff shows only its own layer, because the base is the branch below — not main.
-Add a stack map to each PR body (`gh pr create --body "Stack: #1 ← #2(this) ← #3"`) so
-reviewers see the order; gh does not render stacks.
+Before each PR and before each mutation, save the old boundary: PR number, branch, base/head
+names, local tip, and exact remote OID. Query `gh pr view <pr> --json baseRefName,headRefName,state,statusCheckRollup`
+and record the result. A target/base/head/state drift invalidates the candidate; stop,
+re-query, re-gate, and re-review.
 
-## Review feedback on a lower PR → restack (the core loop)
+## Parent merge, abandonment, or rename
 
-Feedback lands on `feat-a`. Amend it, then cascade the rebase upward:
+Do not assume a forge changes a child target. After the parent operation:
+
+1. Re-query the parent result and identify each **immediate child** from open PR data.
+2. Explicitly retarget each immediate child, one at a time, with
+   `gh pr edit <child-pr> --base <verified-replacement-base>`.
+3. Re-query `baseRefName`, `headRefName`, and `state` for each child.
+4. Preserve every old parent boundary in an old-parent map and maintain a new-parent map.
+   For each descendant, cascade bottom-up from the rewritten parent to its nearest child, using
+   `git rebase --onto <new-parent> <saved-old-parent> <child>`; then use that rewritten child
+   as the next layer's new parent. This replays only the child's commits; never replay an
+   ancestor range.
+5. Run required gates and obtain fresh review for every rewritten or retargeted PR. Do not
+   merge or delete while any layer is stale.
+
+A child still using a branch as its base keeps that branch alive. Before deletion, re-query
+all open PRs and `baseRefName`; do not delete a branch while any open PR still uses it as a
+base. If the query is incomplete, absent, unsupported, or returns HTTP 403, governance is
+UNKNOWN and deletion stops. Perform a final race check immediately before deletion: re-read
+open-child usage, PR base/head/state, the saved remote OID, required checks, and governance.
+Only after that final readback may deletion proceed, with the exact saved-OID lease:
 
 ```sh
-git switch feat-a
-# … apply the fix, commit (or amend) …
-git push --force-with-lease origin feat-a         # PR #1 updates
-
-git switch feat-b
-git rebase feat-a                                 # replay B on the new A
-git push --force-with-lease origin feat-b
-
-git switch feat-c
-git rebase feat-b
-git push --force-with-lease origin feat-c
+git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin :refs/heads/<branch>
 ```
 
-- **Always `--force-with-lease`, never `--force`** — lease aborts if someone else pushed to
-  the branch, so you don't clobber a collaborator (or another agent) blindly.
-- `git rebase --update-refs` (git ≥ 2.38) can rebase a whole stack held as branches on one
-  local line in a single command — but you still force-push each branch. Know your git
-  version before relying on it.
+Never use ordinary unleased deletion, an unqualified lease, or `--force`. A changed final
+readback or lease failure is a stop, not a retry. Governance is UNKNOWN when evidence is
+missing or stale; UNKNOWN is not approval.
 
-## The squash-merge gotcha (the one that corrupts stacks)
+## Restack and exact rewrite lease
 
-The default GitHub merge is **squash**. When `feat-a` squash-merges, main gets ONE new
-commit whose hash/content does NOT match any commit on `feat-a`. Now `feat-b` still contains
-A's original (pre-squash) commits. If you naively `git rebase main feat-b`, git tries to
-replay A's commits that are "already" in main-as-a-squash and you get spurious conflicts or
-duplicated changes.
-
-Fix — after the base PR squash-merges, rebase the child ONTO main while DROPPING the old
-base commits:
+For each rewritten branch, preserve its saved old parent and save its remote OID. Rebase,
+inspect the diff, gate, and obtain fresh review. **Immediately before the push**, repeat the
+full race check: re-query PR base/head/state, open-child usage, required checks, governance,
+and the remote branch OID. Push only if every value still matches the reviewed candidate,
+using the exact saved-boundary lease:
 
 ```sh
-git fetch origin
-git switch feat-b
-git rebase --onto origin/main feat-a feat-b       # replay ONLY B's commits onto main
-git push --force-with-lease origin feat-b
-# GitHub already auto-retargeted PR #2's base main -> confirm with: gh pr view feat-b --json baseRefName
+git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin <branch>
 ```
 
-`--onto origin/main feat-a feat-b` = "take the commits that are on feat-b but not on feat-a,
-and replay them onto origin/main." That skips A's now-squashed commits cleanly. Repeat per
-layer as each merges. (Merge-commit or rebase-merge strategies avoid this specific trap but
-have their own; squash is the GitHub default, so assume it.)
+Never use a stale saved OID. A lease failure or changed readback is a stop: preserve evidence,
+re-query, and start a new authorized candidate.
 
-## Merge order
+## Verification checklist
 
-Bottom-up, always: merge `#1`, let GitHub auto-retarget `#2` to main, restack `#2` onto main
-(squash gotcha above), merge `#2`, and so on. Never merge a child before its parent — its
-diff would include the parent's unmerged changes.
-
-## Manual retarget (when auto-retarget doesn't fire)
-
-Auto-retarget needs the base branch to be *merged*. If you abandon or rename a base branch,
-retarget children by hand:
-
-```sh
-gh pr edit <child-pr> --base main
-```
-
-## Agentic-wave note
-
-One worktree/workspace per stack layer; commit per layer; the conductor (or `sdlc-integrator`)
-opens PRs with `--base` pointing down the stack, then merges bottom-up and re-gates each
-layer on its real base (the flagship skill's worktree-integration reference — worktree-green
-≠ base-green). If the repo is on jj, skip most of this: `jj` auto-rebases descendants, so
-restacking after a lower change is automatic — see the flagship skill's jj-vcs reference.
-
-## Verification
-
-- `gh pr view <child> --json baseRefName` shows the base is the layer below (not main) while
-  stacked, and flips to `main` automatically after the parent merges.
-- After a restack, `gh pr diff <child>` shows only that layer's changes, no duplicated
-  parent hunks (if you see duplicates, you hit the squash gotcha — use `--onto`).
-
-## References
-
-- sibling `stacked-prs` skill — methodology, when-to-stack, anti-fat-branch rationale.
-- flagship `agentic-sdlc-orchestrator` skill, jj-vcs reference — jj makes restacking free.
-- GitHub auto-retarget: github.blog changelog (2020) "automatically changing base branch".
+- `gh pr view <pr> --json baseRefName,headRefName,state,statusCheckRollup` matches the saved
+  boundary and intended new base. The final readback occurs immediately before mutation.
+- `gh pr checks <pr> --required` is interpreted with repository policy; no checks, absent
+  evidence, unsupported governance fields, and HTTP 403 are UNKNOWN, not success.
+- `gh pr diff <pr>` contains only the intended layer after restack.
+- Every descendant is re-gated and re-reviewed after a parent rewrite or squash.
+- The final race check passes immediately before any branch deletion or rewrite.

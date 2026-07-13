@@ -11,9 +11,8 @@ context-costing roles in every codex session with dangling ledger paths.
 Install into a specific research repo either way:
 
 ```bash
-# preferred — scaffolds the roles AND the ledgers/workflows/gates they depend on:
-python3 <bundle>/skills/codex-research-os/scripts/install_research_os.py \
-  --target /path/to/repo --project-name "Name"
+# preferred — from the bundle root; scaffolds roles, ledgers, workflows, and gates:
+mise run research-os:install -- --target /path/to/repo --project-name "Name"
 
 # or copy just the roles into a repo that already has the research/ layer:
 cp <bundle>/agents/codex/research/*.toml /path/to/repo/.codex/agents/

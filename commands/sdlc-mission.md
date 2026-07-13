@@ -18,13 +18,16 @@ Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` an
    acting). New ideas become classified Seeds, not detours.
 4. **Plan the wave**: workstreams with owner role, worktree, scope, gates, rollback;
    independent items parallel, dependent sequenced. Scale-setter decisions (frame, plan,
-   verdicts) stay with you or a solo strongest-tier agent.
+   verdicts) stay with you or a solo strongest-tier agent as recommendations; they do not
+   authorize outward effects. Record the requested semantic model tier separately from the
+   resolved provider/model: resolve only with adapter readback, otherwise inherited or
+   unresolved.
 5. **Execute** via `/sdlc-wave` semantics: provider-native workers in worktrees by
-   default. Use CAO `assign`/`--async` only when the optional adapter was explicitly
-   selected and is already healthy for durable or mixed-engine work. WIP caps: impl ≤3,
+   default. Use provider-native background or persistent tasks for bounded work. WIP caps: impl ≤3,
    research ≤2, integration ≤1, critique ≤1, nesting ≤2.
 6. **Concurrent critique**: one standing review team auditing each wave's SQUASH-MERGED
-   snapshot (never live worktrees), filing classified Seeds in real time.
+   snapshot (never live worktrees), filing classified advisory Seeds in real time. A
+   reviewer or critic recommendation is not an acceptance or authority grant.
 7. **Reconcile + loop**: merge-base-validated fan-in, re-gate on main, close only with
    evidence, fold in blocking seeds, re-prioritize, next wave. Backflow (re-entering an
    earlier phase) comes only from the verdict, scoped, within budgets
@@ -37,4 +40,6 @@ Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` an
 Non-negotiables: no force-push/history-rewrite on shared branches; no secrets; no CI
 mutation from a dirty checkout; no closing without acceptance evidence; no chat-only
 TODOs; no cross-platform claims from single-platform proof; seeds-first for every
-discovery — never fix inline.
+discovery — never fix inline. Push, publication, PR mutation, merge, deployment,
+credential, and evidence-store operations each require explicit operation-specific approval;
+local status, gates, reviewer labels, and conductor choices never grant it.

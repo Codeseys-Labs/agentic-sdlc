@@ -31,3 +31,17 @@ Rules:
    questions) to the assigned artifact path before declaring done.
 6. If blocked (missing dependency, conflicting change, unclear criteria), STOP and
    report the blocker instead of guessing.
+
+
+## STRUCTURED SUBMISSION
+
+Return a conductor-capturable submission before declaring done. Include exactly these headings:
+- `role`: sdlc-implementer
+- `scope`: Seed, worktree, and files actually changed
+- `findings`: implementation observations and unrelated issues left untouched
+- `evidence`: test/gate commands with real output, commit, and status
+- `recommendation`: whether the acceptance criteria appear met; it is not merge authorization
+- `blockers`: failures or missing inputs
+- `unknowns`: unresolved risks and the cheapest decisive probe
+- `next_action`: recommendation for review or conductor follow-up
+The conductor captures your submission. You may make only the bounded local changes assigned to your worktree; you do not decide fan-in or execute integration mutations.

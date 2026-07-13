@@ -8,8 +8,11 @@ optional durability and view adapters.
 
 ## The multiplier principle (where the frontier model goes)
 
-Agents are not interchangeable. Reserve the scarcest/strongest tier for
-**scale-setters** — decisions that multiply:
+Agents are not interchangeable, and model tier is a requested semantic, not proof of the
+provider/model actually used. Reserve the scarcest/strongest tier for **scale-setters** —
+decisions that multiply. Record resolved provider/model only after adapter readback; otherwise
+record inherited or unresolved. A tier choice, verdict, or gate result never authorizes an
+outward effect.
 
 - **Frame/Decompose** (multiplies FORWARD: every later token is spent inside this frame)
 - **Plan** (its `workstreams[]` IS the worker fleet's work list)
@@ -33,8 +36,7 @@ Secondary test: if this agent is wrong, does the run **derail** (frontier), **de
 
 In the bundle, tier assignment starts with native host configuration: Claude Workflow
 stages carry `model:` per agent() call, and Codex roles carry
-`model`/`model_reasoning_effort` in TOML. When the optional CAO adapter is selected, its
-profiles can also carry per-worker `model:` frontmatter.
+`model`/`model_reasoning_effort` in TOML.
 The full four-tier policy — quota math, the decision ladder ("if this agent is wrong, does
 the run derail / degrade / just retry?"), alias plumbing, and concurrency budgets — ships
 as the sibling skill `skills/model-tier-rightsizing/` (re-derive its worked quota table per
@@ -58,14 +60,12 @@ The baseline has two complete layers; optional adapters add durability or visibi
 
 | Layer | Runs | Use for |
 |---|---|---|
-| **Conductor** (interactive host session) | frame, plan adoption, verdicts, Seeds/merge ownership | All scale-setter decisions |
+| **Conductor** (interactive host session) | frame, plan adoption, verdict recommendations, Seeds/merge ownership | All scale-setter decisions; no outward authority |
 | **Provider-native fan-out** (roles, subagents, workflows, teams, background tasks) | discovery, research, implementation waves, review panels, critique | All delegated work within the host's supported lifetime |
-| **Optional CAO adapter** | durable or mixed-engine sessions | Select only when explicitly needed and already healthy |
 | **Optional cmux adapter** | view/event layer for already-active sessions | Never load-bearing; no installation or enablement step |
 
-Rule of thumb: **keep phases and waves provider-native unless a concrete durability or
-mixed-engine requirement selects CAO. Use cmux only for visibility when it is already
-active.** The practical delegation ceiling is about three real levels; coordination quality
+Rule of thumb: **keep phases and waves provider-native. Use cmux only for visibility when it
+is already active.** The practical delegation ceiling is about three real levels; coordination quality
 runs out before mechanism does.
 
 ## The research stage: delegate to a pipeline, don't inline it
@@ -99,8 +99,8 @@ Guardrails (so "keep going until done" stays bounded):
 
 The conductor holds the backflow cursor. Re-entry launches a scoped provider-native worker,
 folds its artifact into accumulated state, then re-runs forward phases as cheap
-re-validation. When CAO is selected, `assign`/async is one optional implementation of the
-same artifact-backed pattern.
+re-validation. A verdict or backflow directive is advisory and does not grant
+permission for an outward operation.
 
 ## Iteration shape: chained runs vs one mega-run
 
@@ -109,8 +109,9 @@ same artifact-backed pattern.
   belongs to the conductor. Each completed iteration is a durable checkpoint + a steering
   point for the human.
 - **One mega-run** (backflow controller inside): headless/cron missions, well-trodden
-  shapes, explicit fire-and-forget. Delegate ship authority to the final verdict
-  (commit-never-push) and keep the honest-exit contract.
+  shapes, explicit fire-and-forget. Treat the final verdict as a recommendation only;
+  ship, commit, push, and every other outward effect still require operation-specific
+  authorization. Keep the honest-exit contract.
 - **Hybrid scout trick:** do cheap discovery inline FIRST (list files, find seams) so the
   run's prompts reference real names instead of spending their first phase rediscovering.
 

@@ -1,100 +1,69 @@
 ---
 name: stacked-prs
 description: |
-  Stacked pull requests — the tool-agnostic methodology for shipping a chain of small,
-  dependent PRs instead of one fat branch. Use when: (1) a change is growing into a large
-  multi-concern PR and review is stalling ("this PR is too big", "reviewer fatigue");
-  (2) later work depends on earlier unmerged work and you don't want to wait for the first
-  to merge; (3) an agentic wave produced several dependent commits that should land as
-  separate reviewable units; (4) deciding stack-vs-parallel-PRs (dependent → stack;
-  independent → parallel); (5) a lower PR in a stack got review changes and you must
-  propagate them up. Covers the small-batch/anti-fat-branch rationale, stack structure,
-  bottom-up merge order, the restack discipline, and when NOT to stack. Tool mechanics
-  live in sibling skills (stacked-prs-gh-cli) and the jj-vcs reference.
-author: Claude Code
-version: 1.0.0
-date: 2026-07-06
+  Use when dependent changes need separate, reviewable pull requests and a lower layer
+  changes, merges, is retargeted, or is restacked while descendants remain open.
 ---
 
-# Stacked Pull Requests (methodology)
+# Stacked pull requests
 
-## Problem: the fat branch
+A stack is a chain of small, dependent PRs. Each PR has one logical change and targets the
+branch immediately below it. Independent changes are parallel PRs, not a stack. Merge and
+restack bottom-up; a child is not ready merely because its parent changed.
 
-The default habit is one long-lived branch that accumulates a whole feature, then opens as
-one giant PR. It fails predictably:
+## Safety doctrine
 
-- **Review stalls.** A 1,500-line PR gets rubber-stamped or sits for days. Reviewer
-  attention is roughly constant per PR, not per line — so quality drops as size grows.
-- **Serial blocking.** Everything in the branch waits on the slowest-to-review part.
-- **Merge conflicts compound** the longer the branch diverges from main.
-- **Hard to revert / bisect.** One commit (or one squash) mixes unrelated concerns.
-- **Feedback is expensive.** A design change near the base forces reworking everything
-  layered on top, by hand.
+- Save an old boundary for every layer before any operation: branch, local tip, PR number,
+  base/head names, and exact remote OID. A changed target, base, head, or PR state invalidates
+  the candidate; stop, re-query, re-gate, and re-review. Target/base/head/state drift invalidates
+  the candidate. Every check occurs immediately before mutation.
+- Never assume a hosting service changes a child target. After a parent merges, is abandoned,
+  or is renamed, explicitly retarget each immediate child to the verified replacement base.
+  Re-query `baseRefName`, `headRefName`, and `state` after each retarget before continuing.
+- Before rewriting a stack, preserve every old parent boundary in an old-parent map. Build a
+  new-parent map as each layer is rewritten, then cascade from the parent outward (nearest
+  child first). For each child, use its saved old parent and current new parent exactly:
 
-Small batches are the fix — but "just open small PRs" breaks when the pieces DEPEND on each
-other. Stacking is how you keep batches small *without* waiting for each to merge first.
+  ```sh
+  git rebase --onto <new-parent> <saved-old-parent> <child>
+  ```
 
-## What a stack is
+  This replays only that child's commits; never replay ancestor commits or an ancestor range.
+  Re-gate and re-review every rewritten or retargeted layer, obtaining fresh review.
+- Before deleting any branch, re-query all open PRs and their base fields. Do not delete while
+  any open PR uses that branch as a base. Missing, stale, unsupported, or HTTP 403 governance
+  evidence means governance is UNKNOWN; UNKNOWN is not approval.
+- Immediately before every rewrite or deletion, perform a final race check: re-read the saved
+  remote OID (the saved remote OID), PR base/head/state, open-child usage, required checks, and governance. Any change
+  invalidates the candidate and requires a fresh boundary and review. Only after that readback
+  may a remote branch be deleted, and deletion must use the exact saved-OID lease:
 
-A chain of PRs where each one's base branch is the branch below it, each carrying ONE
-logical change:
+  ```sh
+  git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin :refs/heads/<branch>
+  ```
+
+  Never use ordinary unleased deletion, an unqualified lease, or `--force`. A lease failure or
+  changed final readback is a stop, not a retry.
+
+## Normal shape
 
 ```
-main  ←  feat-a (PR #1, base: main)
-          └─ feat-b (PR #2, base: feat-a)
-              └─ feat-c (PR #3, base: feat-b)
+main <- feat-a (PR 1) <- feat-b (PR 2) <- feat-c (PR 3)
 ```
 
-Each PR is independently reviewable; a reviewer sees only that layer's diff, not the whole
-feature. Work proceeds on `feat-c` while `feat-a` is still in review.
+Create each PR against the immediate parent. Keep the stack shallow (usually 2–4 layers),
+keep a stack map in each PR, and merge only bottom-up. A child PR remains open while its
+parent is reviewed; that is not permission to remove the parent branch.
 
-## The rules
+## Rewrite discipline
 
-1. **One logical change per PR.** If you can't summarize a PR in one sentence without
-   "and", split it. This is the golden rule everything else serves.
-2. **Base each PR on the one below**, not on main. That's what makes the diff show only
-   the new layer.
-3. **Merge bottom-up.** `#1` merges first, then `#2`, then `#3`. Never merge a child before
-   its parent.
-4. **Changes to a lower PR propagate upward by restacking.** Review feedback lands on
-   `feat-a` → amend `feat-a` → rebase `feat-b` (and its descendants) onto the new
-   `feat-a` → force-push (with lease). Every tool and the raw-git flow is a variation of
-   this one move. See the `stacked-prs-gh-cli` skill (raw gh/git) and the flagship skill's
-   jj-vcs reference (jj auto-rebases descendants — restacking is free).
-5. **Keep the stack shallow.** 2–4 PRs is the sweet spot. Beyond ~5, restack churn and
-   reviewer context-switching cost more than the batching saves — split into sequential
-   stacks landed as you go.
+For every rewritten branch, save its current remote OID before the final race check, preserve
+the old parent boundary, and inspect the result before gating and review. Push only with the
+exact saved-boundary lease:
 
-## When NOT to stack
+```sh
+git push --force-with-lease=refs/heads/<branch>:<saved-remote-oid> origin <branch>
+```
 
-- **Independent changes → parallel PRs, not a stack.** If B doesn't need A, base both on
-  main and review concurrently. Stacking independent work invents a false dependency and
-  serializes the merge.
-- **A single atomic change** (a change that is only correct as a whole — e.g. a rename that
-  must touch caller and callee together) is ONE PR, not a stack.
-- **Reviewers can't follow the split.** If layering makes each PR incomprehensible without
-  the others, the boundaries are wrong — re-cut them along genuine logical seams.
-
-## How it wires into agentic waves
-
-The bundle's worktree/workspace waves already produce disjoint-scope commits (see the
-flagship skill's seeds-worktrees reference). Stacking is the PR-landing strategy for the
-DEPENDENT case: when Seed B builds on Seed A, land them as a stack (A's PR base main, B's base A)
-rather than one merged mega-branch or a blocked-until-A-merges wait. Independent Seeds in
-the same wave land as parallel PRs. The integrator (see the `sdlc-integrator` agent) merges
-bottom-up and re-gates each layer on its actual base.
-
-## Verification
-
-A healthy stack: each PR's diff is small and single-purpose; `#N`'s base is `#N-1`'s branch;
-merging `#1` leaves `#2` still reviewable (auto-retargeted to main — see stacked-prs-gh-cli);
-reverting any single PR is meaningful in isolation.
-
-## References
-
-- `stacked-prs-gh-cli` skill — the raw `gh` + git mechanics (no native stack command; the
-  squash-merge rebase-onto gotcha; native auto-retargeting).
-- flagship `agentic-sdlc-orchestrator` skill, jj-vcs reference — jj's change model
-  makes stacks first-class (auto-rebase descendants).
-- Graphite's stacked-diffs guides (graphite.com/guides) — the methodology's popular
-  reference; tool-specific but the principles are general.
+A lease failure or changed readback is a stop: preserve evidence, re-query, and start a new
+authorized candidate.

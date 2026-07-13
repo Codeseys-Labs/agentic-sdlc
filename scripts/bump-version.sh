@@ -6,19 +6,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 manifest="$repo_root/.version-bump.json"
 
-python_cmd=()
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
-  python_cmd=(python3)
-elif command -v python >/dev/null 2>&1 && python -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
-  python_cmd=(python)
-elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
-  python_cmd=(py -3)
-else
-  echo "error: Python 3.8+ is required to update version manifests" >&2
-  exit 1
-fi
+command -v mise >/dev/null 2>&1 || {
+  echo "error: mise 2026.4.27+ is required to update version manifests" >&2
+  exit 2
+}
 
-"${python_cmd[@]}" - "$manifest" "$repo_root" "${1:-}" <<'PY'
+mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest" "$repo_root" "${1:-}" <<'PY'
 import json, sys, re
 manifest_path, root, arg = sys.argv[1], sys.argv[2], sys.argv[3]
 m = json.load(open(manifest_path, encoding="utf-8"))

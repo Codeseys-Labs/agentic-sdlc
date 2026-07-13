@@ -4,7 +4,8 @@ Use this reference when converting the plan into parallel implementation work.
 
 ## Seeds Queue
 
-Use Seeds as the authoritative dynamic queue:
+Use Seeds as the authoritative dynamic queue for recommendations and acceptance tracking;
+they are not an authorization or execution channel:
 
 ```bash
 sd prime
@@ -20,7 +21,9 @@ Create or update Seeds for:
 - Missing tests/docs.
 - Blockers that need human approval or external credentials.
 
-Do not close a Seed from an agent message alone. Verify current files, gates, and acceptance criteria.
+Do not close a Seed from an agent message, reviewer label, gate status, or conductor choice alone.
+Verify current files, gates, and acceptance criteria; a verified local result still does not
+authorize an outward effect.
 
 ## Wave Selection
 
@@ -64,6 +67,8 @@ Before opening a PR:
 - Run `sd sync` if Seeds changed.
 - Confirm the integration branch diff matches the intended Seeds.
 - Include Seeds ids and test evidence in the PR body.
+- Confirm explicit operation-specific authorization for PR creation or mutation; gates,
+  status, and recommendations do not grant it.
 
 Do not force-push or rewrite shared branches without explicit user approval.
 
@@ -71,8 +76,7 @@ Do not force-push or rewrite shared branches without explicit user approval.
 them as a stack (A's PR base main, B's base A, merge bottom-up) rather than merging both
 into one mega-branch or blocking B until A merges. Independent Seeds in the same wave land
 as parallel PRs. Mechanics: the `stacked-prs` skill (methodology) and `stacked-prs-gh-cli`
-(raw gh/git, incl. the squash-merge restack gotcha); on jj, descendants auto-rebase
-(`references/jj-vcs.md`).
+(raw gh/git, incl. the squash-merge restack gotcha).
 
 ## Config propagation into new worktrees
 
@@ -89,22 +93,21 @@ depend on does NOT follow:
 - mise per-path trust — same pattern: a fresh worktree is untrusted even when the main repo
   is trusted, so git hooks (which ARE shared from the main repo's gitdir) fail on any
   mise-shimmed command with "config not trusted". Run `mise trust <worktree-path>` per
-  worktree. Full gate stack: `skills/repo-toolchain-gates/`.
+  worktree. Missing, unpinned, untrusted, or ambiguous required capability fails closed;
+  do not let workers bypass the repository gate. Full gate stack:
+  `skills/repo-toolchain-gates/`.
 
 Wave-creation checklist: create worktree → copy untracked config the workers need →
 trust the path for codex AND mise → then launch.
 
 ## Worker substrates and optional viewers
 
-- Launch provider-native workers by default. Give every write-capable worker one worktree,
-  its absolute path, and an artifact report path. Never share a write worktree.
+- Launch provider-native workers by default after capability and trust probes pass. Give every
+  write-capable worker one worktree, its absolute path, and an artifact report path. Never
+  share a write worktree.
 - Codex workers on any substrate need each new worktree path trusted in
   `~/.codex/config.toml`; batch-add trust entries when creating the wave.
-- When the optional CAO adapter is selected, pass the worktree with
-  `--working-directory`. CAO-specific stale `processing` versus dead tmux diagnostics
-  live in `references/cao-operations.md`.
 - When cmux is already active, optionally publish wave status. Attach a
-  `tmux attach -t cao-<session>` viewer only for an existing CAO/tmux-backed worker;
   native workers require neither cmux nor tmux.
 
 ## Salvage Rules
