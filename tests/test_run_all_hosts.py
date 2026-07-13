@@ -23,7 +23,11 @@ class RunAllHostsTests(unittest.TestCase):
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             completed.append(command)
             if command[0] == "wslpath":
-                return subprocess.CompletedProcess(command, 0, "E:\\repo\n", "")
+                converted = {
+                    str(SCRIPT.parents[1]): "E:\\repo",
+                    "/tmp/home with spaces": "\\\\wsl.localhost\\Ubuntu\\tmp\\home with spaces",
+                }
+                return subprocess.CompletedProcess(command, 0, converted[command[-1]] + "\n", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         with mock.patch.object(all_hosts.sys, "platform", "linux"), mock.patch.object(
@@ -38,7 +42,25 @@ class RunAllHostsTests(unittest.TestCase):
         windows = next(command for command in completed if command[0] == "powershell.exe")
         self.assertEqual(wsl[-3:], ["--dry-run", "--home", "/tmp/home with spaces"])
         encoded = windows[windows.index("-TaskArgsJson") + 1]
-        self.assertEqual(json.loads(encoded), ["--dry-run", "--home", "/tmp/home with spaces"])
+        self.assertEqual(
+            json.loads(encoded),
+            ["--dry-run", "--home", "\\\\wsl.localhost\\Ubuntu\\tmp\\home with spaces"],
+        )
+
+    def test_converts_equals_path_options_but_preserves_relative_values(self) -> None:
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 0, "C:\\native-home\n", "")
+
+        with mock.patch.object(all_hosts.subprocess, "run", side_effect=run):
+            result = all_hosts.windows_arguments(
+                ["--home=/tmp/home", "--codex-home", "relative-codex", "--dry-run"],
+                "wslpath",
+            )
+
+        self.assertEqual(
+            result,
+            ["--home=C:\\native-home", "--codex-home", "relative-codex", "--dry-run"],
+        )
 
     def test_returns_worst_host_exit_code(self) -> None:
         exits = iter((1, 0))

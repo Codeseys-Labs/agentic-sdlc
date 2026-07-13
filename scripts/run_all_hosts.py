@@ -28,6 +28,40 @@ def run_host(label: str, command: list[str]) -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def windows_arguments(arguments: list[str], wslpath: str) -> list[str]:
+    """Translate WSL absolute values for installer path options."""
+    converted = list(arguments)
+    index = 0
+    while index < len(converted):
+        argument = converted[index]
+        if argument in {"--home", "--codex-home"} and index + 1 < len(converted):
+            value = converted[index + 1]
+            if Path(value).is_absolute():
+                converted[index + 1] = subprocess.run(
+                    [wslpath, "-w", value],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+            index += 2
+            continue
+        for option in ("--home", "--codex-home"):
+            prefix = f"{option}="
+            if argument.startswith(prefix):
+                value = argument[len(prefix) :]
+                if Path(value).is_absolute():
+                    native = subprocess.run(
+                        [wslpath, "-w", value],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip()
+                    converted[index] = f"{prefix}{native}"
+                break
+        index += 1
+    return converted
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("install", "status"))
@@ -49,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     native_repo = subprocess.run(
         [wslpath, "-w", str(repo)], check=True, capture_output=True, text=True
     ).stdout.strip()
+    native_forwarded = windows_arguments(forwarded, wslpath)
     windows_exit = run_host(
         f"Native Windows host: {args.operation}",
         [
@@ -63,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             "-Task",
             task,
             "-TaskArgsJson",
-            json.dumps(forwarded),
+            json.dumps(native_forwarded),
         ],
     )
     print(f"=== Host summary: WSL={wsl_exit} Windows={windows_exit} ===")
