@@ -317,6 +317,64 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(installer.uninstall(old).exit_code, 0)
             self.assertFalse(old_destination.exists())
 
+    def test_persists_earlier_ownership_when_later_install_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            commands = config.home / ".claude" / "commands"
+            commands.parent.mkdir(parents=True)
+            commands.write_text("blocks collection")
+
+            with self.assertRaises(installer.InstallerError):
+                installer.install(config)
+
+            destination = config.home / ".claude" / "skills" / "example"
+            state = installer.load_state(config.state_path)
+            self.assertTrue(destination.exists())
+            self.assertTrue(state["entries"][str(destination)]["removable"])
+
+            commands.unlink()
+            self.assertEqual(installer.uninstall(config).exit_code, 0)
+            self.assertFalse(destination.exists())
+
+    def test_rejects_linked_collection_root_without_external_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            external = root / "external"
+            external.mkdir()
+            collection = config.home / ".claude" / "skills"
+            collection.parent.mkdir(parents=True)
+            collection.symlink_to(external, target_is_directory=True)
+
+            with self.assertRaisesRegex(installer.InstallerError, "collection root must not be a link"):
+                installer.install(config)
+
+            self.assertEqual(list(external.iterdir()), [])
+            self.assertFalse(config.state_path.exists())
+
+    def test_retargeted_collection_link_cannot_redirect_uninstall(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            self.assertEqual(installer.install(config).exit_code, 0)
+            destination = config.home / ".claude" / "skills" / "example"
+            installer.remove_path(destination)
+            collection = destination.parent
+            collection.rmdir()
+            external = root / "external"
+            external.mkdir()
+            installer.copy_item(root / "skills" / "example", external / "example")
+            collection.symlink_to(external, target_is_directory=True)
+
+            with self.assertRaisesRegex(installer.InstallerError, "collection root must not be a link"):
+                installer.uninstall(config)
+
+            self.assertTrue((external / "example").exists())
+
     def test_uninstall_removes_owned_dangling_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
