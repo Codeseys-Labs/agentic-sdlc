@@ -191,6 +191,25 @@ def destination_for(entry: Entry, config: Config) -> Path:
     return root / collection / entry.name
 
 
+def assert_safe_collection(entry: Entry, destination: Path, config: Config) -> None:
+    """Reject collection roots that can redirect bundle mutations."""
+    collection = destination.parent
+    agent_root = collection.parent
+    expected_root = config.home / ".claude" if entry.agent == "claude" else config.codex_home
+    if is_junction(collection) or collection.is_symlink():
+        raise InstallerError(f"collection root must not be a link: {collection}")
+    if collection.exists() and not collection.is_dir():
+        raise InstallerError(f"collection root must be a directory: {collection}")
+    if is_junction(agent_root) or agent_root.is_symlink():
+        raise InstallerError(f"agent root must not be a link: {agent_root}")
+    if agent_root.exists() and not agent_root.is_dir():
+        raise InstallerError(f"agent root must be a directory: {agent_root}")
+    if os.path.normcase(os.path.abspath(agent_root)) != os.path.normcase(
+        os.path.abspath(expected_root)
+    ):
+        raise InstallerError(f"destination escapes configured agent root: {destination}")
+
+
 def digest(path: Path) -> str:
     """Hash a file or directory byte-for-byte, including relative file names."""
     hasher = hashlib.sha256()
@@ -384,6 +403,17 @@ def create_destination(entry: Entry, destination: Path, config: Config) -> str:
         return "copy"
 
 
+def save_owned_entry(
+    config: Config,
+    state: dict[str, Any],
+    key: str,
+    record: dict[str, str | bool],
+) -> None:
+    """Persist one ownership change before another destination can fail."""
+    state["entries"][key] = record
+    write_state(config.state_path, state, config.dry_run)
+
+
 def install(config: Config) -> Result:
     """Install selected entries, adopting only exact legacy entries and reporting conflicts."""
     state = load_state(config.state_path)
@@ -396,6 +426,7 @@ def install(config: Config) -> Result:
         if config.agent != "all" and entry.agent != config.agent:
             continue
         destination = destination_for(entry, config)
+        assert_safe_collection(entry, destination, config)
         key = str(destination)
         record = owned.get(key)
 
@@ -419,7 +450,7 @@ def install(config: Config) -> Result:
                     else:
                         remove_path(destination)
                         copy_item(entry.source, destination)
-                        owned[key] = entry_record(entry, "copy")
+                        save_owned_entry(config, state, key, entry_record(entry, "copy"))
                         messages.append(f"refreshed: {destination}")
                 else:
                     recorded_source = Path(str(record.get("source", "")))
@@ -437,7 +468,7 @@ def install(config: Config) -> Result:
                                 except (OSError, subprocess.CalledProcessError):
                                     pass
                                 raise InstallerError(f"cannot retarget {destination}: {exc}") from exc
-                            owned[key] = entry_record(entry, mode)
+                            save_owned_entry(config, state, key, entry_record(entry, mode))
                             messages.append(f"retargeted: {destination} ({mode})")
                     else:
                         messages.append(f"ok: {destination}")
@@ -465,16 +496,26 @@ def install(config: Config) -> Result:
                             raise InstallerError(
                                 f"cannot replace link with copy {destination}: {exc}"
                             ) from exc
-                        owned[key] = entry_record(entry, "copy")
+                        save_owned_entry(config, state, key, entry_record(entry, "copy"))
                         messages.append(f"replaced link with copy: {destination}")
                 else:
                     if not config.dry_run:
-                        owned[key] = entry_record(entry, legacy_mode)
+                        save_owned_entry(config, state, key, entry_record(entry, legacy_mode))
                     messages.append(f"adopted: {destination}")
                 continue
             if not destination.is_symlink() and destination.exists() and content_equivalent(destination, entry.source):
                 if not config.dry_run:
-                    owned[key] = entry_record(entry, "copy", removable=False, installed_digest=digest(destination))
+                    save_owned_entry(
+                        config,
+                        state,
+                        key,
+                        entry_record(
+                            entry,
+                            "copy",
+                            removable=False,
+                            installed_digest=digest(destination),
+                        ),
+                    )
                 messages.append(f"adopted (preserved on uninstall): {destination}")
                 continue
             partial = True
@@ -488,7 +529,7 @@ def install(config: Config) -> Result:
             mode = create_destination(entry, destination, config)
         except (OSError, subprocess.CalledProcessError) as exc:
             raise InstallerError(f"cannot install {destination}: {exc}") from exc
-        owned[key] = entry_record(entry, mode)
+        save_owned_entry(config, state, key, entry_record(entry, mode))
         messages.append(f"installed: {destination} ({mode})")
 
     write_state(config.state_path, state, config.dry_run)
@@ -507,6 +548,13 @@ def status(config: Config) -> Result:
         if not destination_is_configured(key, record, config):
             continue
         destination = Path(key)
+        entry = Entry(
+            record["agent"],
+            record["kind"],
+            record.get("name", destination.name),
+            Path(record["source"]),
+        )
+        assert_safe_collection(entry, destination, config)
         if not destination.exists() and not destination.is_symlink():
             partial = True
             messages.append(f"absent: {destination}")
@@ -530,6 +578,13 @@ def uninstall(config: Config) -> Result:
         if not destination_is_configured(key, record, config):
             continue
         destination = Path(key)
+        entry = Entry(
+            record["agent"],
+            record["kind"],
+            record.get("name", destination.name),
+            Path(record["source"]),
+        )
+        assert_safe_collection(entry, destination, config)
         if not destination.exists() and not destination.is_symlink():
             if not config.dry_run:
                 owned.pop(key)
