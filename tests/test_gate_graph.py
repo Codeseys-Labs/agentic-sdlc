@@ -95,7 +95,11 @@ class GateGraphTests(unittest.TestCase):
             repo = self.copied_repo(temp)
             home = Path(temp) / "home"
             home.mkdir()
-            env = {key: value for key, value in os.environ.items() if not key.startswith("MISE_")}
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("MISE_") and key != "CI"
+            }
             env |= {
                 "HOME": str(home),
                 "MISE_PARANOID": "1",
