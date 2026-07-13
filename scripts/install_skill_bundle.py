@@ -239,6 +239,16 @@ def current_link_target(path: Path) -> Path | None:
         return None
 
 
+def legacy_link_mode(destination: Path, source: Path) -> str | None:
+    """Return the concrete mode when an unowned destination links to source."""
+    if is_junction(destination):
+        try:
+            return "junction" if os.path.samefile(destination, source) else None
+        except OSError:
+            return None
+    return "link" if current_link_target(destination) == source.resolve() else None
+
+
 def is_junction(path: Path) -> bool:
     """Return whether path is a Windows directory junction on supported Python versions."""
     return bool(getattr(path, "is_junction", lambda: False)())
@@ -433,11 +443,34 @@ def install(config: Config) -> Result:
                         messages.append(f"ok: {destination}")
                 continue
 
-            target = current_link_target(destination)
-            if target == entry.source.resolve():
-                if not config.dry_run:
-                    owned[key] = entry_record(entry, "link")
-                messages.append(f"adopted: {destination}")
+            legacy_mode = legacy_link_mode(destination, entry.source)
+            if legacy_mode is not None:
+                if config.mode == "copy":
+                    if config.dry_run:
+                        messages.append(f"would replace link with copy: {destination}")
+                    else:
+                        remove_path(destination)
+                        try:
+                            copy_item(entry.source, destination)
+                        except OSError as exc:
+                            if destination.exists() or destination.is_symlink():
+                                remove_path(destination)
+                            try:
+                                if legacy_mode == "junction":
+                                    make_junction(entry.source, destination)
+                                else:
+                                    make_unix_symlink(entry.source, destination)
+                            except (OSError, subprocess.CalledProcessError):
+                                pass
+                            raise InstallerError(
+                                f"cannot replace link with copy {destination}: {exc}"
+                            ) from exc
+                        owned[key] = entry_record(entry, "copy")
+                        messages.append(f"replaced link with copy: {destination}")
+                else:
+                    if not config.dry_run:
+                        owned[key] = entry_record(entry, legacy_mode)
+                    messages.append(f"adopted: {destination}")
                 continue
             if not destination.is_symlink() and destination.exists() and content_equivalent(destination, entry.source):
                 if not config.dry_run:

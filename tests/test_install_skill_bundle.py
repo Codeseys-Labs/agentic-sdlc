@@ -141,7 +141,66 @@ class InstallSkillBundleTests(unittest.TestCase):
 
             adopted = installer.install(config)
             self.assertIn(f"adopted (preserved on uninstall): {copy_destination}", adopted.messages)
-            self.assertIn(f"adopted: {agent_destination}", adopted.messages)
+            self.assertIn(f"replaced link with copy: {agent_destination}", adopted.messages)
+            self.assertFalse(agent_destination.is_symlink())
+
+    def test_copy_mode_replaces_exact_legacy_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            destination = config.home / ".claude" / "skills" / "example"
+            destination.parent.mkdir(parents=True)
+            destination.symlink_to(root / "skills" / "example")
+
+            result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(destination.is_dir())
+            self.assertFalse(destination.is_symlink())
+            self.assertIn(f"replaced link with copy: {destination}", result.messages)
+            state = installer.load_state(config.state_path)
+            self.assertEqual(state["entries"][str(destination)]["mode"], "copy")
+
+    def test_copy_mode_dry_run_preserves_exact_legacy_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", True, "claude")
+            destination = config.home / ".claude" / "skills" / "example"
+            destination.parent.mkdir(parents=True)
+            destination.symlink_to(root / "skills" / "example")
+
+            result = installer.install(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(destination.is_symlink())
+            self.assertIn(f"would replace link with copy: {destination}", result.messages)
+            self.assertFalse(config.state_path.exists())
+
+    def test_copy_mode_restores_legacy_link_when_copy_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            destination = config.home / ".claude" / "skills" / "example"
+            destination.parent.mkdir(parents=True)
+            destination.symlink_to(root / "skills" / "example")
+
+            with mock.patch.object(installer, "copy_item", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(installer.InstallerError, "cannot replace link with copy"):
+                    installer.install(config)
+
+            self.assertTrue(destination.is_symlink())
+            self.assertTrue(os.path.samefile(destination, root / "skills" / "example"))
+
+    def test_legacy_link_mode_recognizes_windows_junction(self) -> None:
+        with mock.patch.object(installer, "is_junction", return_value=True), mock.patch.object(
+            installer.os.path, "samefile", return_value=True
+        ):
+            self.assertEqual(
+                installer.legacy_link_mode(Path("destination"), Path("source")), "junction"
+            )
 
     def test_adopts_line_ending_only_copy_but_preserves_it_on_uninstall(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
