@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 MESSAGE = "CAO has been retired; use native Frame/Wave/Mission instead."
-BASH = shutil.which("bash")
+BASH = None if os.name == "nt" else shutil.which("bash")
 
 
 class CAORetirementTests(unittest.TestCase):

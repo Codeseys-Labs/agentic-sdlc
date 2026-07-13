@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "check-agentic-sdlc-prereqs.sh"
-BASH = shutil.which("bash")
+BASH = None if os.name == "nt" else shutil.which("bash")
 
 
 class PreflightCapabilityTests(unittest.TestCase):
