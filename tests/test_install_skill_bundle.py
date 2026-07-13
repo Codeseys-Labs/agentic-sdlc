@@ -220,6 +220,44 @@ class InstallSkillBundleTests(unittest.TestCase):
             with self.assertRaises(installer.InstallerError):
                 installer.install(config)
 
+    def test_changed_codex_home_preserves_old_records_and_installs_new_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            state_root = root / "state"
+            old = installer.Config(
+                root, root / "home", root / "old-codex", "copy", False, "codex", state_root
+            )
+            new = installer.Config(
+                root, root / "home", root / "new-codex", "copy", False, "codex", state_root
+            )
+            installer.install(old)
+            old_destination = old.codex_home / "skills" / "example"
+
+            claude_status = installer.status(
+                installer.Config(
+                    root, root / "home", new.codex_home, "copy", False, "claude", state_root
+                )
+            )
+            installed = installer.install(new)
+            new_destination = new.codex_home / "skills" / "example"
+
+            self.assertEqual(claude_status.exit_code, 0)
+            self.assertEqual(installed.exit_code, 0)
+            self.assertTrue(old_destination.exists())
+            self.assertTrue(new_destination.exists())
+
+            removed = installer.uninstall(new)
+
+            self.assertEqual(removed.exit_code, 0)
+            self.assertTrue(old_destination.exists())
+            self.assertFalse(new_destination.exists())
+            self.assertIn(
+                str(old_destination), installer.load_state(old.state_path)["entries"]
+            )
+            self.assertEqual(installer.uninstall(old).exit_code, 0)
+            self.assertFalse(old_destination.exists())
+
     def test_uninstall_removes_owned_dangling_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -308,6 +346,32 @@ class InstallSkillBundleTests(unittest.TestCase):
                 installer.uninstall(config)
 
             self.assertTrue(victim.exists())
+
+    def test_stale_structural_record_has_no_deletion_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "all")
+            victim = root / "old-codex" / "skills" / "example"
+            victim.mkdir(parents=True)
+            (victim / "SKILL.md").write_text("owned-looking")
+            state = installer.load_state(config.state_path)
+            state["entries"][str(victim)] = {
+                "agent": "codex",
+                "kind": "skill",
+                "name": "example",
+                "source": str(root / "skills" / "example"),
+                "mode": "copy",
+                "digest": installer.digest(victim),
+                "removable": True,
+            }
+            installer.write_state(config.state_path, state, False)
+
+            result = installer.uninstall(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(victim.exists())
+            self.assertIn(str(victim), installer.load_state(config.state_path)["entries"])
 
     def test_windows_junction_rejects_cmd_metacharacters(self) -> None:
         with tempfile.TemporaryDirectory(prefix="agentic-sdlc-&-") as temp:

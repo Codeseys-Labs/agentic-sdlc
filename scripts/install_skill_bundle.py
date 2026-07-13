@@ -99,8 +99,16 @@ def load_state(path: Path) -> dict[str, Any]:
     return state
 
 
+def destination_is_configured(key: str, record: dict[str, Any], config: Config) -> bool:
+    """Return whether a record targets the currently configured agent home."""
+    name = record.get("name", Path(key).name)
+    entry = Entry(record["agent"], record["kind"], name, Path(record["source"]))
+    expected = destination_for(entry, config)
+    return os.path.normcase(os.path.abspath(key)) == os.path.normcase(os.path.abspath(expected))
+
+
 def validate_owned_entries(config: Config, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Reject state records that do not identify a canonical bundle destination."""
+    """Reject malformed records while preserving entries from previously configured homes."""
     entries = state["entries"]
     for key, record in entries.items():
         agent = record.get("agent")
@@ -114,14 +122,16 @@ def validate_owned_entries(config: Config, state: dict[str, Any]) -> dict[str, d
             and name not in {"", ".", ".."}
             and Path(name).name == name
         )
-        expected = (
-            destination_for(Entry(agent, kind, name, Path(str(record.get("source", "")))), config)
-            if identity_valid
-            else None
+        collection = {"skill": "skills", "agent": "agents", "command": "commands"}.get(kind)
+        destination = Path(key)
+        destination_valid = (
+            identity_valid
+            and destination.name == name
+            and destination.parent.name == collection
+            and (agent == "codex" or destination.parent.parent.name == ".claude")
         )
         valid = (
-            expected is not None
-            and os.path.normcase(os.path.abspath(key)) == os.path.normcase(os.path.abspath(expected))
+            destination_valid
             and record.get("mode") in {"copy", "link", "junction"}
             and isinstance(record.get("source"), str)
             and bool(record["source"])
@@ -461,6 +471,8 @@ def status(config: Config) -> Result:
     for key, record in owned.items():
         if config.agent != "all" and record.get("agent") != config.agent:
             continue
+        if not destination_is_configured(key, record, config):
+            continue
         destination = Path(key)
         if not destination.exists() and not destination.is_symlink():
             partial = True
@@ -481,6 +493,8 @@ def uninstall(config: Config) -> Result:
     partial = False
     for key, record in list(owned.items()):
         if config.agent != "all" and record.get("agent") != config.agent:
+            continue
+        if not destination_is_configured(key, record, config):
             continue
         destination = Path(key)
         if not destination.exists() and not destination.is_symlink():
