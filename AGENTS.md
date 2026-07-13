@@ -64,9 +64,19 @@ idempotence or Git-wave readiness from intent alone.
 
 Unix installs use symlinks. Windows automatic mode tries directory junctions and file
 symlinks, then falls back to copies; strict link mode has no fallback. Ownership state lives
-under `XDG_STATE_HOME` on Unix or `LOCALAPPDATA` on Windows. Dry-run migration writes neither
-entries nor state. Exact legacy links and byte-identical copies can be adopted; foreign,
-retargeted, and modified entries are preserved, while unchanged owned copies may refresh.
+under `XDG_STATE_HOME` on Unix or `LOCALAPPDATA` on Windows. Write commands serialize on that
+state file and fail closed when stable physical identity or atomic no-replace primitives are
+unavailable; Linux lifecycle mutation requires glibc 2.28+ and `statx` birth-time support. Status
+inspects every known v1 document without rewriting it, and ordinary lifecycle commands block
+while one is outstanding. `bundle:install -- --migrate-state --dry-run` previews an exact,
+state-only conversion; `bundle:install -- --migrate-state` merges all exact records from the
+operator and configured-home legacy paths into central v2 without installing or refreshing
+bundle entries. A distinct legacy source is retired only after durable v2 persistence and an
+exact recheck. Linux/macOS persistence-barrier failures stop mutation; native Windows provides
+handle-bound process-crash recovery but does not claim sudden-power-loss durability for namespace
+transitions. Concurrent external mutation of managed paths during a write command is unsupported.
+Exact legacy links and byte-identical copies can be adopted; foreign, retargeted, and modified
+entries are preserved, while unchanged owned copies may refresh.
 
 Native Windows runs the current-host task normally. From WSL, all-host tasks run WSL first,
 then invoke native Windows mise and report the two hosts separately. `hooks:install` installs

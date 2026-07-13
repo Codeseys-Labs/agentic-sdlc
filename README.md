@@ -173,7 +173,9 @@ for directories and file symlinks for files; when the host cannot create those l
 falls back to copies. Strict link mode does not use that fallback. The installer records
 per-entry ownership in the platform state directory (`XDG_STATE_HOME` on Unix,
 `LOCALAPPDATA` on Windows), so lifecycle operations can distinguish bundle entries from
-user files.
+user files. Write-capable lifecycle commands are serialized per state file. Linux lifecycle
+mutation requires glibc 2.28+ and a filesystem exposing `statx` birth time; unsupported
+identity or no-replace primitives fail closed rather than weakening ownership authority.
 
 ```bash
 mise run bundle:install
@@ -188,13 +190,32 @@ summaries remain separate, and the native task's arguments and exit code are pre
 
 ### Safe migration and lifecycle rules
 
-Use the installer's dry-run option before migrating an existing installation. The dry-run
-sequence is:
+Use the installer to inspect v1 ownership before explicitly migrating it:
 
-1. inspect the current entries and ownership state;
-2. report links, copies, adoptions, and conflicts without changing files or state;
-3. review the plan, then run the same operation without dry-run;
-4. run `bundle:status` (or `bundle:status:all-hosts`) and `check`.
+```bash
+mise run bundle:status
+mise run bundle:install -- --migrate-state --dry-run
+mise run bundle:install -- --migrate-state
+mise run bundle:status
+mise run check
+```
+
+`status` and ordinary lifecycle commands never rewrite v1 state and block mutation while a
+known v1 document is outstanding. `--migrate-state --dry-run` validates every record from the
+operator state path and the configured home's distinct legacy path without changing files or
+state. The write-enabled command converts all exact, structurally valid records—including
+mixed-agent and historical-home records—into one central v2 document. Migration is state-only:
+it does not install, refresh, or otherwise reconcile current bundle entries. A distinct legacy
+source is retired only after the central v2 write is durable and the source is rechecked; retry
+is idempotent if retirement was interrupted. Migration fails closed on changed object types,
+conflicting records, changed sources, or unsafe roots.
+
+Linux and macOS require their supported filesystem durability barriers; failures stop the
+operation. macOS uses `F_FULLFSYNC` for file content and directory fsync for namespace changes.
+Native Windows uses handle-bound, no-replace renames and supports process-crash recovery, but
+does not claim sudden-power-loss durability for namespace transitions. Concurrent external
+mutation of managed paths during a write command is unsupported; detected identity or content
+changes are preserved and reported as conflicts.
 
 Collection directories are never replaced. An exact legacy bundle link or byte-identical
 copy may be adopted into ownership. Foreign entries, retargeted links, and modified copies

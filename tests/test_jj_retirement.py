@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import unittest
@@ -8,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-BASH = shutil.which("bash")
+BASH = None if os.name == "nt" else shutil.which("bash")
 SURFACES = (
     ROOT / "mise.toml",
     ROOT / "README.md",
