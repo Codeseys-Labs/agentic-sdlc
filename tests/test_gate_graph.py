@@ -105,7 +105,33 @@ class GateGraphTests(unittest.TestCase):
             }
             env.pop("MISE_TRUSTED_CONFIG_PATHS", None)
             before = subprocess.run(["mise", "-C", str(repo), "tasks"], env=env, text=True, capture_output=True, check=False)
-            self.assertNotEqual(before.returncode, 0)
+            if before.returncode == 0:
+                diagnostics = {
+                    "outer_mise_env": {key: value for key, value in os.environ.items() if key.startswith("MISE_")},
+                    "isolated_mise_env": {key: value for key, value in env.items() if key.startswith("MISE_")},
+                    "trust": subprocess.run(
+                        ["mise", "-C", str(repo), "trust", "--show"],
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    ).stdout,
+                    "configs": subprocess.run(
+                        ["mise", "-C", str(repo), "config", "ls", "--tracked-configs"],
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    ).stdout,
+                    "settings": subprocess.run(
+                        ["mise", "-C", str(repo), "settings", "--json-extended"],
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    ).stdout,
+                }
+                self.fail(f"copied config unexpectedly trusted:\n{diagnostics}")
             self.assertIn("not trusted", before.stderr)
 
             trusted = subprocess.run(["mise", "trust", str(repo / "mise.toml")], env=env, text=True, capture_output=True, check=False)
