@@ -95,7 +95,8 @@ class GateGraphTests(unittest.TestCase):
             repo = self.copied_repo(temp)
             home = Path(temp) / "home"
             home.mkdir()
-            env = os.environ | {
+            env = {key: value for key, value in os.environ.items() if not key.startswith("MISE_")}
+            env |= {
                 "HOME": str(home),
                 "MISE_PARANOID": "1",
                 "MISE_DATA_DIR": str(Path(temp) / "mise-data"),
@@ -103,35 +104,8 @@ class GateGraphTests(unittest.TestCase):
                 "MISE_CACHE_DIR": str(Path(temp) / "mise-cache"),
                 "MISE_CONFIG_DIR": str(Path(temp) / "mise-config"),
             }
-            env.pop("MISE_TRUSTED_CONFIG_PATHS", None)
             before = subprocess.run(["mise", "-C", str(repo), "tasks"], env=env, text=True, capture_output=True, check=False)
-            if before.returncode == 0:
-                diagnostics = {
-                    "outer_mise_env": {key: value for key, value in os.environ.items() if key.startswith("MISE_")},
-                    "isolated_mise_env": {key: value for key, value in env.items() if key.startswith("MISE_")},
-                    "trust": subprocess.run(
-                        ["mise", "-C", str(repo), "trust", "--show"],
-                        env=env,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    ).stdout,
-                    "configs": subprocess.run(
-                        ["mise", "-C", str(repo), "config", "ls", "--tracked-configs"],
-                        env=env,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    ).stdout,
-                    "settings": subprocess.run(
-                        ["mise", "-C", str(repo), "settings", "--json-extended"],
-                        env=env,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    ).stdout,
-                }
-                self.fail(f"copied config unexpectedly trusted:\n{diagnostics}")
+            self.assertNotEqual(before.returncode, 0)
             self.assertIn("not trusted", before.stderr)
 
             trusted = subprocess.run(["mise", "trust", str(repo / "mise.toml")], env=env, text=True, capture_output=True, check=False)
