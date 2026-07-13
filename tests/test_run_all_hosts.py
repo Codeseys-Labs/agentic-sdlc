@@ -17,6 +17,19 @@ spec.loader.exec_module(all_hosts)
 
 
 class RunAllHostsTests(unittest.TestCase):
+    def test_windows_launcher_preserves_json_argument_boundaries(self) -> None:
+        launcher = SCRIPT.with_name("run-windows-mise.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "$decodedArgs = ConvertFrom-Json -InputObject $TaskArgsJson",
+            launcher,
+        )
+        self.assertNotIn(
+            "$decodedArgs = @(ConvertFrom-Json -InputObject $TaskArgsJson)",
+            launcher,
+        )
+
     def test_forwards_arguments_to_both_hosts(self) -> None:
         completed: list[list[str]] = []
 
@@ -99,6 +112,21 @@ class RunAllHostsTests(unittest.TestCase):
 
     def test_returns_worst_host_exit_code(self) -> None:
         exits = iter((1, 0))
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if command[0] == "wslpath":
+                return subprocess.CompletedProcess(command, 0, "E:\\repo\n", "")
+            return subprocess.CompletedProcess(command, next(exits), "", "")
+
+        with mock.patch.object(all_hosts.sys, "platform", "linux"), mock.patch.object(
+            all_hosts.Path, "exists", return_value=True
+        ), mock.patch.object(all_hosts, "powershell_path", return_value="powershell.exe"), mock.patch.object(
+            all_hosts.shutil, "which", return_value="wslpath"
+        ), mock.patch.object(all_hosts.subprocess, "run", side_effect=run):
+            self.assertEqual(all_hosts.main(["status"]), 1)
+
+    def test_signal_terminated_host_cannot_report_success(self) -> None:
+        exits = iter((-9, 0))
 
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             if command[0] == "wslpath":
