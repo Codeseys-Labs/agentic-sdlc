@@ -45,7 +45,7 @@ Reconcile:
 - Turn findings into advisory Seeds and close or update them only after acceptance evidence is verified.
   Only the integrator may execute an already authorized fan-in mutation; local status, passing
   gates, worker reports, reviewer recommendations, and conductor choices never grant authority.
-- Run `sd sync` when the repo uses Seeds and queue state changed.
+- Run `Seeds(<target>, sync)` using the exact launcher contract in `references/seeds-worktrees.md` when the repo uses Seeds and queue state changed.
 
 Ship:
 - Squash/rebase worktree branches into an integration branch only within the authorized scope.
