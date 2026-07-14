@@ -20,20 +20,95 @@ EXACT_RUNTIMES = [
     "bun@1.3.10",
     "npm:@os-eco/seeds-cli@0.5.14",
 ]
-OWNED_DOCS = [
-    ROOT / "commands" / "sdlc-init.md",
-    ROOT / "commands" / "sdlc-frame.md",
-    ROOT / "commands" / "sdlc-wave.md",
-    ROOT / "commands" / "sdlc-mission.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md",
-    ROOT
-    / "skills"
-    / "agentic-sdlc-orchestrator"
-    / "references"
-    / "seeds-worktrees.md",
-    ROOT / "README.md",
-    ROOT / "AGENTS.md",
-]
+SHIPPED_TEXT_SUFFIXES = frozenset({".md", ".py", ".toml", ".yaml", ".yml"})
+EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".seeds",
+        "__pycache__",
+        "artifacts",
+        "build",
+        "dist",
+        "generated",
+        "history",
+        "historical",
+        "node_modules",
+        "tests",
+    }
+)
+SD_INSTRUCTION = re.compile(
+    r"\b(?:check|execute|invoke|run|use)\s+(?:the\s+)?`?sd\s+"
+    r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
+    re.IGNORECASE,
+)
+RAW_SD_COMMAND = re.compile(
+    r"^\s*(?:[-*+]\s*)?`?sd\s+"
+    r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
+    re.IGNORECASE,
+)
+DIRECT_SEEDS_MUTATION = re.compile(
+    r"\b(?:claim|create|update|close|disposition)\b[^.\n]{0,80}"
+    r"\b(?:seeds|seed\s+(?:issue|queue))\b",
+    re.IGNORECASE,
+)
+DIRECT_SEEDS_OPERATION = re.compile(
+    r"\bSeeds\(\s*<target>\s*,\s*(?:create|claim|update|close|disposition)\b",
+    re.IGNORECASE,
+)
+PROHIBITED_SEEDS_MUTATION = re.compile(
+    r"\b(?:cannot|do not|must not|never)\b[^.\n]{0,100}"
+    r"\b(?:claim|create|update|close|disposition)\b",
+    re.IGNORECASE,
+)
+
+
+def shipped_surface_paths(root: Path) -> list[Path]:
+    paths = [
+        root / name
+        for name in ("README.md", "AGENTS.md", "CLAUDE.md")
+        if (root / name).is_file()
+    ]
+    for directory in ("commands", "skills", "agents", "cao-profiles"):
+        base = root / directory
+        if not base.is_dir():
+            continue
+        paths.extend(
+            path
+            for path in base.rglob("*")
+            if path.is_file()
+            and path.suffix in SHIPPED_TEXT_SUFFIXES
+            and not (set(path.relative_to(root).parts) & EXCLUDED_SHIPPED_SURFACE_PARTS)
+        )
+    return sorted(set(paths))
+
+
+def is_non_conductor_agent(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    return relative.parts[:1] == ("agents",) and "conductor" not in path.stem.lower()
+
+
+def shipped_surface_violations(root: Path) -> list[str]:
+    violations = []
+    for path in shipped_surface_paths(root):
+        relative = path.relative_to(root)
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if SD_INSTRUCTION.search(line) or RAW_SD_COMMAND.search(line):
+                violations.append(
+                    f"{relative}:{line_number}: bare operational sd invocation: {line.strip()}"
+                )
+            if (
+                is_non_conductor_agent(path, root)
+                and (DIRECT_SEEDS_MUTATION.search(line) or DIRECT_SEEDS_OPERATION.search(line))
+                and not PROHIBITED_SEEDS_MUTATION.search(line)
+                and "conductor" not in line.lower()
+            ):
+                violations.append(
+                    f"{relative}:{line_number}: direct non-conductor Seeds queue mutation guidance: {line.strip()}"
+                )
+    return violations
 
 
 class PreflightCapabilityTests(unittest.TestCase):
@@ -272,14 +347,71 @@ class PreflightCapabilityTests(unittest.TestCase):
 
 
 class SeedsDocumentationContractTests(unittest.TestCase):
-    def test_owned_docs_have_no_unqualified_operational_sd_calls(self) -> None:
-        operational_sd = re.compile(r"(?<![\w:@-])sd\s+(?:prime|ready|blocked|init|sync)\b")
-        violations = []
-        for path in OWNED_DOCS:
-            for line_number, line in enumerate(path.read_text().splitlines(), 1):
-                if operational_sd.search(line):
-                    violations.append(f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}")
+    def test_shipped_surface_has_no_bare_sd_or_non_conductor_queue_mutation_guidance(self) -> None:
+        violations = shipped_surface_violations(ROOT)
         self.assertEqual(violations, [], "\n".join(violations))
+
+    def test_shipped_surface_discovers_recursive_shipped_paths_and_excludes_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            included = {
+                "README.md",
+                "AGENTS.md",
+                "CLAUDE.md",
+                "commands/nested/runbook.md",
+                "skills/example/references/reference.md",
+                "skills/example/templates/template.md",
+                "skills/codex-research-os/templates/research-os.md",
+                "agents/claude/worker.md",
+                "agents/codex/worker.toml",
+                "agents/codex/research/director.toml",
+            }
+            excluded = {
+                "tests/fixture.md",
+                "history/old-runbook.md",
+                "artifacts/report.md",
+                "skills/example/generated/output.md",
+                "agents/codex/research/__pycache__/cached.toml",
+            }
+            for relative in included | excluded:
+                path = fixture_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("shipped surface fixture\n", encoding="utf-8")
+
+            discovered = {
+                path.relative_to(fixture_root).as_posix()
+                for path in shipped_surface_paths(fixture_root)
+            }
+
+        self.assertTrue(included <= discovered)
+        self.assertFalse(excluded & discovered)
+
+    def test_shipped_surface_contract_rejects_representative_leaks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            (fixture_root / "commands").mkdir()
+            (fixture_root / "agents" / "codex" / "research").mkdir(parents=True)
+            (fixture_root / "README.md").write_text(
+                "Seeds(target, ready) names the provider-neutral notation.\n",
+                encoding="utf-8",
+            )
+            (fixture_root / "commands" / "leak.md").write_text(
+                "- Run `sd sync` after reconciliation.\n",
+                encoding="utf-8",
+            )
+            (fixture_root / "agents" / "codex" / "research" / "director.toml").write_text(
+                "Claim or create a Seeds issue before work.\n"
+                "Use Seeds(<target>, close) after work.\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(len(violations), 3, "\n".join(violations))
+        self.assertTrue(any("bare operational sd invocation" in item for item in violations))
+        self.assertTrue(
+            any("direct non-conductor Seeds queue mutation guidance" in item for item in violations)
+        )
 
     def test_docs_define_exact_posix_and_process_scoped_windows_contract(self) -> None:
         skill = (ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").read_text()
