@@ -51,7 +51,11 @@ SEEDS_PSEUDO_OPERATION = re.compile(
     rf"\bSeeds\(\s*[^,()]+\s*,\s*(?P<action>{SEEDS_ACTION})\b", re.IGNORECASE
 )
 NEGATED_PSEUDO_OPERATION = re.compile(
-    r"\b(?:(?:should|do|must)\s+not|never)\s+(?:invoke|run|call|use|execute)\s*$",
+    r"\b(?:(?:should|do|must)\s+not|never)\s+(?:invoke|run|call|use|execute)\s*`?\s*$",
+    re.IGNORECASE,
+)
+COPULAR_TOPIC_PROSE = re.compile(
+    r"^\s+(?:[A-Za-z][A-Za-z-]*\s+)+(?:is|are|was|were|be|been|being)\b",
     re.IGNORECASE,
 )
 SEEDS_ACTION_FIRST = re.compile(
@@ -69,7 +73,9 @@ NEGATED_SEEDS_ACTION = re.compile(
 )
 SD_ACTION = r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)"
 SD_EXECUTABLE = r"sd(?:\.(?:exe|cmd|bat|com|ps1|sh))?"
-SD_COMMAND = re.compile(rf"\b{SD_EXECUTABLE}\b(?:['\"])?\s+{SD_ACTION}\b", re.IGNORECASE)
+SD_COMMAND = re.compile(
+    rf"\b{SD_EXECUTABLE}\b(?:['\"])?\s+['\"]?{SD_ACTION}\b", re.IGNORECASE
+)
 SD_QUOTED_COMMAND = re.compile(
     rf"(?:^|\s)['\"](?:[^'\"]*[\\/])?{SD_EXECUTABLE}['\"]\s+['\"]?{SD_ACTION}\b",
     re.IGNORECASE,
@@ -250,6 +256,10 @@ def pseudo_operation_is_negated(text: str, action_start: int) -> bool:
     return bool(NEGATED_PSEUDO_OPERATION.search(text[:action_start]))
 
 
+def is_copular_topic_prose(text: str, action_end: int) -> bool:
+    return bool(COPULAR_TOPIC_PROSE.match(text[action_end:]))
+
+
 def seeds_mutation_operations(text: str) -> list[str]:
     operations = []
     for match in SEEDS_PSEUDO_OPERATION.finditer(text):
@@ -257,7 +267,9 @@ def seeds_mutation_operations(text: str) -> list[str]:
             operations.append(match.group("action").lower())
     for pattern in (SEEDS_ACTION_FIRST, SEEDS_ACTION_SUBJECT_FIRST):
         for match in pattern.finditer(text):
-            if not operation_is_negated(text, match.start("actions")):
+            if not operation_is_negated(text, match.start("actions")) and not is_copular_topic_prose(
+                text, match.end("actions")
+            ):
                 operations.extend(action_names(match.group("actions")))
     return operations
 
@@ -1100,6 +1112,31 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             "\n".join(violations),
         )
 
+    def test_bare_sd_invocations_reject_asymmetrically_quoted_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            command = fixture_root / "commands" / "runbook.md"
+            command.parent.mkdir(parents=True)
+            command.write_text(
+                "\n".join(
+                    (
+                        'sd "create"',
+                        "/opt/seeds/bin/sd 'claim'",
+                        'mise exec -- sd "sync"',
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("bare operational sd invocation" in item for item in violations),
+            3,
+            "\n".join(violations),
+        )
+
     def test_python_scanner_rejects_safe_subprocess_argument_lists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture_root = Path(temporary_directory)
@@ -1203,6 +1240,33 @@ class SeedsDocumentationContractTests(unittest.TestCase):
 
         self.assertFalse(violations, "\n".join(violations))
 
+    def test_pseudo_operation_negations_cover_call_use_execute_and_inline_code(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join(
+                    (
+                        "Workers should not call `Seeds(target, create)`.",
+                        "Workers should not use `Seeds(<target>, claim)`.",
+                        "Workers should not execute `Seeds(repo.name, update)`.",
+                        "Workers never invoke `Seeds(target, close)`.",
+                        "Workers may invoke `Seeds(target, sync)`.",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            1,
+            "\n".join(violations),
+        )
+
     def test_python_scanner_reconstructs_safe_constant_expressions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture_root = Path(temporary_directory)
@@ -1288,7 +1352,8 @@ class SeedsDocumentationContractTests(unittest.TestCase):
                         "Create a Seeds queue migration-guide.",
                         "Update the Seeds queue documentation.",
                         "Close a Seeds security-gap.",
-                        "Seeds queue sync terminology is provider-neutral.",
+                        "Seeds queue sync semantics are provider-neutral.",
+                        "Seeds queue claim lifecycle is provider-neutral.",
                         "Create a Seeds issue.",
                         "Claim a Seeds item.",
                         "Update a Seeds record.",
