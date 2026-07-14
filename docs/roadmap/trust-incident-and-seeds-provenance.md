@@ -21,9 +21,9 @@ The graph source receipt is SHA-256 `0f239c6d0dbe14506b800cfc7ddb2a38cea030d1460
 
 The user explicitly requested filing Seeds/epics/dependencies in this session. The worktree-derived `agentic-sdlc-orchestrator-wt-roadmap-docs-*` project key is a historical snapshot namespace, not final public product identity.
 
-Retained evidence identifies the delegated archive writer as the repository mutation actor that staged and committed the existing `.seeds` records. It does not identify an actor that initialized or semantically authored those records before the writer started: the writer's assignment stated that the canonical store had already been initialized, and no retained record shows a create or semantic-update command. This distinction must not be filled with inferred provenance.
+Retained evidence establishes at least the following named chronology; it does not reconstruct every command or exhaustively attribute every semantic action across all 41 records. Before delegation, the session conductor initialized Seeds and performed evidenced semantic graph operations (create, dependencies, update/status, close). The delegated documentation writer later authored archive documentation and staged and committed the already-existing `.seeds` bytes. Seeds semantic authority therefore remained conductor-owned, even though the writer made the later repository documentation and Git mutation.
 
-That workflow did not preserve the intended separation of powers: a delegated writer, rather than the session conductor, staged and committed the Seeds records into repository history. The session conductor owns disposition; filing, Git presence, or this receipt does not establish a conductor disposition, acceptance, closure, or authorization to mutate the graph.
+Using the same worktree for conductor semantic mutations and a later writer violated the approved one-writer-per-worktree process boundary and did not preserve the intended separation of powers. That process violation is distinct from semantic authority: the writer did not become the graph author by staging and committing pre-existing bytes. The session conductor owns disposition; filing, Git presence, or this receipt does not independently establish acceptance or authorization for a future graph mutation.
 
 ## Receipt classification
 

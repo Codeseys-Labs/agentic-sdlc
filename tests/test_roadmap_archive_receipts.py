@@ -32,12 +32,30 @@ class RoadmapArchiveReceiptTests(unittest.TestCase):
             "process-scoped `MISE_TRUSTED_CONFIG_PATHS` set only to the corrective worktree root",
             "user explicitly requested filing Seeds/epics/dependencies",
             "session conductor owns disposition",
-            "delegated archive writer as the repository mutation actor",
+            "delegated documentation writer later authored archive documentation",
             "separation of powers",
             "historical snapshot namespace, not final public product identity",
         ):
             with self.subTest(fact=fact):
                 self.assertIn(fact, receipt)
+
+    def test_incident_receipt_attributes_conductor_graph_authority(self) -> None:
+        receipt = INCIDENT_RECEIPT.read_text()
+        for fact in (
+            "session conductor initialized Seeds",
+            "evidenced semantic graph operations",
+            "create, dependencies, update/status, close",
+            "Before delegation",
+            "delegated documentation writer later authored archive documentation",
+            "staged and committed the already-existing `.seeds` bytes",
+            "Seeds semantic authority therefore remained conductor-owned",
+            "same worktree for conductor semantic mutations and a later writer",
+            "approved one-writer-per-worktree process boundary",
+        ):
+            with self.subTest(fact=fact):
+                self.assertIn(fact, receipt)
+        self.assertNotIn("does not identify an actor that initialized", receipt)
+        self.assertNotIn("no retained record shows a create or semantic-update command", receipt)
 
     def test_canonical_seeds_graph_receipt_remains_exact(self) -> None:
         payload = SEEDS.read_bytes()
