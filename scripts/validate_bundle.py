@@ -40,21 +40,51 @@ MIN_MISE_VERSION = "2026.4.27"
 UV_VERSION = "0.11.17"
 PYTHON_VERSION = "3.12.11"
 LEFTHOOK_VERSION = "2.1.10"
-LOCK_PLATFORMS = {"linux-x64", "macos-arm64", "macos-x64", "windows-x64"}
+NODE_VERSION = "22.22.3"
+BUN_VERSION = "1.3.10"
+SEEDS_VERSION = "0.5.14"
+SEEDS_TOOL = "npm:@os-eco/seeds-cli"
 LOCK_ARTIFACTS = {
     "uv": {
         "backend": "aqua:astral-sh/uv",
-        "linux-x64": ("uv-x86_64-unknown-linux-musl.tar.gz", "4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e"),
-        "macos-arm64": ("uv-aarch64-apple-darwin.tar.gz", "2a162f6b90ff3691a2f9cae1622e066a3ce592e110f66670cdcc841324b28226"),
-        "macos-x64": ("uv-x86_64-apple-darwin.tar.gz", "6c66e41eaf4d15abeda58d3f268161b6e3f742d98390341b174a7cfc1b48841d"),
-        "windows-x64": ("uv-x86_64-pc-windows-msvc.zip", "35fc29e03e62f3cda769bc12773f3cb70ce305d0d36c0d8bd0c117dd0b3fcd14"),
+        "platforms": {
+            "linux-x64": ("https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-unknown-linux-musl.tar.gz", "4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e", "github-attestations"),
+            "macos-arm64": ("https://github.com/astral-sh/uv/releases/download/0.11.17/uv-aarch64-apple-darwin.tar.gz", "2a162f6b90ff3691a2f9cae1622e066a3ce592e110f66670cdcc841324b28226", "github-attestations"),
+            "macos-x64": ("https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-apple-darwin.tar.gz", "6c66e41eaf4d15abeda58d3f268161b6e3f742d98390341b174a7cfc1b48841d", "github-attestations"),
+            "windows-x64": ("https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-pc-windows-msvc.zip", "35fc29e03e62f3cda769bc12773f3cb70ce305d0d36c0d8bd0c117dd0b3fcd14", "github-attestations"),
+        },
     },
     "lefthook": {
         "backend": "aqua:evilmartians/lefthook",
-        "linux-x64": ("lefthook_2.1.10_Linux_x86_64.gz", "0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f"),
-        "macos-arm64": ("lefthook_2.1.10_MacOS_arm64.gz", "1dd4dc7b4c50efb1f9d9122cd6535c793738d6e59751c228d49f768ec9dbb604"),
-        "macos-x64": ("lefthook_2.1.10_MacOS_x86_64.gz", "49d905f28ca46442cb236060058b252da650b5f7b864bd275b61aa46945e8c4a"),
-        "windows-x64": ("lefthook_2.1.10_Windows_x86_64.gz", "beabbce824641ae71229ed11dd8634f47148921cb649d25c90441b737481494a"),
+        "platforms": {
+            "linux-x64": ("https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_x86_64.gz", "0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f", "github-attestations"),
+            "macos-arm64": ("https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_MacOS_arm64.gz", "1dd4dc7b4c50efb1f9d9122cd6535c793738d6e59751c228d49f768ec9dbb604", "github-attestations"),
+            "macos-x64": ("https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_MacOS_x86_64.gz", "49d905f28ca46442cb236060058b252da650b5f7b864bd275b61aa46945e8c4a", "github-attestations"),
+            "windows-x64": ("https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Windows_x86_64.gz", "beabbce824641ae71229ed11dd8634f47148921cb649d25c90441b737481494a", "github-attestations"),
+        },
+    },
+    "node": {
+        "backend": "core:node",
+        "platforms": {
+            "linux-x64": ("https://nodejs.org/dist/v22.22.3/node-v22.22.3-linux-x64.tar.gz", "c7a10d6816da8eaaa7534dd73c71c6e2b2c391dbbf845e364902d156615dd1b8", None),
+            "macos-arm64": ("https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-arm64.tar.gz", "0da7ff74ef8611328c8212f17943368713a2ad953fb7d89a8c8a0eae87c23207", None),
+            "macos-x64": ("https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-x64.tar.gz", "45830ba752fa0d892c6dcd640946669801293cac820a33591ded40ac075198ec", None),
+            "windows-x64": ("https://nodejs.org/dist/v22.22.3/node-v22.22.3-win-x64.zip", "6c8d54f635feff4df76c2ca80f45332eb2ff57d25226edce36592e51a177ee33", None),
+        },
+    },
+    "bun": {
+        "backend": "core:bun",
+        "platforms": {
+            "linux-x64": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64.zip", "f57bc0187e39623de716ba3a389fda5486b2d7be7131a980ba54dc7b733d2e08", None),
+            "linux-x64-baseline": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64-baseline.zip", "41201a8c5ee74a9dcbb1ce25a1104f1f929838b57a845aa78d98379b0ce7cde2", None),
+            "linux-x64-musl": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64-musl.zip", "48a6c32277d343db0148ce066336472ffd380358a4d26bb1329714742492d824", None),
+            "linux-x64-musl-baseline": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64-musl-baseline.zip", "a7bc4cdea1ef255a83adbf39c7aafcd30e09f2b8f74deec4b10ee318bc024d1f", None),
+            "macos-arm64": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-aarch64.zip", "82034e87c9d9b4398ea619aee2eed5d2a68c8157e9a6ae2d1052d84d533ccd8d", None),
+            "macos-x64": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-x64.zip", "c1d90bf6140f20e572c473065dc6b37a4b036349b5e9e4133779cc642ad94323", None),
+            "macos-x64-baseline": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-x64-baseline.zip", "f9686c4e4e760db4cde77a0f1fad05e552648b9c9cbfa4f7fc9a7ec26b9f3267", None),
+            "windows-x64": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-windows-x64.zip", "7a77b3e245e2e26965c93089a4a1332e8a326d3364c89fae1d1fd99cdd3cd73d", None),
+            "windows-x64-baseline": ("https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-windows-x64-baseline.zip", "715709c69b176e20994533d3292bd0b7c32de9c0c5575b916746ec6b2aa38346", None),
+        },
     },
 }
 TASK_COMMANDS = {
@@ -231,11 +261,23 @@ def validate_mise(root: Path, result: Validation) -> None:
 
     if config.get("min_version") != MIN_MISE_VERSION:
         result.error(f"mise.toml must require mise {MIN_MISE_VERSION}")
-    if config.get("settings", {}).get("locked") is not True:
+    settings = config.get("settings", {})
+    if settings.get("locked") is not True:
         result.error("mise.toml must enable locked tool resolution")
-    expected_tools = {"uv": UV_VERSION, "lefthook": LEFTHOOK_VERSION}
+    if settings.get("npm", {}).get("package_manager") != "npm":
+        result.error("mise.toml npm.package_manager must equal npm")
+    expected_tools = {
+        "uv": UV_VERSION,
+        "lefthook": LEFTHOOK_VERSION,
+        "node": NODE_VERSION,
+        "bun": BUN_VERSION,
+        SEEDS_TOOL: {"version": SEEDS_VERSION, "depends": ["node"]},
+    }
     if config.get("tools") != expected_tools:
         result.error(f"mise.toml tools must equal {expected_tools}")
+    seeds = config.get("tools", {}).get(SEEDS_TOOL, {})
+    if seeds.get("depends") != ["node"]:
+        result.error("mise.toml Seeds tool must depend on node")
 
     for name, suffix in TASK_COMMANDS.items():
         task = tasks.get(name, {})
@@ -268,33 +310,53 @@ def validate_mise(root: Path, result: Validation) -> None:
         result.error(f"mise.lock is invalid: {exc}")
         return
     locked_tools = lock.get("tools", {})
-    for name, version in expected_tools.items():
+    expected_versions = {
+        "uv": UV_VERSION,
+        "lefthook": LEFTHOOK_VERSION,
+        "node": NODE_VERSION,
+        "bun": BUN_VERSION,
+        SEEDS_TOOL: SEEDS_VERSION,
+    }
+    for name, version in expected_versions.items():
         entries = locked_tools.get(name, [])
         if len(entries) != 1 or entries[0].get("version") != version:
             result.error(f"mise.lock must resolve {name} {version}")
             continue
-        if entries[0].get("backend") != LOCK_ARTIFACTS[name]["backend"]:
-            result.error(f"mise.lock {name} backend must equal {LOCK_ARTIFACTS[name]['backend']}")
+        entry = entries[0]
+        if name == SEEDS_TOOL:
+            if entry.get("backend") != SEEDS_TOOL:
+                result.error(f"mise.lock {name} backend must equal {SEEDS_TOOL}")
+            if set(entry) != {"version", "backend"}:
+                result.error(f"mise.lock {name} must contain version and backend only")
+            continue
+
+        expected_lock = LOCK_ARTIFACTS[name]
+        if entry.get("backend") != expected_lock["backend"]:
+            result.error(f"mise.lock {name} backend must equal {expected_lock['backend']}")
         platforms = {
             key.removeprefix("platforms."): value
-            for key, value in entries[0].items()
+            for key, value in entry.items()
             if key.startswith("platforms.")
         }
-        if set(platforms) != LOCK_PLATFORMS:
-            result.error(f"mise.lock {name} platforms must equal {sorted(LOCK_PLATFORMS)}")
+        expected_platforms = expected_lock["platforms"]
+        if set(platforms) != set(expected_platforms):
+            result.error(f"mise.lock {name} platforms must equal {sorted(expected_platforms)}")
         for platform, record in platforms.items():
-            if platform not in LOCK_ARTIFACTS[name]:
+            expected_record = expected_platforms.get(platform)
+            if expected_record is None:
                 continue
-            release = f"https://github.com/{'astral-sh/uv' if name == 'uv' else 'evilmartians/lefthook'}/releases/download/"
-            expected_version = version if name == "uv" else f"v{version}"
-            artifact, checksum = LOCK_ARTIFACTS[name][platform]
-            expected_url = f"{release}{expected_version}/{artifact}"
+            expected_url, checksum, provenance = expected_record
             if record.get("url") != expected_url:
                 result.error(f"mise.lock {name} {platform} URL must equal {expected_url}")
             if record.get("checksum") != f"sha256:{checksum}":
-                result.error(f"mise.lock {name} {platform} checksum must equal the reviewed SHA-256")
-            if record.get("provenance") != "github-attestations":
-                result.error(f"mise.lock {name} {platform} provenance must equal github-attestations")
+                result.error(f"mise.lock {name} {platform} checksum must equal the generated lock")
+            expected_fields = {"checksum", "url"}
+            if provenance is not None:
+                expected_fields.add("provenance")
+                if record.get("provenance") != provenance:
+                    result.error(f"mise.lock {name} {platform} provenance must equal {provenance}")
+            if set(record) != expected_fields:
+                result.error(f"mise.lock {name} {platform} must contain only generated artifact metadata")
 
 
 def validate_gate_graph(root: Path, result: Validation) -> None:
