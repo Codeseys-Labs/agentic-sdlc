@@ -41,6 +41,17 @@ class ResearchOSLauncherTests(unittest.TestCase):
         self.assertNotIn("claim or create tracked work", generated.lower())
         self.assertIn(SEEDS_READ_ONLY_GUIDANCE.strip(), generated)
 
+    def test_every_rendered_build_file_is_scanned_without_temp_output(self) -> None:
+        scanner_path = Path(__file__).parents[1] / "tests" / "test_preflight_capabilities.py"
+        scanner_spec = importlib.util.spec_from_file_location("seeds_scanner", scanner_path)
+        assert scanner_spec and scanner_spec.loader
+        scanner = importlib.util.module_from_spec(scanner_spec)
+        scanner_spec.loader.exec_module(scanner)
+
+        violations = scanner.rendered_build_file_violations(installer.build_files("example"))
+
+        self.assertEqual(violations, [], "\n".join(violations))
+
     def test_generated_research_director_literal_guidance_has_no_mutation_leak(self) -> None:
         generated = installer.build_files("example")[".codex/agents/research_director.toml"]
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -44,52 +44,42 @@ EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
         "tests",
     }
 )
-SEEDS_ACTION = r"(?:claim|create|update|close|sync|disposition)"
-SEEDS_ACTION_LIST = rf"{SEEDS_ACTION}(?:\s*(?:/|or|,|and|-)\s*(?:{SEEDS_ACTION}|or\s+))*"
-SEEDS_OBJECT = r"(?:Seeds?\s+(?:issue|item|record|state|queue)|Seed[-\s]queue)"
+SEEDS_ACTION = r"(?:init|claim|create|update|close|sync|disposition)"
+SEEDS_ACTION_LIST = rf"{SEEDS_ACTION}(?:\s*(?:/|or|,|and|-)\s*{SEEDS_ACTION})*"
+SEEDS_OBJECT = r"(?:Seeds?\s+(?:issue|item|record|state|queue(?:[-\s]state)?)|Seed[-\s]queue(?:[-\s]state)?)"
 SEEDS_PSEUDO_OPERATION = re.compile(
-    rf"\bSeeds\(\s*[^,()]+\s*,\s*{SEEDS_ACTION}\b", re.IGNORECASE
+    rf"\bSeeds\(\s*[^,()]+\s*,\s*(?P<action>{SEEDS_ACTION})\b", re.IGNORECASE
 )
 NEGATED_PSEUDO_OPERATION = re.compile(
-    rf"\b(?:should|do|must)\s+not\s+(?:invoke|run)\s+Seeds\(\s*[^,()]+\s*,\s*{SEEDS_ACTION}\b|"
-    rf"\bnever\s+(?:invoke|run)\s+Seeds\(\s*[^,()]+\s*,\s*{SEEDS_ACTION}\b",
+    r"\b(?:(?:should|do|must)\s+not|never)\s+(?:invoke|run)\s*$",
     re.IGNORECASE,
 )
 SEEDS_ACTION_FIRST = re.compile(
-    rf"\b{SEEDS_ACTION_LIST}\b\s+(?:a\s+|an\s+|the\s+)?{SEEDS_OBJECT}\b(?!\s+(?:migration[-\s]?guide|documentation|security[-\s]?gap)\b)",
+    rf"\b(?P<actions>{SEEDS_ACTION_LIST})\b\s+(?:a\s+|an\s+|the\s+)?{SEEDS_OBJECT}\b"
+    r"(?!\s+(?:dashboard|chart|guide|docs?|documentation|security(?:[-\s]gap)?|migration[-\s]?guide)\b)",
     re.IGNORECASE,
 )
 SEEDS_ACTION_SUBJECT_FIRST = re.compile(
-    rf"\b{SEEDS_OBJECT}\s+{SEEDS_ACTION_LIST}\b",
+    rf"\b{SEEDS_OBJECT}\s+(?P<actions>{SEEDS_ACTION_LIST})\b"
+    r"(?!\s+(?:dashboard|chart|guide|docs?|documentation|security(?:[-\s]gap)?|migration[-\s]?guide)\b)",
     re.IGNORECASE,
 )
 NEGATED_SEEDS_ACTION = re.compile(
-    rf"\b(?:should|do|must)\s+not\s+{SEEDS_ACTION_LIST}\b|"
-    rf"\b(?:cannot|never)\s+{SEEDS_ACTION_LIST}\b",
+    r"\b(?:(?:should|do|must)\s+not|cannot|never)\s*$", re.IGNORECASE
+)
+SD_ACTION = r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)"
+SD_EXECUTABLE = r"sd(?:\.(?:exe|cmd|bat|com|ps1|sh))?"
+SD_COMMAND = re.compile(rf"\b{SD_EXECUTABLE}\b(?:['\"])?\s+{SD_ACTION}\b", re.IGNORECASE)
+SD_START_PROCESS = re.compile(
+    rf"\bStart-Process\b.*?\b{SD_EXECUTABLE}\b.*?\b{SD_ACTION}\b",
     re.IGNORECASE,
 )
-CLAUSE_BOUNDARY = re.compile(r"[.;]|\b(?:and|but)\b", re.IGNORECASE)
-HYPHENATED_ACTION_SEPARATOR = re.compile(rf"\b({SEEDS_ACTION})-({SEEDS_ACTION})\b", re.IGNORECASE)
-SD_COMMAND = re.compile(
-    r"\bsd\s+(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
-    re.IGNORECASE,
+CANONICAL_CONDUCTOR_PATH = Path("agents/codex/conductor.toml")
+CANONICAL_CONDUCTOR_ROLE = "conductor"
+CANONICAL_RECONCILIATION_PATH = Path(
+    "skills/agentic-sdlc-orchestrator/references/sdlc-loop.md"
 )
-SD_WRAPPED_COMMAND = re.compile(
-    r"\b(?:command|exec|env(?:\s+[A-Za-z_][A-Za-z0-9_]*=[^\s`]+)*|sh\s+-c|bash\s+-lc)\s+"
-    r"(?:['\"])?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s`]+\s+)*sd\s+"
-    r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
-    re.IGNORECASE,
-)
-SD_INLINE_COMMAND = re.compile(
-    r"[`'\"]\s*sd\s+(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
-    re.IGNORECASE,
-)
-SD_INSTRUCTION = re.compile(
-    r"\b(?:check|execute|invoke|run|use)\s+(?:the\s+)?(?:command\s+)?"
-    r"(?:\$\s*)?(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s`]+\s+)*`?"
-    + SD_COMMAND.pattern,
-    re.IGNORECASE,
-)
+ACTOR_SCOPED_INIT_PATH = Path("commands/sdlc-init.md")
 
 
 def normalized_command_prefix(line: str) -> str:
@@ -101,28 +91,167 @@ def normalized_command_prefix(line: str) -> str:
 
 
 def clauses(line: str) -> list[str]:
-    return [clause.strip() for clause in re.split(r"[;]|\b(?:and|but)\s+(?=\w+\s+(?:a\s+)?Seeds?)|,\s+(?=\w+\s+(?:a\s+)?Seeds?)", line, flags=re.IGNORECASE) if clause.strip()]
+    """Split prose boundaries without splitting a Seeds(target, action) call."""
+    clauses = []
+    start = depth = 0
+    for index, character in enumerate(line):
+        if character == "(":
+            depth += 1
+        elif character == ")" and depth:
+            depth -= 1
+        elif depth == 0 and character in ",;":
+            if clause := line[start:index].strip():
+                clauses.append(clause)
+            start = index + 1
+    if clause := line[start:].strip():
+        clauses.append(clause)
+    return clauses
 
 
-def normalized_seeds_guidance(clause: str) -> str:
-    return HYPHENATED_ACTION_SEPARATOR.sub(r"\1/\2", clause)
+def action_names(actions: str) -> list[str]:
+    return [match.group(0).lower() for match in re.finditer(SEEDS_ACTION, actions, re.IGNORECASE)]
+
+
+def operation_is_negated(text: str, action_start: int) -> bool:
+    return bool(NEGATED_SEEDS_ACTION.search(text[:action_start]))
+
+
+def pseudo_operation_is_negated(text: str, action_start: int) -> bool:
+    return bool(NEGATED_PSEUDO_OPERATION.search(text[:action_start]))
+
+
+def seeds_mutation_operations(text: str) -> list[str]:
+    operations = []
+    for match in SEEDS_PSEUDO_OPERATION.finditer(text):
+        if not pseudo_operation_is_negated(text, match.start()):
+            operations.append(match.group("action").lower())
+    for pattern in (SEEDS_ACTION_FIRST, SEEDS_ACTION_SUBJECT_FIRST):
+        for match in pattern.finditer(text):
+            if not operation_is_negated(text, match.start("actions")):
+                operations.extend(action_names(match.group("actions")))
+    return operations
 
 
 def clause_has_seeds_mutation_guidance(clause: str) -> bool:
-    clause = normalized_seeds_guidance(clause)
-    pseudo_operations = list(SEEDS_PSEUDO_OPERATION.finditer(clause))
-    if pseudo_operations:
-        return any(
-            not NEGATED_PSEUDO_OPERATION.search(clause[max(0, match.start() - 32):match.end()])
-            for match in pseudo_operations
-        )
-    return not NEGATED_SEEDS_ACTION.search(clause) and any(
-        pattern.search(clause) for pattern in (SEEDS_ACTION_FIRST, SEEDS_ACTION_SUBJECT_FIRST)
-    )
+    return bool(seeds_mutation_operations(clause))
+
+
+def _safe_string_expression(node: ast.AST, values: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return values.get(node.id)
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return values.get(f"{node.value.id}.{node.attr}")
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _safe_string_expression(node.left, values)
+        right = _safe_string_expression(node.right, values)
+        return left + right if left is not None and right is not None else None
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                rendered = _safe_string_expression(value.value, values)
+                if rendered is None:
+                    return None
+                parts.append(rendered)
+            else:
+                return None
+        return "".join(parts)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+        template = _safe_string_expression(node.func.value, values)
+        if template is None or node.args or any(keyword.arg is None for keyword in node.keywords):
+            return None
+        replacements = {}
+        for keyword in node.keywords:
+            replacement = _safe_string_expression(keyword.value, values)
+            if replacement is None:
+                return None
+            replacements[keyword.arg] = replacement
+        try:
+            return template.format(**replacements)
+        except (IndexError, KeyError, ValueError):
+            return None
+    return None
+
+
+def _safe_string_mapping(node: ast.AST, values: dict[str, str]) -> dict[str, str] | None:
+    if isinstance(node, ast.Name):
+        return None
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict":
+        if node.args or any(keyword.arg is None for keyword in node.keywords):
+            return None
+        rendered = {}
+        for keyword in node.keywords:
+            value = _safe_string_expression(keyword.value, values)
+            if value is None:
+                return None
+            rendered[keyword.arg] = value
+        return rendered
+    if not isinstance(node, ast.Dict):
+        return None
+    rendered = {}
+    for key, value in zip(node.keys, node.values):
+        if key is None:
+            return None
+        rendered_key = _safe_string_expression(key, values)
+        rendered_value = _safe_string_expression(value, values)
+        if rendered_key is None or rendered_value is None:
+            return None
+        rendered[rendered_key] = rendered_value
+    return rendered
+
+
+def _assignment_strings(nodes: list[ast.stmt], values: dict[str, str]) -> None:
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            value = _safe_string_expression(node.value, values)
+            if value is not None:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        values[target.id] = value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            value = _safe_string_expression(node.value, values) if node.value else None
+            if value is not None:
+                values[node.target.id] = value
+
+
+def rendered_build_file_lines(tree: ast.Module) -> list[tuple[int, str]]:
+    """Safely reconstruct direct constant build_files outputs without executing code."""
+    module_values: dict[str, str] = {}
+    _assignment_strings(tree.body, module_values)
+    guidance = []
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) or function.name != "build_files":
+            continue
+        values = module_values.copy()
+        for argument in function.args.args:
+            values[argument.arg] = f"<{argument.arg}>"
+        for statement in function.body:
+            if isinstance(statement, ast.Return) and statement.value is not None:
+                rendered = _safe_string_mapping(statement.value, values)
+                if rendered is not None:
+                    for content in rendered.values():
+                        guidance.extend(
+                            (statement.lineno + offset, line)
+                            for offset, line in enumerate(content.splitlines() or [content])
+                        )
+            elif isinstance(statement, ast.Assign):
+                rendered = _safe_string_mapping(statement.value, values)
+                if rendered is not None:
+                    for content in rendered.values():
+                        guidance.extend(
+                            (statement.lineno + offset, line)
+                            for offset, line in enumerate(content.splitlines() or [content])
+                        )
+                _assignment_strings([statement], values)
+    return guidance
 
 
 def literal_guidance_lines(path: Path) -> list[tuple[int, str]]:
-    """Return only Python string literals; other shipped text is scanned verbatim."""
+    """Return literal and safely reconstructed Python guidance without executing it."""
     text = path.read_text(encoding="utf-8")
     if path.suffix != ".py":
         return list(enumerate(text.splitlines(), 1))
@@ -130,58 +259,116 @@ def literal_guidance_lines(path: Path) -> list[tuple[int, str]]:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
         return list(enumerate(text.splitlines(), 1))
-    guidance: list[tuple[int, str]] = []
+    guidance = []
+    formatted_string_constants = {
+        id(value)
+        for formatted in ast.walk(tree)
+        if isinstance(formatted, ast.JoinedStr)
+        for value in formatted.values
+        if isinstance(value, ast.Constant) and isinstance(value.value, str)
+    }
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in formatted_string_constants
+        ):
             guidance.extend((node.lineno + offset, line) for offset, line in enumerate(node.value.splitlines() or [node.value]))
+    guidance.extend(rendered_build_file_lines(tree))
     return guidance
 
 
 def shipped_surface_paths(root: Path) -> list[Path]:
-    return sorted(
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix in SHIPPED_TEXT_SUFFIXES
-        and not (set(path.relative_to(root).parts) & EXCLUDED_SHIPPED_SURFACE_PARTS)
-    )
+    paths = []
+    for directory, directories, files in os.walk(root):
+        directories[:] = [name for name in directories if name not in EXCLUDED_SHIPPED_SURFACE_PARTS]
+        base = Path(directory)
+        paths.extend(
+            base / name
+            for name in files
+            if (base / name).suffix in SHIPPED_TEXT_SUFFIXES
+        )
+    return sorted(paths)
 
 
 def is_conductor_owned_surface(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
-    if relative.parts[:2] != ("agents", "codex") or relative.name != "conductor.toml":
+    if relative != CANONICAL_CONDUCTOR_PATH:
         return False
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8")).get("name") == "conductor"
-    except tomllib.TOMLDecodeError:
+        return tomllib.loads(path.read_text(encoding="utf-8")).get("name") == CANONICAL_CONDUCTOR_ROLE
+    except (OSError, tomllib.TOMLDecodeError):
         return False
+
+
+def is_actor_scoped_init_guidance(relative: Path, operation: str) -> bool:
+    return relative == ACTOR_SCOPED_INIT_PATH and operation == "init"
+
+
+def is_canonical_reconciliation_guidance(relative: Path, line: str, operation: str) -> bool:
+    return (
+        relative == CANONICAL_RECONCILIATION_PATH
+        and operation == "sync"
+        and "The conductor runs `Seeds(<target>, sync)` using the exact launcher contract" in line
+    )
 
 
 def should_enforce_seeds_authority(path: Path, root: Path) -> bool:
     return not is_conductor_owned_surface(path, root)
 
 
-def shipped_surface_violations(root: Path) -> list[str]:
+def guidance_violations(
+    relative: Path,
+    lines: list[tuple[int, str]],
+    *,
+    enforce_seeds_authority: bool,
+) -> list[str]:
     violations = []
-    for path in shipped_surface_paths(root):
-        relative = path.relative_to(root)
-        for line_number, line in literal_guidance_lines(path):
-            command = normalized_command_prefix(line)
-            if (
-                SD_INSTRUCTION.search(line)
-                or SD_COMMAND.match(command)
-                or SD_WRAPPED_COMMAND.search(line)
-                or SD_INLINE_COMMAND.search(line)
-            ):
-                violations.append(
-                    f"{relative.as_posix()}:{line_number}: bare operational sd invocation: {line.strip()}"
-                )
-            if should_enforce_seeds_authority(path, root) and any(
-                clause_has_seeds_mutation_guidance(clause) for clause in clauses(line)
+    for line_number, line in lines:
+        command = normalized_command_prefix(line)
+        if SD_COMMAND.search(command) or SD_START_PROCESS.search(line):
+            violations.append(
+                f"{relative.as_posix()}:{line_number}: bare operational sd invocation: {line.strip()}"
+            )
+        if enforce_seeds_authority:
+            operations = seeds_mutation_operations(line)
+            if operations and not all(
+                is_actor_scoped_init_guidance(relative, operation)
+                or is_canonical_reconciliation_guidance(relative, line, operation)
+                for operation in operations
             ):
                 violations.append(
                     f"{relative.as_posix()}:{line_number}: direct non-conductor Seeds queue mutation guidance: {line.strip()}"
                 )
+    return violations
+
+
+def rendered_build_file_violations(files: dict[str, str]) -> list[str]:
+    """Scan every in-memory build_files output without creating a temporary tree."""
+    violations = []
+    for name, content in files.items():
+        relative = Path(name)
+        violations.extend(
+            guidance_violations(
+                relative,
+                list(enumerate(content.splitlines(), 1)),
+                enforce_seeds_authority=True,
+            )
+        )
+    return violations
+
+
+def shipped_surface_violations(root: Path) -> list[str]:
+    violations = []
+    for path in shipped_surface_paths(root):
+        relative = path.relative_to(root)
+        violations.extend(
+            guidance_violations(
+                relative,
+                literal_guidance_lines(path),
+                enforce_seeds_authority=should_enforce_seeds_authority(path, root),
+            )
+        )
     return violations
 
 
@@ -574,8 +761,8 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             fixture_root = Path(temporary_directory)
             surfaces = {
                 "agents/codex/conductor.toml": 'name = "conductor"\ndeveloper_instructions = "Conductor-only authority may create a Seeds issue."\n',
-                "agents/codex/worker-conductor.toml": 'name = "worker-conductor"\ndeveloper_instructions = "Conductor-only authority may create a Seeds issue."\n',
-                "agents/codex/research/conductor.toml": 'name = "research_director"\ndeveloper_instructions = "Conductor-only authority may create a Seeds issue."\n',
+                "agents/codex/worker-conductor.toml": 'name = "conductor"\ndeveloper_instructions = "Conductor-only authority may create a Seeds issue."\n',
+                "agents/codex/research/conductor.toml": 'name = "conductor"\ndeveloper_instructions = "Conductor-only authority may create a Seeds issue."\n',
                 "commands/conductor.md": "Conductor-only authority may create a Seeds issue.\n",
             }
             for relative, content in surfaces.items():
@@ -652,7 +839,125 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             "\n".join(violations),
         )
 
-    def test_bare_sd_invocations_reject_wrappers_inline_and_fenced_commands(self) -> None:
+    def test_modal_positive_operations_after_negation_are_independent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join(
+                    (
+                        "Workers must not init a Seeds queue, but may create a Seeds issue.",
+                        "Workers never create a Seeds issue, and may claim a Seeds item.",
+                        "Workers must not claim a Seeds item, but may update a Seeds record.",
+                        "Workers should not update a Seeds record; may close a Seeds state.",
+                        "Workers never close a Seeds state, and may sync a Seeds queue-state.",
+                        "Workers may init a Seeds queue.",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            6,
+            "\n".join(violations),
+        )
+
+    def test_sdlc_init_activation_guidance_remains_allowed(self) -> None:
+        violations = shipped_surface_violations(ROOT)
+        self.assertFalse(
+            any(item.startswith("commands/sdlc-init.md:") for item in violations),
+            "\n".join(violations),
+        )
+
+    def test_sdlc_loop_restores_conductor_scoped_sync_reconciliation(self) -> None:
+        loop = (
+            ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "sdlc-loop.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "The conductor runs `Seeds(<target>, sync)` using the exact launcher contract",
+            loop,
+        )
+
+    def test_bare_sd_invocations_reject_posix_mise_and_powershell_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            command = fixture_root / "commands" / "runbook.md"
+            command.parent.mkdir(parents=True)
+            command.write_text(
+                "\n".join(
+                    (
+                        "/opt/seeds/bin/sd create",
+                        "command /opt/seeds/bin/sd claim",
+                        "exec ./tools/sd update",
+                        "env MODE=test ./tools/sd close",
+                        "mise exec node@22.22.3 -- sd sync",
+                        "& sd.exe create",
+                        r"& 'C:\\Seeds\\sd.cmd' claim",
+                        "Start-Process sd.exe -ArgumentList update",
+                        r"Start-Process -FilePath 'C:\\Seeds\\sd.bat' -ArgumentList 'close'",
+                        "Start-Process sd.exe -ArgumentList @('update')",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("bare operational sd invocation" in item for item in violations),
+            10,
+            "\n".join(violations),
+        )
+
+    def test_python_scanner_reconstructs_safe_constant_expressions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            script = fixture_root / "skills" / "example" / "scripts" / "render.py"
+            script.parent.mkdir(parents=True)
+            script.write_text(
+                'PREFIX = "Workers may "\nGUIDANCE = PREFIX + "create a Seeds issue."\n',
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            1,
+            "\n".join(violations),
+        )
+
+    def test_python_scanner_checks_every_rendered_build_files_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            installer = (
+                fixture_root
+                / "skills"
+                / "codex-research-os"
+                / "scripts"
+                / "install_research_os.py"
+            )
+            installer.parent.mkdir(parents=True)
+            installer.write_text(
+                "def build_files(project_name):\n"
+                "    return {'generated.md': f'Workers may create a Seeds issue {project_name}.'}\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            1,
+            "\n".join(violations),
+        )
+
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture_root = Path(temporary_directory)
             command = fixture_root / "commands" / "runbook.md"

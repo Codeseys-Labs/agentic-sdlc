@@ -45,6 +45,8 @@ Reconcile:
 - Turn findings into typed `SeedProposal` records for conductor triage. Only the conductor may
   authorize verified queue mutations under operation-specific policy; worker and reviewer roles
   never execute create/claim/update/close/sync actions.
+- The conductor runs `Seeds(<target>, sync)` using the exact launcher contract in
+  `references/seeds-worktrees.md` when the verified queue state changed.
 
 Ship:
 - Squash/rebase worktree branches into an integration branch only within the authorized scope.
