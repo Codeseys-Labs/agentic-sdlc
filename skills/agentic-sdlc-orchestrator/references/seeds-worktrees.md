@@ -40,8 +40,11 @@ missing, or ambiguous version/provenance fails closed.
 
 ## Seeds Queue
 
-Use Seeds as the authoritative dynamic queue for recommendations and acceptance tracking;
-they are not an authorization or execution channel:
+Only the conductor owns Seeds queue mutations. Workers and reviewers inspect queue state through
+`Seeds(<target>, ready --format json)` and emit typed `SeedProposal` records; they never execute
+create/claim/update/close/sync actions. The conductor may apply an operation only after verified,
+operation-specific policy authorizes it. Seeds remain an authoritative dynamic queue for
+recommendations and acceptance tracking, never an authorization channel.
 
 ```text
 Seeds(<target>, prime)
@@ -49,7 +52,7 @@ Seeds(<target>, ready --format json)
 Seeds(<target>, blocked --format json)
 ```
 
-Create or update Seeds for:
+The conductor creates or updates Seeds for:
 
 - Original requested work.
 - Discovered bugs.
@@ -100,7 +103,7 @@ After worker completion:
 Before opening a PR:
 
 - Run final gates from the integration branch.
-- Run `Seeds(<target>, sync)` if Seeds changed.
+- Confirm the conductor's verified, operation-specific policy before any queue synchronization.
 - Confirm the integration branch diff matches the intended Seeds.
 - Include Seeds ids and test evidence in the PR body.
 - Confirm explicit operation-specific authorization for PR creation or mutation; gates,
