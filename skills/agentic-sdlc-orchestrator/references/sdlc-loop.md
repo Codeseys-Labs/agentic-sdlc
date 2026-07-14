@@ -23,11 +23,13 @@ Research:
 - Feed the final report path into Plan; do not paste large reports into prompts.
 
 Plan:
-- Emit workstreams with owner role, target worktree, dependencies, files in scope, gates, and rollback.
-  Roles and verdicts are advisory submissions; record requested model tier separately from
-  actual provider/model resolution. Record resolved only after adapter readback, otherwise
-  inherited or unresolved.
-- Convert every actionable finding into a Seed before Act.
+- Load `model-tier-rightsizing` before planning a dispatch. Emit workstreams with owner role,
+  target worktree, dependencies, files in scope, gates, rollback, caller-injected certified
+  exact model ID, and requested effort. Provider-neutral roles do not select models; stop
+  before dispatch when identity or adapter readback is unresolved. Roles and verdicts are
+  advisory submissions.
+- Return every actionable finding as a SeedProposal for conductor adjudication before Act;
+  the conductor alone mutates Seeds.
 - Mark workstreams that require Claude Code dynamic workflows.
 
 Act:
@@ -38,13 +40,13 @@ Act:
 Review:
 - Review diffs and stable snapshots, not only summaries.
 - Use multiple lenses: correctness, tests, security/safety, UX/docs when relevant, and queue alignment.
-- Convert review findings into Seeds, then decide whether they block ship.
+- Return review findings as advisory SeedProposals for conductor adjudication.
 
 Reconcile:
 - Run gates from the root and from affected packages as needed.
-- Turn findings into advisory Seeds and close or update them only after acceptance evidence is verified.
-  Only the integrator may execute an already authorized fan-in mutation; local status, passing
-  gates, worker reports, reviewer recommendations, and conductor choices never grant authority.
+- The conductor alone mutates Seeds after acceptance evidence is verified. An authorized
+  integrator alone may perform an already-authorized fan-in; local status, passing gates,
+  worker reports, reviewer recommendations, and conductor choices never grant authority.
 - Run `sd sync` when the repo uses Seeds and queue state changed.
 
 Ship:

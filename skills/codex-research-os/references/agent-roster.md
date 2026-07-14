@@ -26,13 +26,10 @@ Model tiering, external tools, seeds, or project-specific issue systems are opti
 
 ## Model Config Policy
 
-Generated agents should not pretend to select unavailable models. The default portable scaffold omits `model`, so subagents inherit the active/default Codex model selected by the host. It sets only `model_reasoning_effort` and `sandbox_mode`.
+Generated roles are provider-neutral and do not select models. Before any dispatch, the
+caller injects a certified exact ID and requested effort, records adapter readback, and stops
+when either is unresolved. Never inherit a host default or use an unverified alias for an
+operational dispatch.
 
-If a project intentionally pins models, use real Codex model ids only and run `make validate-agents`. The default allowlist is:
-
-- `gpt-5.4`
-- `gpt-5.5`
-- `openai.gpt-5.4`
-- `openai.gpt-5.5`
-
-Override with `CODEX_RESEARCH_OS_ALLOWED_MODELS=model-a,model-b` when a host has a different verified model catalog.
+A project may maintain a local exact-ID allowlist for static validation, but allowlisting does
+not certify a live transport. Validate the caller's injected ID and readback before dispatch.

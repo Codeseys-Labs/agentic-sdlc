@@ -1,6 +1,7 @@
 # Codex role TOML — mirror of agents/claude/sdlc-implementer.md.
 # Install: copy/symlink into $CODEX_HOME/agents/ (default ~/.codex/agents/).
-# model is intentionally unset — inherits the user's config.toml default.
+# Provider-neutral role definition: the caller injects a certified exact model ID and
+# requested effort, or stops before dispatch; never inherit a default model.
 name = "sdlc-implementer"
 description = "Bounded implementation worker for one Seed/workstream inside a dedicated git worktree. Writes code + tests for exactly the assigned scope, runs gates, produces an artifact report. One per workstream; never share a worktree."
 sandbox_mode = "workspace-write"

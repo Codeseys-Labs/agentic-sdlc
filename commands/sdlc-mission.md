@@ -16,22 +16,23 @@ Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` an
    (impact × severity × unblocks × confidence) / effort. Only ACTIVE_MILESTONE executes.
 3. **Research** only load-bearing unknowns (delegated research pipeline, synthesize before
    acting). New ideas become classified Seeds, not detours.
-4. **Plan the wave**: workstreams with owner role, worktree, scope, gates, rollback;
-   independent items parallel, dependent sequenced. Scale-setter decisions (frame, plan,
-   verdicts) stay with you or a solo strongest-tier agent as recommendations; they do not
-   authorize outward effects. Record the requested semantic model tier separately from the
-   resolved provider/model: resolve only with adapter readback, otherwise inherited or
-   unresolved.
+4. **Plan the wave**: load `model-tier-rightsizing`, then define workstreams with owner
+   role, worktree, scope, gates, rollback, caller-injected certified exact model ID, and
+   requested effort. Provider-neutral roles do not select models; stop before dispatch when
+   identity or adapter readback is unresolved. Scale-setter outputs are advisory
+   recommendations for conductor adjudication and do not authorize outward effects.
 5. **Execute** via `/sdlc-wave` semantics: provider-native workers in worktrees by
    default. Use provider-native background or persistent tasks for bounded work. WIP caps: impl ≤3,
    research ≤2, integration ≤1, critique ≤1, nesting ≤2.
-6. **Concurrent critique**: one standing review team auditing each wave's SQUASH-MERGED
-   snapshot (never live worktrees), filing classified advisory Seeds in real time. A
-   reviewer or critic recommendation is not an acceptance or authority grant.
-7. **Reconcile + loop**: merge-base-validated fan-in, re-gate on main, close only with
-   evidence, fold in blocking seeds, re-prioritize, next wave. Backflow (re-entering an
-   earlier phase) comes only from the verdict, scoped, within budgets
-   (global passes ≤6; Frame ≤1, Discover/Research/Plan ≤2, Act ≤3 re-entries).
+6. **Concurrent critique**: one standing review team audits each wave's SQUASH-MERGED
+   snapshot (never live worktrees) and returns advisory findings. The conductor alone
+   adjudicates whether findings become Seeds; reviewer or critic output is not acceptance
+   or authority.
+7. **Reconcile + loop**: an authorized integrator alone performs an already-authorized,
+   merge-base-validated fan-in; re-gate on main, close only with evidence, fold in blocking
+   seeds, re-prioritize, and start the next wave. Backflow (re-entering an earlier phase) is
+   a recommendation for the conductor, scoped, within budgets (global passes ≤6; Frame ≤1,
+   Discover/Research/Plan ≤2, Act ≤3 re-entries).
 8. **Terminate honestly**: done = zero ACTIVE_MILESTONE + critique reports zero blocking +
    tracker clean + final checkpoint (evidence, remaining non-blocking backlog,
    assumptions). A tripped bound = an honest stop with exact blockers + resume hints —

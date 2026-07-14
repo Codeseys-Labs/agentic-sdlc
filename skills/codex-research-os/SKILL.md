@@ -67,4 +67,6 @@ Read `references/operating-model.md` when designing or modifying the OS. Read `r
 - No important synthesis without adversarial review.
 - Negative results stay in memory and experiment logs.
 - Every loop updates `research/state/next_action.md`.
-- No decorative model pins. By default generated agents omit `model` and inherit the active/default Codex model. If a repo pins `model`, `make validate-agents` must allow it explicitly.
+- Provider-neutral generated roles may omit `model`, but they do not dispatch. A caller must
+  inject a certified exact model ID and requested effort or stop before dispatch; reject
+  inherited/default routing and unverified aliases.

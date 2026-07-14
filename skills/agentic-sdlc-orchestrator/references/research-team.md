@@ -89,10 +89,10 @@ before any synthesis ships:
   reviews.
 - `review-gates` — flags: promoted empirical claims without replication review;
   proof-like claims without formalization; novelty claims without novelty review.
-- `validate-agents` — role configs contain only known keys, names match files, and any
-  explicit `model` pins are ALLOWLISTED. **No decorative model pins**: by default omit
-  `model` so roles inherit the host's configured default — a pinned model that doesn't
-  exist on the host fails silently or 404s.
+- `validate-agents` — role configs contain only known keys and names match files. A
+  provider-neutral role definition may omit `model`, but the dispatching caller must inject a
+  certified exact ID and requested effort or stop. Reject unverified aliases and do not
+  dispatch from inherited/default routing.
 
 This mirrors the bundle's validate-bundle.sh philosophy: silent failure modes get a
 gate, not a guideline.
@@ -102,6 +102,6 @@ gate, not a guideline.
 In `references/mission-loop.md` terms: a standing research effort is ONE research track
 (WIP cap: ≤2), run by a provider-native director/supervisor. Its claims ledger is the research twin of the
 Seeds queue; its review gates are the critique team's rubric; its next-action file is the
-checkpoint. Research findings that imply code work
-become Seeds; code findings that imply research questions become ledger ideas. The two
+checkpoint. Research findings that imply code work return as SeedProposals for conductor
+adjudication; code findings that imply research questions become ledger ideas. The two
 queues cross-pollinate but never merge.
