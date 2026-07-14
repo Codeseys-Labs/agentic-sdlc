@@ -1,70 +1,68 @@
-# Tiered Orchestration (model tiers, backflow, and a native-first capability ladder)
+# Tiered Orchestration (blast radius, backflow, and a native-first capability ladder)
 
-Use this reference when composing a full mission run — assigning MODEL TIERS to stages,
-bounding BACKFLOW (later stages re-entering earlier phases), and choosing WHICH
-orchestration layer runs each piece. Distilled from a proven tiered deep-work-loop
-practice (multi-million-token runs); adapted here for a provider-native baseline with
-optional durability and view adapters.
+Use this reference when composing a full mission run: assigning semantic model lanes to
+stages, bounding backflow (later stages re-entering earlier phases), and choosing which
+orchestration layer runs each piece. This file owns model-neutral mission structure. The
+installable sibling skill `skills/model-tier-rightsizing/` owns routing doctrine, and its
+`references/model-routing-calibration.md` is the canonical generation-specific authority.
+This flagship reference does not duplicate a model, effort, quota, or roadmap matrix.
 
 For concrete Claude Code Dynamic Workflow routing across providers, context windows,
 compaction policies, and fast modes, read
 [`claude-code-multi-model-routing.md`](claude-code-multi-model-routing.md).
 
-## The multiplier principle (where the frontier model goes)
+## Blast-radius routing
 
-Agents are not interchangeable, and model tier is a requested semantic, not proof of the
-provider/model actually used. Reserve the scarcest/strongest tier for **scale-setters** —
-decisions that multiply. Record resolved provider/model only after adapter readback; otherwise
-record inherited or unresolved. A tier choice, verdict, or gate result never authorizes an
-outward effect.
+Agents are not interchangeable, and a selected lane is a request rather than proof of the
+provider/model actually used. Route by what happens when an answer is wrong:
 
-- **Frame/Decompose** (multiplies FORWARD: every later token is spent inside this frame)
-- **Plan** (its `workstreams[]` IS the worker fleet's work list)
-- **Verdict** (multiplies BACKWARD: gates whether a whole extra round happens)
-- **Mid-loop triage rulings** (patch-vs-redo; one wrong call = N workers of rework)
+- **Scale-setting:** a frame, plan, authority ruling, cross-system invariant, or final
+  stop/go decision can derail the run because later stages branch on it or consume it as
+  settled truth. Keep it solo, require re-derivation, and use the strongest certified
+  decision lane.
+- **Silent degradation:** implementation, synthesis, or semantic review can be plausible
+  while weakening an artifact beyond ordinary gate coverage. Use a certified judgment
+  lane, explicit acceptance criteria, and independent review of an immutable candidate.
+- **Visible retry:** a compiler, test, schema, deterministic comparison, or evidence check
+  catches failure. Use a certified gated-volume lane and retry or escalate.
+- **Mechanical redo:** fully checked inventories, extraction, and formatting can use the
+  least expensive certified lane whose errors are visible and cheap to repeat.
 
-**Litmus test:** does this agent's output appear in a later stage's work list, loop bound,
-or branch condition — or will later stages treat it as settled truth without re-deriving?
-If yes → scale-setter: run it SOLO on the strongest tier. If its output is one input among
-peers to a synthesis → the workhorse tier. Budget ~2–4 scale-setter points per loop;
-more than that, collapse them (one judge over panel outputs beats N frontier critics).
+The scale-setter litmus is structural: does the output define a later work list, loop bound,
+branch condition, authority edge, or truth that consumers will not re-derive? If so, keep
+that point singular. Collapse excess scale-setting candidates into one judge over bounded
+panel artifacts rather than spawning a top-lane panel.
 
-Everything else splits two ways:
-- **Judgment volume** (code comprehension, implementation, reviews, drafts): the strong
-  workhorse tier, 3–8 parallel.
-- **Mechanical glue** (reconcile builds, inventories, formatting, gate re-runs): the cheap
-  tier — anything fully checked by a compiler/test/diff, where wrong = visible = retry.
+Every delegated call carries an exact model ID and requested effort/context supported by
+the active transport. Record resolved provider/model/effort/context only after adapter
+readback; otherwise record inherited, unknown, or unresolved. A route, verdict, or gate
+never authorizes an outward effect.
 
-Secondary test: if this agent is wrong, does the run **derail** (frontier), **degrade**
-(workhorse), or just **retry** (cheap)?
-
-In the bundle, tier assignment starts with native host configuration: Claude Workflow
-stages carry `model:` per agent() call, and Codex roles carry
-`model`/`model_reasoning_effort` in TOML.
-The full four-tier policy — quota math, the decision ladder ("if this agent is wrong, does
-the run derail / degrade / just retry?"), alias plumbing, and concurrency budgets — ships
-as the sibling skill `skills/model-tier-rightsizing/` (re-derive its worked quota table per
-account).
+Load the model-tier-rightsizing skill and its canonical calibration before dispatch. It
+contains current exact IDs, transport hazards, effort evidence, context boundaries,
+fallbacks, quota evidence, and per-roadmap lanes; do not infer those from generic lane
+names here.
 
 ## Scale-setter survival rules
 
-1. **Small in, small out.** Never interpolate huge upstream state into a frontier prompt —
+1. **Small in, small out.** Never interpolate huge upstream state into a decision-lane prompt —
    persist artifacts to disk, have the agent Read them; ask for a SMALL decision object
    (verdict + pointers), with big artifacts Written to disk incrementally.
 2. **Fallback ladder, never a bare throw.** A scale-setter that stalls or errors must not
-   kill a long run: retry once, then substitute the workhorse tier. Keep the STRUCTURE
-   (solo scale-setter points) even when the model behind them changes.
-3. **Interactive runs:** the conductor session already runs on the strong tier — pull the
-   highest-stakes verdicts into the main loop (read the disk artifacts, decide yourself)
-   instead of spawning a frontier agent.
+   kill a long run: retry once, then use a same-class certified fallback from the canonical
+   calibration. Keep the STRUCTURE (solo scale-setter points) when transport changes. If no
+   same-class route is certified, stop or reduce scope rather than silently weakening it.
+3. **Interactive runs:** the conductor session may already occupy the certified decision
+   lane — pull the highest-stakes verdicts into the main loop (read the disk artifacts,
+   decide there) instead of spawning another scale-setter.
 
 ## The capability ladder (which mechanism runs which piece)
 
-The baseline has two complete layers; optional adapters add durability or visibility:
+The baseline has two complete layers; optional adapters add visibility:
 
 | Layer | Runs | Use for |
 |---|---|---|
-| **Conductor** (interactive host session) | frame, plan adoption, verdict recommendations, Seeds/merge ownership | All scale-setter decisions; no outward authority |
+| **Conductor** (interactive host session) | frame, plan adoption, verdict recommendations, Seeds/merge ownership | All scale-setting decisions; no outward authority |
 | **Provider-native fan-out** (roles, subagents, workflows, teams, background tasks) | discovery, research, implementation waves, review panels, critique | All delegated work within the host's supported lifetime |
 | **Optional cmux adapter** | view/event layer for already-active sessions | Never load-bearing; no installation or enablement step |
 
@@ -78,10 +76,10 @@ When Research is more than a quick lookup, run it as a dedicated research pipeli
 (e.g. a hyperresearch-style skill chain, or the bundle's `sdlc-researcher` workers)
 via ONE orchestrating agent — never inline a multi-step research procedure into a single
 worker prompt (long procedures get compacted away mid-run; routers/skill-chains exist to
-load each step fresh). Research tiering: cheap tier for volume (fetch/sweep/per-topic
-digestion), workhorse for judgment (synthesis, adversarial critique). Research rarely
-needs the frontier tier — its quality is bounded by source coverage and synthesis
-discipline; spend the frontier on the PLAN that consumes the report.
+load each step fresh). Route research by the canonical calibration: use the gated-volume
+lane for checked fetch/sweep/extraction and the judgment lane for synthesis or adversarial
+critique. External research quality is often bounded by source coverage and evidence
+discipline; spend the strongest decision lane on the PLAN that consumes the report.
 
 ## Backflow: bounded re-entry into earlier phases
 
