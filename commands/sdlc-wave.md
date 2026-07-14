@@ -24,8 +24,10 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
    cmux nor tmux.
 6. Collect artifact reports. Review each worktree (diff + gates, not summaries) —
    use the sdlc-reviewer agent where available.
-7. Reconcile: convert findings to advisory Seeds, close only verified Seeds, run
-   `Seeds(<target>, sync)` using the exact loaded-skill contract,
+7. Reconcile: convert findings to advisory Seeds. Only the conductor may authorize queue mutations;
+   workers emit typed `SeedProposal` records and never execute create/claim/update/close/sync actions.
+   A worker claim or report is never authority to accept, close, or mark work done. The conductor
+   applies verified, operation-specific policy through the exact loaded-skill contract,
    squash/rebase accepted branches per repo policy, remove merged worktrees
    (`git worktree remove`). The integrator may execute only an already authorized fan-in
    mutation; worker, reviewer, critic, Seed, gate, or local status claims never grant
