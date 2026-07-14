@@ -52,11 +52,10 @@ start, or enable cmux or tmux merely to use this bundle.
   (director + specialists), claim/experiment ledgers, greenfield/brownfield workflows,
   schemas, and Make validation gates into any target repo. Pairs with the flagship's
   `references/research-team.md` (the distilled principles).
-- `skills/model-tier-rightsizing/`: the four-tier model policy for fleets — frontier =
-  solo scale-setters, judgment-workhorse = un-gated judgment, capable-volume = the
-  gated-parallel default, mechanical = gate-checked floor. Decision ladder
-  (derail/degrade/retry), alias plumbing, quota-aware concurrency math, worked quota
-  table (re-derive per account). Pairs with `references/tiered-orchestration.md`.
+- `skills/model-tier-rightsizing/`: model-routing trigger and discovery pointer. Load it
+  before any model dispatch; its canonical calibration records exact certified IDs,
+  requested effort, transport hazards, evidence boundaries, complements, controls, and
+  roadmap lanes. The flagship hands off through `references/tiered-orchestration.md`.
 - `skills/cmux-event-bus-messaging/`: optional cmux-only event-bus pub/sub pattern (publish via
   `cmux log --source msg:<topic>`, subscribe via `cmux events` with replay/resume, the
   claim-check pattern, both race gotchas). Pairs with `references/cmux-integration.md`
@@ -99,8 +98,8 @@ start, or enable cmux or tmux merely to use this bundle.
   implementer, reviewer, **researcher** (bounded unknown-resolution), **critic** (standing
   snapshot-only critique team), **integrator** (the only merging agent). Full loop wiring:
   cartographers (parallel, per area) → planner → implementers → reviewers → integrator,
-  critic concurrent, researchers on demand. Model intentionally unset — inherits the
-  user's default.
+  critic concurrent, researchers on demand. Provider-neutral role definitions do not dispatch:
+  their caller must inject a certified exact model ID or stop before delegation.
 - `agents/codex/research/`: the 17-role research-team TOMLs (repo-scoped reference
   copies — NOT globally installed; see its README; scaffolded per-repo by
   codex-research-os).
@@ -135,8 +134,9 @@ The checked-in `mise.toml` pins `uv`; `mise.lock` records source URLs and SHA-25
 for Linux, macOS, and Windows; `uv` supplies Python `3.12.11` for every authoritative Python
 entrypoint. Git, a documented Seeds distribution, supported trust behavior, and the selected
 adapter are also prerequisites. Resolve and record the actual provider/model only when the
-adapter proves it; otherwise record inherited or unresolved. A passing local status or gate
-never authorizes push, publication, PR mutation, merge, deployment, credential, or other
+adapter proves it; otherwise record unresolved. The requested model ID and requested effort
+remain dispatch inputs; adapter readback alone may resolve provider/model. A passing local
+status or gate never authorizes push, publication, PR mutation, merge, deployment, credential, or other
 outward effect.
 
 Bootstrap the repository and inspect the available lifecycle tasks:

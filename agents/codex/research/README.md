@@ -22,5 +22,6 @@ Roster: research_director, repo_cartographer, literature_scout, novelty_auditor,
 theorist, counterexample_hunter, formalizer, experimentalist, benchmark_engineer,
 data_engineer, systems_engineer, ablationist, replication_reviewer,
 adversarial_reviewer, synthesis_writer, knowledge_librarian, safety_reviewer.
-Principles: `skills/agentic-sdlc-orchestrator/references/research-team.md`.
-No `model` pins (inherit the host default — see the no-decorative-pins policy).
+Principles: `skills/agentic-sdlc-orchestrator/references/research-team.md`. These
+provider-neutral role definitions do not dispatch: their caller injects a certified exact
+model ID and requested effort, or stops before delegation.

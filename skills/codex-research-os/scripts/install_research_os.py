@@ -394,12 +394,9 @@ import os, tomllib
 from research_os_lib import ROOT
 
 agents_dir = ROOT / ".codex" / "agents"
-allowed_keys = {"name", "description", "model", "model_reasoning_effort", "sandbox_mode", "developer_instructions"}
+allowed_keys = {"name", "description", "model_reasoning_effort", "sandbox_mode", "developer_instructions"}
 allowed_efforts = {"low", "medium", "high", "xhigh"}
 allowed_sandboxes = {"read-only", "workspace-write", "danger-full-access"}
-default_models = {"gpt-5.4", "gpt-5.5", "openai.gpt-5.4", "openai.gpt-5.5"}
-raw_models = os.environ.get("CODEX_RESEARCH_OS_ALLOWED_MODELS")
-allowed_models = {item.strip() for item in raw_models.split(",") if item.strip()} if raw_models else default_models
 
 errors, infos = [], []
 files = sorted(agents_dir.glob("*.toml")) if agents_dir.exists() else []
@@ -414,11 +411,6 @@ for path in files:
             errors.append(f"{label}: missing required field {required}")
     if data.get("name") != path.stem:
         errors.append(f"{label}: name {data.get('name')!r} does not match filename stem {path.stem!r}")
-    model = data.get("model")
-    if model is None:
-        infos.append(f"{label}: no model pin; subagent will inherit the active/default Codex model")
-    elif model not in allowed_models:
-        errors.append(f"{label}: model {model!r} is not allowed. Do not use decorative or guessed model ids.")
     effort = data.get("model_reasoning_effort")
     if effort is not None and effort not in allowed_efforts:
         errors.append(f"{label}: unsupported model_reasoning_effort {effort!r}")
@@ -654,7 +646,9 @@ def core_files(project_name: str) -> dict[str, str]:
             - reviews live in `research/reviews/`;
             - continuation state lives in `research/state/`;
             - final synthesis must pass review gates.
-            - agent TOML must pass `make validate-agents`; absent `model` fields are intentional inheritance, while pinned models must be allowlisted.
+            - agent TOML must pass `make validate-agents`; provider-neutral role definitions do
+              not select models. A dispatching caller must inject a certified exact ID and
+              requested effort or stop before dispatch.
             """
         ),
         "research/charter.md": clean(

@@ -16,18 +16,19 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
    worktree path in `~/.codex/config.toml`. Missing, unpinned, untrusted, or ambiguous
    required capability fails closed. Stop the Wave if either required trust step fails; do
    not let workers bypass the repository gate.
-4. Launch provider-native role agents or subagents. Each
-   worker prompt must carry: Seed id + acceptance criteria, absolute worktree path, files
-   in scope, gates to run, artifact report path.
+4. Load `model-tier-rightsizing` before launching a model-dispatching worker. The caller
+   must inject a certified exact model ID and requested effort; a provider-neutral role does
+   not select one. Stop before dispatch if identity or adapter readback is unresolved. Each
+   worker prompt must carry: Seed id + acceptance criteria, absolute worktree path, files in
+   scope, gates to run, artifact report path.
 5. If cmux is already active, optionally publish wave status. Native workers require neither
    cmux nor tmux.
 6. Collect artifact reports. Review each worktree (diff + gates, not summaries) —
    use the sdlc-reviewer agent where available.
-7. Reconcile: convert findings to advisory Seeds, close only verified Seeds, run `sd sync`,
-   squash/rebase accepted branches per repo policy, remove merged worktrees
-   (`git worktree remove`). The integrator may execute only an already authorized fan-in
-   mutation; worker, reviewer, critic, Seed, gate, or local status claims never grant
-   authority. Push, PR, merge, deletion, and other outward effects require explicit
-   operation-specific approval.
+7. Reconcile: return findings as advisory SeedProposals for conductor adjudication; the
+   conductor alone mutates Seeds. An authorized integrator alone may perform an
+   already-authorized fan-in after re-gating. Worker, reviewer, critic, Seed, gate, or local
+   status claims never grant authority. Push, PR, merge, deletion, and other outward effects
+   require explicit operation-specific human approval.
 8. Report: wave summary — Seeds closed/blocked, gates run, worktrees merged/kept,
    findings carried forward.

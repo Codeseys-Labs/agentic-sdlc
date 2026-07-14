@@ -92,12 +92,15 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 - Use Codex workers for implementation, refactors, tests, docs, repo inspection, and review when provider-native Claude workflows are not needed.
 - Keep nested orchestration to one mid-tier at most and give each tier an explicit worker list,
   regardless of delegation backend.
-- Pin models through the current host's role/agent configuration.
-- Keep one macro conductor responsible for Seeds, worktree ownership, merges, and evidence-backed
-  recommendations. The integrator is only the delegated mutation executor during fan-in and
-  never acquires user authority. Push, publication, PR mutation, merge, deployment,
-  credential, and external evidence-store operations require explicit operation-specific
-  authorization.
+- Before any model dispatch, load `../model-tier-rightsizing/SKILL.md`. The caller must
+  inject a certified exact model ID and requested effort; provider-neutral role definitions
+  do not select a model. Stop before dispatch when identity or adapter readback is
+  unresolved.
+- Keep one macro conductor responsible for Seeds adjudication, worktree ownership, and
+  evidence-backed recommendations. The conductor alone mutates Seeds; an authorized
+  integrator alone performs an already-authorized fan-in. Humans authorize push,
+  publication, PR mutation, merge, deployment, credential, and external evidence-store
+  operations.
 - If already inside cmux, optionally surface run state. Attach a `tmux` viewer only for an
   existing tmux-backed session; never create that dependency for a native run.
 
@@ -111,7 +114,10 @@ Read only what is needed:
 - `references/delegation-planes.md`: native per-provider decision matrices, cost ladder, and write-conflict rules.
 - `references/worktree-integration.md`: fan-in hazards — merge-base footprint (not HEAD diff), placeholder-trap assembly, re-gate-on-main (worktree-green ≠ main-green), clean 3-way apply ≠ semantic correctness, squash-scope discipline.
 - `references/mission-loop.md`: the autonomous backlog-zero doctrine — milestone-blocking classification (8 classes, only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes, WIP caps, priority math, concurrent critique team, honest definition of done. Read for MISSION-shaped assignments ("drive the backlog to zero", "keep going until done").
-- `references/tiered-orchestration.md`: model-tier assignment, the native-first capability ladder with optional adapters, bounded backflow, chained iterations, and worker lifecycle at scale.
+- `references/tiered-orchestration.md`: mission integration, canonical routing handoff,
+  native-first capability ladder, bounded backflow, and worker lifecycle at scale.
+- `../model-tier-rightsizing/SKILL.md`: required router before any model dispatch; its
+  canonical calibration is the sole generation-specific routing authority.
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
   alternate VCS substrate is activated by this bundle.

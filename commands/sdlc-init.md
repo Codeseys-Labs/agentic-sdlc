@@ -24,9 +24,10 @@ claiming wave readiness.
    - Run the maintained prerequisite checker when available. Missing, unpinned, untrusted,
      or ambiguous required capability fails closed; missing optional cmux or tmux
      never triggers implicit installation. `mise` is the managed-tool bootstrap, not the sole
-     readiness prerequisite; repository tools are pinned through it. Record the selected
-     adapter and its capability/model readback, or record inherited/unresolved when it cannot
-     prove the resolved provider/model.
+     readiness prerequisite; repository tools are pinned through it. A dispatching consumer
+     later needs a caller-injected certified exact model ID and requested effort; a
+     provider-neutral role does not select one and must stop before unresolved dispatch.
+     Record resolved provider/model only after adapter readback.
    - If the repository is dirty, do not commit, stage, or absorb pre-existing changes.
      Produce the activation proposal and ask the user to commit/stash/select an explicit
      activation worktree before write steps.

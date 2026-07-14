@@ -16,6 +16,10 @@ as the router.
   `references/*.md` on demand only.
 - `skills/codex-research-os/` — repo-scaffolding installer for a 17-role research
   organization with claim ledgers and review gates.
+- `skills/model-tier-rightsizing/` — routing router for every model-dispatching
+  consumer. Load it before dispatch; the caller injects a certified exact ID and requested
+  effort, otherwise dispatch stops. Its canonical calibration owns generation-specific IDs,
+  effort bands, evidence, quotas, complements, controls, and roadmap lanes.
 - `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
   critic, integrator) in Claude `.md` and Codex `.toml` forms, plus the repo-scoped
   research roster under `agents/codex/research/`.
@@ -50,8 +54,11 @@ all authoritative Python entrypoints. Git, a documented Seeds distribution, supp
 behavior, and any selected adapter must be present and verified; missing, unpinned, untrusted,
 or ambiguous capability means not Git-ready. Trust is scoped to each absolute config path:
 every linked worktree must review and trust its own `mise.toml`; `MISE_PARANOID=1` fails closed
-until that explicit trust step. The requested model tier and resolved provider/model are
-separate facts: record resolved only after adapter readback, otherwise inherited or unresolved.
+until that explicit trust step. A requested model is not a resolved model: requested ID and
+effort are dispatch inputs, while provider/model remains unresolved until adapter readback.
+A dispatching consumer must receive a caller-injected, certified exact model ID and requested
+effort; otherwise it stops before dispatch. A decorative model pin does not certify a
+transport or replace required adapter readback.
 
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`

@@ -1,13 +1,11 @@
 ---
 name: model-tier-rightsizing
 description: |
-  Route workflow agents by wrong-output blast radius, verification strength, and
-  available capacity. Use when assigning an exact model and requested effort to
-  each agent, planning a gated fan-out, preserving a high-impact decision lane,
-  or escalating after null output, semantic uncertainty, throttling, or missing
-  provider readback. Keeps stable routing doctrine here and delegates all
-  generation-specific IDs, effort bands, evidence, quotas, and roadmap mappings
-  to one canonical reference.
+  Route workflow agents by wrong-output blast radius and verification strength. Use when
+  a caller must inject a certified exact model ID and requested effort into a bounded
+  dispatch, preserve a high-impact recommendation lane, or stop after null output,
+  semantic uncertainty, throttling, missing readback, or unresolved transport identity.
+  Stable doctrine stays here; generation-specific routing stays in one canonical reference.
 ---
 
 # Model-tier rightsizing
@@ -36,32 +34,33 @@ visible retry. Importance alone never moves it up.
 
 Every delegated call must state:
 
-- an **exact model ID** accepted by the active transport; never rely on an inherited
-  model or an unverified alias;
+- a caller-injected **exact model ID** certified by the active transport; never dispatch
+  from an inherited/default model or unverified alias;
 - the requested effort and context form, kept separate from resolved model, resolved
   effort, provider, and context telemetry;
 - one bounded artifact, owner, stop condition, and wrong-output class;
-- the gate or independent reviewer that detects failure;
+- the gate or independent reviewer that detects failure; and
 - the fallback and escalation action before work starts.
 
-Record resolved facts only from adapter readback. If readback is absent, record the
-field as inherited, unknown, or unresolved; a requested value and echoed prompt text
-are not resolution evidence.
+A provider-neutral static role definition does not select a model. Stop before dispatch
+unless the caller injects a certified exact ID. Record resolved facts only from adapter
+readback; absent readback is unresolved, and a requested value or echoed prompt text is
+not resolution evidence.
 
 ## Fallback discipline
 
 Treat null, malformed, truncated, missing, or transport-rejected output as failure.
-Classify transport failure versus task-output failure, apply bounded backoff, and
-retry the same certified cell once. Reduce fan-out on capacity pressure, but do not
-silently weaken the blast-radius class or gate. A fallback may cross lanes only when
-an added verifier genuinely preserves the failure boundary. If no certified route
-exists, stop or decompose into smaller verifiable artifacts.
+Classify transport failure versus task-output failure, apply bounded backoff, and retry the
+same certified cell once. Reduce fan-out on capacity pressure, but do not silently weaken
+the blast-radius class or gate. A fallback may cross lanes only when the same class and
+control predicate remain true. If no certified route exists, stop or decompose into smaller
+verifiable artifacts.
 
 ## Canonical calibration
 
-Load `references/model-routing-calibration.md` before dispatch. It is the sole human
-reference for current exact IDs, requested effort bands, alias behavior, context
-boundaries, smoke evidence, quotas, roadmap-family lanes, vendor complements,
-fallbacks, rerun triggers, and auditable receipts. Do not copy its matrices here;
-recalibrate the reference when transport, lineup, telemetry, or representative
-results change.
+Load the [canonical calibration](references/model-routing-calibration.md) before dispatch.
+It is the sole human reference for current exact IDs, requested effort bands, alias
+behavior, context boundaries, smoke evidence, quotas, roadmap-family lanes, vendor
+complements, fallbacks, rerun triggers, and auditable receipts. Do not copy its matrices
+here; recalibrate the reference when transport, lineup, telemetry, or representative results
+change.
