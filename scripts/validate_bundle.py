@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -44,142 +45,7 @@ NODE_VERSION = "22.22.3"
 BUN_VERSION = "1.3.10"
 SEEDS_VERSION = "0.5.14"
 SEEDS_TOOL = "npm:@os-eco/seeds-cli"
-LOCK_ARTIFACTS = {'uv': {'backend': 'aqua:astral-sh/uv',
-        'platforms': {'linux-arm64': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-aarch64-unknown-linux-musl.tar.gz',
-                                      '9e5eaf16ffad968fc689f18c2733ace914ed417d4e5572e92d807fd51a90228c',
-                                      'github-attestations'),
-                      'linux-arm64-musl': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-aarch64-unknown-linux-musl.tar.gz',
-                                           '9e5eaf16ffad968fc689f18c2733ace914ed417d4e5572e92d807fd51a90228c',
-                                           'github-attestations'),
-                      'linux-x64': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-unknown-linux-musl.tar.gz',
-                                    '4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e',
-                                    'github-attestations'),
-                      'linux-x64-baseline': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-unknown-linux-musl.tar.gz',
-                                             '4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e',
-                                             'github-attestations'),
-                      'linux-x64-musl': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-unknown-linux-musl.tar.gz',
-                                         '4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e',
-                                         'github-attestations'),
-                      'linux-x64-musl-baseline': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-unknown-linux-musl.tar.gz',
-                                                  '4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e',
-                                                  'github-attestations'),
-                      'macos-arm64': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-aarch64-apple-darwin.tar.gz',
-                                      '2a162f6b90ff3691a2f9cae1622e066a3ce592e110f66670cdcc841324b28226',
-                                      'github-attestations'),
-                      'macos-x64': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-apple-darwin.tar.gz',
-                                    '6c66e41eaf4d15abeda58d3f268161b6e3f742d98390341b174a7cfc1b48841d',
-                                    'github-attestations'),
-                      'macos-x64-baseline': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-apple-darwin.tar.gz',
-                                             '6c66e41eaf4d15abeda58d3f268161b6e3f742d98390341b174a7cfc1b48841d',
-                                             'github-attestations'),
-                      'windows-x64': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-pc-windows-msvc.zip',
-                                      '35fc29e03e62f3cda769bc12773f3cb70ce305d0d36c0d8bd0c117dd0b3fcd14',
-                                      'github-attestations'),
-                      'windows-x64-baseline': ('https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-pc-windows-msvc.zip',
-                                               '35fc29e03e62f3cda769bc12773f3cb70ce305d0d36c0d8bd0c117dd0b3fcd14',
-                                               'github-attestations')}},
- 'lefthook': {'backend': 'aqua:evilmartians/lefthook',
-              'platforms': {'linux-arm64': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_aarch64.gz',
-                                            '6380a6ad6dd484466fd69bd83f24491d6ec27dc0b84e837be025620f7c4e11e3',
-                                            'github-attestations'),
-                            'linux-arm64-musl': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_aarch64.gz',
-                                                 '6380a6ad6dd484466fd69bd83f24491d6ec27dc0b84e837be025620f7c4e11e3',
-                                                 'github-attestations'),
-                            'linux-x64': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_x86_64.gz',
-                                          '0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f',
-                                          'github-attestations'),
-                            'linux-x64-baseline': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_x86_64.gz',
-                                                   '0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f',
-                                                   'github-attestations'),
-                            'linux-x64-musl': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_x86_64.gz',
-                                               '0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f',
-                                               'github-attestations'),
-                            'linux-x64-musl-baseline': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_x86_64.gz',
-                                                        '0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f',
-                                                        'github-attestations'),
-                            'macos-arm64': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_MacOS_arm64.gz',
-                                            '1dd4dc7b4c50efb1f9d9122cd6535c793738d6e59751c228d49f768ec9dbb604',
-                                            'github-attestations'),
-                            'macos-x64': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_MacOS_x86_64.gz',
-                                          '49d905f28ca46442cb236060058b252da650b5f7b864bd275b61aa46945e8c4a',
-                                          'github-attestations'),
-                            'macos-x64-baseline': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_MacOS_x86_64.gz',
-                                                   '49d905f28ca46442cb236060058b252da650b5f7b864bd275b61aa46945e8c4a',
-                                                   'github-attestations'),
-                            'windows-x64': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Windows_x86_64.gz',
-                                            'beabbce824641ae71229ed11dd8634f47148921cb649d25c90441b737481494a',
-                                            'github-attestations'),
-                            'windows-x64-baseline': ('https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Windows_x86_64.gz',
-                                                     'beabbce824641ae71229ed11dd8634f47148921cb649d25c90441b737481494a',
-                                                     'github-attestations')}},
- 'node': {'backend': 'core:node',
-          'platforms': {'linux-arm64': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-linux-arm64.tar.gz',
-                                        'cc8bc82b2dd0b595c3b95a4c3c9c8c350907cff011afbdee3d1379e812e1e3e3',
-                                        None),
-                        'linux-arm64-musl': ('https://unofficial-builds.nodejs.org/download/release/v22.22.3/node-v22.22.3-linux-arm64-musl.tar.gz',
-                                             '09c87acbafae65e18fcc0eb188376c1254cab74dc769118f4b60479c5fa326cf',
-                                             None),
-                        'linux-x64': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-linux-x64.tar.gz',
-                                      'c7a10d6816da8eaaa7534dd73c71c6e2b2c391dbbf845e364902d156615dd1b8',
-                                      None),
-                        'linux-x64-baseline': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-linux-x64.tar.gz',
-                                               'c7a10d6816da8eaaa7534dd73c71c6e2b2c391dbbf845e364902d156615dd1b8',
-                                               None),
-                        'linux-x64-musl': ('https://unofficial-builds.nodejs.org/download/release/v22.22.3/node-v22.22.3-linux-x64-musl.tar.gz',
-                                           'd227692583d6ae17c44028fd8f17cb1b3672167a6baa035818240cbb9db6ea4a',
-                                           None),
-                        'linux-x64-musl-baseline': ('https://unofficial-builds.nodejs.org/download/release/v22.22.3/node-v22.22.3-linux-x64-musl.tar.gz',
-                                                    'd227692583d6ae17c44028fd8f17cb1b3672167a6baa035818240cbb9db6ea4a',
-                                                    None),
-                        'macos-arm64': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-arm64.tar.gz',
-                                        '0da7ff74ef8611328c8212f17943368713a2ad953fb7d89a8c8a0eae87c23207',
-                                        None),
-                        'macos-x64': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-x64.tar.gz',
-                                      '45830ba752fa0d892c6dcd640946669801293cac820a33591ded40ac075198ec',
-                                      None),
-                        'macos-x64-baseline': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-x64.tar.gz',
-                                               '45830ba752fa0d892c6dcd640946669801293cac820a33591ded40ac075198ec',
-                                               None),
-                        'windows-x64': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-win-x64.zip',
-                                        '6c8d54f635feff4df76c2ca80f45332eb2ff57d25226edce36592e51a177ee33',
-                                        None),
-                        'windows-x64-baseline': ('https://nodejs.org/dist/v22.22.3/node-v22.22.3-win-x64.zip',
-                                                 '6c8d54f635feff4df76c2ca80f45332eb2ff57d25226edce36592e51a177ee33',
-                                                 None)}},
- 'bun': {'backend': 'core:bun',
-         'platforms': {'linux-arm64': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-aarch64.zip',
-                                       'fa5ecb25cafa8e8f5c87a0f833719d46dd0af0a86c7837d806531212d55636d3',
-                                       None),
-                       'linux-arm64-musl': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-aarch64-musl.zip',
-                                            'd2c81365a2e529b78a42330d3a0056e8dbd7896b4a6782c8e392b6532141e34d',
-                                            None),
-                       'linux-x64': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64.zip',
-                                     'f57bc0187e39623de716ba3a389fda5486b2d7be7131a980ba54dc7b733d2e08',
-                                     None),
-                       'linux-x64-baseline': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64-baseline.zip',
-                                              '41201a8c5ee74a9dcbb1ce25a1104f1f929838b57a845aa78d98379b0ce7cde2',
-                                              None),
-                       'linux-x64-musl': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64-musl.zip',
-                                          '48a6c32277d343db0148ce066336472ffd380358a4d26bb1329714742492d824',
-                                          None),
-                       'linux-x64-musl-baseline': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64-musl-baseline.zip',
-                                                   'a7bc4cdea1ef255a83adbf39c7aafcd30e09f2b8f74deec4b10ee318bc024d1f',
-                                                   None),
-                       'macos-arm64': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-aarch64.zip',
-                                       '82034e87c9d9b4398ea619aee2eed5d2a68c8157e9a6ae2d1052d84d533ccd8d',
-                                       None),
-                       'macos-x64': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-x64.zip',
-                                     'c1d90bf6140f20e572c473065dc6b37a4b036349b5e9e4133779cc642ad94323',
-                                     None),
-                       'macos-x64-baseline': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-x64-baseline.zip',
-                                              'f9686c4e4e760db4cde77a0f1fad05e552648b9c9cbfa4f7fc9a7ec26b9f3267',
-                                              None),
-                       'windows-x64': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-windows-x64.zip',
-                                       '7a77b3e245e2e26965c93089a4a1332e8a326d3364c89fae1d1fd99cdd3cd73d',
-                                       None),
-                       'windows-x64-baseline': ('https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-windows-x64-baseline.zip',
-                                                '715709c69b176e20994533d3292bd0b7c32de9c0c5575b916746ec6b2aa38346',
-                                                None)}}}
+MISE_LOCK_SHA256 = "d894faadc5dab0b3f2af7ab341ca53dc1925b2ae9245ba03132c74dfe092176d"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -398,8 +264,15 @@ def validate_mise(root: Path, result: Validation) -> None:
         result.error("mise.lock is required")
         return
     try:
-        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+        lock_bytes = lock_path.read_bytes()
+    except OSError as exc:
+        result.error(f"mise.lock is invalid: {exc}")
+        return
+    if hashlib.sha256(lock_bytes).hexdigest() != MISE_LOCK_SHA256:
+        result.error("mise.lock SHA-256 must equal the canonical generated lock")
+    try:
+        lock = tomllib.loads(lock_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         result.error(f"mise.lock is invalid: {exc}")
         return
     locked_tools = lock.get("tools", {})
@@ -417,41 +290,13 @@ def validate_mise(root: Path, result: Validation) -> None:
         if len(entries) != 1 or entries[0].get("version") != version:
             result.error(f"mise.lock must resolve {name} {version}")
             continue
-        entry = entries[0]
-        if name == SEEDS_TOOL:
-            if entry.get("backend") != SEEDS_TOOL:
-                result.error(f"mise.lock {name} backend must equal {SEEDS_TOOL}")
-            if set(entry) != {"version", "backend"}:
-                result.error(f"mise.lock {name} must contain version and backend only")
+        if name != SEEDS_TOOL:
             continue
-
-        expected_lock = LOCK_ARTIFACTS[name]
-        if entry.get("backend") != expected_lock["backend"]:
-            result.error(f"mise.lock {name} backend must equal {expected_lock['backend']}")
-        platforms = {
-            key.removeprefix("platforms."): value
-            for key, value in entry.items()
-            if key.startswith("platforms.")
-        }
-        expected_platforms = expected_lock["platforms"]
-        if set(platforms) != set(expected_platforms):
-            result.error(f"mise.lock {name} platforms must equal {sorted(expected_platforms)}")
-        for platform, record in platforms.items():
-            expected_record = expected_platforms.get(platform)
-            if expected_record is None:
-                continue
-            expected_url, checksum, provenance = expected_record
-            if record.get("url") != expected_url:
-                result.error(f"mise.lock {name} {platform} URL must equal {expected_url}")
-            if record.get("checksum") != f"sha256:{checksum}":
-                result.error(f"mise.lock {name} {platform} checksum must equal the generated lock")
-            expected_fields = {"checksum", "url"}
-            if provenance is not None:
-                expected_fields.add("provenance")
-                if record.get("provenance") != provenance:
-                    result.error(f"mise.lock {name} {platform} provenance must equal {provenance}")
-            if set(record) != expected_fields:
-                result.error(f"mise.lock {name} {platform} must contain only generated artifact metadata")
+        entry = entries[0]
+        if entry.get("backend") != SEEDS_TOOL:
+            result.error(f"mise.lock {name} backend must equal {SEEDS_TOOL}")
+        if set(entry) != {"version", "backend"}:
+            result.error(f"mise.lock {name} must contain version and backend only")
 
 
 def validate_gate_graph(root: Path, result: Validation) -> None:

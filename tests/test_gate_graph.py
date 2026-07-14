@@ -9,6 +9,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from scripts import validate_bundle
+
 
 ROOT = Path(__file__).parents[1]
 VALIDATOR = Path("scripts/validate_bundle.py")
@@ -73,11 +75,6 @@ class GateGraphTests(unittest.TestCase):
         ("scripts/bump-version.sh", 'mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest"', '# mise -C "$repo_root" exec -- uv run --python 3.12.11 python -\npython3 - "$manifest"', "bump-version.sh must use only"),
         ("scripts/bump-version.sh", "\nPY\n", "\nPY\npython3 -c 'print(1)'\n", "must end at the pinned Python heredoc"),
         ("lefthook.yml", "run: mise run self-test", "run: mise run check", "documented best-effort gate subsets"),
-        ("mise.lock", '[tools.uv."platforms.windows-x64"]', '[tools.uv."platforms.windows-arm64"]', "mise.lock uv platforms must equal"),
-        ("mise.lock", "https://github.com/astral-sh/uv/releases/download/0.11.17/uv-x86_64-unknown-linux-musl.tar.gz", "https://evil.invalid/uv", "mise.lock uv linux-x64 URL must equal"),
-        ("mise.lock", "sha256:4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e", "sha256:" + "0" * 64, "checksum must equal the generated lock"),
-        ("mise.lock", 'backend = "aqua:astral-sh/uv"', 'backend = "aqua:attacker/uv"', "mise.lock uv backend must equal"),
-        ("mise.lock", 'provenance = "github-attestations"', 'provenance = "unverified"', "provenance must equal github-attestations"),
         (".github/workflows/validate.yml", "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5", "actions/checkout@v4", "CI workflow must equal the single authoritative mise run check graph"),
         (".github/workflows/validate.yml", "jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac", "jdx/mise-action@v2", "CI workflow must equal the single authoritative mise run check graph"),
         (".github/workflows/validate.yml", "run: mise run check", "run: mise run validate", "CI workflow must equal the single authoritative mise run check graph"),
@@ -115,6 +112,29 @@ class GateGraphTests(unittest.TestCase):
         if unlock:
             env["MISE_LOCKED"] = "0"
         return env
+
+    def assert_lock_mutation_fails(self, old: bytes, new: bytes) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shutil.copy2(ROOT / "mise.toml", root / "mise.toml")
+            before = (ROOT / "mise.lock").read_bytes()
+            self.assertIn(old, before)
+            (root / "mise.lock").write_bytes(before.replace(old, new, 1))
+            result = validate_bundle.Validation()
+            validate_bundle.validate_mise(root, result)
+        self.assertIn("mise.lock SHA-256 must equal the canonical generated lock", result.errors)
+
+    def test_unexpected_lock_root_table_fails(self) -> None:
+        self.assert_lock_mutation_fails(
+            b"\n[[tools.uv]]",
+            b'\n[unexpected]\nvalue = "not generated"\n\n[[tools.uv]]',
+        )
+
+    def test_unexpected_non_seeds_tool_entry_field_fails(self) -> None:
+        self.assert_lock_mutation_fails(
+            b'[[tools.node]]\nversion = "22.22.3"',
+            b'[[tools.node]]\nversion = "22.22.3"\nunexpected = "not generated"',
+        )
 
     def test_current_gate_graph_is_valid(self) -> None:
         result = self.run_validator(ROOT)
@@ -221,34 +241,31 @@ class GateGraphTests(unittest.TestCase):
 
     def test_toolchain_lock_mutations_fail(self) -> None:
         mutations = (
-            ("node", 'version = "22.22.3"', 'version = "22.22.2"', "mise.lock must resolve node 22.22.3"),
-            ("bun", 'version = "1.3.10"', 'version = "1.3.9"', "mise.lock must resolve bun 1.3.10"),
-            ("npm:@os-eco/seeds-cli", 'version = "0.5.14"', 'version = "0.5.13"', "mise.lock must resolve npm:@os-eco/seeds-cli 0.5.14"),
-            ("npm:@os-eco/seeds-cli", 'backend = "npm:@os-eco/seeds-cli"', 'backend = "core:node"', "mise.lock npm:@os-eco/seeds-cli backend must equal npm:@os-eco/seeds-cli"),
-            ("node", '[tools.node."platforms.linux-x64"]\nchecksum = ', '[tools.node."platforms.linux-x64"]\nchecksum = "sha256:' + "0" * 64 + '" # ', "mise.lock node linux-x64 checksum must equal the generated lock"),
-            ("bun", '[tools.bun."platforms.linux-x64"]\nchecksum = ', '[tools.bun."platforms.linux-x64"]\nchecksum = "sha256:' + "0" * 64 + '" # ', "mise.lock bun linux-x64 checksum must equal the generated lock"),
-            ("npm:@os-eco/seeds-cli", 'backend = "npm:@os-eco/seeds-cli"', 'backend = "npm:@os-eco/seeds-cli"\ntransitive_integrity = "unsupported"', "must contain version and backend only"),
+            (b'[[tools.node]]\nversion = "22.22.3"', b'[[tools.node]]\nversion = "22.22.2"'),
+            (b'[[tools.bun]]\nversion = "1.3.10"', b'[[tools.bun]]\nversion = "1.3.9"'),
+            (
+                b'[[tools."npm:@os-eco/seeds-cli"]]\nversion = "0.5.14"',
+                b'[[tools."npm:@os-eco/seeds-cli"]]\nversion = "0.5.13"',
+            ),
+            (
+                b'backend = "npm:@os-eco/seeds-cli"',
+                b'backend = "npm:@os-eco/seeds-cli"\ntransitive_integrity = "unsupported"',
+            ),
+            (b'[tools.node."platforms.linux-x64"]\nchecksum = ', b'[tools.node."platforms.linux-x64"]\nchecksum = "sha256:' + b"0" * 64 + b'" # '),
+            (b'[tools.bun."platforms.linux-x64"]\nchecksum = ', b'[tools.bun."platforms.linux-x64"]\nchecksum = "sha256:' + b"0" * 64 + b'" # '),
         )
-        executed = 0
-        for name, old, new, diagnostic in mutations:
-            with self.subTest(tool=name, diagnostic=diagnostic), tempfile.TemporaryDirectory() as temp:
-                repo = self.copied_repo(temp)
-                path = repo / "mise.lock"
-                text = path.read_text(encoding="utf-8")
-                heading = f"[[tools.{name}]]" if ":" not in name else f'[[tools."{name}"]]'
-                start = text.find(heading)
-                self.assertNotEqual(start, -1)
-                end = text.find("\n[[tools.", start + len(heading))
-                if end == -1:
-                    end = len(text)
-                section = text[start:end]
-                self.assertIn(old, section)
-                path.write_text(text[:start] + section.replace(old, new, 1) + text[end:], encoding="utf-8")
-                result = self.run_validator(repo)
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn(diagnostic, result.stderr)
-                executed += 1
-        self.assertEqual(executed, len(mutations))
+        for old, new in mutations:
+            with self.subTest(mutation=old[:40]):
+                self.assert_lock_mutation_fails(old, new)
+
+    def test_lock_mutation_fails_through_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = self.copied_repo(temp)
+            path = repo / "mise.lock"
+            path.write_bytes(path.read_bytes().replace(b'backend = "core:node"', b'backend = "core:tampered"', 1))
+            result = self.run_validator(repo)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("mise.lock SHA-256 must equal the canonical generated lock", result.stderr)
 
     def test_all_hollowing_mutations_fail(self) -> None:
         executed = 0
