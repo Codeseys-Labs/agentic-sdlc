@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 VALIDATOR = Path("scripts/validate_bundle.py")
+MIN_MISE_VERSION = "2026.4.27"
 
 
 class GateGraphTests(unittest.TestCase):
@@ -98,6 +99,23 @@ class GateGraphTests(unittest.TestCase):
             check=False,
         )
 
+    def isolated_mise_env(self, temp: str, *, unlock: bool = False) -> dict[str, str]:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("MISE_") and key != "CI"
+        }
+        env |= {
+            "HOME": str(Path(temp) / "home"),
+            "MISE_DATA_DIR": str(Path(temp) / "mise-data"),
+            "MISE_STATE_DIR": str(Path(temp) / "mise-state"),
+            "MISE_CACHE_DIR": str(Path(temp) / "mise-cache"),
+            "MISE_CONFIG_DIR": str(Path(temp) / "mise-config"),
+        }
+        if unlock:
+            env["MISE_LOCKED"] = "0"
+        return env
+
     def test_current_gate_graph_is_valid(self) -> None:
         result = self.run_validator(ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -150,25 +168,45 @@ class GateGraphTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("mise.lock tools must equal", result.stderr)
 
-    @unittest.skipUnless(shutil.which("mise"), "mise is required for generated lock behavior")
-    def test_canonical_lock_regeneration_is_byte_identical_and_valid(self) -> None:
+    @unittest.skipUnless(shutil.which("mise"), "mise is required for install lock behavior")
+    def test_runtime_install_preserves_reviewed_lock_bytes_and_validity(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             repo = self.copied_repo(temp)
             lock_path = repo / "mise.lock"
             before = lock_path.read_bytes()
-            env = {
-                key: value
-                for key, value in os.environ.items()
-                if not key.startswith("MISE_") and key != "CI"
-            }
-            env |= {
-                "HOME": str(Path(temp) / "home"),
-                "MISE_DATA_DIR": str(Path(temp) / "mise-data"),
-                "MISE_STATE_DIR": str(Path(temp) / "mise-state"),
-                "MISE_CACHE_DIR": str(Path(temp) / "mise-cache"),
-                "MISE_CONFIG_DIR": str(Path(temp) / "mise-config"),
-                "MISE_LOCKED": "0",
-            }
+            env = self.isolated_mise_env(temp)
+            installed = subprocess.run(
+                ["mise", "-C", str(repo), "install", "--yes"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+            self.assertEqual(lock_path.read_bytes(), before)
+            result = self.run_validator(repo)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(shutil.which("mise"), "mise is required for generated lock behavior")
+    def test_canonical_lock_regeneration_is_byte_identical_and_valid(self) -> None:
+        version = subprocess.run(
+            ["mise", "--version"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(version.returncode, 0, version.stdout + version.stderr)
+        actual_version = version.stdout.split()[0]
+        if actual_version != MIN_MISE_VERSION:
+            self.skipTest(
+                "canonical lock regeneration requires exact maintenance mise "
+                f"{MIN_MISE_VERSION}; found {actual_version}"
+            )
+        with tempfile.TemporaryDirectory() as temp:
+            repo = self.copied_repo(temp)
+            lock_path = repo / "mise.lock"
+            before = lock_path.read_bytes()
+            env = self.isolated_mise_env(temp, unlock=True)
             generated = subprocess.run(
                 ["mise", "-C", str(repo), "lock", "--yes"],
                 env=env,
