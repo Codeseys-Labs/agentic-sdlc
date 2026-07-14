@@ -52,6 +52,21 @@ class ResearchOSLauncherTests(unittest.TestCase):
 
         self.assertEqual(violations, [], "\n".join(violations))
 
+    def test_rendered_build_files_ignores_unresolved_dynamic_command_forms(self) -> None:
+        scanner_path = Path(__file__).parents[1] / "tests" / "test_preflight_capabilities.py"
+        scanner_spec = importlib.util.spec_from_file_location("seeds_scanner", scanner_path)
+        assert scanner_spec and scanner_spec.loader
+        scanner = importlib.util.module_from_spec(scanner_spec)
+        scanner_spec.loader.exec_module(scanner)
+
+        files = {
+            "scripts/worker.ps1": "& $seed_command $seed_action\nStart-Process -FilePath $seed_command -ArgumentList @('sync')\n",
+            "scripts/worker.py": "subprocess.run([command, action])\n",
+        }
+        violations = scanner.rendered_build_file_violations(files)
+
+        self.assertEqual(violations, [], "\n".join(violations))
+
     def test_generated_research_director_literal_guidance_has_no_mutation_leak(self) -> None:
         generated = installer.build_files("example")[".codex/agents/research_director.toml"]
         with tempfile.TemporaryDirectory() as temporary_directory:
