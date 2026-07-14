@@ -10,8 +10,15 @@ from pathlib import Path
 
 
 COMMON_AGENT_RULES = """
-Read repository instructions before acting. Preserve existing project conventions. Keep work to one smallest useful research unit unless the director assigns more. Write durable findings to the research OS ledgers. Do not promote claims without matching evidence and review. If the repo has an issue tracker, claim or create tracked work before substantive changes. If the repo has an expertise/memory system, record non-obvious findings before finishing.
+Read repository instructions before acting. Preserve existing project conventions. Keep work to one smallest useful research unit unless the director assigns more. Write durable findings to the research OS ledgers. Do not promote claims without matching evidence and review. If durable tracker work is needed, emit a proposal for its authorized owner rather than mutating tracked work. If the repo has an expertise/memory system, record non-obvious findings before finishing.
 """
+
+
+RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
+- Research Director is Seeds-read-only.
+- Inspect `Seeds(<target>, ready --format json)` through the exact launcher contract in the loaded `agentic-sdlc-orchestrator` skill before substantive orchestration when Seeds is available.
+- Do not create, claim, update, close, or disposition Seeds.
+- For work that outlives the session, emit a typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage."""
 
 
 AGENTS = {
@@ -20,9 +27,38 @@ AGENTS = {
         "high",
         "workspace-write",
         """
-You are the research director. Read research/README.md, research/status.md, research/state/current_focus.md, research/state/next_action.md, research/state/resume_context.md, research/claims/claims.yaml, research/research_journal.md, research/memory/best.md, and research/memory/failed_attempts.md.
+You are the research director for this repository.
 
-Classify work as greenfield, brownfield, or hybrid. Identify the highest-leverage uncertainty. Select one smallest useful unit of work. Assign the right specialist. Validate output. Update status, next_action, resume_context, claims, and memory. End with current state, strongest evidence, weakest assumption, exact next action, and recommended next agent.
+Always begin by reading AGENTS.md and the research operating state:
+- research/README.md
+- research/charter.md
+- research/problem_statement.md
+- research/status.md
+- research/state/current_focus.md
+- research/state/next_action.md
+- research/state/resume_context.md
+- research/claims/claims.yaml
+- research/research_journal.md
+- research/memory/best.md
+- research/memory/failed_attempts.md
+
+Responsibilities:
+1. Classify the work as greenfield, brownfield, or hybrid.
+2. Identify the highest-leverage uncertainty.
+3. Select exactly one smallest useful unit of work.
+4. Assign the right specialist agent and keep shared files lead-owned.
+5. Validate specialist outputs against schemas and review gates.
+6. Update status, next_action, resume_context, claims, and memory.
+7. Prevent overclaiming: evidence before synthesis, review before promotion.
+8. Make Seeds/mulch tracking explicit by emitting typed proposals for conductor triage.
+
+Repository discipline:
+"""
+        + RESEARCH_DIRECTOR_SEEDS_AUTHORITY
+        + """
+
+- Record non-obvious findings via ml record before finishing; include the active seed issue when possible.
+- End with current state, strongest evidence, weakest assumption, exact next action, recommended next agent, and any `SeedProposal`.
 """,
     ),
     "repo_cartographer": (
@@ -297,16 +333,18 @@ def clean(text: str) -> str:
 def agent_toml(name: str, description: str, effort: str, sandbox: str, body: str) -> str:
     instructions = clean(body + "\n" + COMMON_AGENT_RULES).replace('"""', '\\"\\"\\"')
     return clean(
-        f"""
-        name = "{name}"
-        description = "{description}"
-        model_reasoning_effort = "{effort}"
-        sandbox_mode = "{sandbox}"
-
-        developer_instructions = \"\"\"
-        {instructions}
-        \"\"\"
-        """
+        "\n".join(
+            (
+                f'name = "{name}"',
+                f'description = "{description}"',
+                f'model_reasoning_effort = "{effort}"',
+                f'sandbox_mode = "{sandbox}"',
+                "",
+                'developer_instructions = """',
+                instructions,
+                '"""',
+            )
+        )
     )
 
 

@@ -39,30 +39,74 @@ EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
         "tests",
     }
 )
+SEEDS_ACTION = r"(?:claim|create|update|close|disposition)"
+SEEDS_ACTION_LIST = rf"{SEEDS_ACTION}(?:\s*(?:/|or|,|and|-)\s*(?:{SEEDS_ACTION}|or\s+))*"
+SD_COMMAND = re.compile(
+    r"\bsd\s+(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
+    re.IGNORECASE,
+)
 SD_INSTRUCTION = re.compile(
-    r"\b(?:check|execute|invoke|run|use)\s+(?:the\s+)?`?sd\s+"
-    r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
+    r"\b(?:check|execute|invoke|run|use)\s+(?:the\s+)?(?:command\s+)?"
+    r"(?:\$\s*)?(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s`]+\s+)*`?"
+    + SD_COMMAND.pattern,
     re.IGNORECASE,
 )
-RAW_SD_COMMAND = re.compile(
-    r"^\s*(?:[-*+]\s*)?`?sd\s+"
-    r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)\b",
+SEEDS_PSEUDO_OPERATION = re.compile(
+    rf"\bSeeds\(\s*[^,()]+\s*,\s*{SEEDS_ACTION}\b", re.IGNORECASE
+)
+SEEDS_ACTION_FIRST = re.compile(
+    rf"\b{SEEDS_ACTION_LIST}\b\s+(?:a\s+|an\s+|the\s+)?(?:Seeds?|Seed[-\s]queue)"
+    r"(?:\s+issue)?\b",
     re.IGNORECASE,
 )
-DIRECT_SEEDS_MUTATION = re.compile(
-    r"\b(?:claim|create|update|close|disposition)\b[^.\n]{0,80}"
-    r"\b(?:seeds|seed\s+(?:issue|queue))\b",
+SEEDS_ACTION_SUBJECT_FIRST = re.compile(
+    rf"\b(?:Seeds?|Seed[-\s]queue)(?:\s+(?:issue|item))?\s+{SEEDS_ACTION_LIST}\b",
     re.IGNORECASE,
 )
-DIRECT_SEEDS_OPERATION = re.compile(
-    r"\bSeeds\(\s*<target>\s*,\s*(?:create|claim|update|close|disposition)\b",
+NEGATED_SEEDS_ACTION = re.compile(
+    r"\b(?:should|do|must)\s+not\s*$|\b(?:cannot|never)\s*$", re.IGNORECASE
+)
+NEGATED_SEEDS_ACTION_LIST = re.compile(
+    rf"\b(?:should|do|must)\s+not\s+{SEEDS_ACTION_LIST}\b|"
+    rf"\b(?:cannot|never)\s+{SEEDS_ACTION_LIST}\b",
     re.IGNORECASE,
 )
-PROHIBITED_SEEDS_MUTATION = re.compile(
-    r"\b(?:cannot|do not|must not|never)\b[^.\n]{0,100}"
-    r"\b(?:claim|create|update|close|disposition)\b",
-    re.IGNORECASE,
-)
+
+
+def normalized_command_prefix(line: str) -> str:
+    """Remove common shell/Markdown prefixes before checking a literal command."""
+    command = line.strip()
+    command = re.sub(r"^(?:[-*+]\s*)?`?\$?\s*", "", command)
+    command = re.sub(r"^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s`]+\s+)*", "", command)
+    return command.lstrip("`")
+
+
+def clauses(line: str) -> list[str]:
+    return [clause.strip() for clause in re.split(r"[.;]\s*", line) if clause.strip()]
+
+
+def is_negated_action(clause: str, match_start: int) -> bool:
+    return bool(NEGATED_SEEDS_ACTION.search(clause[:match_start].rstrip()))
+
+
+def clause_has_seeds_mutation_guidance(clause: str) -> bool:
+    if SEEDS_PSEUDO_OPERATION.search(clause):
+        return True
+    if re.search(
+        rf"\b(?:should|do|must)\s+not\s+(?:{SEEDS_ACTION}|or|,|and|\s)+\s*(?:Seeds?|Seed[-\s]queue)\b|"
+        rf"\b(?:cannot|never)\s+(?:{SEEDS_ACTION}|or|,|and|\s)+\s*(?:Seeds?|Seed[-\s]queue)\b",
+        clause,
+        re.IGNORECASE,
+    ):
+        return False
+    negated_actions = [match.span() for match in NEGATED_SEEDS_ACTION_LIST.finditer(clause)]
+    for pattern in (SEEDS_ACTION_FIRST, SEEDS_ACTION_SUBJECT_FIRST):
+        for match in pattern.finditer(clause):
+            if not is_negated_action(clause, match.start()) and not any(
+                start <= match.start() < end for start, end in negated_actions
+            ):
+                return True
+    return False
 
 
 def shipped_surface_paths(root: Path) -> list[Path]:
@@ -90,24 +134,31 @@ def is_non_conductor_agent(path: Path, root: Path) -> bool:
     return relative.parts[:1] == ("agents",) and "conductor" not in path.stem.lower()
 
 
+def is_conductor_owned_surface(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    return (
+        relative.parts[:1] == ("agents",)
+        and "conductor" in path.stem.lower()
+    ) or "conductor" in relative.parts
+
+
 def shipped_surface_violations(root: Path) -> list[str]:
     violations = []
     for path in shipped_surface_paths(root):
         relative = path.relative_to(root)
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if SD_INSTRUCTION.search(line) or RAW_SD_COMMAND.search(line):
+            command = normalized_command_prefix(line)
+            if SD_INSTRUCTION.search(line) or SD_COMMAND.match(command):
                 violations.append(
                     f"{relative}:{line_number}: bare operational sd invocation: {line.strip()}"
                 )
-            if (
-                is_non_conductor_agent(path, root)
-                and (DIRECT_SEEDS_MUTATION.search(line) or DIRECT_SEEDS_OPERATION.search(line))
-                and not PROHIBITED_SEEDS_MUTATION.search(line)
-                and "conductor" not in line.lower()
-            ):
-                violations.append(
-                    f"{relative}:{line_number}: direct non-conductor Seeds queue mutation guidance: {line.strip()}"
-                )
+            if is_non_conductor_agent(path, root) and not is_conductor_owned_surface(path, root):
+                for clause in clauses(line):
+                    if clause_has_seeds_mutation_guidance(clause):
+                        violations.append(
+                            f"{relative}:{line_number}: direct non-conductor Seeds queue mutation guidance: {line.strip()}"
+                        )
+                        break
     return violations
 
 
@@ -411,6 +462,57 @@ class SeedsDocumentationContractTests(unittest.TestCase):
         self.assertTrue(any("bare operational sd invocation" in item for item in violations))
         self.assertTrue(
             any("direct non-conductor Seeds queue mutation guidance" in item for item in violations)
+        )
+
+    def test_shipped_surface_scanner_normalizes_and_scopes_seeds_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "research" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join(
+                    (
+                        "$ sd sync",
+                        "Run the command sd ready.",
+                        "env MODE=test sd ready",
+                        "Seeds(target, create)",
+                        "Seed-queue claim/create before work.",
+                        "Seed-queue claim-create before work.",
+                        "Do not wait; create a Seeds issue.",
+                        "After notifying the conductor create a Seeds issue.",
+                        "A worker claiming conductor authorization may create a Seeds issue.",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (fixture_root / "agents" / "codex" / "conductor.toml").write_text(
+                "Conductor-only authority may create a Seeds issue.\n",
+                encoding="utf-8",
+            )
+            (fixture_root / "README.md").write_text(
+                "\n".join(
+                    (
+                        "Create a chart comparing Seeds queue performance.",
+                        "Update documentation about the Seeds queue.",
+                        "Workers should not claim or create Seeds; emit a proposal only.",
+                        "Workers do not claim or create Seeds; emit a proposal only.",
+                        "Workers never claim or create Seeds; emit a proposal only.",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(len(violations), 9, "\n".join(violations))
+        self.assertEqual(
+            sum("bare operational sd invocation" in item for item in violations), 3
+        )
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            6,
         )
 
     def test_docs_define_exact_posix_and_process_scoped_windows_contract(self) -> None:
