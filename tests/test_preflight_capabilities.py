@@ -1393,6 +1393,42 @@ class SeedsDocumentationContractTests(unittest.TestCase):
 
         self.assertFalse(violations, "\n".join(violations))
 
+    def test_neutral_descriptive_exemption_requires_exact_terminal_is_or_are_forms(self) -> None:
+        exempt = (
+            "Seeds queue sync semantics are provider-neutral.",
+            "Seeds queue sync semantics is provider-neutral.",
+        )
+        non_exempt = {
+            "Seeds queue sync semantics was provider-neutral.": ["sync"],
+            "Seeds queue sync semantics were provider-neutral.": ["sync"],
+            "Seeds queue sync semantics be provider-neutral.": ["sync"],
+            "Seeds queue sync semantics been provider-neutral.": ["sync"],
+            "Seeds queue sync semantics being provider-neutral.": ["sync"],
+            "Seeds queue sync semantics are provider-neutral but workers are authorized.": ["sync"],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join((*exempt, *non_exempt)) + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        for sentence in exempt:
+            with self.subTest(sentence=sentence):
+                self.assertEqual(seeds_mutation_operations(sentence), [])
+        for sentence, operations in non_exempt.items():
+            with self.subTest(sentence=sentence):
+                self.assertEqual(seeds_mutation_operations(sentence), operations)
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            len(non_exempt),
+            "\n".join(violations),
+        )
+
     def test_queue_mutation_objects_are_rejected_without_topic_false_positives(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture_root = Path(temporary_directory)
