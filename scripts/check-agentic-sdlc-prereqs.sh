@@ -1,12 +1,33 @@
 #!/bin/bash
-# Preflight for the agentic-sdlc-orchestrator kit.
-# Required baseline: git and sd (Seeds queue).
+# Preflight and reusable Seeds launcher for the agentic-sdlc-orchestrator kit.
+# Required bootstrap: mise. Required runtime capabilities: git and exact Seeds via mise.
 # Set AGENTIC_SDLC_GITHUB_REQUIRED=1 only for an authorized GitHub operation; then gh is required.
-# The current skill-capable host is detected informationally because not every provider
-# exposes a stable CLI executable name.
 # Optional enhancements: tmux (adapter backend) and cmux (active view/event layer).
-# Native orchestration remains fully supported when optional enhancements are absent.
 set -euo pipefail
+
+AGENTIC_SDLC_SEEDS_VERSION=0.5.14
+AGENTIC_SDLC_SEEDS_TOOL="npm:@os-eco/seeds-cli@${AGENTIC_SDLC_SEEDS_VERSION}"
+AGENTIC_SDLC_NODE_TOOL=node@22.22.3
+AGENTIC_SDLC_BUN_TOOL=bun@1.3.10
+
+# Run exact Seeds from the target repository without loading that repository's or ambient
+# mise config. The target remains cwd and every caller argument crosses unchanged.
+agentic_sdlc_seeds() {
+  if [ "$#" -lt 1 ]; then
+    printf 'usage: agentic_sdlc_seeds <target> [sd args...]\n' >&2
+    return 2
+  fi
+  seeds_target=$1
+  shift
+  MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd "$seeds_target" exec \
+    "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
+    -- sd "$@"
+}
+
+# Sourcing this script exposes only the launcher; executing it runs preflight.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 missing=0
 
@@ -24,11 +45,45 @@ opt() {
 }
 
 req git
-req sd
+req mise
 if [ "${AGENTIC_SDLC_GITHUB_REQUIRED:-0}" = "1" ]; then
   req gh
 else
   rec gh "GitHub publication adapter skipped; local Git orchestration is unaffected"
+fi
+
+# Verify version and separator-bounded provenance inside the exact mise execution environment.
+# command -v on the ambient shell is intentionally not accepted as Seeds evidence.
+if command -v mise >/dev/null 2>&1; then
+  seeds_target=$(pwd)
+  if ! seeds_version=$(agentic_sdlc_seeds "$seeds_target" --version 2>/dev/null); then
+    printf 'MISSING:  exact Seeds %s through mise (required)\n' "$AGENTIC_SDLC_SEEDS_VERSION" >&2
+    missing=1
+  elif [ "$seeds_version" != "$AGENTIC_SDLC_SEEDS_VERSION" ]; then
+    printf 'MISMATCH: Seeds version %s; required %s\n' "$seeds_version" "$AGENTIC_SDLC_SEEDS_VERSION" >&2
+    missing=1
+  elif ! seeds_root=$(MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd "$seeds_target" exec \
+      "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
+      -- sh -c 'mise --no-config --cd "$1" where "$2"' agentic-sdlc "$seeds_target" "$AGENTIC_SDLC_SEEDS_TOOL" 2>/dev/null); then
+    printf 'MISSING:  Seeds provenance root from mise (required)\n' >&2
+    missing=1
+  elif ! seeds_executable=$(MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd "$seeds_target" exec \
+      "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
+      -- sh -c 'command -v sd' 2>/dev/null); then
+    printf 'MISSING:  Seeds executable from exact mise environment (required)\n' >&2
+    missing=1
+  else
+    # Normalize Windows separators and case. The trailing slash makes containment separator-bounded.
+    normalized_root=$(printf '%s' "$seeds_root" | tr '\\' '/' | tr '[:upper:]' '[:lower:]')
+    normalized_executable=$(printf '%s' "$seeds_executable" | tr '\\' '/' | tr '[:upper:]' '[:lower:]')
+    case "$normalized_executable" in
+      "$normalized_root"/*) printf 'ok:       Seeds %s (%s)\n' "$seeds_version" "$seeds_executable" ;;
+      *)
+        printf 'MISMATCH: Seeds provenance %s is outside %s\n' "$seeds_executable" "$seeds_root" >&2
+        missing=1
+        ;;
+    esac
+  fi
 fi
 
 # Known agent CLIs are useful evidence, but execution may already be inside another
@@ -53,10 +108,9 @@ if command -v cmux >/dev/null 2>&1 && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
   printf 'optional: active cmux view/event adapter detected\n'
 fi
 
-
 # codex dir-trust preflight: workers hang on the trust prompt in untrusted dirs.
 if command -v codex >/dev/null 2>&1 && [ -f "${CODEX_HOME:-$HOME/.codex}/config.toml" ]; then
-  cwd_target="$(pwd)"
+  cwd_target=$(pwd)
   if grep -qF "$cwd_target" "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; then
     printf 'ok:       codex trusts %s\n' "$cwd_target"
   else

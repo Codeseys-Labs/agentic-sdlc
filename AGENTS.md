@@ -44,11 +44,16 @@ as the router.
 
 ## Installing this bundle
 
-mise 2026.4.27+ is the managed-tool bootstrap, not the sole readiness prerequisite. It pins
-uv, consumes the checked-in cross-platform `mise.lock`, and uv supplies Python 3.12.11 for
-all authoritative Python entrypoints. Git, a documented Seeds distribution, supported trust
-behavior, and any selected adapter must be present and verified; missing, unpinned, untrusted,
-or ambiguous capability means not Git-ready. Trust is scoped to each absolute config path:
+Mise 2026.4.27+ is the only bootstrap prerequisite. Bootstrap from the reviewed distribution
+checkout with `mise -C <distribution-root> install`; it installs pinned uv, Node 22.22.3, Bun
+1.3.10, and `npm:@os-eco/seeds-cli@0.5.14`, while uv supplies Python 3.12.11 for all
+authoritative Python entrypoints. The Seeds lock proves the exact version and npm backend, not tarball or transitive dependency integrity. After bootstrap, execute Seeds in any target repository
+through the exact `Seeds(<target>, <args...>)` contract in the flagship skill; it uses
+`mise --no-config --cd <target>` and has no bundle-checkout dependency. Never accept ambient
+Seeds provenance or make permanent Windows environment/trust/config changes. Git, supported
+trust behavior, repository gates, and any selected adapter remain verified runtime-readiness
+capabilities; missing, unpinned, untrusted, or ambiguous capability means not Git-ready. Trust
+is scoped to each absolute config path:
 every linked worktree must review and trust its own `mise.toml`; `MISE_PARANOID=1` fails closed
 until that explicit trust step. The requested model tier and resolved provider/model are
 separate facts: record resolved only after adapter readback, otherwise inherited or unresolved.

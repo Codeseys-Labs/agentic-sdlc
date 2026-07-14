@@ -21,10 +21,13 @@ claiming wave readiness.
    - Resolve the target repository, then record `git status --short`, tracked/untracked
      files, current branch/HEAD, remotes, existing task runner, hooks, CI, instruction
      files, and language/toolchain manifests.
-   - Run the maintained prerequisite checker when available. Missing, unpinned, untrusted,
+   - Run the maintained prerequisite checker from the reviewed distribution checkout. It defines
+     `Seeds(<target>, <args...>)` as the exact, config-independent mise contract in
+     `agentic-sdlc-orchestrator` and verifies version/provenance; use that shorthand for every
+     Seeds operation below. Missing, unpinned, untrusted,
      or ambiguous required capability fails closed; missing optional cmux or tmux
-     never triggers implicit installation. `mise` is the managed-tool bootstrap, not the sole
-     readiness prerequisite; repository tools are pinned through it. Record the selected
+     never triggers implicit installation. `mise` is the only bootstrap prerequisite; repository
+     readiness still requires verified Git, gates, trust, and selected adapters. Record the selected
      adapter and its capability/model readback, or record inherited/unresolved when it cannot
      prove the resolved provider/model.
    - If the repository is dirty, do not commit, stage, or absorb pre-existing changes.
@@ -46,7 +49,7 @@ claiming wave readiness.
      worktrees; this runbook neither initializes nor promotes another VCS substrate.
 
 3. **Seeds queue of record**
-   - Run `sd init` only when `.seeds/` is absent. Preserve existing queue/configuration.
+   - Run `Seeds(<target>, init)` only when `.seeds/` is absent. Preserve existing queue/configuration.
    - Convert starting intent into 1–3 bounded Seeds, or derive them from accepted TODOs /
      issues. Never invent priority or silently import every TODO.
    - Record whether `.seeds/` is tracked or intentionally local according to repository

@@ -8,8 +8,10 @@ Run the FRAME phase of the agentic-sdlc-orchestrator loop for: $ARGUMENTS
 1. Load the `agentic-sdlc-orchestrator` skill if not already loaded.
 2. State the exact done condition for this run. If $ARGUMENTS is ambiguous, ask one
    clarifying question before proceeding.
-3. Prime state:
-   - `sd prime` + `sd ready --format json` + `sd blocked --format json` (if Seeds present)
+3. Prime state using the exact `Seeds(<target>, <args...>)` shorthand defined by the loaded
+   orchestrator skill (never an ambient executable):
+   - `Seeds(<target>, prime)` + `Seeds(<target>, ready --format json)` +
+     `Seeds(<target>, blocked --format json)` (if Seeds present)
    - `git status --short` (dirty tree → plan worktrees; never write in a dirty checkout)
    - Read repo intent docs (README, ADRs, roadmap) relevant to the task.
 4. Detect provider-native delegation first, but treat it as sufficient only after the

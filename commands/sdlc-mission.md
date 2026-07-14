@@ -9,7 +9,8 @@ Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` an
 `references/tiered-orchestration.md`. Operate as the conductor:
 
 1. **Reconstruct state** (no shared-context assumptions): repo agent instructions,
-   roadmap/status, tracker + `sd prime`/`sd ready`/`sd blocked`, ADR index, CI docs,
+   roadmap/status, tracker + `Seeds(<target>, prime)` / `Seeds(<target>, ready)` /
+   `Seeds(<target>, blocked)` using the exact loaded-skill contract, ADR index, CI docs,
    branch/dirty-tree state, latest commit. Document the baseline.
 2. **Audit + classify** every open item: ACTIVE_MILESTONE / BLOCKED_* / POST_MILESTONE /
    OUT_OF_SCOPE / DUPLICATE / INVALID, with rationale. Priority =

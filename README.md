@@ -130,22 +130,37 @@ start, or enable cmux or tmux merely to use this bundle.
 
 ## Install and run the bundle
 
-**Mise 2026.4.27 or newer is the managed-tool bootstrap, not the sole readiness prerequisite.**
-The checked-in `mise.toml` pins `uv`; `mise.lock` records source URLs and SHA-256 checksums
-for Linux, macOS, and Windows; `uv` supplies Python `3.12.11` for every authoritative Python
-entrypoint. Git, a documented Seeds distribution, supported trust behavior, and the selected
-adapter are also prerequisites. Resolve and record the actual provider/model only when the
-adapter proves it; otherwise record inherited or unresolved. A passing local status or gate
+**Mise 2026.4.27 or newer is the only bootstrap prerequisite.** From the reviewed distribution
+checkout, `mise -C <distribution-root> install` installs the pinned bundle tools. The checked-in
+`mise.toml` pins `uv`, Node `22.22.3`, Bun `1.3.10`, and Seeds
+`npm:@os-eco/seeds-cli@0.5.14`; `mise.lock` supplies the platform resolution. `uv` supplies
+Python `3.12.11` for every authoritative Python entrypoint. The Seeds lock proves the exact
+version and npm backend, not tarball or transitive dependency integrity. Git, supported trust
+behavior, repository gates, and any selected adapter remain runtime-readiness capabilities,
+not additional bootstrap prerequisites. Resolve and record the actual provider/model only when
+the adapter proves it; otherwise record inherited or unresolved. A passing local status or gate
 never authorizes push, publication, PR mutation, merge, deployment, credential, or other
 outward effect.
 
 Bootstrap the repository and inspect the available lifecycle tasks:
 
 ```bash
-mise trust mise.toml
-mise install
-mise tasks
+mise -C <distribution-root> install
+mise -C <distribution-root> tasks
 ```
+
+Bootstrap commands deliberately run in the reviewed distribution checkout. Once installed,
+Seeds operations run from any target repository with no bundle-checkout dependency and ignore
+both target and ambient mise config while preserving target cwd:
+
+```bash
+MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>
+```
+
+Use process-scoped `$env:MISE_NPM_PACKAGE_MANAGER = 'npm'` with the same argument array on
+native Windows and restore its previous value afterward; do not make permanent trust or config
+changes. The skill and `references/seeds-worktrees.md` define the unambiguous
+`Seeds(<target>, <args...>)` shorthand for this exact command.
 
 Mise trust is scoped to each absolute config path, so every linked worktree must trust its own
 `mise.toml` after reviewing the diff. `MISE_PARANOID=1` deliberately rejects an untrusted

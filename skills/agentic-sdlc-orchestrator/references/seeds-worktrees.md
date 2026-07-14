@@ -2,15 +2,51 @@
 
 Use this reference when converting the plan into parallel implementation work.
 
+## Exact Seeds execution contract
+
+Mise is the only bootstrap prerequisite. From a reviewed distribution checkout, bootstrap the
+pinned tools once with `mise -C <distribution-root> install`. Thereafter, define
+`Seeds(<target>, <args...>)` as this exact POSIX command; it has no bundle-checkout dependency:
+
+```bash
+MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>
+```
+
+`--no-config` prevents target or ambient mise configuration from changing any runtime, while
+`--cd <target>` preserves the target repository as cwd. Pass each argument separately; do not
+assemble a shell command string or resolve an ambient `sd` from `PATH`.
+
+On native Windows use process-scoped environment only, restore prior state, and preserve the
+argument array:
+
+```powershell
+$previousSeedsPackageManager = $env:MISE_NPM_PACKAGE_MANAGER
+try {
+  $env:MISE_NPM_PACKAGE_MANAGER = 'npm'
+  & mise --no-config --cd $target exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd @seedsArgs
+} finally {
+  if ($null -eq $previousSeedsPackageManager) {
+    Remove-Item Env:MISE_NPM_PACKAGE_MANAGER -ErrorAction SilentlyContinue
+  } else {
+    $env:MISE_NPM_PACKAGE_MANAGER = $previousSeedsPackageManager
+  }
+}
+```
+
+Do not make permanent trust or config changes for this execution. Preflight verifies exact
+version 0.5.14 and that the resolved executable is separator-bounded beneath mise's exact npm
+installation root; Windows path comparison normalizes separators and ignores case. Wrong,
+missing, or ambiguous version/provenance fails closed.
+
 ## Seeds Queue
 
 Use Seeds as the authoritative dynamic queue for recommendations and acceptance tracking;
 they are not an authorization or execution channel:
 
-```bash
-sd prime
-sd ready --format json
-sd blocked --format json
+```text
+Seeds(<target>, prime)
+Seeds(<target>, ready --format json)
+Seeds(<target>, blocked --format json)
 ```
 
 Create or update Seeds for:
@@ -64,7 +100,7 @@ After worker completion:
 Before opening a PR:
 
 - Run final gates from the integration branch.
-- Run `sd sync` if Seeds changed.
+- Run `Seeds(<target>, sync)` if Seeds changed.
 - Confirm the integration branch diff matches the intended Seeds.
 - Include Seeds ids and test evidence in the PR body.
 - Confirm explicit operation-specific authorization for PR creation or mutation; gates,
