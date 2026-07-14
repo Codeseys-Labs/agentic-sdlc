@@ -24,8 +24,42 @@ class GateGraphTests(unittest.TestCase):
     )
 
     LOCKED_TOOLCHAIN = {
-        "node": {"version": "22.22.3", "backend": "core:node"},
-        "bun": {"version": "1.3.10", "backend": "core:bun"},
+        "uv": {
+            "version": "0.11.17",
+            "backend": "aqua:astral-sh/uv",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
+        "lefthook": {
+            "version": "2.1.10",
+            "backend": "aqua:evilmartians/lefthook",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
+        "node": {
+            "version": "22.22.3",
+            "backend": "core:node",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
+        "bun": {
+            "version": "1.3.10",
+            "backend": "core:bun",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
         "npm:@os-eco/seeds-cli": {"version": "0.5.14", "backend": "npm:@os-eco/seeds-cli"},
     }
 
@@ -95,16 +129,57 @@ class GateGraphTests(unittest.TestCase):
                 if name == "npm:@os-eco/seeds-cli":
                     self.assertEqual(set(entries[0]), {"version", "backend"})
                 else:
-                    expected_platforms = {
-                        "node": {"linux-x64", "macos-arm64", "macos-x64", "windows-x64"},
-                        "bun": {
-                            "linux-x64", "linux-x64-baseline", "linux-x64-musl", "linux-x64-musl-baseline",
-                            "macos-arm64", "macos-x64", "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
-                        },
-                    }[name]
+                    expected_platforms = expected["platforms"]
                     self.assertEqual(platform_keys, {f"platforms.{platform}" for platform in expected_platforms})
                     for key in platform_keys:
-                        self.assertEqual(set(entries[0][key]), {"checksum", "url"})
+                        expected_fields = {"checksum", "url"}
+                        if name in {"uv", "lefthook"}:
+                            expected_fields.add("provenance")
+                        self.assertEqual(set(entries[0][key]), expected_fields)
+
+    def test_generated_toolchain_lock_has_exact_tool_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = self.copied_repo(temp)
+            path = repo / "mise.lock"
+            text = path.read_text(encoding="utf-8")
+            path.write_text(
+                text + '\n[[tools.python]]\nversion = "3.12.11"\nbackend = "core:python"\n',
+                encoding="utf-8",
+            )
+            result = self.run_validator(repo)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("mise.lock tools must equal", result.stderr)
+
+    @unittest.skipUnless(shutil.which("mise"), "mise is required for generated lock behavior")
+    def test_canonical_lock_regeneration_is_byte_identical_and_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = self.copied_repo(temp)
+            lock_path = repo / "mise.lock"
+            before = lock_path.read_bytes()
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("MISE_") and key != "CI"
+            }
+            env |= {
+                "HOME": str(Path(temp) / "home"),
+                "MISE_DATA_DIR": str(Path(temp) / "mise-data"),
+                "MISE_STATE_DIR": str(Path(temp) / "mise-state"),
+                "MISE_CACHE_DIR": str(Path(temp) / "mise-cache"),
+                "MISE_CONFIG_DIR": str(Path(temp) / "mise-config"),
+                "MISE_LOCKED": "0",
+            }
+            generated = subprocess.run(
+                ["mise", "-C", str(repo), "lock", "--yes"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+            self.assertEqual(lock_path.read_bytes(), before)
+            result = self.run_validator(repo)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_toolchain_lock_mutations_fail(self) -> None:
         mutations = (
@@ -112,8 +187,8 @@ class GateGraphTests(unittest.TestCase):
             ("bun", 'version = "1.3.10"', 'version = "1.3.9"', "mise.lock must resolve bun 1.3.10"),
             ("npm:@os-eco/seeds-cli", 'version = "0.5.14"', 'version = "0.5.13"', "mise.lock must resolve npm:@os-eco/seeds-cli 0.5.14"),
             ("npm:@os-eco/seeds-cli", 'backend = "npm:@os-eco/seeds-cli"', 'backend = "core:node"', "mise.lock npm:@os-eco/seeds-cli backend must equal npm:@os-eco/seeds-cli"),
-            ("node", "checksum = ", 'checksum = "sha256:' + "0" * 64 + '" # ', "mise.lock node linux-x64 checksum must equal the generated lock"),
-            ("bun", "checksum = ", 'checksum = "sha256:' + "0" * 64 + '" # ', "mise.lock bun linux-x64 checksum must equal the generated lock"),
+            ("node", '[tools.node."platforms.linux-x64"]\nchecksum = ', '[tools.node."platforms.linux-x64"]\nchecksum = "sha256:' + "0" * 64 + '" # ', "mise.lock node linux-x64 checksum must equal the generated lock"),
+            ("bun", '[tools.bun."platforms.linux-x64"]\nchecksum = ', '[tools.bun."platforms.linux-x64"]\nchecksum = "sha256:' + "0" * 64 + '" # ', "mise.lock bun linux-x64 checksum must equal the generated lock"),
             ("npm:@os-eco/seeds-cli", 'backend = "npm:@os-eco/seeds-cli"', 'backend = "npm:@os-eco/seeds-cli"\ntransitive_integrity = "unsupported"', "must contain version and backend only"),
         )
         executed = 0
