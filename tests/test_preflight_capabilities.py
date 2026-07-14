@@ -55,8 +55,8 @@ NEGATED_PSEUDO_OPERATION = re.compile(
     re.IGNORECASE,
 )
 SEEDS_DESCRIPTIVE_SUBJECT = r"(?:semantics|lifecycle|terminology)"
-COPULAR_TOPIC_PROSE = re.compile(
-    rf"^\s+{SEEDS_DESCRIPTIVE_SUBJECT}\s+(?:is|are|was|were|be|been|being)\b",
+NEUTRAL_DESCRIPTIVE_TOPIC_PROSE = re.compile(
+    rf"^\s+{SEEDS_DESCRIPTIVE_SUBJECT}\s+(?:is|are)\s+provider-neutral[.!?]\s*$",
     re.IGNORECASE,
 )
 SEEDS_ACTION_FIRST = re.compile(
@@ -66,7 +66,7 @@ SEEDS_ACTION_FIRST = re.compile(
 )
 SEEDS_ACTION_SUBJECT_FIRST = re.compile(
     rf"\b{SEEDS_OBJECT}\s+(?P<actions>{SEEDS_ACTION_LIST})\b"
-    r"(?!\s+(?:dashboard|chart|guide|docs?|documentation|security(?:[-\s]gap)?|migration[-\s]?guide|terminology)\b)",
+    r"(?!\s+(?:dashboard|chart|guide|docs?|documentation|security(?:[-\s]gap)?|migration[-\s]?guide)\b)",
     re.IGNORECASE,
 )
 NEGATED_SEEDS_ACTION = re.compile(
@@ -257,8 +257,8 @@ def pseudo_operation_is_negated(text: str, action_start: int) -> bool:
     return bool(NEGATED_PSEUDO_OPERATION.search(text[:action_start]))
 
 
-def is_copular_topic_prose(text: str, action_end: int) -> bool:
-    return bool(COPULAR_TOPIC_PROSE.match(text[action_end:]))
+def is_neutral_descriptive_topic_prose(text: str, action_end: int) -> bool:
+    return bool(NEUTRAL_DESCRIPTIVE_TOPIC_PROSE.match(text[action_end:]))
 
 
 def seeds_mutation_operations(text: str) -> list[str]:
@@ -268,7 +268,7 @@ def seeds_mutation_operations(text: str) -> list[str]:
             operations.append(match.group("action").lower())
     for pattern in (SEEDS_ACTION_FIRST, SEEDS_ACTION_SUBJECT_FIRST):
         for match in pattern.finditer(text):
-            if not operation_is_negated(text, match.start("actions")) and not is_copular_topic_prose(
+            if not operation_is_negated(text, match.start("actions")) and not is_neutral_descriptive_topic_prose(
                 text, match.end("actions")
             ):
                 operations.extend(action_names(match.group("actions")))
@@ -1349,6 +1349,10 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             worker.write_text(
                 "\n".join(
                     (
+                        "Seeds queue sync semantics are that workers are authorized.",
+                        "Seeds queue claim lifecycle is owned by workers.",
+                        "Seeds queue create terminology grants workers permission.",
+                        "Seeds queue create terminology grants workers access.",
                         "Seeds queue create permission is granted to workers.",
                         "Seeds queue claim authorization is granted to workers.",
                         "Seeds queue sync access is allowed to workers.",
@@ -1364,9 +1368,30 @@ class SeedsDocumentationContractTests(unittest.TestCase):
 
         self.assertEqual(
             sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
-            5,
+            9,
             "\n".join(violations),
         )
+
+    def test_exact_neutral_descriptive_grammar_preserves_provider_neutral_terminal_predicates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join(
+                    (
+                        "Seeds queue sync semantics are provider-neutral.",
+                        "Seeds queue claim lifecycle is provider-neutral!",
+                        "Seeds queue create terminology is provider-neutral?",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertFalse(violations, "\n".join(violations))
 
     def test_queue_mutation_objects_are_rejected_without_topic_false_positives(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
