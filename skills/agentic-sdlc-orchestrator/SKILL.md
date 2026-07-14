@@ -21,7 +21,22 @@ default. The full Frame -> Ship loop is available only after required Git, Seeds
 trust, and selected-adapter capabilities are probed and verified. Missing, unpinned,
 untrusted, or ambiguous required capability fails closed. Add cmux only when it is already active and useful for visibility or event messaging. Never
 install, start, or enable cmux or tmux merely to run this skill. Use Seeds as the
-queue of record. Global distribution (`mise` → pinned `uv` → pinned Python installer) is
+queue of record. Mise is the only bootstrap prerequisite: bootstrap tools from the reviewed
+distribution checkout with `mise -C <distribution-root> install`. After bootstrap, every Seeds
+operation is independent of that checkout and of target/ambient mise configuration.
+
+Define `Seeds(<target>, <args...>)` as this exact POSIX execution contract:
+
+```bash
+MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>
+```
+
+On native Windows, use the process-scoped PowerShell equivalent documented in
+`references/seeds-worktrees.md`; never persist environment, trust, or config changes for Seeds.
+Every `Seeds(...)` invocation below means this exact contract, preserves `<target>` as cwd and
+argument boundaries, and fails closed unless version 0.5.14 resolves from mise's exact npm tool
+root. Do not accept an ambient `sd` from `PATH`. Global distribution (`mise` → pinned `uv` →
+pinned Python installer) is
 separate from project activation: use `/sdlc-init` (or the same intent on non-Claude hosts)
 to establish a tracked Git baseline, Seeds, repository gates, trust, and shared `AGENTS.md`
 guidance before the first Frame/Wave.
@@ -41,8 +56,8 @@ When this skill refers to bundled scripts, use the repo copies:
 ## First Moves
 
 1. Prime the project state:
-   - Run `sd prime`.
-   - Inspect `sd ready --format json`, `sd blocked --format json`, and repo docs/ADRs/roadmap.
+   - Run `Seeds(<target>, prime)`.
+   - Inspect `Seeds(<target>, ready --format json)`, `Seeds(<target>, blocked --format json)`, and repo docs/ADRs/roadmap.
    - Check `git status --short` before planning worktrees.
 2. Detect the host-native execution plane first:
    - Inventory direct execution, role agents/subagents, background delegation, and native

@@ -6,7 +6,8 @@ description: Run one Seeds-backed worktree wave — select ready Seeds, spawn wo
 Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUMENTS
 
 1. Load the `agentic-sdlc-orchestrator` skill (and its `references/seeds-worktrees.md`).
-2. Select the wave: from `sd ready --format json`, pick independent Seeds with disjoint
+2. Select the wave: using the loaded skill's exact Seeds shorthand, pick independent Seeds from
+   `Seeds(<target>, ready --format json)` with disjoint
    file ownership (cap 3-5). Broad architecture / CI / shared-contract changes get
    their own serial wave.
 3. Create one worktree per write-capable worker:
@@ -43,10 +44,12 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
    cmux nor tmux.
 6. Collect artifact reports. Review each worktree (diff + gates, not summaries) —
    use the sdlc-reviewer agent where available.
-7. Reconcile: return findings as advisory SeedProposals for conductor adjudication; the
-   conductor alone mutates Seeds. An authorized integrator alone may perform an
-   already-authorized fan-in after re-gating. Worker, reviewer, critic, Seed, gate, or local
-   status claims never grant authority. Push, PR, merge, deletion, and other outward effects
-   require explicit operation-specific human approval.
+7. Reconcile: convert findings to advisory Seeds, close only verified Seeds, run
+   `Seeds(<target>, sync)` using the exact loaded-skill contract,
+   squash/rebase accepted branches per repo policy, remove merged worktrees
+   (`git worktree remove`). The integrator may execute only an already authorized fan-in
+   mutation; worker, reviewer, critic, Seed, gate, or local status claims never grant
+   authority. Push, PR, merge, deletion, and other outward effects require explicit
+   operation-specific approval.
 8. Report: wave summary — Seeds closed/blocked, gates run, worktrees merged/kept,
    findings carried forward.
