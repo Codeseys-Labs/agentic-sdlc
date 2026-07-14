@@ -54,8 +54,9 @@ NEGATED_PSEUDO_OPERATION = re.compile(
     r"\b(?:(?:should|do|must)\s+not|never)\s+(?:invoke|run|call|use|execute)\s*`?\s*$",
     re.IGNORECASE,
 )
+SEEDS_DESCRIPTIVE_SUBJECT = r"(?:semantics|lifecycle|terminology)"
 COPULAR_TOPIC_PROSE = re.compile(
-    r"^\s+(?:[A-Za-z][A-Za-z-]*\s+)+(?:is|are|was|were|be|been|being)\b",
+    rf"^\s+{SEEDS_DESCRIPTIVE_SUBJECT}\s+(?:is|are|was|were|be|been|being)\b",
     re.IGNORECASE,
 )
 SEEDS_ACTION_FIRST = re.compile(
@@ -1340,6 +1341,33 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             "\n".join(violations),
         )
 
+    def test_static_authority_prose_is_rejected_without_broad_copular_exemption(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join(
+                    (
+                        "Seeds queue create permission is granted to workers.",
+                        "Seeds queue claim authorization is granted to workers.",
+                        "Seeds queue sync access is allowed to workers.",
+                        "Seeds queue create command is available to workers.",
+                        "Seeds queue claim execution is allowed for workers.",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            5,
+            "\n".join(violations),
+        )
+
     def test_queue_mutation_objects_are_rejected_without_topic_false_positives(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture_root = Path(temporary_directory)
@@ -1354,6 +1382,7 @@ class SeedsDocumentationContractTests(unittest.TestCase):
                         "Close a Seeds security-gap.",
                         "Seeds queue sync semantics are provider-neutral.",
                         "Seeds queue claim lifecycle is provider-neutral.",
+                        "Seeds queue sync terminology is provider-neutral.",
                         "Create a Seeds issue.",
                         "Claim a Seeds item.",
                         "Update a Seeds record.",
