@@ -51,7 +51,7 @@ SEEDS_PSEUDO_OPERATION = re.compile(
     rf"\bSeeds\(\s*[^,()]+\s*,\s*(?P<action>{SEEDS_ACTION})\b", re.IGNORECASE
 )
 NEGATED_PSEUDO_OPERATION = re.compile(
-    r"\b(?:(?:should|do|must)\s+not|never)\s+(?:invoke|run)\s*$",
+    r"\b(?:(?:should|do|must)\s+not|never)\s+(?:invoke|run|call|use|execute)\s*$",
     re.IGNORECASE,
 )
 SEEDS_ACTION_FIRST = re.compile(
@@ -61,7 +61,7 @@ SEEDS_ACTION_FIRST = re.compile(
 )
 SEEDS_ACTION_SUBJECT_FIRST = re.compile(
     rf"\b{SEEDS_OBJECT}\s+(?P<actions>{SEEDS_ACTION_LIST})\b"
-    r"(?!\s+(?:dashboard|chart|guide|docs?|documentation|security(?:[-\s]gap)?|migration[-\s]?guide)\b)",
+    r"(?!\s+(?:dashboard|chart|guide|docs?|documentation|security(?:[-\s]gap)?|migration[-\s]?guide|terminology)\b)",
     re.IGNORECASE,
 )
 NEGATED_SEEDS_ACTION = re.compile(
@@ -70,10 +70,29 @@ NEGATED_SEEDS_ACTION = re.compile(
 SD_ACTION = r"(?:prime|ready|blocked|init|sync|create|claim|update|close|disposition)"
 SD_EXECUTABLE = r"sd(?:\.(?:exe|cmd|bat|com|ps1|sh))?"
 SD_COMMAND = re.compile(rf"\b{SD_EXECUTABLE}\b(?:['\"])?\s+{SD_ACTION}\b", re.IGNORECASE)
+SD_QUOTED_COMMAND = re.compile(
+    rf"(?:^|\s)['\"](?:[^'\"]*[\\/])?{SD_EXECUTABLE}['\"]\s+['\"]?{SD_ACTION}\b",
+    re.IGNORECASE,
+)
 SD_START_PROCESS = re.compile(
     rf"\bStart-Process\b.*?\b{SD_EXECUTABLE}\b.*?\b{SD_ACTION}\b",
     re.IGNORECASE,
 )
+POWERSHELL_COMMAND_VARIABLE = re.compile(
+    r"^\s*\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"](?P<value>[^'\"]+)['\"]\s*$",
+    re.IGNORECASE,
+)
+POWERSHELL_CALL_VARIABLE = re.compile(
+    r"\&\s*(?P<command>\$(?P<variable>[A-Za-z_][A-Za-z0-9_]*)|['\"](?P<literal>[^'\"]+)['\"])\s+"
+    r"(?P<action>\$(?P<action_variable>[A-Za-z_][A-Za-z0-9_]*)|['\"](?P<action_literal>[^'\"]+)['\"])",
+    re.IGNORECASE,
+)
+POWERSHELL_START_PROCESS_VARIABLE = re.compile(
+    r"\bStart-Process\b.*?-FilePath\s+(?P<command>\$(?P<variable>[A-Za-z_][A-Za-z0-9_]*)|['\"](?P<literal>[^'\"]+)['\"]).*?"
+    r"-ArgumentList\s+(?P<action>@\(\s*['\"](?P<array_literal>[^'\"]+)['\"]\s*\)|\$(?P<action_variable>[A-Za-z_][A-Za-z0-9_]*)|['\"](?P<action_literal>[^'\"]+)['\"])",
+    re.IGNORECASE,
+)
+PYTHON_SUBPROCESS_CALL = frozenset({"run", "call", "check_call", "check_output", "Popen"})
 CANONICAL_CONDUCTOR_PATH = Path("agents/codex/conductor.toml")
 CANONICAL_CONDUCTOR_ROLE = "conductor"
 CANONICAL_RECONCILIATION_PATH = Path(
@@ -108,8 +127,119 @@ def clauses(line: str) -> list[str]:
     return clauses
 
 
+def _safe_string_sequence(node: ast.AST, values: dict[str, str]) -> list[str] | None:
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    sequence = [_safe_string_expression(element, values) for element in node.elts]
+    return sequence if all(value is not None for value in sequence) else None
+
+
+def python_subprocess_lines(tree: ast.Module) -> list[tuple[int, str]]:
+    """Return direct static subprocess commands without executing Python guidance."""
+    values: dict[str, str] = {}
+    _assignment_strings(tree.body, values)
+    guidance = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if not isinstance(node.func.value, ast.Name) or node.func.value.id != "subprocess":
+            continue
+        if node.func.attr not in PYTHON_SUBPROCESS_CALL:
+            continue
+        arguments = node.args[0] if node.args else next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "args"), None
+        )
+        if arguments is None:
+            continue
+        command = _safe_string_sequence(arguments, values)
+        if command:
+            guidance.append((node.lineno, " ".join(command)))
+    return guidance
+
+
+def static_powershell_command_lines(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """Return static command-variable executions without evaluating PowerShell."""
+    values: dict[str, str] = {}
+    guidance = []
+    for line_number, line in lines:
+        if assignment := POWERSHELL_COMMAND_VARIABLE.match(line):
+            values[assignment.group("name").lower()] = assignment.group("value")
+            continue
+        if call := POWERSHELL_CALL_VARIABLE.search(line):
+            command = call.group("literal") or values.get((call.group("variable") or "").lower())
+            action = call.group("action_literal") or values.get((call.group("action_variable") or "").lower())
+            if command and action and (call.group("variable") or call.group("action_variable")):
+                guidance.append((line_number, f"{command} {action}"))
+            continue
+        if start := POWERSHELL_START_PROCESS_VARIABLE.search(line):
+            command = start.group("literal") or values.get((start.group("variable") or "").lower())
+            action = (
+                start.group("array_literal")
+                or start.group("action_literal")
+                or values.get((start.group("action_variable") or "").lower())
+            )
+            if command and action and (start.group("variable") or start.group("action_variable")):
+                guidance.append((line_number, f"{command} {action}"))
+    return guidance
+
+
+def _deduplicated_lines(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    return list(dict.fromkeys(lines))
+
+
+def guidance_command_violations(relative: Path, lines: list[tuple[int, str]]) -> list[str]:
+    scanned_lines = list(lines)
+    if relative.suffix == ".ps1":
+        scanned_lines.extend(static_powershell_command_lines(lines))
+    elif any(
+        POWERSHELL_COMMAND_VARIABLE.match(line)
+        or POWERSHELL_CALL_VARIABLE.search(line)
+        or POWERSHELL_START_PROCESS_VARIABLE.search(line)
+        for _, line in lines
+    ):
+        scanned_lines.extend(static_powershell_command_lines(lines))
+    violations = []
+    for line_number, line in _deduplicated_lines(scanned_lines):
+        command = normalized_command_prefix(line)
+        if SD_COMMAND.search(command) or SD_QUOTED_COMMAND.search(command) or SD_START_PROCESS.search(line):
+            violations.append(
+                f"{relative.as_posix()}:{line_number}: bare operational sd invocation: {line.strip()}"
+            )
+    return violations
+
+
+def is_sd_command_sequence(values: list[str]) -> bool:
+    return len(values) >= 2 and is_sd_executable(values[0]) and is_sd_action(values[1])
+
+
+def command_sequence_violations(relative: Path, lines: list[tuple[int, str]]) -> list[str]:
+    violations = []
+    for line_number, line in lines:
+        values = line.split()
+        if is_sd_command_sequence(values) and not SD_COMMAND.search(normalized_command_prefix(line)):
+            violations.append(
+                f"{relative.as_posix()}:{line_number}: bare operational sd invocation: {line.strip()}"
+            )
+        for index in range(len(values) - 2):
+            if values[index:index + 2] == ["mise", "exec"] and "--" in values[index + 2:]:
+                separator = values.index("--", index + 2)
+                if is_sd_command_sequence(values[separator + 1:]) and not SD_COMMAND.search(normalized_command_prefix(line)):
+                    violations.append(
+                        f"{relative.as_posix()}:{line_number}: bare operational sd invocation: {line.strip()}"
+                    )
+    return violations
+
+
 def action_names(actions: str) -> list[str]:
     return [match.group(0).lower() for match in re.finditer(SEEDS_ACTION, actions, re.IGNORECASE)]
+
+
+def is_sd_executable(value: str) -> bool:
+    return bool(re.search(rf"(?:^|[\\/]){SD_EXECUTABLE}$", value, re.IGNORECASE))
+
+
+def is_sd_action(value: str) -> bool:
+    return bool(re.fullmatch(SD_ACTION, value, re.IGNORECASE))
 
 
 def operation_is_negated(text: str, action_start: int) -> bool:
@@ -219,35 +349,58 @@ def _assignment_strings(nodes: list[ast.stmt], values: dict[str, str]) -> None:
 
 
 def rendered_build_file_lines(tree: ast.Module) -> list[tuple[int, str]]:
-    """Safely reconstruct direct constant build_files outputs without executing code."""
+    """Safely reconstruct direct and helper-mediated static build_files output without execution."""
     module_values: dict[str, str] = {}
     _assignment_strings(tree.body, module_values)
-    guidance = []
-    for function in ast.walk(tree):
-        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) or function.name != "build_files":
-            continue
-        values = module_values.copy()
-        for argument in function.args.args:
-            values[argument.arg] = f"<{argument.arg}>"
+    functions = {
+        function.name: function
+        for function in tree.body
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def render(
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+        values: dict[str, str],
+        active: frozenset[str] = frozenset(),
+    ) -> tuple[int, dict[str, str]] | None:
+        if function.name in active:
+            return None
+        active = active | {function.name}
         for statement in function.body:
             if isinstance(statement, ast.Return) and statement.value is not None:
-                rendered = _safe_string_mapping(statement.value, values)
-                if rendered is not None:
-                    for content in rendered.values():
-                        guidance.extend(
-                            (statement.lineno + offset, line)
-                            for offset, line in enumerate(content.splitlines() or [content])
-                        )
+                direct = _safe_string_mapping(statement.value, values)
+                if direct is not None:
+                    return statement.lineno, direct
+                if isinstance(statement.value, ast.Call) and isinstance(statement.value.func, ast.Name):
+                    helper = functions.get(statement.value.func.id)
+                    if helper is None or len(statement.value.args) != len(helper.args.args):
+                        return None
+                    helper_values = values.copy()
+                    for parameter, argument in zip(helper.args.args, statement.value.args):
+                        value = _safe_string_expression(argument, values)
+                        if value is None:
+                            return None
+                        helper_values[parameter.arg] = value
+                    return render(helper, helper_values, active)
             elif isinstance(statement, ast.Assign):
-                rendered = _safe_string_mapping(statement.value, values)
-                if rendered is not None:
-                    for content in rendered.values():
-                        guidance.extend(
-                            (statement.lineno + offset, line)
-                            for offset, line in enumerate(content.splitlines() or [content])
-                        )
                 _assignment_strings([statement], values)
-    return guidance
+        return None
+
+    function = functions.get("build_files")
+    if function is None:
+        return []
+    values = module_values.copy()
+    for argument in function.args.args:
+        values[argument.arg] = f"<{argument.arg}>"
+    result = render(function, values)
+    if result is None:
+        return []
+    line_number, rendered = result
+    return [
+        (line_number + offset, line)
+        for content in rendered.values()
+        for offset, line in enumerate(content.splitlines() or [content])
+    ]
 
 
 def literal_guidance_lines(path: Path) -> list[tuple[int, str]]:
@@ -275,6 +428,7 @@ def literal_guidance_lines(path: Path) -> list[tuple[int, str]]:
         ):
             guidance.extend((node.lineno + offset, line) for offset, line in enumerate(node.value.splitlines() or [node.value]))
     guidance.extend(rendered_build_file_lines(tree))
+    guidance.extend(python_subprocess_lines(tree))
     return guidance
 
 
@@ -323,13 +477,10 @@ def guidance_violations(
     *,
     enforce_seeds_authority: bool,
 ) -> list[str]:
-    violations = []
+    violations = guidance_command_violations(relative, lines)
+    if relative.suffix != ".py":
+        violations.extend(command_sequence_violations(relative, lines))
     for line_number, line in lines:
-        command = normalized_command_prefix(line)
-        if SD_COMMAND.search(command) or SD_START_PROCESS.search(line):
-            violations.append(
-                f"{relative.as_posix()}:{line_number}: bare operational sd invocation: {line.strip()}"
-            )
         if enforce_seeds_authority:
             operations = seeds_mutation_operations(line)
             if operations and not all(
@@ -915,6 +1066,143 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             "\n".join(violations),
         )
 
+    def test_bare_sd_invocations_reject_quoted_and_static_powershell_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            command = fixture_root / "commands" / "runbook.md"
+            command.parent.mkdir(parents=True)
+            command.write_text(
+                "\n".join(
+                    (
+                        'mise exec -- "sd" "create"',
+                        "mise exec -- 'sd' 'claim'",
+                        r"& 'C:\\Seeds\\sd.exe' 'update'",
+                        r"$seed_command = 'C:\\Seeds\\sd.exe'",
+                        "$seed_action = 'close'",
+                        "& $seed_command $seed_action",
+                        "& $seed_command 'disposition'",
+                        "$sync_action = 'sync'",
+                        "Start-Process -FilePath $seed_command -ArgumentList $sync_action",
+                        "Start-Process -FilePath $seed_command -ArgumentList 'init'",
+                        "$start_action = 'create'",
+                        "Start-Process -FilePath $seed_command -ArgumentList $start_action",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("bare operational sd invocation" in item for item in violations),
+            8,
+            "\n".join(violations),
+        )
+
+    def test_python_scanner_rejects_safe_subprocess_argument_lists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            script = fixture_root / "skills" / "example" / "scripts" / "worker.py"
+            script.parent.mkdir(parents=True)
+            script.write_text(
+                "\n".join(
+                    (
+                        "import subprocess",
+                        'COMMAND = "sd"',
+                        'ACTION = "close"',
+                        'subprocess.run(["sd", "create"])',
+                        'subprocess.check_call(("/opt/seeds/bin/sd", "claim"))',
+                        "subprocess.Popen(args=[COMMAND, ACTION])",
+                        'subprocess.run(["mise", "exec", "--", "sd", "sync"])',
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("bare operational sd invocation" in item for item in violations),
+            4,
+            "\n".join(violations),
+        )
+
+    def test_python_scanner_does_not_follow_recursive_build_files_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            script = fixture_root / "skills" / "example" / "scripts" / "render.py"
+            script.parent.mkdir(parents=True)
+            script.write_text(
+                "\n".join(
+                    (
+                        "def helper(project_name):",
+                        "    return helper(project_name)",
+                        "def build_files(project_name):",
+                        "    return helper(project_name)",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertFalse(violations, "\n".join(violations))
+
+    def test_python_scanner_reconstructs_static_build_files_helpers_without_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            script = fixture_root / "skills" / "example" / "scripts" / "render.py"
+            script.parent.mkdir(parents=True)
+            script.write_text(
+                "\n".join(
+                    (
+                        'PREFIX = "Workers may "',
+                        'ACTION = "create"',
+                        'OBJECT = " a Seeds issue "',
+                        "def helper(project_name):",
+                        "    return {'generated.md': PREFIX + ACTION + OBJECT + project_name}",
+                        "def build_files(project_name):",
+                        "    return helper(project_name)",
+                        "def untrusted_dynamic_code():",
+                        "    raise RuntimeError('scanner must not execute generated code')",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            1,
+            "\n".join(violations),
+        )
+
+    def test_pseudo_operation_negations_cover_call_use_and_execute(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join(
+                    (
+                        "Workers do not call Seeds(target, create).",
+                        "Workers never use Seeds(<target>, claim).",
+                        "Workers must not execute Seeds(repo.name, update).",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertFalse(violations, "\n".join(violations))
+
     def test_python_scanner_reconstructs_safe_constant_expressions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture_root = Path(temporary_directory)
@@ -1000,6 +1288,7 @@ class SeedsDocumentationContractTests(unittest.TestCase):
                         "Create a Seeds queue migration-guide.",
                         "Update the Seeds queue documentation.",
                         "Close a Seeds security-gap.",
+                        "Seeds queue sync terminology is provider-neutral.",
                         "Create a Seeds issue.",
                         "Claim a Seeds item.",
                         "Update a Seeds record.",
