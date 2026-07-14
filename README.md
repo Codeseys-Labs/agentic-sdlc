@@ -45,6 +45,8 @@ start, or enable cmux or tmux merely to use this bundle.
 
 ## Contents
 
+- [Roadmap archive](docs/roadmap/index.md): approved and superseded plans, decision records, Seeds dependency reference, baseline receipts, and routing certification.
+
 - `skills/agentic-sdlc-orchestrator/`: the flagship, provider-native orchestration skill
   for any skill-capable CLI agent.
 - `skills/codex-research-os/`: vendored research-team OS — a repo-scaffolding installer
