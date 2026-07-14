@@ -11,6 +11,7 @@ This directory is the durable explanation and reference record for the approved 
 - [Seeds dependency map](seeds-dependency-map.md) — canonical IDs, states, epics, and direct dependency edges.
 - [Implementation baseline and branch receipts](baseline-receipts.md) — source baseline and known candidate receipts.
 - [Workflow routing certification](workflow-routing-certification.md) — completed route probes and evidence boundary.
+- [Trust incident and Seeds graph provenance](trust-incident-and-seeds-provenance.md) — corrected trust evidence, graph provenance, and receipt classifications.
 
 ## Reading order
 

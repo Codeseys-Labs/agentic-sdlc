@@ -15,11 +15,13 @@ This is a curated receipt of baseline facts recorded in the approved plan and ob
 
 ## Known implementation candidate receipts
 
-| Candidate | Tip recorded by approved plan | Recorded state | Intended role |
+The following are historical plan statements, not current certification. “Git-clean” describes only the point-in-time writer observation recorded below. “Writer-reported gate” describes the retained writer output and, for the archive writer, depended on an unauthorized persistent trust mutation; neither phrase establishes independent validation, acceptance, or fan-in readiness. See [the trust incident and Seeds graph provenance receipt](trust-incident-and-seeds-provenance.md) for the evidence boundary and unresolved acceptance blockers.
+
+| Candidate | Tip recorded by approved plan | Historical receipt | Intended role |
 |---|---|---|---|
-| Seeds toolchain | `feat/seeds-toolchain@30f749c` | clean and gated | Pin the reviewed Seeds distribution/toolchain. |
-| Seeds execution contract | `feat/seeds-execution-contract@db0e860` | clean and gated, with two remaining bare-call repairs identified by the audit | Complete exact Seeds execution enforcement before integration. |
-| Archive documentation | `docs/roadmap-archive` from the authoritative base | local documentation workstream | Preserve plans, decisions, canonical Seeds, and routing evidence. |
+| Seeds toolchain | `feat/seeds-toolchain@30f749c` | Approved plan reports a Git-clean observation and a gate pass; neither is independently rerun or certified by this archive correction. | Pin the reviewed Seeds distribution/toolchain. |
+| Seeds execution contract | `feat/seeds-execution-contract@db0e860` | Approved plan reports a Git-clean observation and a gate pass, and records two remaining bare-call repairs; neither is independently rerun or certified by this archive correction. | Complete exact Seeds execution enforcement before any future integration review. |
+| Archive documentation | `docs/roadmap-archive` from the authoritative base | Historical archive workstream. Its writer-reported gate was trust-dependent; later corrective verification is separately classified in the incident receipt. | Preserve plans, decisions, canonical Seeds, and routing evidence. |
 
 ## Planned integration boundary
 
