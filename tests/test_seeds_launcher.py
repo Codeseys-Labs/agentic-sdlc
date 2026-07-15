@@ -602,6 +602,92 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             )
             self.assertEqual(inspected.returncode, 0, inspected.stderr)
             self.assertEqual(inspected.stdout.strip(), "0.5.14")
+            receipt = json.loads(
+                (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
+            )
+            seeds_dir = distribution / ".seeds"
+            seeds_dir.mkdir()
+            (seeds_dir / "config.yaml").write_text("project: fixture\nversion: '1'\n", encoding="utf-8")
+            prime_content = "WINDOWS-ADAPTER-PRIME\n"
+            (seeds_dir / "PRIME.md").write_text(prime_content, encoding="utf-8")
+            hostile_marker = root / "target-git-executed"
+            hostile_source = root / "hostile-git.ts"
+            hostile_source.write_text(
+                f"await Bun.write({json.dumps(str(hostile_marker))}, 'executed');"
+                "process.stdout.write('.git\\n');\n",
+                encoding="utf-8",
+            )
+            hostile_git = distribution / "git.exe"
+            compiled = subprocess.run(
+                [
+                    receipt["tuple"]["bun"]["executable"],
+                    f'--config={receipt["tuple"]["trusted"]["bunfig"]}',
+                    "--no-env-file",
+                    "--no-install",
+                    "--no-macros",
+                    f'--tsconfig-override={receipt["tuple"]["trusted"]["tsconfig"]}',
+                    "build",
+                    "--compile",
+                    f'--compile-executable-path={receipt["tuple"]["bun"]["executable"]}',
+                    "--no-compile-autoload-dotenv",
+                    "--no-compile-autoload-bunfig",
+                    "--no-compile-autoload-tsconfig",
+                    "--no-compile-autoload-package-json",
+                    f"--outfile={hostile_git}",
+                    hostile_source,
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                env={"SystemRoot": os.environ["SystemRoot"]},
+                check=False,
+                timeout=300,
+            )
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            hostile_com = distribution / "git.com"
+            shutil.copy2(hostile_git, hostile_com)
+            self.assertIn(
+                "NoDefaultCurrentDirectoryInExePath: '1'",
+                LAUNCHER.read_text(encoding="utf-8"),
+            )
+            adapter = Path(receipt["tuple"]["trusted"]["gitAdapter"])
+            adapter_probe = root / "adapter-probe.ts"
+            adapter_probe.write_text(
+                'const allowed=Bun.spawnSync(["git","rev-parse","--git-dir"]);'
+                'const denied=Bun.spawnSync(["git","status"]);'
+                'if(allowed.exitCode!==0||allowed.stdout.toString().trim()!==".git"||denied.exitCode===0)process.exit(1);\n',
+                encoding="utf-8",
+            )
+            adapter_environment = {
+                "PATH": str(adapter.parent),
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_SYSTEM": "NUL",
+                "GIT_CONFIG_GLOBAL": receipt["tuple"]["trusted"]["gitconfig"],
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_TERMINAL_PROMPT": "0",
+                "PATHEXT": ".EXE",
+                "SystemRoot": os.environ["SystemRoot"],
+            }
+            probe_command = [
+                receipt["tuple"]["bun"]["executable"],
+                f'--config={receipt["tuple"]["trusted"]["bunfig"]}',
+                "--no-macros",
+                "--no-env-file",
+                "--no-install",
+                f'--tsconfig-override={receipt["tuple"]["trusted"]["tsconfig"]}',
+                adapter_probe,
+            ]
+            adapter_result = subprocess.run(
+                probe_command,
+                cwd=distribution,
+                text=True,
+                capture_output=True,
+                env=adapter_environment,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(adapter_result.returncode, 0, adapter_result.stderr)
+            self.assertFalse(hostile_marker.exists(), "the closed runtime environment must select the receipt-bound adapter")
             prime = subprocess.run(
                 [exact_node, LAUNCHER, "inspect", "--target", distribution, "prime"],
                 text=True,
@@ -611,48 +697,8 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(prime.returncode, 0, prime.stderr)
-            receipt = json.loads(
-                (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
-            )
-            hostile_git = distribution / "git.exe"
-            shutil.copy2(Path(os.environ["SystemRoot"]) / "System32" / "hostname.exe", hostile_git)
-            adapter_probe = root / "adapter-probe.ts"
-            adapter_probe.write_text(
-                'const allowed=Bun.spawnSync(["git","rev-parse","--git-dir"]);'
-                'const denied=Bun.spawnSync(["git","status"]);'
-                'if(allowed.exitCode!==0||allowed.stdout.toString().trim()!==".git"||denied.exitCode===0)process.exit(1);\n',
-                encoding="utf-8",
-            )
-            adapter_environment = {
-                "PATH": str(Path(receipt["tuple"]["trusted"]["gitAdapter"]).parent),
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_CONFIG_SYSTEM": "NUL",
-                "GIT_CONFIG_GLOBAL": receipt["tuple"]["trusted"]["gitconfig"],
-                "GIT_OPTIONAL_LOCKS": "0",
-                "GIT_TERMINAL_PROMPT": "0",
-                "NoDefaultCurrentDirectoryInExePath": "1",
-                "PATHEXT": ".EXE",
-                "SystemRoot": os.environ["SystemRoot"],
-            }
-            adapter_result = subprocess.run(
-                [
-                    receipt["tuple"]["bun"]["executable"],
-                    f'--config={receipt["tuple"]["trusted"]["bunfig"]}',
-                    "--no-macros",
-                    "--no-env-file",
-                    "--no-install",
-                    f'--tsconfig-override={receipt["tuple"]["trusted"]["tsconfig"]}',
-                    adapter_probe,
-                ],
-                cwd=distribution,
-                text=True,
-                capture_output=True,
-                env=adapter_environment,
-                check=False,
-                timeout=60,
-            )
-            self.assertEqual(adapter_result.returncode, 0, adapter_result.stderr)
-            adapter = Path(receipt["tuple"]["trusted"]["gitAdapter"])
+            self.assertEqual(prime.stdout, prime_content)
+            self.assertFalse(hostile_marker.exists(), "inspect must not execute target-local git.exe or git.com")
             for flag in ("--git-dir", "--git-common-dir"):
                 with self.subTest(flag=flag):
                     direct = subprocess.run(
@@ -678,6 +724,9 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             self.assertNotEqual(git_failure.returncode, 0)
             self.assertIn("not a git repository", git_failure.stderr)
             hostile_git.unlink()
+            hostile_com.unlink()
+            shutil.rmtree(seeds_dir)
+            adapter_before = adapter.read_bytes()
             second_bootstrap = subprocess.run(
                 [exact_node, LAUNCHER, "bootstrap", "--distribution", distribution],
                 text=True,
@@ -687,6 +736,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 timeout=300,
             )
             self.assertEqual(second_bootstrap.returncode, 0, second_bootstrap.stderr)
+            self.assertEqual(adapter.read_bytes(), adapter_before)
             stale_build = Path(receipt["tuple"]["trusted"]["gitAdapter"]).parent / "git-adapter-build"
             stale_build.mkdir()
             stale_bootstrap = subprocess.run(
