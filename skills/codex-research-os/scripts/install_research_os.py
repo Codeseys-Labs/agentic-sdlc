@@ -40,6 +40,12 @@ ONE_MILLION_CONTEXT_SEMANTICS = "A `[1m]` request or base-ID readback proves nei
 VALIDATION_ONLY_SEMANTICS = "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
 SEEDS_READ_ONLY_SEMANTICS = "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor."
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "6ea5d0acaf63497963ee7087874ae20fdb735c0ae0afad8405b4de1c919a32bd"
+SOURCE_PINNED_REVIEWER_INSTRUCTIONS_SHA256 = {
+    "adversarial_reviewer": "182d6721f2b1205970f2097016a249af1dacd0de63538b6407a35841e58edf2b",
+    "replication_reviewer": "ce6268492086142cfad616d36c7a7e13473cd24e009d35547acc2aa2bb8f9764",
+    "safety_reviewer": "c94b8a9e44ce7db080934c69c856c3ec5b1c5aaefde7f79f93b924845fbf2a71",
+}
 RESEARCH_ROLE_IDS = frozenset(
     {
         "ablationist",
@@ -224,14 +230,20 @@ RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 
 
 def validate_source_pinned_role_authority() -> None:
-    director = developer_instructions_by_role()["research_director"]
+    instructions_by_role = developer_instructions_by_role()
+    director = instructions_by_role["research_director"]
+    if hashlib.sha256(director.encode("utf-8")).hexdigest() != RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256:
+        raise ValueError("source-pinned protected role authority content differs for Research Director")
     protected_director = clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)
     if director.count(protected_director) != 1:
         raise ValueError("source-pinned protected role authority requires the exact Research Director Seeds block once")
     if SEEDS_MUTATION_AUTHORITY_PATTERN.search(director.replace(protected_director, "", 1)):
         raise ValueError("source-pinned protected role authority forbids Research Director Seeds mutation authority")
-    for role in ("adversarial_reviewer", "replication_reviewer", "safety_reviewer"):
-        if REVIEWER_OUTWARD_AUTHORITY_PATTERN.search(developer_instructions_by_role()[role]):
+    for role, expected_digest in SOURCE_PINNED_REVIEWER_INSTRUCTIONS_SHA256.items():
+        instructions = instructions_by_role[role]
+        if hashlib.sha256(instructions.encode("utf-8")).hexdigest() != expected_digest:
+            raise ValueError(f"source-pinned protected role authority content differs for {role}")
+        if REVIEWER_OUTWARD_AUTHORITY_PATTERN.search(instructions):
             raise ValueError(f"source-pinned protected role authority forbids outward reviewer authority for {role}")
 
 
@@ -633,6 +645,7 @@ agents_dir = ROOT / ".codex" / "agents"
 allowed_keys = {"name", "description", "sandbox_mode", "developer_instructions"}
 runtime_fields = __RUNTIME_FIELDS__
 expected_roles = __MANAGED_ROLE_CONTRACTS__
+source_pinned_reviewer_instructions = __SOURCE_PINNED_REVIEWER_INSTRUCTIONS__
 protected_runtime = __RUNTIME_CONTRACT__
 protected_director = __DIRECTOR_CONTRACT__
 contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injection|resolved_(?:provider|model_id)|model_readback|effort_readback|context_readback|provider[- ]default|host[- ]default|caller[- ]override|requested(?:_model_id|_effort|_context_form)?.{0,80}(?:resolved|readback)|(?:resolved|readback).{0,80}requested(?:_model_id|_effort|_context_form)?)")
@@ -678,6 +691,11 @@ for path in files:
             errors.append(f"{label}: developer instructions differ from generation-time canonical content")
         if data.get("sandbox_mode") != expected["sandbox_mode"]:
             errors.append(f"{label}: sandbox_mode differs from the managed role contract")
+    if path.stem in source_pinned_reviewer_instructions and (
+        not isinstance(instructions, str)
+        or hashlib.sha256(instructions.encode("utf-8")).hexdigest() != source_pinned_reviewer_instructions[path.stem]
+    ):
+        errors.append(f"{label}: protected reviewer authority content differs from source-pinned canonical content")
     missing_runtime = sorted(field for field in runtime_fields if field not in instructions)
     if missing_runtime:
         errors.append(f"{label}: runtime model assignment contract missing {', '.join(missing_runtime)}")
@@ -731,6 +749,8 @@ raise SystemExit(1 if errors else 0)
         }
         for role, spec in AGENTS.items()
     }),
+).replace(
+    "__SOURCE_PINNED_REVIEWER_INSTRUCTIONS__", repr(SOURCE_PINNED_REVIEWER_INSTRUCTIONS_SHA256)
 ).replace("__RUNTIME_CONTRACT__", repr(clean(RUNTIME_MODEL_ASSIGNMENT))).replace("__DIRECTOR_CONTRACT__", repr(clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)))
     validate_claims = r'''
 #!/usr/bin/env python3
