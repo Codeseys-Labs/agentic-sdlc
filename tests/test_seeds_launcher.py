@@ -553,8 +553,16 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             capture_output=True,
             check=True,
         ).stdout.strip()
+        bun_root = subprocess.run(
+            [mise, "--no-config", "where", "bun@1.3.10"],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
         exact_node = Path(node_root) / "node.exe"
+        exact_bun = Path(bun_root) / "bin" / "bun.exe"
         self.assertTrue(exact_node.is_file(), "exact Node 22.22.3 must be installed for the native fixture")
+        self.assertTrue(exact_bun.is_file(), "exact Bun 1.3.10 must be installed for the native fixture")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             distribution = root / "reviewed distribution"
@@ -566,6 +574,43 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             subprocess.run(["git", "config", "user.name", "Fixture"], cwd=distribution, check=True)
             subprocess.run(["git", "add", "."], cwd=distribution, check=True)
             subprocess.run(["git", "commit", "-qm", "fixture"], cwd=distribution, check=True)
+            recorded_git_log = root / "recorded-git.jsonl"
+            recorded_git = root / "recorded-git" / "git.exe"
+            recorded_git.parent.mkdir()
+            recorded_git_source = root / "recorded-git.ts"
+            recorded_git_source.write_text(
+                "import{appendFileSync,readFileSync}from'node:fs';"
+                "const args=process.argv.slice(2);"
+                f"const log={json.dumps(str(recorded_git_log))};"
+                "const input=args[0]==='hash-object'?readFileSync(0):undefined;"
+                "const child=Bun.spawnSync(["
+                f"{json.dumps(str(Path(git).resolve()))},...args],"
+                "{cwd:process.cwd(),env:process.env,...(input===undefined?{}:{stdin:input})});"
+                "appendFileSync(log,JSON.stringify({args,exitCode:child.exitCode,stderr:child.stderr.toString(),searchControl:process.env.NoDefaultCurrentDirectoryInExePath??null})+'\\n');"
+                "process.stdout.write(child.stdout);process.stderr.write(child.stderr);process.exit(child.exitCode??1);\n",
+                encoding="utf-8",
+            )
+            recorded_git_compile = subprocess.run(
+                [
+                    exact_bun,
+                    "build",
+                    "--compile",
+                    f"--compile-executable-path={exact_bun}",
+                    "--no-compile-autoload-dotenv",
+                    "--no-compile-autoload-bunfig",
+                    "--no-compile-autoload-tsconfig",
+                    "--no-compile-autoload-package-json",
+                    f"--outfile={recorded_git}",
+                    recorded_git_source,
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                env={"SystemRoot": os.environ["SystemRoot"]},
+                check=False,
+                timeout=300,
+            )
+            self.assertEqual(recorded_git_compile.returncode, 0, recorded_git_compile.stderr)
             target = root / "hostile target"
             target.mkdir()
             (target / "bunfig.toml").write_text("preload = ['./hostile.ts']\n", encoding="utf-8")
@@ -573,7 +618,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             hostile_npmrc.write_text("registry=https://hostile.invalid/\n", encoding="utf-8")
             state = root / "state"
             environment = os.environ | {
-                "PATH": os.pathsep.join((str(Path(mise).parent), str(Path(git).parent))),
+                "PATH": os.pathsep.join((str(Path(mise).parent), str(recorded_git.parent))),
                 "LOCALAPPDATA": str(state),
                 "HOME": str(target),
                 "USERPROFILE": str(target),
@@ -591,7 +636,11 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 check=False,
                 timeout=300,
             )
-            self.assertEqual(bootstrapped.returncode, 0, bootstrapped.stderr)
+            self.assertEqual(
+                bootstrapped.returncode,
+                0,
+                f"{bootstrapped.stderr}\nrecorded Git: {recorded_git_log.read_text(encoding='utf-8') if recorded_git_log.exists() else 'none'}",
+            )
             inspected = subprocess.run(
                 [exact_node, LAUNCHER, "inspect", "--target", target, "--version"],
                 text=True,
@@ -605,6 +654,8 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             receipt = json.loads(
                 (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
             )
+            self.assertTrue(os.path.samefile(receipt["tuple"]["git"]["path"], recorded_git))
+            recorded_git_log.unlink(missing_ok=True)
             seeds_dir = distribution / ".seeds"
             seeds_dir.mkdir()
             (seeds_dir / "config.yaml").write_text("project: fixture\nversion: '1'\n", encoding="utf-8")
@@ -646,15 +697,12 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             hostile_com = distribution / "git.com"
             shutil.copy2(hostile_git, hostile_com)
-            self.assertIn(
-                "NoDefaultCurrentDirectoryInExePath: '1'",
-                LAUNCHER.read_text(encoding="utf-8"),
-            )
             adapter = Path(receipt["tuple"]["trusted"]["gitAdapter"])
             adapter_probe = root / "adapter-probe.ts"
             adapter_probe.write_text(
-                'const allowed=Bun.spawnSync(["git","rev-parse","--git-dir"]);'
-                'const denied=Bun.spawnSync(["git","status"]);'
+                'const target=process.argv[2];'
+                'const allowed=Bun.spawnSync(["git","rev-parse","--git-dir"],{cwd:target,env:process.env});'
+                'const denied=Bun.spawnSync(["git","status"],{cwd:target,env:process.env});'
                 'if(allowed.exitCode!==0||allowed.stdout.toString().trim()!==".git"||denied.exitCode===0)process.exit(1);\n',
                 encoding="utf-8",
             )
@@ -676,6 +724,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 "--no-install",
                 f'--tsconfig-override={receipt["tuple"]["trusted"]["tsconfig"]}',
                 adapter_probe,
+                distribution,
             ]
             adapter_result = subprocess.run(
                 probe_command,
@@ -688,6 +737,18 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             )
             self.assertEqual(adapter_result.returncode, 0, adapter_result.stderr)
             self.assertFalse(hostile_marker.exists(), "the closed runtime environment must select the receipt-bound adapter")
+            direct_hostile = subprocess.run(
+                [hostile_git, "rev-parse", "--git-dir"],
+                cwd=distribution,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(direct_hostile.returncode, 0, direct_hostile.stderr)
+            self.assertTrue(hostile_marker.exists(), "the target-local hostile executable must be runnable")
+            hostile_marker.unlink()
+            recorded_git_log.unlink()
             prime = subprocess.run(
                 [exact_node, LAUNCHER, "inspect", "--target", distribution, "prime"],
                 text=True,
@@ -699,6 +760,42 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             self.assertEqual(prime.returncode, 0, prime.stderr)
             self.assertEqual(prime.stdout, prime_content)
             self.assertFalse(hostile_marker.exists(), "inspect must not execute target-local git.exe or git.com")
+            successful_calls = [json.loads(line) for line in recorded_git_log.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                [call["args"] for call in successful_calls],
+                [
+                    ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=NUL", "rev-parse", "--git-common-dir"],
+                ],
+            )
+            self.assertTrue(all(call["exitCode"] == 0 for call in successful_calls))
+            self.assertTrue(all(call["stderr"] == "" for call in successful_calls))
+            self.assertTrue(all(call["searchControl"] == "1" for call in successful_calls))
+            recorded_git_log.unlink()
+            non_repository = root / "non-repository"
+            non_repository_seeds = non_repository / ".seeds"
+            non_repository_seeds.mkdir(parents=True)
+            (non_repository_seeds / "config.yaml").write_text("project: outside\nversion: '1'\n", encoding="utf-8")
+            outside_content = "OUTSIDE-PRIME\n"
+            (non_repository_seeds / "PRIME.md").write_text(outside_content, encoding="utf-8")
+            outside_prime = subprocess.run(
+                [exact_node, LAUNCHER, "inspect", "--target", non_repository, "prime"],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(outside_prime.returncode, 0, outside_prime.stderr)
+            self.assertEqual(outside_prime.stdout, outside_content)
+            failed_call = json.loads(recorded_git_log.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(
+                failed_call["args"],
+                ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=NUL", "rev-parse", "--git-common-dir"],
+            )
+            self.assertNotEqual(failed_call["exitCode"], 0)
+            self.assertIn("not a git repository", failed_call["stderr"])
+            self.assertEqual(failed_call["searchControl"], "1")
+            self.assertFalse(hostile_marker.exists())
             for flag in ("--git-dir", "--git-common-dir"):
                 with self.subTest(flag=flag):
                     direct = subprocess.run(
