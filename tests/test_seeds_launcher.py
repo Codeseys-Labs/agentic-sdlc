@@ -110,6 +110,7 @@ class SeedsLauncherTests(unittest.TestCase):
             "if [ \"${1:-}\" = --version ]; then printf '1.3.10\\n'; exit 0; fi\n"
             f"printf '%s\\n' \"$*\" >> {self._quote(str(self.bun_log))}\n"
             "case \" $* \" in *\" --no-macros \"*) ;; *) exit 98 ;; esac\n"
+            "case \" $* \" in *\" --tsconfig-override=\"*) ;; *) exit 97 ;; esac\n"
             f"{environment_command} | {sort_command} >> {self._quote(str(self.bun_log))}\n"
             f"if [ \"$({cat_command} {self._quote(str(self.bun_behavior))})\" = TERM ]; then kill -TERM $$; fi\n"
             f"exit \"$({cat_command} {self._quote(str(self.bun_behavior))})\"\n",
@@ -394,6 +395,7 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertEqual(self.calls.read_text(encoding="utf-8"), before)
         contents = self.bun_log.read_text(encoding="utf-8")
         self.assertIn("--config=", contents)
+        self.assertIn("--tsconfig-override=", contents)
         self.assertIn("--no-macros", contents)
         self.assertIn("--no-env-file --no-install", contents)
         self.assertIn("ready --format json", contents)
@@ -401,6 +403,33 @@ class SeedsLauncherTests(unittest.TestCase):
         for hostile in ("BUN_OPTIONS=", "BUN_INSPECT_PRELOAD=", "NODE_OPTIONS=", "NPM_CONFIG_REGISTRY=", "MISE_DATA_DIR=", "SEEDS_DEBUG="):
             self.assertNotIn(hostile, contents)
         self.assertIn("GIT_CONFIG_NOSYSTEM=1", contents)
+
+    def test_inspect_uses_only_finite_read_only_git_adapter(self) -> None:
+        self.assertEqual(self.bootstrap().returncode, 0)
+        receipt = json.loads(self.active_receipt_path().read_text(encoding="utf-8"))
+        adapter = Path(receipt["tuple"]["trusted"]["gitAdapter"])
+        self.assertTrue(adapter.is_file())
+        self.assertEqual(adapter.parent, self.active_receipt_path().parent)
+        self.assertNotEqual(adapter.parent, Path(receipt["tuple"]["git"]["path"]).parent)
+
+        for argv in (("rev-parse", "--git-dir"), ("rev-parse", "--git-common-dir")):
+            with self.subTest(argv=argv):
+                allowed = subprocess.run([adapter, *argv], cwd=self.distribution, text=True, capture_output=True, check=False)
+                self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        for argv in (("status",), ("rev-parse", "HEAD"), ("rev-parse", "--show-toplevel"), ("rev-parse", "--git-dir", "extra")):
+            with self.subTest(argv=argv):
+                denied = subprocess.run([adapter, *argv], cwd=self.distribution, text=True, capture_output=True, check=False)
+                self.assertNotEqual(denied.returncode, 0)
+
+    def test_inspect_rejects_trusted_git_adapter_drift_before_bun(self) -> None:
+        self.assertEqual(self.bootstrap().returncode, 0)
+        receipt = json.loads(self.active_receipt_path().read_text(encoding="utf-8"))
+        adapter = Path(receipt["tuple"]["trusted"]["gitAdapter"])
+        adapter.write_text(adapter.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        rejected = self.launcher("inspect", "--target", str(self.target), "prime")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("Git adapter", rejected.stderr)
+        self.assertFalse(self.bun_log.exists())
 
     def test_inspect_rejects_missing_partial_drifted_receipt_and_invalid_grammar_before_bun(self) -> None:
         missing = self.launcher("inspect", "--target", str(self.target), "prime")
@@ -449,6 +478,8 @@ class SeedsLauncherTests(unittest.TestCase):
             {"root", "commit", "gitTree", "tree", "miseToml", "miseLock", "launcher", "launcherHash"},
         )
         self.assertEqual(pristine["hashes"]["nodeExecutable"], sha256(self.node_executable.read_bytes()).hexdigest())
+        self.assertEqual(pristine["runtime"]["node"], str(self.node_executable.resolve()))
+        self.assertEqual(pristine["runtime"]["nodeHash"], pristine["hashes"]["nodeExecutable"])
         self.assertEqual(Path(distribution["launcher"]), installed.resolve())
         self.assertEqual(distribution["launcherHash"], sha256(installed.read_bytes()).hexdigest())
 
@@ -460,6 +491,7 @@ class SeedsLauncherTests(unittest.TestCase):
         pristine = json.loads(active.read_text(encoding="utf-8"))
         mutations = (
             lambda receipt: receipt.pop("distribution"),
+            lambda receipt: receipt.pop("runtime"),
             lambda receipt: receipt["hashes"]["distribution"].pop("gitTree"),
             lambda receipt: receipt["distribution"].__setitem__("extra", "forged"),
             lambda receipt: receipt["hashes"].pop("distribution"),
