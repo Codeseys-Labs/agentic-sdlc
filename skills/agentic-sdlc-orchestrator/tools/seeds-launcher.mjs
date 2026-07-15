@@ -648,19 +648,59 @@ function trustedEmptyJsonFile(directory, name) {
   return realRegularFile(path, `trusted ${name}`);
 }
 
-function gitAdapterContent(git) {
+function posixGitAdapterContent(git) {
   const quote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
-  if (process.platform !== 'win32') {
-    return `#!/bin/sh\nif [ "$#" -ne 2 ] || [ "$1" != rev-parse ]; then exit 64; fi\ncase "$2" in --git-common-dir|--git-dir) ;; *) exit 64 ;; esac\nexec ${quote(git)} -c core.fsmonitor=false -c core.hooksPath=/dev/null rev-parse "$2"\n`;
-  }
-  const batchGit = git.replaceAll('%', '%%');
-  return `@echo off\r\nsetlocal DisableDelayedExpansion\r\nif /I not "%~1"=="rev-parse" exit /b 64\r\nif not "%~3"=="" exit /b 64\r\nif "%~2"=="--git-common-dir" goto run\r\nif "%~2"=="--git-dir" goto run\r\nexit /b 64\r\n:run\r\n"${batchGit}" -c core.fsmonitor=false -c core.hooksPath=NUL rev-parse "%~2"\r\nexit /b %ERRORLEVEL%\r\n`;
+  return `#!/bin/sh\nif [ "$#" -ne 2 ] || [ "$1" != rev-parse ]; then exit 64; fi\ncase "$2" in --git-common-dir|--git-dir) ;; *) exit 64 ;; esac\nexec ${quote(git)} -c core.fsmonitor=false -c core.hooksPath=/dev/null rev-parse "$2"\n`;
 }
 
-function trustedGitAdapter(directory, git) {
-  const name = process.platform === 'win32' ? 'git.cmd' : 'git';
-  const path = join(directory, name);
-  const content = gitAdapterContent(git);
+function windowsGitAdapterSource(git) {
+  return `const args = process.argv.slice(2);\nif (args.length !== 2 || args[0] !== 'rev-parse' || (args[1] !== '--git-dir' && args[1] !== '--git-common-dir')) process.exit(64);\nconst child = Bun.spawnSync([${JSON.stringify(git)}, '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=NUL', 'rev-parse', args[1]], { cwd: process.cwd(), env: process.env });\nprocess.stdout.write(child.stdout);\nprocess.stderr.write(child.stderr);\nprocess.exit(child.exitCode ?? 1);\n`;
+}
+
+function compileWindowsGitAdapter(directory, git, bun, bunfig, tsconfig) {
+  const build = join(directory, 'git-adapter-build');
+  if (existsSync(build)) fail('trusted Git adapter build directory already exists');
+  mkdirSync(build, { mode: 0o700 });
+  try {
+    const source = join(build, 'adapter.ts');
+    const output = join(build, 'git.exe');
+    writeFileSync(source, windowsGitAdapterSource(git), { encoding: 'utf8', mode: 0o600 });
+    const completed = spawnSync(bun, [
+      `--config=${bunfig}`,
+      '--no-env-file',
+      '--no-install',
+      '--no-macros',
+      `--tsconfig-override=${tsconfig}`,
+      'build',
+      '--compile',
+      `--compile-executable-path=${bun}`,
+      '--no-compile-autoload-dotenv',
+      '--no-compile-autoload-bunfig',
+      '--no-compile-autoload-tsconfig',
+      '--no-compile-autoload-package-json',
+      `--outfile=${output}`,
+      source,
+    ], { cwd: build, env: {}, encoding: 'utf8', shell: false, windowsHide: true });
+    if (completed.error || completed.status !== 0) fail(`cannot compile trusted Git adapter: ${(completed.stderr || completed.error?.message || '').trim()}`);
+    const adapter = realRegularFile(output, 'compiled Git adapter');
+    const destination = join(directory, 'git.exe');
+    if (existsSync(destination)) {
+      const existing = existingTrustedAdapter(destination, git);
+      if (hashFile(existing) !== hashFile(adapter)) fail('existing trusted Git adapter does not match exact compiled bytes');
+      return existing;
+    }
+    renameSync(adapter, destination);
+    fsyncDirectory(directory);
+    return realRegularFile(destination, 'trusted Git adapter');
+  } finally {
+    rmSync(build, { force: true, recursive: true });
+  }
+}
+
+function trustedGitAdapter(directory, git, bun, bunfig, tsconfig) {
+  if (process.platform === 'win32') return compileWindowsGitAdapter(directory, git, bun, bunfig, tsconfig);
+  const path = join(directory, 'git');
+  const content = posixGitAdapterContent(git);
   if (!existsSync(path)) {
     let descriptor;
     try {
@@ -681,7 +721,7 @@ function trustedGitAdapter(directory, git) {
 
 function existingTrustedAdapter(path, git) {
   const node = lstatSync(path);
-  if (node.isSymbolicLink() || !node.isFile() || readFileSync(path, 'utf8') !== gitAdapterContent(git)) fail('trusted Git adapter must be an exact regular file');
+  if (node.isSymbolicLink() || !node.isFile() || (process.platform !== 'win32' && readFileSync(path, 'utf8') !== posixGitAdapterContent(git))) fail('trusted Git adapter must be an exact regular file');
   if (process.platform !== 'win32' && node.uid !== process.getuid()) fail('trusted Git adapter is not owned by this user');
   return realRegularFile(path, 'trusted Git adapter');
 }
@@ -706,7 +746,7 @@ function bootstrap(distributionArgument) {
   const bunfig = trustedEmptyFile(directory, 'trusted-bunfig.toml');
   const tsconfig = trustedEmptyJsonFile(directory, 'trusted-tsconfig.json');
   const gitconfig = trustedEmptyFile(directory, 'trusted-gitconfig');
-  const gitAdapter = trustedGitAdapter(directory, git.path);
+  const gitAdapter = trustedGitAdapter(directory, git.path, tuple.bun, bunfig, tsconfig);
   const distributionHashes = { tree: distributionTreeHash(distribution), gitTree: git.tree, miseToml: hashFile(miseToml), miseLock: hashFile(miseLock), commit: hashBytes(Buffer.from(git.commit, 'utf8')) };
   const runtime = { node: realRegularFile(process.execPath, 'executing Node'), nodeHash: hashFile(realRegularFile(process.execPath, 'executing Node')), launcherHash: hashFile(launcher) };
   const receipt = {
@@ -841,6 +881,10 @@ function inspect(targetArgument, values) {
     GIT_CONFIG_GLOBAL: tuple.gitconfig,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
+    ...(process.platform === 'win32' ? {
+      PATHEXT: '.EXE',
+      SystemRoot: resolve(process.env.SystemRoot || 'C:\\Windows'),
+    } : {}),
   });
   const child = spawn(tuple.bun, [
     `--config=${tuple.bunfig}`,
