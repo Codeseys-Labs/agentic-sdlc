@@ -150,22 +150,22 @@ mise -C <distribution-root> tasks
 ```
 
 Bootstrap commands deliberately run in the reviewed distribution checkout. Once installed,
-Seeds operations run from any target repository with no bundle-checkout dependency. The launcher
-acquires through an empty neutral temporary directory, clears every ambient `NPM_CONFIG_*`
-variable (including scoped registries), forces the public registry, empty user/global npm config,
-and strict TLS; only after acquisition does it restore the target cwd without altering argument
-boundaries:
+Seeds operations run from any target repository with no bundle-checkout dependency. POSIX acquisition
+state is a private directory directly beneath fixed `/var/tmp`, never inherited `TMPDIR`/`TEMP`, the
+target, or target-controlled ancestry. It holds two distinct empty npm user/global config files. The
+launcher clears every ambient `NPM_CONFIG_*` variable (including scoped registries), supplies only
+the public registry and strict TLS, then uses exact Node `22.22.3` as an argv-safe trampoline to
+set only the child cwd to the target and spawn the exact mise executable with `shell: false`. It
+never uses `sh`, Git Bash, or an ambient `sd` from `PATH`.
 
-```bash
-NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <neutral-temp> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sh -c 'cd "$1" && shift && exec sd "$@"' agentic-sdlc-seeds <target> <args>
-```
-
-`<neutral-temp>` is a newly-created empty operating-system temporary directory that is removed
-after the command. npm validates registry-published tarball integrity metadata, but neither that
-nor a version pin authenticates the tarball or its transitive dependency graph. Native Windows
-uses the same process-scoped neutral npm settings and temporary directory; restore all previous
-environment state. Do not make permanent trust or config changes. The skill and
-`references/seeds-worktrees.md` define the unambiguous `Seeds(<target>, <args...>)` shorthand.
+On native Windows, `[IO.Path]::GetTempPath()` is the OS-selected writable root independent of the
+target and its ancestors. A private random directory below it holds two distinct empty config files;
+the Node trampoline executes exact `sd.cmd` through `ComSpec` as an argv array while retaining
+`shell: false`. Both platform launchers remove neutral state on success, failure, and termination
+signals and never persist environment, trust, or config changes. npm validates registry-published
+tarball integrity metadata, but neither that nor a version pin authenticates the tarball or its
+transitive dependency graph. The skill and `references/seeds-worktrees.md` define the unambiguous
+`Seeds(<target>, <args...>)` shorthand.
 
 Mise trust is scoped to each absolute config path, so every linked worktree must trust its own
 `mise.toml` after reviewing the diff. `MISE_PARANOID=1` deliberately rejects an untrusted

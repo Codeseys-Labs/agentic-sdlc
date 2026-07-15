@@ -25,23 +25,25 @@ queue of record. Mise is the only bootstrap prerequisite: bootstrap tools from t
 distribution checkout with `mise -C <distribution-root> install`. After bootstrap, every Seeds
 operation is independent of that checkout and of target/ambient mise configuration.
 
-Define `Seeds(<target>, <args...>)` as this exact POSIX execution contract. Acquire the
-pinned npm package from an empty, config-free temporary directory, then use a bounded `sh -c`
-wrapper to restore `<target>` as `sd`'s cwd without joining the argument array:
+Define `Seeds(<target>, <args...>)` as the exact launcher contract in
+`references/seeds-worktrees.md`. The launcher uses the exact pinned Node `22.22.3` as an
+argv-safe trampoline: mise acquires from neutral state and Node changes only the child cwd to
+`<target>`, then starts the exact mise-provided executable with `shell: false`. It never joins
+arguments into a command string, invokes `sh`, Git Bash, or an ambient `sd` from `PATH`.
 
-```bash
-NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <neutral-temp> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sh -c 'cd "$1" && shift && exec sd "$@"' agentic-sdlc-seeds <target> <args>
-```
-
-`<neutral-temp>` is a newly created empty operating-system temporary directory, deleted after
-the command. The launcher must clear all ambient `NPM_CONFIG_*` variables (including scoped
-registry settings), set the public registry, `/dev/null` user/global configs, and `strict-ssl`;
-the target's `.npmrc` must never affect acquisition. npm verifies registry-published tarball
-integrity metadata, but the Seeds version pin does not by itself authenticate the tarball or
-transitives.
+POSIX neutral state is created directly beneath fixed `/var/tmp`, never an inherited
+`TMPDIR`/`TEMP`, the target, or target-controlled ancestry. It contains two distinct empty npm
+user/global config files. The launcher scrubs every inherited `NPM_CONFIG_*` variable (including
+scoped settings) before setting only the public registry, strict TLS, and those config paths;
+the target's `.npmrc` must never affect acquisition.
 
 On native Windows, use the process-scoped PowerShell equivalent documented in
-`references/seeds-worktrees.md`; never persist environment, trust, or config changes for Seeds.
+`references/seeds-worktrees.md`: `[IO.Path]::GetTempPath()` is the OS-selected temporary-root
+boundary, independent of the target and its ancestry. Node starts the exact `sd.cmd` through
+`ComSpec`'s argv array while retaining `shell: false`. Both platforms clean up on success,
+failure, and termination signals, and never persist environment, trust, or config changes.
+npm verifies registry-published tarball integrity metadata, but the Seeds version pin does not
+by itself authenticate the tarball or transitives.
 Every `Seeds(...)` invocation below means this exact contract, preserves `<target>` as cwd and
 argument boundaries, and fails closed unless version 0.5.14 resolves from mise's exact npm tool
 root. Do not accept an ambient `sd` from `PATH`. Global distribution (`mise` → pinned `uv` →
