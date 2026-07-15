@@ -4,87 +4,47 @@ Use this reference when converting the plan into parallel implementation work.
 
 ## Exact Seeds execution contract
 
-Mise is the only bootstrap prerequisite. From a reviewed distribution checkout, bootstrap the
-pinned tools once with `mise -C <distribution-root> install`. Thereafter, use the exact pinned
-Node `22.22.3` as an argv-safe trampoline. Mise acquires the tuple
-`node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14` from neutral state; Node receives the
-absolute target and original `Seeds` argument array separately, sets only the child's `cwd` to
-the target, and runs the exact mise-provided executable with `shell: false` and inherited stdio.
-Never join a command string, invoke `sh`, Git Bash, or select an ambient `sd` from `PATH`.
-
-On POSIX, create private neutral state directly beneath fixed `/var/tmp` with `mktemp -d` after
-`umask 077`. Do not derive the root from inherited `TMPDIR`, `TEMP`, or `TMP`; do not place it in
-the target or target-controlled ancestry. Create two distinct empty files in that directory and
-pass them as `NPM_CONFIG_USERCONFIG` and `NPM_CONFIG_GLOBALCONFIG`. Before acquisition, scrub
-every inherited `NPM_CONFIG_*` variable, including scoped registries, then set only:
+Mise is the only bootstrap prerequisite. The installed flagship skill contains the portable Node
+stdlib tool `tools/seeds-launcher.mjs`; first run its explicit bootstrap mode from a reviewed
+distribution checkout:
 
 ```text
-NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
-NPM_CONFIG_STRICT_SSL=true
-NPM_CONFIG_USERCONFIG=<neutral>/npm-user.config
-NPM_CONFIG_GLOBALCONFIG=<neutral>/npm-global.config
-MISE_NPM_PACKAGE_MANAGER=npm
+<exact-node-root>/bin/node tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>
 ```
 
-Use `env -i` so those are the only npm settings. The launcher removes the entire neutral
-directory on ordinary exit and traps `HUP`, `INT`, and `TERM` to remove it before preserving the
-signal-derived failure. `--no-config` prevents target or ambient mise configuration from changing
-the runtime; the target's `.npmrc` cannot affect acquisition.
+Bootstrap alone runs `mise --locked install`, then consumes exact roots returned by
+`mise --no-config where` for Node `22.22.3`, Bun `1.3.10`, and
+`npm:@os-eco/seeds-cli@0.5.14`. It validates the version, platform layout, package name/version,
+separator-contained `sd` bin entry, prohibited package Bun/TypeScript/macro/preload controls, and
+a trusted owned empty Bun config. It hashes the reviewed distribution tree, distribution commit,
+`mise.toml`, `mise.lock`, every tool tree, package metadata, entry, Git binary, and trusted configs,
+then atomically publishes an active versioned receipt under platform state while retaining the
+preceding receipt for rollback.
 
-On native Windows, `[IO.Path]::GetTempPath()` is the OS-selected writable temporary-root
-boundary, independent of the target and all target-controlled ancestors. Create a random private
-directory directly below it. The PowerShell launcher below makes two distinct empty config files,
-scrubs all inherited `NPM_CONFIG_*` values, invokes the same exact tuple and Node trampoline, and
-uses `try`/`finally` for every success/failure cleanup path. On Windows, Node cannot directly
-spawn `.cmd` with `shell: false`; its Windows branch invokes `ComSpec` with the exact `sd.cmd`
-path and an argv array while `shell` remains false. This is not a Git Bash/MSYS path.
+The lock and npm backend establish exact version selection but **do not authenticate the npm
+tarball or transitive dependency graph**. The receipt catches ordinary post-bootstrap drift but
+cannot close a same-UID TOCTOU race between its checks and spawn.
 
-```powershell
-$previousSeedsEnvironment = @{}
-$previousNpmConfigEnvironment = @{}
-$neutralRoot = [IO.Path]::Combine([IO.Path]::GetTempPath(), [IO.Path]::GetRandomFileName())
-[IO.Directory]::CreateDirectory($neutralRoot) | Out-Null
-$neutralNpmConfig = [IO.Path]::GetTempFileName()
-$neutralGlobalNpmConfig = [IO.Path]::GetTempFileName()
-if ($neutralNpmConfig -eq $neutralGlobalNpmConfig) { throw 'distinct npm config files required' }
-Move-Item -LiteralPath $neutralNpmConfig -Destination (Join-Path $neutralRoot 'npm-user.config')
-Move-Item -LiteralPath $neutralGlobalNpmConfig -Destination (Join-Path $neutralRoot 'npm-global.config')
-$neutralNpmConfig = Join-Path $neutralRoot 'npm-user.config'
-$neutralGlobalNpmConfig = Join-Path $neutralRoot 'npm-global.config'
-foreach ($variable in Get-ChildItem Env:NPM_CONFIG_*) { $previousNpmConfigEnvironment[$variable.Name] = $variable.Value }
-foreach ($name in @('MISE_NPM_PACKAGE_MANAGER', 'NPM_CONFIG_REGISTRY', 'NPM_CONFIG_USERCONFIG', 'NPM_CONFIG_GLOBALCONFIG', 'NPM_CONFIG_STRICT_SSL')) {
-  $previousSeedsEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-}
-try {
-  Get-ChildItem Env:NPM_CONFIG_* | Remove-Item -ErrorAction SilentlyContinue
-  $env:MISE_NPM_PACKAGE_MANAGER = 'npm'
-  $env:NPM_CONFIG_REGISTRY = 'https://registry.npmjs.org/'
-  $env:NPM_CONFIG_USERCONFIG = $neutralNpmConfig
-  $env:NPM_CONFIG_GLOBALCONFIG = $neutralGlobalNpmConfig
-  $env:NPM_CONFIG_STRICT_SSL = 'true'
-  $nodeTrampoline = @'
-const fs = require('node:fs'); const path = require('node:path'); const { spawn } = require('node:child_process');
-const [target, ...args] = process.argv.slice(1); const executable = process.env.PATH.split(path.delimiter).map(entry => path.join(entry, process.platform === 'win32' ? 'sd.cmd' : 'sd')).find(fs.existsSync);
-const child = spawn(process.platform === 'win32' ? process.env.ComSpec : executable, process.platform === 'win32' ? ['/d', '/s', '/c', executable, ...args] : args, { cwd: target, shell: false, stdio: 'inherit', windowsHide: true });
-child.once('error', error => { console.error(error.message); process.exitCode = 2; }); child.once('close', (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exitCode = code ?? 1; });
-'@
-  & mise --no-config --cd $neutralRoot exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- node -e $nodeTrampoline $target @seedsArgs
-} finally {
-  Remove-Item -LiteralPath $neutralRoot -Recurse -Force -ErrorAction SilentlyContinue
-  Get-ChildItem Env:NPM_CONFIG_* | Remove-Item -ErrorAction SilentlyContinue
-  foreach ($name in $previousNpmConfigEnvironment.Keys) { Set-Item "Env:$name" $previousNpmConfigEnvironment[$name] }
-  foreach ($name in $previousSeedsEnvironment.Keys) {
-    if ($null -eq $previousSeedsEnvironment[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
-    else { Set-Item "Env:$name" $previousSeedsEnvironment[$name] }
-  }
-}
+Thereafter `Seeds(<target>, <args...>)` means exact Node running:
+
+```text
+seeds-launcher.mjs inspect --target <target> <args...>
 ```
 
-npm validates registry-published tarball integrity metadata, but neither that behavior nor a
-version pin authenticates the tarball or transitive dependency graph. Preflight verifies exact
-version 0.5.14 and separator-bounded provenance beneath mise's exact npm installation root;
-Windows path comparison normalizes separators and ignores case. Wrong, missing, or ambiguous
-version/provenance fails closed.
+`inspect` never installs, calls mise, acquires from a network, discovers ambient tools, repairs a
+receipt, or reads target package controls. It validates only the active receipt and current hashes,
+then permits precisely `--version`, `prime`, `ready [--format json]`, and
+`blocked [--format json]`. Other forms fail before Bun. Exact Node uses `shell:false` solely as
+an argv-safe wrapper for the exact absolute Bun executable and exact entry, with target as cwd.
+Bun uses `--config=<trusted-empty-file>`, `--no-env-file`, and `--no-install`. Its environment is
+an allowlist: `PATH` contains only the separately resolved recorded Git directory, and Git system
+and global config are isolated; all `BUN_*`, `NODE_OPTIONS`, npm/mise override variables, and
+unreviewed Seeds debug variables are absent. This leaves neither target `bunfig`, `.env`, package
+configuration, nor ambient `sd` with execution authority.
+
+POSIX and native Windows wrappers resolve the exact Node root before delegation, establish
+cleanup before setup, preserve the immediate child status, clean up, and return that exact status.
+They make no persistent Windows environment, trust, or config change.
 
 ## Seeds Queue
 

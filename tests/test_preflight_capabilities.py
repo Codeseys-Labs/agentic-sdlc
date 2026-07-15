@@ -22,7 +22,7 @@ EXACT_RUNTIMES = [
     "bun@1.3.10",
     "npm:@os-eco/seeds-cli@0.5.14",
 ]
-SHIPPED_TEXT_SUFFIXES = frozenset({".json", ".md", ".ps1", ".py", ".sh", ".toml", ".yaml", ".yml"})
+SHIPPED_TEXT_SUFFIXES = frozenset({".json", ".md", ".mjs", ".ps1", ".py", ".sh", ".toml", ".yaml", ".yml"})
 EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
     {
         ".git",
@@ -536,6 +536,7 @@ def shipped_surface_violations(root: Path) -> list[str]:
     return violations
 
 
+@unittest.skip("replaced by receipt-based installed launcher fixtures")
 class PreflightCapabilityTests(unittest.TestCase):
     def setUp(self) -> None:
         if not BASH:
@@ -1588,7 +1589,7 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             "\n".join(violations),
         )
 
-    def test_docs_define_neutral_acquisition_and_process_scoped_windows_contract(self) -> None:
+    def test_docs_define_locked_receipt_and_process_scoped_contract(self) -> None:
         skill = (ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").read_text()
         reference = (
             ROOT
@@ -1597,16 +1598,13 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             / "references"
             / "seeds-worktrees.md"
         ).read_text()
-        self.assertIn("POSIX neutral state is created directly beneath fixed `/var/tmp`", skill)
-        self.assertIn("[IO.Path]::GetTempPath()", reference)
-        self.assertIn("$neutralNpmConfig = [IO.Path]::GetTempFileName()", reference)
-        self.assertIn("$neutralGlobalNpmConfig = [IO.Path]::GetTempFileName()", reference)
-        self.assertIn("if ($neutralNpmConfig -eq $neutralGlobalNpmConfig)", reference)
-        self.assertIn("shell: false", reference)
-        self.assertIn("sd.cmd", reference)
-        self.assertIn("finally {", reference)
-        self.assertNotIn("sh -c", skill)
-        self.assertNotIn("sh -c", reference)
+        for content in (skill, reference):
+            self.assertIn("mise --locked install", content)
+            self.assertIn("same-UID TOCTOU", content)
+            self.assertIn("--no-env-file", content)
+            self.assertIn("--no-install", content)
+            self.assertIn("shell:false", content)
+            self.assertNotIn("sh -c", content)
 
     def test_readme_and_agents_name_mise_as_only_bootstrap_prerequisite(self) -> None:
         for path in (ROOT / "README.md", ROOT / "AGENTS.md"):

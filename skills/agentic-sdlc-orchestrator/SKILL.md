@@ -21,36 +21,28 @@ default. The full Frame -> Ship loop is available only after required Git, Seeds
 trust, and selected-adapter capabilities are probed and verified. Missing, unpinned,
 untrusted, or ambiguous required capability fails closed. Add cmux only when it is already active and useful for visibility or event messaging. Never
 install, start, or enable cmux or tmux merely to run this skill. Use Seeds as the
-queue of record. Mise is the only bootstrap prerequisite: bootstrap tools from the reviewed
-distribution checkout with `mise -C <distribution-root> install`. After bootstrap, every Seeds
-operation is independent of that checkout and of target/ambient mise configuration.
+queue of record. Mise is the only bootstrap prerequisite: from a reviewed distribution checkout, run the installed
+flagship tool `seeds-launcher.mjs bootstrap --distribution <distribution-root>`. Bootstrap alone
+runs reviewed `mise --locked install`, resolves exact config-free roots, and atomically publishes
+an active tuple receipt. It verifies exact Node `22.22.3`, Bun `1.3.10`, the exact
+`@os-eco/seeds-cli@0.5.14` package/bin/layout, permitted package controls, a trusted empty Bun
+configuration, the distribution commit plus `mise.toml`/`mise.lock`, and typed tree/file hashes.
+It retains the preceding receipt for explicit rollback. The receipt establishes an execution
+integrity boundary against ordinary accidental drift, not tarball/transitive authenticity and not
+a same-UID TOCTOU attacker racing verification and execution. npm version/backend and a lock do not
+authenticate a tarball or its transitives.
 
-Define `Seeds(<target>, <args...>)` as the exact launcher contract in
-`references/seeds-worktrees.md`. The launcher uses the exact pinned Node `22.22.3` as an
-argv-safe trampoline: mise acquires from neutral state and Node changes only the child cwd to
-`<target>`, then starts the exact mise-provided executable with `shell: false`. It never joins
-arguments into a command string, invokes `sh`, Git Bash, or an ambient `sd` from `PATH`.
-
-POSIX neutral state is created directly beneath fixed `/var/tmp`, never an inherited
-`TMPDIR`/`TEMP`, the target, or target-controlled ancestry. It contains two distinct empty npm
-user/global config files. The launcher scrubs every inherited `NPM_CONFIG_*` variable (including
-scoped settings) before setting only the public registry, strict TLS, and those config paths;
-the target's `.npmrc` must never affect acquisition.
-
-On native Windows, use the process-scoped PowerShell equivalent documented in
-`references/seeds-worktrees.md`: `[IO.Path]::GetTempPath()` is the OS-selected temporary-root
-boundary, independent of the target and its ancestry. Node starts the exact `sd.cmd` through
-`ComSpec`'s argv array while retaining `shell: false`. Both platforms clean up on success,
-failure, and termination signals, and never persist environment, trust, or config changes.
-npm verifies registry-published tarball integrity metadata, but the Seeds version pin does not
-by itself authenticate the tarball or transitives.
-Every `Seeds(...)` invocation below means this exact contract, preserves `<target>` as cwd and
-argument boundaries, and fails closed unless version 0.5.14 resolves from mise's exact npm tool
-root. Do not accept an ambient `sd` from `PATH`. Global distribution (`mise` → pinned `uv` →
-pinned Python installer) is
-separate from project activation: use `/sdlc-init` (or the same intent on non-Claude hosts)
-to establish a tracked Git baseline, Seeds, repository gates, trust, and shared `AGENTS.md`
-guidance before the first Frame/Wave.
+After an explicit successful bootstrap, `Seeds(<target>, <args...>)` is implemented by
+`seeds-launcher.mjs inspect --target <target> <args...>` under that exact recorded Node root.
+`inspect` never installs, invokes mise, networks, discovers replacement tooling, repairs state,
+or accepts ambient provenance. It loads and validates only the active receipt and recorded
+current hashes, accepts only `--version`, `prime`, `ready [--format json]`, and
+`blocked [--format json]`, and rejects every other form before Bun starts. Node has `shell:false`
+and invokes the exact recorded absolute Bun/entry pair with `--config=<trusted-file>`,
+`--no-env-file`, and `--no-install`; the child gets only a short environment allowlist. Its PATH
+is only the separately resolved and recorded Git directory, with portable system/global Git config
+isolation. Target `bunfig`, `.env`, package config, ambient `BUN_*`, `NODE_OPTIONS`, npm/mise
+overrides, and unreviewed Seeds debug variables have no execution effect.
 
 ## Repo Location
 

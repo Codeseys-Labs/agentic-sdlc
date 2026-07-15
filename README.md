@@ -145,48 +145,40 @@ start, or enable cmux or tmux merely to use this bundle.
 
 ## Install and run the bundle
 
-**Mise 2026.4.27 or newer is the only bootstrap prerequisite.** From the reviewed distribution
-checkout, `mise -C <distribution-root> install` installs the pinned bundle tools. The checked-in
-`mise.toml` pins `uv`, Node `22.22.3`, Bun `1.3.10`, and Seeds
-`npm:@os-eco/seeds-cli@0.5.14`; `mise.lock` supplies the platform resolution. `uv` supplies
-Python `3.12.11` for every authoritative Python entrypoint. The Seeds lock proves the exact
-version and npm backend, not tarball or transitive dependency integrity. Git, supported trust
-behavior, repository gates, and any selected adapter remain runtime-readiness capabilities,
-not additional bootstrap prerequisites. Resolve and record the actual provider/model only when
-the adapter proves it; otherwise record inherited or unresolved. A passing local status or gate
-never authorizes push, publication, PR mutation, merge, deployment, credential, or other
-outward effect.
+**Mise 2026.4.27 or newer is the only bootstrap prerequisite.** The flagship skill ships the
+portable Node-stdlib `tools/seeds-launcher.mjs`. From a reviewed distribution checkout, run its
+explicit `bootstrap --distribution <distribution-root>` mode under exact Node; bootstrap alone runs
+reviewed `mise --locked install`, resolves exact config-free Node `22.22.3`, Bun `1.3.10`, and
+Seeds `npm:@os-eco/seeds-cli@0.5.14` roots, and atomically publishes an active tuple receipt.
+The Seeds lock proves the exact version and npm backend, not tarball or transitive dependency integrity. Neither that claim nor the receipt
+closes a same-UID TOCTOU race between validation and execution. Git, supported trust behavior,
+repository gates, and any selected adapter remain runtime-readiness capabilities, not additional
+bootstrap prerequisites. Resolve and record the actual provider/model only when the adapter proves
+it; otherwise record inherited or unresolved. A passing local status or gate never authorizes push,
+publication, PR mutation, merge, deployment, credential, or other outward effect.
 
-Before any persistent `mise trust` operation—including the bootstrap below—obtain explicit
+Before any persistent `mise trust` operation—including bootstrap—obtain explicit
 operation-specific approval for the exact reviewed config path. The same gate applies to
 persistent Codex/global config edits, shell aliases, and credential writes; a general run or
 implementation approval is insufficient. Process-scoped validation may instead use
 `mise --no-config --cd <repo> exec ...` without persisting trust.
 
-Bootstrap the repository and inspect the available lifecycle tasks:
+Bootstrap the repository and inspect available lifecycle tasks:
 
 ```bash
-mise -C <distribution-root> install
 mise -C <distribution-root> tasks
+<exact-node-root>/bin/node <installed-flagship>/tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>
 ```
 
-Bootstrap commands deliberately run in the reviewed distribution checkout. Once installed,
-Seeds operations run from any target repository with no bundle-checkout dependency. POSIX acquisition
-state is a private directory directly beneath fixed `/var/tmp`, never inherited `TMPDIR`/`TEMP`, the
-target, or target-controlled ancestry. It holds two distinct empty npm user/global config files. The
-launcher clears every ambient `NPM_CONFIG_*` variable (including scoped registries), supplies only
-the public registry and strict TLS, then uses exact Node `22.22.3` as an argv-safe trampoline to
-set only the child cwd to the target and spawn the exact mise executable with `shell: false`. It
-never uses `sh`, Git Bash, or an ambient `sd` from `PATH`.
-
-On native Windows, `[IO.Path]::GetTempPath()` is the OS-selected writable root independent of the
-target and its ancestors. A private random directory below it holds two distinct empty config files;
-the Node trampoline executes exact `sd.cmd` through `ComSpec` as an argv array while retaining
-`shell: false`. Both platform launchers remove neutral state on success, failure, and termination
-signals and never persist environment, trust, or config changes. npm validates registry-published
-tarball integrity metadata, but neither that nor a version pin authenticates the tarball or its
-transitive dependency graph. The skill and `references/seeds-worktrees.md` define the unambiguous
-`Seeds(<target>, <args...>)` shorthand.
+After explicit bootstrap, Seeds operations from any target use `inspect --target <target>` against
+only the active receipt. Inspect never installs, networks, calls mise, or repairs state. It allows
+only `--version`, `prime`, `ready [--format json]`, and `blocked [--format json]`; all other input
+fails before exact Bun starts. Exact Node uses `shell:false` to invoke only absolute recorded Bun
+and entry paths. Bun receives `--config=<trusted-empty-file>`, `--no-env-file`, and `--no-install`;
+its allowlisted environment isolates target `bunfig`, `.env`, package configuration, ambient
+`BUN_*`, `NODE_OPTIONS`, npm/mise overrides, and unreviewed Seeds debug settings. PATH contains
+only the independently recorded Git directory, with system/global Git config isolation. The skill
+and `references/seeds-worktrees.md` define the unambiguous `Seeds(<target>, <args...>)` shorthand.
 
 Mise trust is scoped to each absolute config path, so every linked worktree must trust its own
 `mise.toml` after reviewing the diff. `MISE_PARANOID=1` deliberately rejects an untrusted
