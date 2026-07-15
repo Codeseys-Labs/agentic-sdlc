@@ -10,54 +10,111 @@ AGENTIC_SDLC_SEEDS_TOOL="npm:@os-eco/seeds-cli@${AGENTIC_SDLC_SEEDS_VERSION}"
 AGENTIC_SDLC_NODE_TOOL=node@22.22.3
 AGENTIC_SDLC_BUN_TOOL=bun@1.3.10
 
-# Acquire exact Seeds in an empty, config-free operating-system temporary directory, then
-# execute it in the requested target. This keeps a target .npmrc out of package resolution
-# while preserving the target as sd's cwd and every caller argument boundary.
-agentic_sdlc_seeds_exec() {
+# The exact Node 22.22.3 runtime executes this literal program after mise has acquired
+# the pinned package. It accepts the target and original Seeds argv as distinct values; it
+# never invokes a shell to parse any of them. Native Windows cannot directly spawn a .cmd file
+# without a shell, so the program starts the exact sd.cmd through ComSpec's argv interface while
+# Node itself retains shell:false. Mise prepends only the selected exact tuple to PATH, so the
+# first matching executable is the exact Seeds executable provided to this invocation.
+AGENTIC_SDLC_SEEDS_TRAMPOLINE=$(cat <<'EOF'
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const [target, ...args] = process.argv.slice(1);
+const isWindows = process.platform === 'win32';
+const executableName = isWindows ? 'sd.cmd' : 'sd';
+const executable = process.env.PATH.split(path.delimiter)
+  .map((entry) => path.join(entry, executableName))
+  .find(fs.existsSync);
+if (!target || !fs.existsSync(target) || !fs.statSync(target).isDirectory() || !executable) {
+  process.stderr.write('MISSING: exact Seeds trampoline inputs\n');
+  process.exitCode = 2;
+} else {
+  const command = isWindows ? process.env.ComSpec : executable;
+  const commandArgs = isWindows ? ['/d', '/s', '/c', executable, ...args] : args;
+  const child = spawn(command, commandArgs, {
+    cwd: target,
+    shell: false,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  let spawnError = false;
+  child.once('error', (error) => {
+    spawnError = true;
+    process.stderr.write(`MISSING: exact Seeds executable: ${error.message}\n`);
+    process.exitCode = 2;
+  });
+  child.once('close', (code, signal) => {
+    if (spawnError) return;
+    if (signal) {
+      process.kill(process.pid, signal);
+    } else {
+      process.exitCode = code === null ? 1 : code;
+    }
+  });
+}
+EOF
+)
+
+# POSIX acquisition state is created only directly under fixed /var/tmp. It never follows
+# TMPDIR, TEMP, TMP, the requested target, or ancestry controlled by that target.
+agentic_sdlc_seeds_exec() (
   if [ "$#" -lt 2 ]; then
     printf 'usage: agentic_sdlc_seeds_exec <target> <command> [args...]\n' >&2
     return 2
   fi
   seeds_target=$1
   shift
-  if ! pushd "$seeds_target" >/dev/null; then
-    printf 'MISSING:  Seeds target %s is not a directory\n' "$seeds_target" >&2
+  if ! seeds_target=$(cd -- "$seeds_target" && pwd -P); then
+    printf 'MISSING:  Seeds target %s is not a directory\n' "$1" >&2
     return 2
   fi
-  seeds_target=$PWD
-  popd >/dev/null
-  if ! seeds_neutral_dir=$(mktemp -d "${TMPDIR:-/tmp}/agentic-sdlc-seeds.XXXXXX"); then
+  old_umask=$(umask)
+  umask 077
+  if ! seeds_neutral_dir=$(mktemp -d /var/tmp/agentic-sdlc-seeds.XXXXXX); then
+    umask "$old_umask"
     printf 'MISSING:  neutral temporary directory for Seeds acquisition\n' >&2
     return 2
   fi
+  umask "$old_umask"
+  seeds_user_config=$seeds_neutral_dir/npm-user.config
+  seeds_global_config=$seeds_neutral_dir/npm-global.config
+  if ! : >"$seeds_user_config" || ! : >"$seeds_global_config"; then
+    rm -rf -- "$seeds_neutral_dir"
+    printf 'MISSING:  neutral npm config files for Seeds acquisition\n' >&2
+    return 2
+  fi
+  cleanup_seeds_neutral() {
+    rm -rf -- "$seeds_neutral_dir"
+  }
+  trap 'cleanup_seeds_neutral' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
-  # env -i removes every NPM_CONFIG_* spelling, including scoped registry variables that
-  # cannot be represented as shell identifiers. Retain only mise's data/cache locations so
-  # a non-default mise installation remains usable; acquisition is otherwise process-local.
+  # env -i removes every inherited NPM_CONFIG_* spelling, including scoped registry variables
+  # that cannot be represented as shell identifiers. The reviewed values and distinct empty
+  # config files are the only npm configuration exposed to mise/npm acquisition.
+  if [ -z "${MISE_DATA_DIR:-}" ] || [ -z "${MISE_CACHE_DIR:-}" ]; then
+    printf 'MISSING:  isolate MISE_DATA_DIR and MISE_CACHE_DIR before exact Seeds acquisition\n' >&2
+    return 2
+  fi
   seeds_env=(
     env -i
     "PATH=$PATH"
     "HOME=${HOME:-}"
-    "TMPDIR=${TMPDIR:-/tmp}"
+    "MISE_DATA_DIR=$MISE_DATA_DIR"
+    "MISE_CACHE_DIR=$MISE_CACHE_DIR"
     'NPM_CONFIG_REGISTRY=https://registry.npmjs.org/'
-    'NPM_CONFIG_USERCONFIG=/dev/null'
-    'NPM_CONFIG_GLOBALCONFIG=/dev/null'
+    "NPM_CONFIG_USERCONFIG=$seeds_user_config"
+    "NPM_CONFIG_GLOBALCONFIG=$seeds_global_config"
     'NPM_CONFIG_STRICT_SSL=true'
     'MISE_NPM_PACKAGE_MANAGER=npm'
   )
-  if [ -n "${MISE_DATA_DIR:-}" ]; then
-    seeds_env+=("MISE_DATA_DIR=$MISE_DATA_DIR")
-  fi
-  if [ -n "${MISE_CACHE_DIR:-}" ]; then
-    seeds_env+=("MISE_CACHE_DIR=$MISE_CACHE_DIR")
-  fi
   "${seeds_env[@]}" mise --no-config --cd "$seeds_neutral_dir" exec \
     "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
-    -- "$@"
-  seeds_status=$?
-  rm -rf -- "$seeds_neutral_dir"
-  return "$seeds_status"
-}
+    -- node -e "$AGENTIC_SDLC_SEEDS_TRAMPOLINE" "$seeds_target" "$@"
+)
 
 # Run exact Seeds from the target repository without loading that repository's or ambient
 # mise/npm configuration. npm's registry integrity metadata and strict TLS apply to acquisition;
@@ -69,14 +126,7 @@ agentic_sdlc_seeds() {
   fi
   seeds_target=$1
   shift
-  if ! pushd "$seeds_target" >/dev/null; then
-    printf 'MISSING:  Seeds target %s is not a directory\n' "$seeds_target" >&2
-    return 2
-  fi
-  seeds_target=$PWD
-  popd >/dev/null
-  agentic_sdlc_seeds_exec "$seeds_target" \
-    sh -c 'cd "$1" && shift && exec sd "$@"' agentic-sdlc-seeds "$seeds_target" "$@"
+  agentic_sdlc_seeds_exec "$seeds_target" "$@"
 }
 
 # Sourcing this script exposes only the launcher; executing it runs preflight.
@@ -117,12 +167,10 @@ if command -v mise >/dev/null 2>&1; then
   elif [ "$seeds_version" != "$AGENTIC_SDLC_SEEDS_VERSION" ]; then
     printf 'MISMATCH: Seeds version %s; required %s\n' "$seeds_version" "$AGENTIC_SDLC_SEEDS_VERSION" >&2
     missing=1
-  elif ! seeds_root=$(agentic_sdlc_seeds_exec "$seeds_target" \
-      sh -c 'mise --no-config --cd "$1" where "$2"' agentic-sdlc "$seeds_target" "$AGENTIC_SDLC_SEEDS_TOOL" 2>/dev/null); then
+  elif ! seeds_root=$(mise --no-config where "$AGENTIC_SDLC_SEEDS_TOOL" 2>/dev/null); then
     printf 'MISSING:  Seeds provenance root from mise (required)\n' >&2
     missing=1
-  elif ! seeds_executable=$(agentic_sdlc_seeds_exec "$seeds_target" \
-      sh -c 'command -v sd' 2>/dev/null); then
+  elif ! seeds_executable=$(if [ "${OS:-}" = "Windows_NT" ]; then printf '%s/sd.cmd\n' "$seeds_root"; else printf '%s/bin/sd\n' "$seeds_root"; fi); then
     printf 'MISSING:  Seeds executable from exact mise environment (required)\n' >&2
     missing=1
   else
