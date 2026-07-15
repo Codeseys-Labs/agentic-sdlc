@@ -48,9 +48,11 @@ Mise 2026.4.27+ is the only bootstrap prerequisite. Bootstrap from the reviewed 
 checkout with `mise -C <distribution-root> install`; it installs pinned uv, Node 22.22.3, Bun
 1.3.10, and `npm:@os-eco/seeds-cli@0.5.14`, while uv supplies Python 3.12.11 for all
 authoritative Python entrypoints. The Seeds lock proves the exact version and npm backend, not tarball or transitive dependency integrity. After bootstrap, execute Seeds in any target repository
-through the exact `Seeds(<target>, <args...>)` contract in the flagship skill; it uses
-`mise --no-config --cd <target>` and has no bundle-checkout dependency. Never accept ambient
-Seeds provenance or make permanent Windows environment/trust/config changes. Git, supported
+through the exact `Seeds(<target>, <args...>)` contract in the flagship skill; it acquires from
+a neutral config-free directory and restores the target only for `sd`, so neither target nor
+ambient npm configuration supplies executable package content. npm verifies the registry's
+tarball integrity metadata, but a version pin does not authenticate the tarball or transitives.
+Never accept ambient Seeds provenance or make permanent Windows environment/trust/config changes.
 trust behavior, repository gates, and any selected adapter remain verified runtime-readiness
 capabilities; missing, unpinned, untrusted, or ambiguous capability means not Git-ready. Trust
 is scoped to each absolute config path:

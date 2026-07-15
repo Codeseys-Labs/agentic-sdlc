@@ -546,14 +546,24 @@ class PreflightCapabilityTests(unittest.TestCase):
         self.bin_dir.mkdir()
         self.exact_root = self.temp / "mise installs" / "npm-os-eco-seeds-cli" / "0.5.14"
         (self.exact_root / "bin").mkdir(parents=True)
-        self.target = self.temp / "target repo with spaces"
+        self.target = self.temp / "target repo with spaces ;$&[]"
         self.target.mkdir()
         (self.target / "mise.toml").write_text(
             '[tools]\n"npm:@os-eco/seeds-cli" = "9.9.9"\nnode = "0.0.1"\n'
         )
+        self.target_npmrc = self.target / ".npmrc"
+        self.target_npmrc.write_text(
+            "registry=https://target.invalid/\n@os-eco:registry=https://target.invalid/\n"
+        )
+        self.ambient_npmrc = self.temp / "ambient.npmrc"
+        self.ambient_npmrc.write_text("registry=https://ambient.invalid/\n")
         self.log = self.temp / "calls.jsonl"
         self.ambient_log = self.temp / "ambient-sd-called"
         self.sd_log = self.temp / "exact-sd.jsonl"
+        self.fake_mise_mode = self.temp / "fake-mise-mode"
+        self.fake_sd_version = self.temp / "fake-sd-version"
+        self.fake_mise_mode.write_text("correct")
+        self.fake_sd_version.write_text("0.5.14")
         self._write_executable("git", "#!/bin/sh\nexit 0\n")
         os.symlink(shutil.which("tr"), self.bin_dir / "tr")
         os.symlink(shutil.which("sh"), self.bin_dir / "sh")
@@ -588,10 +598,10 @@ class PreflightCapabilityTests(unittest.TestCase):
                 from pathlib import Path
                 import sys
 
-                with Path(os.environ["FAKE_SD_LOG"]).open("a", encoding="utf-8") as stream:
+                with Path({str(self.sd_log)!r}).open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}) + "\\n")
                 if sys.argv[1:] == ["--version"]:
-                    print(os.environ.get("FAKE_SD_VERSION", "0.5.14"))
+                    print(Path({str(self.fake_sd_version)!r}).read_text(encoding="utf-8"))
                 """
             )
         )
@@ -610,15 +620,25 @@ class PreflightCapabilityTests(unittest.TestCase):
                 import sys
 
                 argv = sys.argv[1:]
-                with Path(os.environ["FAKE_MISE_LOG"]).open("a", encoding="utf-8") as stream:
+                npm_environment = {{
+                    name: value
+                    for name, value in os.environ.items()
+                    if name.lower().startswith("npm_config_")
+                }}
+                with Path({str(self.log)!r}).open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps({{
                         "argv": argv,
                         "cwd": os.getcwd(),
                         "npm_package_manager": os.environ.get("MISE_NPM_PACKAGE_MANAGER"),
+                        "npm_environment": npm_environment,
+                        "mise_cd": argv[argv.index("--cd") + 1] if "--cd" in argv else None,
+                        "mise_cd_has_npmrc": (
+                            Path(argv[argv.index("--cd") + 1]) / ".npmrc"
+                        ).is_file() if "--cd" in argv else None,
                     }}) + "\\n")
 
-                mode = os.environ.get("FAKE_MISE_MODE", "correct")
-                root = os.environ["FAKE_MISE_ROOT"]
+                mode = Path({str(self.fake_mise_mode)!r}).read_text(encoding="utf-8")
+                root = {str(self.exact_root)!r}
                 if "where" in argv:
                     if mode == "windows-paths":
                         print(r"C:\\Mise\\Installs\\Seeds")
@@ -633,7 +653,7 @@ class PreflightCapabilityTests(unittest.TestCase):
                 target = argv[argv.index("--cd") + 1]
                 os.chdir(target)
                 if mode == "wrong-provenance":
-                    selected_bin = os.environ["FAKE_AMBIENT_BIN"]
+                    selected_bin = {str(self.bin_dir)!r}
                 else:
                     selected_bin = str(Path(root) / "bin")
                 env = os.environ.copy()
@@ -645,9 +665,14 @@ class PreflightCapabilityTests(unittest.TestCase):
                     else:
                         print(str(Path(selected_bin) / "sd"))
                     raise SystemExit(0)
+                if command[:3] == ["sh", "-c", 'cd "$1" && shift && exec sd "$@"']:
+                    if len(command) < 5:
+                        raise SystemExit(2)
+                    os.chdir(command[4])
+                    command = ["sd", *command[5:]]
                 if command and command[0] == "sd":
                     if mode == "wrong-version":
-                        env["FAKE_SD_VERSION"] = "0.5.13"
+                        Path({str(self.fake_sd_version)!r}).write_text("0.5.13")
                     sd_path = Path(root) / "bin" / "sd" if mode == "wrong-provenance" else Path(selected_bin) / "sd"
                     completed = subprocess.run(
                         [str(sd_path), *command[1:]], env=env, check=False
@@ -661,16 +686,16 @@ class PreflightCapabilityTests(unittest.TestCase):
         executable.chmod(0o755)
 
     def _environment(self, *, github_required: bool, mode: str = "correct") -> dict[str, str]:
+        self.fake_mise_mode.write_text(mode)
+        self.fake_sd_version.write_text("0.5.14")
         return os.environ | {
             "PATH": str(self.bin_dir) + os.pathsep + os.defpath,
             "AGENTIC_SDLC_HOST_READY": "1",
             "AGENTIC_SDLC_GITHUB_REQUIRED": "1" if github_required else "0",
             "HOME": str(self.temp),
-            "FAKE_MISE_LOG": str(self.log),
-            "FAKE_MISE_ROOT": str(self.exact_root),
-            "FAKE_MISE_MODE": mode,
-            "FAKE_AMBIENT_BIN": str(self.bin_dir),
-            "FAKE_SD_LOG": str(self.sd_log),
+            "NPM_CONFIG_REGISTRY": "https://ambient.invalid/",
+            "NPM_CONFIG_USERCONFIG": str(self.ambient_npmrc),
+            "NPM_CONFIG__OS_ECO_REGISTRY": "https://scoped-ambient.invalid/",
         }
 
     def run_preflight(
@@ -698,10 +723,25 @@ class PreflightCapabilityTests(unittest.TestCase):
     def assert_exact_contract(self, call: dict[str, object]) -> None:
         argv = call["argv"]
         self.assertEqual(call["npm_package_manager"], "npm")
-        self.assertEqual(argv[:4], ["--no-config", "--cd", str(self.target), "exec"])
+        self.assertEqual(argv[0], "--no-config")
+        self.assertEqual(argv[1:3], ["--cd", call["mise_cd"]])
+        self.assertNotEqual(call["mise_cd"], str(self.target))
+        self.assertFalse(call["mise_cd_has_npmrc"])
+        self.assertEqual(argv[3], "exec")
         self.assertEqual(argv[4:7], EXACT_RUNTIMES)
         self.assertEqual(argv[7], "--")
         self.assertNotEqual(argv[8:9], ["mise"])
+
+    def assert_neutral_npm_environment(self, call: dict[str, object]) -> None:
+        self.assertEqual(
+            call["npm_environment"],
+            {
+                "NPM_CONFIG_REGISTRY": "https://registry.npmjs.org/",
+                "NPM_CONFIG_USERCONFIG": os.devnull,
+                "NPM_CONFIG_GLOBALCONFIG": os.devnull,
+                "NPM_CONFIG_STRICT_SSL": "true",
+            },
+        )
 
     def test_ambient_wrong_sd_is_ignored_and_exact_mise_seeds_is_required(self) -> None:
         result = self.run_preflight(github_required=False)
@@ -713,6 +753,7 @@ class PreflightCapabilityTests(unittest.TestCase):
         self.assertGreaterEqual(len(exact_calls), 3)
         for call in exact_calls[:3]:
             self.assert_exact_contract(call)
+            self.assert_neutral_npm_environment(call)
         self.assertIn("ok:       Seeds 0.5.14", result.stdout)
 
     def test_wrong_exact_version_fails_closed(self) -> None:
@@ -745,20 +786,32 @@ class PreflightCapabilityTests(unittest.TestCase):
         calls = self._mise_calls()
         self.assertEqual(len(calls), 1)
         self.assert_exact_contract(calls[0])
-        self.assertEqual(calls[0]["argv"][8:], ["sd", *arguments])
+        self.assertEqual(calls[0]["argv"][8:], ["sh", "-c", 'cd "$1" && shift && exec sd "$@"', "agentic-sdlc-seeds", str(self.target), *arguments])
+        self.assert_neutral_npm_environment(calls[0])
         self.assertEqual(self._sd_calls(), [{"argv": arguments, "cwd": str(self.target)}])
+
+    def test_relative_dot_target_keeps_target_cwd_and_neutral_acquisition(self) -> None:
+        result = subprocess.run(
+            [BASH, "-c", '. "$1"; agentic_sdlc_seeds . ready', "test-shell", str(SCRIPT)],
+            cwd=self.target,
+            env=self._environment(github_required=False),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self._mise_calls()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["argv"][:4], ["--no-config", "--cd", calls[0]["mise_cd"], "exec"])
+        self.assert_neutral_npm_environment(calls[0])
+        self.assertEqual(self._sd_calls(), [{"argv": ["ready"], "cwd": str(self.target)}])
 
     def test_local_git_run_does_not_require_gh(self) -> None:
         self._write_executable("gh", "#!/bin/sh\nexit 127\n")
         (self.bin_dir / "gh").unlink()
-        env = self._environment(github_required=False)
-        env["PATH"] = str(self.bin_dir)
-        result = subprocess.run(
-            [BASH, str(SCRIPT)], cwd=self.target, env=env, text=True,
-            capture_output=True, check=False,
-        )
+        result = self.run_preflight(github_required=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("gh not found (GitHub publication adapter skipped", result.stdout)
+        self.assertIn("ok:       Seeds 0.5.14", result.stdout)
 
     def test_selected_github_operation_requires_gh(self) -> None:
         env = self._environment(github_required=True)
@@ -1464,7 +1517,7 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             "\n".join(violations),
         )
 
-    def test_docs_define_exact_posix_and_process_scoped_windows_contract(self) -> None:
+    def test_docs_define_neutral_acquisition_and_process_scoped_windows_contract(self) -> None:
         skill = (ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").read_text()
         reference = (
             ROOT
@@ -1474,13 +1527,20 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             / "seeds-worktrees.md"
         ).read_text()
         exact = (
-            "MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec "
-            "node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>"
+            "NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ NPM_CONFIG_USERCONFIG=/dev/null "
+            "NPM_CONFIG_GLOBALCONFIG=/dev/null MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <neutral-temp> "
+            "exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- "
+            "sh -c 'cd \"$1\" && shift && exec sd \"$@\"' agentic-sdlc-seeds <target> <args>"
         )
         self.assertIn(exact, skill)
         self.assertIn("Seeds(<target>, <args...>)", skill)
         self.assertIn(exact, reference)
-        self.assertIn("$env:MISE_NPM_PACKAGE_MANAGER", reference)
+        self.assertIn("$env:NPM_CONFIG_REGISTRY = 'https://registry.npmjs.org/'", reference)
+        self.assertIn("$neutralNpmConfig = [IO.Path]::GetTempFileName()", reference)
+        self.assertIn("$previousNpmConfigEnvironment = @{}", reference)
+        self.assertIn("foreach ($variable in Get-ChildItem Env:NPM_CONFIG_*)", reference)
+        self.assertIn("$env:NPM_CONFIG_USERCONFIG = $neutralNpmConfig", reference)
+        self.assertIn("$env:NPM_CONFIG_GLOBALCONFIG = $neutralGlobalNpmConfig", reference)
         self.assertIn("try {", reference)
         self.assertIn("finally {", reference)
 

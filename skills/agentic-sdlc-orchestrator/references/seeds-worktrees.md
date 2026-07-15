@@ -5,30 +5,61 @@ Use this reference when converting the plan into parallel implementation work.
 ## Exact Seeds execution contract
 
 Mise is the only bootstrap prerequisite. From a reviewed distribution checkout, bootstrap the
-pinned tools once with `mise -C <distribution-root> install`. Thereafter, define
-`Seeds(<target>, <args...>)` as this exact POSIX command; it has no bundle-checkout dependency:
+pinned tools once with `mise -C <distribution-root> install`. Thereafter, resolve the npm package
+from a newly-created empty, config-free operating-system temporary directory, delete that
+directory after execution, then use this exact POSIX command to execute `sd` in `<target>`:
 
 ```bash
-MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>
+NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <neutral-temp> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sh -c 'cd "$1" && shift && exec sd "$@"' agentic-sdlc-seeds <target> <args>
 ```
 
-`--no-config` prevents target or ambient mise configuration from changing any runtime, while
-`--cd <target>` preserves the target repository as cwd. Pass each argument separately; do not
-assemble a shell command string or resolve an ambient `sd` from `PATH`.
+`<neutral-temp>` is not the target. Before launching, clear every inherited `NPM_CONFIG_*`
+variable, including scoped registries, then set `NPM_CONFIG_REGISTRY` to
+`https://registry.npmjs.org/`, user/global config to `/dev/null`, and strict SSL. `--no-config`
+prevents target or ambient mise configuration from changing any runtime. The wrapper changes to
+`<target>` only after mise has acquired the package and preserves every argument boundary; do not
+assemble a shell command string or resolve an ambient `sd` from `PATH`. npm validates
+registry-published tarball integrity metadata, but neither that behavior nor a version pin is a
+claim that the pin authenticates the tarball or transitive dependency graph.
 
-On native Windows use process-scoped environment only, restore prior state, and preserve the
-argument array:
+On native Windows use process-scoped variables and fresh empty temp files for npm config, restore
+all prior variables (including every cleared `NPM_CONFIG_*` value), and preserve the target and
+argument arrays:
 
 ```powershell
-$previousSeedsPackageManager = $env:MISE_NPM_PACKAGE_MANAGER
+$previousSeedsEnvironment = @{}
+$previousNpmConfigEnvironment = @{}
+$neutralNpmConfig = [IO.Path]::GetTempFileName()
+$neutralGlobalNpmConfig = [IO.Path]::GetTempFileName()
+foreach ($variable in Get-ChildItem Env:NPM_CONFIG_*) {
+  $previousNpmConfigEnvironment[$variable.Name] = $variable.Value
+}
+foreach ($name in @('MISE_NPM_PACKAGE_MANAGER', 'NPM_CONFIG_REGISTRY', 'NPM_CONFIG_USERCONFIG', 'NPM_CONFIG_GLOBALCONFIG', 'NPM_CONFIG_STRICT_SSL')) {
+  $previousSeedsEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
 try {
+  Get-ChildItem Env:NPM_CONFIG_* | Remove-Item -ErrorAction SilentlyContinue
   $env:MISE_NPM_PACKAGE_MANAGER = 'npm'
-  & mise --no-config --cd $target exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd @seedsArgs
+  $env:NPM_CONFIG_REGISTRY = 'https://registry.npmjs.org/'
+  $env:NPM_CONFIG_USERCONFIG = $neutralNpmConfig
+  $env:NPM_CONFIG_GLOBALCONFIG = $neutralGlobalNpmConfig
+  $env:NPM_CONFIG_STRICT_SSL = 'true'
+  $neutralDirectory = [IO.Path]::Combine([IO.Path]::GetTempPath(), [IO.Path]::GetRandomFileName())
+  [IO.Directory]::CreateDirectory($neutralDirectory) | Out-Null
+  & mise --no-config --cd $neutralDirectory exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sh -c 'cd "$1" && shift && exec sd "$@"' agentic-sdlc-seeds $target @seedsArgs
 } finally {
-  if ($null -eq $previousSeedsPackageManager) {
-    Remove-Item Env:MISE_NPM_PACKAGE_MANAGER -ErrorAction SilentlyContinue
-  } else {
-    $env:MISE_NPM_PACKAGE_MANAGER = $previousSeedsPackageManager
+  Remove-Item -LiteralPath $neutralDirectory -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $neutralNpmConfig, $neutralGlobalNpmConfig -Force -ErrorAction SilentlyContinue
+  Get-ChildItem Env:NPM_CONFIG_* | Remove-Item -ErrorAction SilentlyContinue
+  foreach ($name in $previousNpmConfigEnvironment.Keys) {
+    Set-Item "Env:$name" $previousNpmConfigEnvironment[$name]
+  }
+  foreach ($name in $previousSeedsEnvironment.Keys) {
+    if ($null -eq $previousSeedsEnvironment[$name]) {
+      Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+    } else {
+      Set-Item "Env:$name" $previousSeedsEnvironment[$name]
+    }
   }
 }
 ```
