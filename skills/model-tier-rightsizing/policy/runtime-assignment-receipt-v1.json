@@ -10,6 +10,70 @@
   },
   "allowed_efforts": ["low", "medium", "high", "xhigh", "max"],
   "allowed_context_forms": ["base", "[1m]"],
-  "unavailable_marker": "unavailable_in_transport",
-  "model_mapping_evidence": "policy:runtime-assignment-policy-v1#model-provider-map"
+  "allowed_evidence": {
+    "request_injection": {
+      "source_kinds": ["immutable_request_receipt"],
+      "statuses": ["verified"],
+      "schemas": ["launcher-request-evidence/v1"]
+    },
+    "model_mapping": {
+      "source_kinds": ["policy_exact_id_mapping"],
+      "statuses": ["unavailable"],
+      "schemas": ["runtime-assignment-policy-v1"]
+    },
+    "transport_readback": {
+      "source_kinds": ["transport_readback"],
+      "statuses": ["verified", "unavailable"],
+      "schemas": ["runtime-assignment-readback/v1"]
+    }
+  },
+  "certified_request_tuples": [
+    ["gpt-5.6-sol", "low", "base"],
+    ["gpt-5.6-sol", "medium", "base"],
+    ["gpt-5.6-sol", "high", "base"],
+    ["gpt-5.6-sol", "xhigh", "base"],
+    ["gpt-5.6-sol", "max", "base"],
+    ["gpt-5.6-sol", "low", "[1m]"],
+    ["gpt-5.6-sol", "medium", "[1m]"],
+    ["gpt-5.6-sol", "high", "[1m]"],
+    ["gpt-5.6-sol", "xhigh", "[1m]"],
+    ["gpt-5.6-sol", "max", "[1m]"],
+    ["gpt-5.6-terra", "low", "base"],
+    ["gpt-5.6-terra", "medium", "base"],
+    ["gpt-5.6-terra", "high", "base"],
+    ["gpt-5.6-terra", "xhigh", "base"],
+    ["gpt-5.6-terra", "max", "base"],
+    ["gpt-5.6-terra", "low", "[1m]"],
+    ["gpt-5.6-terra", "medium", "[1m]"],
+    ["gpt-5.6-terra", "high", "[1m]"],
+    ["gpt-5.6-terra", "xhigh", "[1m]"],
+    ["gpt-5.6-terra", "max", "[1m]"],
+    ["gpt-5.6-luna", "low", "base"],
+    ["gpt-5.6-luna", "medium", "base"],
+    ["gpt-5.6-luna", "high", "base"],
+    ["gpt-5.6-luna", "xhigh", "base"],
+    ["gpt-5.6-luna", "max", "base"],
+    ["gpt-5.6-luna", "low", "[1m]"],
+    ["gpt-5.6-luna", "medium", "[1m]"],
+    ["gpt-5.6-luna", "high", "[1m]"],
+    ["gpt-5.6-luna", "xhigh", "[1m]"],
+    ["gpt-5.6-luna", "max", "[1m]"],
+    ["claude-fable-5", "low", "base"],
+    ["claude-fable-5", "medium", "base"],
+    ["claude-fable-5", "high", "base"],
+    ["claude-fable-5", "xhigh", "base"],
+    ["claude-fable-5", "max", "base"],
+    ["claude-opus-4-8", "low", "base"],
+    ["claude-opus-4-8", "medium", "base"],
+    ["claude-opus-4-8", "high", "base"],
+    ["claude-opus-4-8", "xhigh", "base"],
+    ["claude-opus-4-8", "max", "base"],
+    ["claude-sonnet-5", "low", "base"],
+    ["claude-sonnet-5", "medium", "base"],
+    ["claude-sonnet-5", "high", "base"],
+    ["claude-sonnet-5", "xhigh", "base"],
+    ["claude-sonnet-5", "max", "base"]
+  ],
+  "model_mapping_reference": "model-provider-map",
+  "unavailable_marker": "unavailable_in_transport"
 }

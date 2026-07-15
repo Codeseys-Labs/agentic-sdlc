@@ -199,15 +199,19 @@ def validate_python(root: Path, result: Validation) -> None:
 
 
 def parse_frontmatter_metadata(text: str) -> dict[str, str]:
-    """Parse the flat YAML frontmatter shape used by Claude role manifests."""
+    """Parse bounded flat YAML frontmatter for Claude role manifests.
+
+    This is deliberately not a general YAML parser: only a single quoted or unquoted
+    scalar key followed by optional whitespace and a colon is needed for pin detection.
+    """
     metadata = frontmatter(text)
     values: dict[str, str] = {}
     for line in metadata.splitlines():
-        match = re.fullmatch(r"([A-Za-z_][\w-]*):\s*(.*)", line)
+        match = re.fullmatch(r"\s*(?:([A-Za-z_][\w-]*)|['\"]([A-Za-z_][\w-]*)['\"])\s*:\s*(.*)", line)
         if not match:
             continue
-        key, value = match.groups()
-        value = value.strip()
+        key = match.group(1) or match.group(2)
+        value = match.group(3).strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         values[key] = value

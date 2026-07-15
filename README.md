@@ -150,11 +150,19 @@ The checked-in `mise.toml` pins `uv`; `mise.lock` records source URLs and SHA-25
 for Linux, macOS, and Windows; `uv` supplies Python `3.12.11` for every authoritative Python
 entrypoint. Git, a documented Seeds distribution, supported trust behavior, and the selected
 adapter are also prerequisites. Resolve and record the actual provider/model only when the
-adapter proves it; otherwise record unresolved. Every dispatch receipt records requested
-model/effort/context separately from `resolved_provider`, `resolved_model_id`,
-`resolved_effort`, `resolved_context_form`, `provider_readback_source`, and
-`provider_readback_evidence`. Only a fully non-unknown resolved receipt can reach spawn. A
-passing local
+adapter proves it; otherwise record unresolved. Every v1 dispatch receipt uses exactly
+`requested_model_id`, `requested_effort`, `requested_context_form`, request-injection evidence,
+resolved provider/model identity evidence, and effective effort/context readback status plus
+evidence. Request-injection evidence binds canonical exact requested model/effort/context
+bytes, adapter identity/version/config digest, and request-byte digest. It validates internal
+consistency only: it never proves external injection, no-bypass enforcement, or spawned-worker
+identity. Effective effort/context may be `unavailable` when the transport does not expose
+them; requested values never become readback. An external harness calls receipt admission
+immediately before spawn, correlates its digest, and remains responsible for injection,
+no-bypass, and spawn identity; this repository supplies no host launcher. Only an admitted,
+certified tuple can reach spawn. Exact Claude `[1m]` forms remain denied pending tuple-specific
+policy evidence; base Claude eligibility and calibration-supported GPT `[1m]` tuples remain.
+A passing local
 status or gate never authorizes push, publication, PR mutation, merge, deployment, credential, or other
 outward effect.
 
