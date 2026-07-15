@@ -12,16 +12,38 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 LAUNCHER = ROOT / "skills" / "agentic-sdlc-orchestrator" / "tools" / "seeds-launcher.mjs"
-NODE = shutil.which("node")
+SEEDS_PACKAGE_FIXTURE = ROOT / "tests" / "fixtures" / "seeds-cli-0.5.14" / "package.json"
+HOST_NODE = shutil.which("node")
+HOSTILE_NODE = next(
+    (
+        str(candidate)
+        for candidate in (
+            Path("/home/linuxbrew/.linuxbrew/bin/node"),
+            Path("/usr/local/bin/node"),
+            Path("/usr/bin/node"),
+        )
+        if candidate.is_file()
+        and subprocess.run([candidate, "--version"], text=True, capture_output=True, check=False).stdout.strip().removeprefix("v") != "22.22.3"
+    ),
+    None,
+)
+EXACT_NODE = Path(
+    os.environ.get(
+        "AGENTIC_SDLC_TEST_NODE",
+        str(Path.home() / ".local" / "share" / "mise" / "installs" / "node" / "22.22.3" / ("node.exe" if os.name == "nt" else "bin/node")),
+    )
+)
+NODE = str(EXACT_NODE) if EXACT_NODE.is_file() else HOST_NODE
 
 
-@unittest.skipIf(NODE is None or os.name == "nt", "Node and POSIX fixture executables are required for isolated launcher execution fixtures")
+@unittest.skipIf(NODE is None or os.name == "nt", "exact Node and POSIX fixture executables are required")
 class SeedsLauncherTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.distribution = self.root / "reviewed distribution"
         self.distribution.mkdir()
+        (self.distribution / ".gitignore").write_text("IGNORED\n", encoding="utf-8")
         (self.distribution / "mise.toml").write_text("[tools]\nnode = '22.22.3'\n", encoding="utf-8")
         (self.distribution / "mise.lock").write_text("locked fixture\n", encoding="utf-8")
         self._run(["git", "init", "-q"], cwd=self.distribution)
@@ -33,6 +55,8 @@ class SeedsLauncherTests(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.calls = self.root / "mise.jsonl"
+        self.mise_environment = self.root / "mise-environment.jsonl"
+        self.mise_config_listing = self.root / "mise-config-listing"
         self.bun_log = self.root / "bun.log"
         self.bun_behavior = self.root / "bun-behavior"
         self.bun_behavior.write_text("0", encoding="utf-8")
@@ -93,10 +117,7 @@ class SeedsLauncherTests(unittest.TestCase):
         )
         package = self.seeds_root / "lib" / "node_modules" / "@os-eco" / "seeds-cli"
         package.mkdir(parents=True)
-        (package / "package.json").write_text(
-            '{"name":"@os-eco/seeds-cli","version":"0.5.14","bin":{"sd":"./src/index.ts"}}\n',
-            encoding="utf-8",
-        )
+        (package / "package.json").write_bytes(SEEDS_PACKAGE_FIXTURE.read_bytes())
         (package / "src").mkdir()
         (package / "src" / "index.ts").write_text("console.log('fixture')\n", encoding="utf-8")
         (self.seeds_root / "bin").mkdir(parents=True)
@@ -107,6 +128,8 @@ class SeedsLauncherTests(unittest.TestCase):
             self.bin / "mise",
             "#!/bin/sh\n"
             f"printf '%s\\n' \"$*\" >> {self._quote(str(self.calls))}\n"
+            f"printf '{{\"npm_config_registry\":\"%s\",\"npm_config_userconfig\":\"%s\",\"npm_config_globalconfig\":\"%s\",\"mise_global_config_file\":\"%s\",\"mise_system_config_file\":\"%s\",\"mise_override_config_filenames\":\"%s\",\"mise_no_env\":\"%s\",\"mise_no_hooks\":\"%s\",\"home\":\"%s\",\"cwd\":\"%s\"}}\\n' \"${{NPM_CONFIG_REGISTRY-}}\" \"${{NPM_CONFIG_USERCONFIG-}}\" \"${{NPM_CONFIG_GLOBALCONFIG-}}\" \"${{MISE_GLOBAL_CONFIG_FILE-}}\" \"${{MISE_SYSTEM_CONFIG_FILE-}}\" \"${{MISE_OVERRIDE_CONFIG_FILENAMES-}}\" \"${{MISE_NO_ENV-}}\" \"${{MISE_NO_HOOKS-}}\" \"${{HOME-}}\" \"$PWD\" >> {self._quote(str(self.mise_environment))}\n"
+            f"if [ -f \"${{HOME-}}/ambient-mise-config-used\" ] || [ -f \"${{NPM_CONFIG_USERCONFIG-}}\" ] && grep -q hostile \"${{NPM_CONFIG_USERCONFIG-}}\"; then printf ambient >> {self._quote(str(self.mise_config_listing))}; fi\n"
             "if [ \"${1:-}\" = --no-config ] && [ \"${2:-}\" = where ]; then\n"
             "  case \"${3:-}\" in\n"
             f"    node@22.22.3) printf '%s\\n' {self._quote(str(self.node_root))} ;;\n"
@@ -121,13 +144,23 @@ class SeedsLauncherTests(unittest.TestCase):
         )
 
     def environment(self) -> dict[str, str]:
+        hostile_home = self.root / "hostile-home"
+        hostile_home.mkdir(exist_ok=True)
+        (hostile_home / ".npmrc").write_text("registry=https://home-hostile.invalid/\n", encoding="utf-8")
+        (hostile_home / "ambient-mise-config-used").write_text("hostile\n", encoding="utf-8")
+        hostile_npmrc = self.root / "hostile.npmrc"
+        hostile_npmrc.write_text("registry=https://hostile.invalid/\n", encoding="utf-8")
         return os.environ | {
+            "HOME": str(hostile_home),
             "PATH": str(self.bin) + os.pathsep + os.defpath,
             "XDG_STATE_HOME": str(self.state),
             "BUN_OPTIONS": "--inspect=127.0.0.1:9229",
             "BUN_INSPECT_PRELOAD": "hostile",
             "NODE_OPTIONS": "--trace-warnings",
             "NPM_CONFIG_REGISTRY": "https://hostile.invalid/",
+            "NPM_CONFIG_USERCONFIG": str(hostile_npmrc),
+            "MISE_GLOBAL_CONFIG_FILE": str(self.root / "hostile-mise.toml"),
+            "MISE_OVERRIDE_CONFIG_FILENAMES": "hostile.toml",
             "MISE_DATA_DIR": str(self.root / "hostile-mise-data"),
             "SEEDS_DEBUG": "1",
         }
@@ -163,20 +196,91 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertIn("distribution", receipt["hashes"])
         self.assertTrue((active.parent / "trusted-bunfig.toml").is_file())
         self.assertEqual((active.parent / "trusted-bunfig.toml").read_bytes(), b"")
+        mise_environments = [json.loads(line) for line in self.mise_environment.read_text(encoding="utf-8").splitlines()]
+        for environment in mise_environments:
+            self.assertEqual(environment["npm_config_registry"], "https://registry.npmjs.org/")
+            self.assertNotEqual(environment["npm_config_userconfig"], environment["npm_config_globalconfig"])
+            self.assertEqual(Path(environment["npm_config_userconfig"]).read_bytes(), b"")
+            self.assertEqual(Path(environment["npm_config_globalconfig"]).read_bytes(), b"")
+            self.assertEqual(Path(environment["mise_global_config_file"]), self.distribution / "mise.toml")
+            self.assertEqual(environment["mise_system_config_file"], os.devnull)
+            self.assertEqual(environment["mise_override_config_filenames"], "__agentic_sdlc_reviewed_config_only__")
+            self.assertEqual(environment["mise_no_env"], "1")
+            self.assertEqual(environment["mise_no_hooks"], "1")
+            self.assertEqual(environment["home"], str(active.parent / "bootstrap-home"))
+            self.assertEqual(environment["cwd"], environment["home"])
+        self.assertFalse(self.mise_config_listing.exists())
         second = self.bootstrap()
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertTrue((active.parent / "previous.json").is_file())
 
+    def test_bootstrap_rejects_nested_dirty_and_untracked_distribution_trees(self) -> None:
+        nested = self.distribution / "nested"
+        nested.mkdir()
+        shutil.copy2(self.distribution / "mise.toml", nested / "mise.toml")
+        shutil.copy2(self.distribution / "mise.lock", nested / "mise.lock")
+        nested_result = self.launcher("bootstrap", "--distribution", str(nested))
+        self.assertNotEqual(nested_result.returncode, 0)
+        self.assertIn("Git root", nested_result.stderr)
+
+        shutil.rmtree(nested)
+        (self.distribution / "mise.toml").write_text("[tools]\nnode = '22.22.4'\n", encoding="utf-8")
+        dirty = self.bootstrap()
+        self.assertNotEqual(dirty.returncode, 0)
+        self.assertIn("clean Git tree", dirty.stderr)
+
+        self._run(["git", "restore", "mise.toml"], cwd=self.distribution)
+        (self.distribution / "UNREVIEWED").write_text("untracked\n", encoding="utf-8")
+        untracked = self.bootstrap()
+        self.assertNotEqual(untracked.returncode, 0)
+        self.assertIn("untracked", untracked.stderr)
+
+        (self.distribution / "UNREVIEWED").unlink()
+        (self.distribution / "IGNORED").write_text("ignored\n", encoding="utf-8")
+        ignored = self.bootstrap()
+        self.assertNotEqual(ignored.returncode, 0)
+        self.assertIn("ignored", ignored.stderr)
+        self.assertFalse((self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json").exists())
+
+    @unittest.skipIf(HOSTILE_NODE is None, "a non-22.22.3 Node is required for interpreter rejection fixture")
+    def test_bootstrap_and_inspect_reject_launcher_process_running_under_wrong_node(self) -> None:
+        result = subprocess.run(
+            [HOSTILE_NODE, str(LAUNCHER), "bootstrap", "--distribution", str(self.distribution)],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("launcher Node version mismatch", result.stderr)
+
+        self.assertEqual(self.bootstrap().returncode, 0)
+        inspect = subprocess.run(
+            [HOSTILE_NODE, str(LAUNCHER), "inspect", "--target", str(self.target), "prime"],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+        self.assertNotEqual(inspect.returncode, 0)
+        self.assertIn("launcher Node version mismatch", inspect.stderr)
+
     def test_bootstrap_rejects_package_execution_controls_before_receipt_publication(self) -> None:
         package = self.seeds_root / "lib" / "node_modules" / "@os-eco" / "seeds-cli" / "package.json"
-        package.write_text(
-            '{"name":"@os-eco/seeds-cli","version":"0.5.14","bin":{"sd":"./src/index.ts"},"preload":["hostile"]}\n',
-            encoding="utf-8",
-        )
-        result = self.bootstrap()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("execution control", result.stderr)
-        self.assertFalse((self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json").exists())
+        metadata = json.loads(SEEDS_PACKAGE_FIXTURE.read_text(encoding="utf-8"))
+        for control in (
+            {"preload": ["hostile"]},
+            {"bun": {"preload": ["hostile"]}},
+            {"engines": {"bun": {"preload": ["hostile"]}}},
+            {"nested": {"bun": "hostile"}},
+            {"nested": {"macro": "hostile"}},
+        ):
+            with self.subTest(control=control):
+                package.write_text(json.dumps(metadata | control) + "\n", encoding="utf-8")
+                result = self.bootstrap()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("execution control", result.stderr)
+                self.assertFalse((self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json").exists())
 
     def test_inspect_uses_receipt_never_mise_and_filters_environment_before_exact_bun(self) -> None:
         self.assertEqual(self.bootstrap().returncode, 0)
@@ -234,6 +338,77 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertIn("'--no-config' 'where' 'node@22.22.3'", windows)
         self.assertIn("finally", windows)
         self.assertIn("$childStatus = $LASTEXITCODE", windows)
+
+
+@unittest.skipUnless(os.name == "nt", "native Windows launcher fixture")
+class NativeWindowsSeedsLauncherTests(unittest.TestCase):
+    def test_real_locked_tuple_bootstraps_and_inspects_with_hostile_ambient_config(self) -> None:
+        mise = shutil.which("mise.exe") or shutil.which("mise")
+        git = shutil.which("git.exe") or shutil.which("git")
+        self.assertIsNotNone(mise, "native Windows mise is required")
+        self.assertIsNotNone(git, "native Windows Git is required")
+        node_root = subprocess.run(
+            [mise, "--no-config", "where", "node@22.22.3"],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        exact_node = Path(node_root) / "node.exe"
+        self.assertTrue(exact_node.is_file(), "exact Node 22.22.3 must be installed for the native fixture")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            distribution = root / "reviewed distribution"
+            distribution.mkdir()
+            shutil.copy2(ROOT / "mise.toml", distribution / "mise.toml")
+            shutil.copy2(ROOT / "mise.lock", distribution / "mise.lock")
+            subprocess.run(["git", "init", "-q"], cwd=distribution, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=distribution, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"], cwd=distribution, check=True)
+            subprocess.run(["git", "add", "."], cwd=distribution, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=distribution, check=True)
+            target = root / "hostile target"
+            target.mkdir()
+            (target / "bunfig.toml").write_text("preload = ['./hostile.ts']\n", encoding="utf-8")
+            hostile_npmrc = root / "hostile.npmrc"
+            hostile_npmrc.write_text("registry=https://hostile.invalid/\n", encoding="utf-8")
+            state = root / "state"
+            environment = os.environ | {
+                "PATH": os.pathsep.join((str(Path(mise).parent), str(Path(git).parent))),
+                "LOCALAPPDATA": str(state),
+                "HOME": str(target),
+                "USERPROFILE": str(target),
+                "NPM_CONFIG_REGISTRY": "https://hostile.invalid/",
+                "NPM_CONFIG_USERCONFIG": str(hostile_npmrc),
+                "BUN_OPTIONS": "--inspect=127.0.0.1:9229",
+                "NODE_OPTIONS": "--trace-warnings",
+                "MISE_GLOBAL_CONFIG_FILE": str(root / "hostile-mise.toml"),
+            }
+            bootstrapped = subprocess.run(
+                [exact_node, LAUNCHER, "bootstrap", "--distribution", distribution],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+                timeout=300,
+            )
+            self.assertEqual(bootstrapped.returncode, 0, bootstrapped.stderr)
+            inspected = subprocess.run(
+                [exact_node, LAUNCHER, "inspect", "--target", target, "--version"],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(inspected.returncode, 0, inspected.stderr)
+            self.assertEqual(inspected.stdout.strip(), "0.5.14")
+            receipt = json.loads(
+                (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(receipt["platform"], "win32")
+            self.assertTrue(receipt["tuple"]["node"]["executable"].lower().endswith("node.exe"))
+            self.assertTrue(receipt["tuple"]["bun"]["executable"].lower().endswith("bun.exe"))
+            self.assertTrue(receipt["tuple"]["seeds"]["packageRoot"].lower().endswith("@os-eco\\seeds-cli"))
 
 
 if __name__ == "__main__":

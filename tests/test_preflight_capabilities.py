@@ -46,7 +46,7 @@ EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
 )
 SEEDS_ACTION = r"(?:init|claim|create|update|close|sync|disposition)"
 SEEDS_ACTION_LIST = rf"{SEEDS_ACTION}(?:\s*(?:/|or|,|and|-)\s*{SEEDS_ACTION})*"
-SEEDS_OBJECT = r"(?:Seeds?\s+(?:issue|item|record|state|queue(?:[-\s]state)?)|Seed[-\s]queue(?:[-\s]state)?)"
+SEEDS_OBJECT = r"(?:Seeds?\s+(?:issues?|items?|records?|states?|queues?(?:[-\s]states?)?)|Seed[-\s]queues?(?:[-\s]states?)?)"
 SEEDS_PSEUDO_OPERATION = re.compile(
     rf"\bSeeds\(\s*[^,()]+\s*,\s*(?P<action>{SEEDS_ACTION})\b", re.IGNORECASE
 )
@@ -1013,6 +1013,34 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             6,
         )
 
+    def test_shipped_surface_scanner_rejects_plural_seeds_authority_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                "\n".join(
+                    (
+                        "Workers may create Seeds issues.",
+                        "Workers may claim Seeds items.",
+                        "Workers may update Seeds records.",
+                        "Workers may close Seeds states.",
+                        "Workers may sync Seeds queues.",
+                        "Workers may update Seeds queue-states.",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            6,
+            "\n".join(violations),
+        )
+
     def test_shipped_surface_scanner_enforces_every_shipped_text_surface(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture_root = Path(temporary_directory)
@@ -1601,6 +1629,8 @@ class SeedsDocumentationContractTests(unittest.TestCase):
         for content in (skill, reference):
             self.assertIn("mise --locked install", content)
             self.assertIn("same-UID TOCTOU", content)
+            self.assertIn("exact clean Git", content)
+            self.assertIn("engines.bun", content)
             self.assertIn("--no-env-file", content)
             self.assertIn("--no-install", content)
             self.assertIn("shell:false", content)
