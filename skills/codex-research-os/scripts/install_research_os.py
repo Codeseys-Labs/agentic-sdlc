@@ -39,6 +39,7 @@ ONE_MILLION_CONTEXT_SEMANTICS = "A `[1m]` request or base-ID readback proves nei
 VALIDATION_ONLY_SEMANTICS = "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
 SEEDS_READ_ONLY_SEMANTICS = "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor."
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+CANONICAL_RUNTIME_CONTRACT_SHA256 = "e1872645df2e036770491fab44c122336c2fcf3e3765b10485d04bac06f23314"
 EXACT_MODEL_PROVIDER_MAP = {
     "claude-fable-5": "anthropic",
     "claude-opus-4-8": "anthropic",
@@ -54,6 +55,23 @@ EXACT_MODEL_PAIRS = {
 }
 ALLOWED_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 ALLOWED_CONTEXT_FORMS = ["base", "[1m]"]
+ALLOWED_EVIDENCE = {
+    "request_injection": {
+        "source_kinds": ["immutable_request_receipt"],
+        "statuses": ["verified"],
+        "schemas": ["launcher-request-evidence/v1"],
+    },
+    "model_mapping": {
+        "source_kinds": ["policy_exact_id_mapping"],
+        "statuses": ["unavailable"],
+        "schemas": ["runtime-assignment-policy-v1"],
+    },
+    "transport_readback": {
+        "source_kinds": ["transport_readback"],
+        "statuses": ["verified", "unavailable"],
+        "schemas": ["runtime-assignment-readback/v1"],
+    },
+}
 CERTIFIED_MODEL_ORDER = [
     "gpt-5.6-sol",
     "gpt-5.6-terra",
@@ -110,10 +128,16 @@ def runtime_policies() -> tuple[dict[str, object], dict[str, object]]:
         raise ValueError("normative runtime contract does not bind the packaged receipt policy")
     if normative.get("canonical_runtime_contract_sha256") != hashlib.sha256(contract.encode("utf-8")).hexdigest():
         raise ValueError("normative runtime contract does not bind the packaged runtime block")
+    if normative.get("canonical_runtime_contract_sha256") != CANONICAL_RUNTIME_CONTRACT_SHA256:
+        raise ValueError("normative runtime contract does not match the source-pinned canonical runtime authority contract")
     if normative.get("canonical_receipt_fields") != receipt.get("canonical_receipt_fields"):
         raise ValueError("packaged normative and receipt field contracts differ")
     if receipt.get("canonical_receipt_fields") != list(RUNTIME_FIELDS):
         raise ValueError("packaged receipt policy differs from the source-pinned canonical field order")
+    if receipt.get("allowed_evidence") != ALLOWED_EVIDENCE:
+        raise ValueError("packaged receipt policy allowed_evidence vocabulary differs from the source-pinned contract")
+    if normative.get("allowed_evidence") != ALLOWED_EVIDENCE:
+        raise ValueError("packaged normative contract allowed_evidence vocabulary differs from the source-pinned contract")
     if normative.get("exact_model_provider_map") != receipt.get("allowed_exact_model_ids"):
         raise ValueError("packaged normative and receipt model contracts differ")
     if normative.get("allowed_efforts") != receipt.get("allowed_efforts"):
@@ -127,6 +151,7 @@ def runtime_policies() -> tuple[dict[str, object], dict[str, object]]:
         "exact_model_pairs": EXACT_MODEL_PAIRS,
         "allowed_efforts": ALLOWED_EFFORTS,
         "allowed_context_forms": ALLOWED_CONTEXT_FORMS,
+        "allowed_evidence": ALLOWED_EVIDENCE,
         "certified_context_forms_by_model": CERTIFIED_CONTEXT_FORMS_BY_MODEL,
         "certified_request_tuples": certified_request_tuples(),
         "production_efforts_by_model": PRODUCTION_EFFORTS_BY_MODEL,
@@ -184,7 +209,7 @@ End with current state, strongest evidence, weakest assumption, exact next actio
     ),
     "repo_cartographer": (
         "Maps an existing codebase, architecture, entrypoints, tests, data flow, docs, and research extension points.",
-        "read-only",
+        "workspace-write",
         """
 You are the repository cartographer. Use this role for brownfield mapping. Read AGENTS.md first. Map repository structure, core modules, entrypoints, build/test commands, data flow, experiment harnesses, current docs, TODOs, blockers, and research-relevant extension points. Write findings incrementally to research/memory/repo_map.md and setup blockers to research/state/blockers.md. Do not modify code or infer unsupported claims. Record non-obvious repository facts before finishing.
 """,
@@ -568,6 +593,10 @@ expected_roles = __MANAGED_ROLE_CONTRACTS__
 protected_runtime = __RUNTIME_CONTRACT__
 protected_director = __DIRECTOR_CONTRACT__
 contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injection|resolved_(?:provider|model_id)|model_readback|effort_readback|context_readback|provider[- ]default|host[- ]default|caller[- ]override|requested(?:_model_id|_effort|_context_form)?.{0,80}(?:resolved|readback)|(?:resolved|readback).{0,80}requested(?:_model_id|_effort|_context_form)?)")
+contradictory_authority = re.compile(r"(?i)\b(?:repository|role|agent|worker|receipt|local\s+validation|local\s+status|passing\s+(?:local\s+)?gate)\b.{0,80}\b(?:may|can|is\s+authorized\s+to|authori[sz](?:e|es|ed)?|grant(?:s|ed)?)\b.{0,80}\b(?:external\s+)?(?:spawn|admission|readback)\b")
+contradictory_capacity = re.compile(r"(?i)\[1m\].{0,100}\bproves?\b.{0,100}\b(?:capacity|intelligence|compaction|effort)\b")
+contradictory_seeds = re.compile(r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b")
+contradictory_publication = re.compile(r"(?i)\b(?:local\s+validation|passing\s+(?:local\s+)?gate|local\s+status)\b.{0,80}\b(?:sufficient|authori[sz](?:e|es|ed)?|grant(?:s|ed)?|permit(?:s|ted)?)\b.{0,80}\b(?:push|publish(?:ing|ation)?|merge|deploy(?:ment)?|outward)\b")
 forbidden_seed_authority_addition = re.compile(r"(?i)\b(?:seeds?|seedproposal|sd)\b")
 errors = []
 files = sorted(agents_dir.glob("*.toml")) if agents_dir.exists() else []
@@ -616,6 +645,17 @@ for path in files:
         outside_runtime = instructions.replace(protected_runtime, "", 1)
         if contradictory_runtime.search(outside_runtime):
             errors.append(f"{label}: additive runtime restatement or requested-to-readback/host-default mutation is forbidden")
+        authority_text = outside_runtime.replace(protected_runtime, "", 1)
+        if any(
+            pattern.search(authority_text)
+            for pattern in (
+                contradictory_authority,
+                contradictory_capacity,
+                contradictory_seeds,
+                contradictory_publication,
+            )
+        ):
+            errors.append(f"{label}: contradictory runtime authority language is forbidden")
     if "model" in data:
         errors.append(f"{label}: static model is forbidden; the conductor must inject the exact requested model at spawn")
     if "model_reasoning_effort" in data:

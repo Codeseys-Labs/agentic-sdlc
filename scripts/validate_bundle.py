@@ -76,6 +76,7 @@ RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsi
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+CANONICAL_RUNTIME_CONTRACT_SHA256 = "e1872645df2e036770491fab44c122336c2fcf3e3765b10485d04bac06f23314"
 EXACT_MODEL_PROVIDER_MAP = {
     "claude-fable-5": "anthropic",
     "claude-opus-4-8": "anthropic",
@@ -91,6 +92,23 @@ EXACT_MODEL_PAIRS = {
 }
 ALLOWED_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 ALLOWED_CONTEXT_FORMS = ["base", "[1m]"]
+ALLOWED_EVIDENCE = {
+    "request_injection": {
+        "source_kinds": ["immutable_request_receipt"],
+        "statuses": ["verified"],
+        "schemas": ["launcher-request-evidence/v1"],
+    },
+    "model_mapping": {
+        "source_kinds": ["policy_exact_id_mapping"],
+        "statuses": ["unavailable"],
+        "schemas": ["runtime-assignment-policy-v1"],
+    },
+    "transport_readback": {
+        "source_kinds": ["transport_readback"],
+        "statuses": ["verified", "unavailable"],
+        "schemas": ["runtime-assignment-readback/v1"],
+    },
+}
 CERTIFIED_MODEL_ORDER = [
     "gpt-5.6-sol",
     "gpt-5.6-terra",
@@ -137,6 +155,28 @@ RUNTIME_RECEIPT_SOURCE_FIELDS = frozenset(
         "effort_readback_source",
         "context_readback_source",
     }
+)
+FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS = (
+    re.compile(
+        r"(?i)\b(?:repository|role|agent|worker|receipt|local\s+validation|local\s+status|passing\s+(?:local\s+)?gate)\b"
+        r".{0,80}\b(?:may|can|is\s+authorized\s+to|is\s+the\s+sole|authori[sz](?:e|es|ed)?|grant(?:s|ed)?)\b"
+        r".{0,80}\b(?:external\s+)?(?:spawn|admission|readback)\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:external\s+)?(?:spawn|admission|readback)\b.{0,80}\b(?:authority|authorized|authori[sz](?:e|es|ed)?)\b"
+    ),
+    re.compile(
+        r"(?i)\[1m\].{0,100}\bproves?\b.{0,100}\b(?:capacity|intelligence|compaction|effort)\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
+        r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:local\s+validation|passing\s+(?:local\s+)?gate|local\s+status)\b.{0,80}\b"
+        r"(?:sufficient|authori[sz](?:e|es|ed)?|grant(?:s|ed)?|permit(?:s|ted)?)\b.{0,80}\b"
+        r"(?:push|publish(?:ing|ation)?|merge|deploy(?:ment)?|outward)\b"
+    ),
 )
 
 VALIDATOR_WRAPPER = """#!/usr/bin/env bash
@@ -334,6 +374,7 @@ def validate_runtime_policy_contract(root: Path, result: Validation) -> None:
         "exact_model_pairs": EXACT_MODEL_PAIRS,
         "allowed_efforts": ALLOWED_EFFORTS,
         "allowed_context_forms": ALLOWED_CONTEXT_FORMS,
+        "allowed_evidence": ALLOWED_EVIDENCE,
         "certified_context_forms_by_model": CERTIFIED_CONTEXT_FORMS_BY_MODEL,
         "production_efforts_by_model": PRODUCTION_EFFORTS_BY_MODEL,
         "validation_only_semantics": VALIDATION_ONLY_SEMANTICS,
@@ -350,6 +391,10 @@ def validate_runtime_policy_contract(root: Path, result: Validation) -> None:
         result.error("runtime receipt policy effort vocabulary mismatch")
     if policy.get("allowed_context_forms") != ALLOWED_CONTEXT_FORMS:
         result.error("runtime receipt policy context vocabulary mismatch")
+    if policy.get("allowed_evidence") != ALLOWED_EVIDENCE:
+        result.error("runtime receipt policy allowed_evidence vocabulary mismatch")
+    if normative.get("allowed_evidence") != ALLOWED_EVIDENCE:
+        result.error("normative runtime contract allowed_evidence vocabulary mismatch")
     if normative.get("certified_request_tuples") != policy.get("certified_request_tuples"):
         result.error("normative runtime contract certified request tuples mismatch")
     if policy.get("certified_request_tuples") != certified_request_tuples():
@@ -363,6 +408,8 @@ def validate_runtime_policy_contract(root: Path, result: Validation) -> None:
         result.error("normative runtime contract digest does not bind the canonical receipt policy")
     if normative.get("canonical_runtime_contract_sha256") != sha256_bytes(contract.encode("utf-8")):
         result.error("normative runtime contract digest does not bind the canonical runtime block")
+    if normative.get("canonical_runtime_contract_sha256") != CANONICAL_RUNTIME_CONTRACT_SHA256:
+        result.error("normative runtime contract digest does not match the source-pinned canonical runtime authority contract")
     if normative.get("research_director_seeds_contract_sha256") != RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256:
         result.error("normative runtime contract digest does not bind the Research Director Seeds boundary")
     packaged_receipt = PACKAGED_POLICY_DIR / RECEIPT_POLICY_PATH.name
@@ -375,16 +422,22 @@ def validate_runtime_policy_contract(root: Path, result: Validation) -> None:
         result.error("canonical runtime block must preserve validation-only semantics")
     if ONE_MILLION_CONTEXT_SEMANTICS not in contract:
         result.error("canonical runtime block must preserve evidence-qualified [1m] semantics")
+    if not any(
+        value in contract
+        for value in (
+            "external authenticated harness is the sole spawn and admission authority",
+            "external authenticated harness is solely responsible for spawn and admission",
+        )
+    ):
+        result.error("canonical runtime block must preserve the source-pinned canonical runtime authority contract")
+    if "Local validation authorizes push" in contract or "local validation authorizes push" in contract:
+        result.error("canonical runtime block must preserve the source-pinned canonical runtime authority contract")
 
 
-def managed_global_paths() -> set[str]:
+def managed_global_paths(root: Path) -> set[str]:
     return {
-        *(f"agents/claude/sdlc-{role}.md" for role in (
-            "cartographer", "critic", "implementer", "integrator", "planner", "researcher", "reviewer"
-        )),
-        *(f"agents/codex/sdlc-{role}.toml" for role in (
-            "cartographer", "critic", "implementer", "integrator", "planner", "researcher", "reviewer"
-        )),
+        *(path.relative_to(root).as_posix() for path in (root / "agents" / "claude").glob("*.md")),
+        *(path.relative_to(root).as_posix() for path in (root / "agents" / "codex").glob("*.toml")),
     }
 
 
@@ -398,12 +451,12 @@ def validate_managed_role_contract(root: Path, result: Validation) -> None:
         result.error(f"invalid normative managed role contract: {exc}")
         return
 
-    global_paths = managed_global_paths()
+    global_paths = managed_global_paths(root)
     actual_global = {
         str(path.relative_to(root)).replace("\\", "/")
         for path in (
-            *(root / "agents" / "claude").glob("sdlc-*.md"),
-            *(root / "agents" / "codex").glob("sdlc-*.toml"),
+            *(root / "agents" / "claude").glob("*.md"),
+            *(root / "agents" / "codex").glob("*.toml"),
         )
     }
     expected_global_hashes = global_spec.get("manifest_sha256", {})
@@ -506,6 +559,11 @@ def validate_runtime_receipt_projection(text: str, label: Path | str, result: Va
     else:
         if text.count(contract) != 1:
             result.error(f"{label}: runtime receipt projection must equal the exact policy-derived canonical runtime block")
+        else:
+            outside_contract = text.replace(contract, "", 1)
+            for pattern in FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS:
+                if pattern.search(outside_contract):
+                    result.error(f"{label}: contradictory runtime authority projection is forbidden")
     if any(field in text for field in RUNTIME_RECEIPT_SOURCE_FIELDS):
         result.error(f"{label}: stale runtime receipt source projection is forbidden")
 
