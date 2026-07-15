@@ -154,6 +154,7 @@ SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "6ea5d0acaf63497963ee7087874ae20fdb735c0ae0afad8405b4de1c919a32bd"
 SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256 = {
     "agents/claude/sdlc-reviewer.md": "2cc7132a36dd93127096448cf214c8a70ae5d7a9aed3d883df3a5af241ed8359",
     "agents/codex/sdlc-reviewer.toml": "31a77d96ea5184f2b4a2f87df250872b5c5e50ccd20c2adb8f15a30bfecba015",
@@ -541,6 +542,10 @@ def validate_source_pinned_protected_role_authority(root: Path, result: Validati
             director_instructions = managed_role_instructions(director_path)
         except (OSError, tomllib.TOMLDecodeError):
             director_instructions = ""
+        if sha256_bytes(director_instructions.encode("utf-8")) != RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256:
+            result.error(
+                "agents/codex/research/research_director.toml: source-pinned protected role authority content differs"
+            )
         if director_instructions.count(RESEARCH_DIRECTOR_SEEDS_AUTHORITY) != 1:
             result.error(
                 "agents/codex/research/research_director.toml: source-pinned protected role authority "
