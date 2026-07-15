@@ -91,6 +91,14 @@ EXACT_MODEL_PAIRS = {
 }
 ALLOWED_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 ALLOWED_CONTEXT_FORMS = ["base", "[1m]"]
+CERTIFIED_MODEL_ORDER = [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+]
 CERTIFIED_CONTEXT_FORMS_BY_MODEL = {
     "claude-fable-5": ["base"],
     "claude-opus-4-8": ["base"],
@@ -278,6 +286,15 @@ def parse_frontmatter_metadata(text: str) -> dict[str, object]:
     return value
 
 
+def certified_request_tuples() -> list[list[str]]:
+    return [
+        [model, effort, context]
+        for model in CERTIFIED_MODEL_ORDER
+        for context in CERTIFIED_CONTEXT_FORMS_BY_MODEL[model]
+        for effort in ALLOWED_EFFORTS
+    ]
+
+
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -335,6 +352,8 @@ def validate_runtime_policy_contract(root: Path, result: Validation) -> None:
         result.error("runtime receipt policy context vocabulary mismatch")
     if normative.get("certified_request_tuples") != policy.get("certified_request_tuples"):
         result.error("normative runtime contract certified request tuples mismatch")
+    if policy.get("certified_request_tuples") != certified_request_tuples():
+        result.error("runtime receipt policy certified request tuples differ from the source-pinned model/context matrix")
 
     contract = policy.get("canonical_runtime_contract")
     if not isinstance(contract, str):

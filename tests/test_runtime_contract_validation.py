@@ -299,6 +299,14 @@ class RuntimeContractValidationTests(unittest.TestCase):
             check=False,
         )
 
+    def run_standalone_research_os(self, standalone: Path, target: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(standalone / "scripts" / "install_research_os.py"), "--dry-run", "--target", str(target)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def test_generated_agent_validator_rejects_replaced_or_additive_instruction_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -472,6 +480,38 @@ class RuntimeContractValidationTests(unittest.TestCase):
                     result = self.run_generated_agent_validator(script)
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     director.write_text(original, encoding="utf-8")
+
+    def test_standalone_research_os_rejects_coordinated_packaged_policy_weakening(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            standalone = root / "codex-research-os"
+            shutil.copytree(RESEARCH_INSTALLER.parents[1], standalone)
+            receipt_path = standalone / "policy" / "runtime-assignment-receipt-v1.json"
+            normative_path = standalone / "policy" / "runtime-assignment-normative-contract-v1.json"
+            original_receipt = receipt_path.read_bytes()
+            original_normative = normative_path.read_bytes()
+            mutations = {
+                "uncertified tuple": lambda receipt, normative: (
+                    receipt["certified_request_tuples"].append(["claude-opus-4-8", "low", "[1m]"]),
+                    normative["certified_request_tuples"].append(["claude-opus-4-8", "low", "[1m]"]),
+                ),
+                "claude one-million context": lambda receipt, normative: normative[
+                    "certified_context_forms_by_model"
+                ]["claude-opus-4-8"].append("[1m]"),
+            }
+            for name, mutate in mutations.items():
+                with self.subTest(mutation=name):
+                    receipt = json.loads(original_receipt)
+                    normative = json.loads(original_normative)
+                    mutate(receipt, normative)
+                    encoded_receipt = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                    normative["canonical_receipt_policy_sha256"] = hashlib.sha256(encoded_receipt).hexdigest()
+                    receipt_path.write_bytes(encoded_receipt)
+                    normative_path.write_text(json.dumps(normative, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                    result = self.run_standalone_research_os(standalone, root / "target")
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    receipt_path.write_bytes(original_receipt)
+                    normative_path.write_bytes(original_normative)
 
     def valid_receipt(self) -> dict[str, object]:
         return receipt_admission.construct_receipt(

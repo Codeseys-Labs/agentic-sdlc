@@ -52,6 +52,24 @@ EXACT_MODEL_PAIRS = {
     "judgment": ["gpt-5.6-terra", "claude-opus-4-8"],
     "volume": ["gpt-5.6-luna", "claude-sonnet-5"],
 }
+ALLOWED_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+ALLOWED_CONTEXT_FORMS = ["base", "[1m]"]
+CERTIFIED_MODEL_ORDER = [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+]
+CERTIFIED_CONTEXT_FORMS_BY_MODEL = {
+    "claude-fable-5": ["base"],
+    "claude-opus-4-8": ["base"],
+    "claude-sonnet-5": ["base"],
+    "gpt-5.6-luna": ["base", "[1m]"],
+    "gpt-5.6-sol": ["base", "[1m]"],
+    "gpt-5.6-terra": ["base", "[1m]"],
+}
 PRODUCTION_EFFORTS_BY_MODEL = {
     "claude-fable-5": ["xhigh", "max"],
     "claude-opus-4-8": ["high", "xhigh"],
@@ -60,6 +78,15 @@ PRODUCTION_EFFORTS_BY_MODEL = {
     "gpt-5.6-sol": ["high", "xhigh"],
     "gpt-5.6-terra": ["xhigh", "max"],
 }
+
+
+def certified_request_tuples() -> list[list[str]]:
+    return [
+        [model, effort, context]
+        for model in CERTIFIED_MODEL_ORDER
+        for context in CERTIFIED_CONTEXT_FORMS_BY_MODEL[model]
+        for effort in ALLOWED_EFFORTS
+    ]
 
 
 def load_policy(path: Path, label: str) -> tuple[dict[str, object], bytes]:
@@ -98,6 +125,10 @@ def runtime_policies() -> tuple[dict[str, object], dict[str, object]]:
     source_pins = {
         "exact_model_provider_map": EXACT_MODEL_PROVIDER_MAP,
         "exact_model_pairs": EXACT_MODEL_PAIRS,
+        "allowed_efforts": ALLOWED_EFFORTS,
+        "allowed_context_forms": ALLOWED_CONTEXT_FORMS,
+        "certified_context_forms_by_model": CERTIFIED_CONTEXT_FORMS_BY_MODEL,
+        "certified_request_tuples": certified_request_tuples(),
         "production_efforts_by_model": PRODUCTION_EFFORTS_BY_MODEL,
         "validation_only_semantics": VALIDATION_ONLY_SEMANTICS,
         "one_million_context_semantics": ONE_MILLION_CONTEXT_SEMANTICS,
