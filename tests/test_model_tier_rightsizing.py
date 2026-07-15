@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -29,9 +30,65 @@ RUNTIME_ASSIGNMENT_FIELDS = (
     "requested_effort",
     "requested_context_form",
     "resolution_state",
+    "resolved_provider",
     "resolved_model_id",
     "resolved_effort",
     "resolved_context_form",
+    "provider_readback_source",
+    "provider_readback_evidence",
+)
+
+GLOBAL_RUNTIME_ASSIGNMENT_FIELDS = (
+    "requested_model_id",
+    "requested_effort",
+    "requested_context_form",
+    "request_injection_status",
+    "request_injection_source",
+    "request_injection_evidence",
+    "resolution_state",
+    "resolved_provider",
+    "resolved_model_id",
+    "model_readback_status",
+    "model_readback_source",
+    "model_readback_evidence",
+    "effort_readback_status",
+    "effort_readback_source",
+    "effort_readback_evidence",
+    "context_readback_status",
+    "context_readback_source",
+    "context_readback_evidence",
+)
+
+GLOBAL_ROLE_SURFACES = tuple(sorted((ROOT / "agents" / "claude").glob("sdlc-*.md"))) + tuple(
+    sorted((ROOT / "agents" / "codex").glob("sdlc-*.toml"))
+)
+
+GLOBAL_RUNTIME_CONSUMERS = (
+    ROOT / "commands" / "sdlc-wave.md",
+    FLAGSHIP,
+    ROUTER,
+)
+
+ALLOWED_EXACT_MODEL_IDS = frozenset(
+    (
+        "gpt-5.6-sol",
+        "claude-fable-5",
+        "gpt-5.6-terra",
+        "claude-opus-4-8",
+        "gpt-5.6-luna",
+        "claude-sonnet-5",
+    )
+)
+
+RESEARCH_CONSUMERS = (
+    ROOT / "README.md",
+    ROOT / "agents" / "codex" / "research" / "README.md",
+    ROOT / "skills" / "codex-research-os" / "SKILL.md",
+    ROOT / "skills" / "codex-research-os" / "references" / "operating-model.md",
+    ROOT / "skills" / "codex-research-os" / "references" / "agent-roster.md",
+    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "research-team.md",
+    ROOT / "commands" / "sdlc-wave.md",
+    FLAGSHIP,
 )
 
 PRIMARY_PAIRS = {
@@ -304,14 +361,144 @@ def _assert_context_claims(text: str) -> None:
     )
 
 
-def _assert_runtime_role_contract(text: str) -> None:
+def _claude_frontmatter(text: str) -> dict[str, str]:
+    assert text.startswith("---\n"), "missing Claude YAML frontmatter"
+    raw = text.split("---\n", 2)[1]
+    parsed: dict[str, str] = {}
+    for line in raw.splitlines():
+        match = re.fullmatch(r"([A-Za-z_][\w-]*):\s*(.*)", line)
+        if not match:
+            continue
+        key, value = match.groups()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        parsed[key] = value
+    return parsed
+
+
+def _assert_no_static_model_selection(text: str) -> None:
+    if text.startswith("---\n"):
+        metadata = _claude_frontmatter(text)
+    else:
+        metadata = tomllib.loads(text)
+    assert "model" not in metadata, "provider-neutral role must not pin model"
+    assert "model_reasoning_effort" not in metadata, "provider-neutral role must not pin effort"
+
+
+def _assert_global_runtime_role_contract(text: str) -> None:
+    if text.lstrip().startswith(("name =", "name=")):
+        match = re.search(r'developer_instructions\s*=\s*"""(.*?)"""', text, re.DOTALL)
+        contract = match.group(1) if match else text
+    else:
+        contract = text
+    for field in GLOBAL_RUNTIME_ASSIGNMENT_FIELDS:
+        assert field in contract, f"missing runtime assignment field: {field}"
+    assert "conductor-supplied certified `RuntimeAssignment`" in contract
+    assert "resolution_state must equal resolved" in contract
+    assert re.search(r"(?is)Requested, inherited, or unresolved.{0,180}SeedProposal", contract)
+    assert re.search(r"(?is)unverified model identity.{0,180}SeedProposal", contract)
+    assert re.search(r"(?m)^(?:- )?`?resolved_provider`?: [^\n]*non-unknown[^\n]+unknown is forbidden[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?resolved_model_id`?: [^\n]*non-unknown[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?request_injection_status`?: [^\n]*verified[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?model_readback_status`?: [^\n]*verified[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?effort_readback_status`?: [^\n]*verified[^\n]*unavailable[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?context_readback_status`?: [^\n]*verified[^\n]*unavailable[^\n]*$", contract)
+    assert "stop before spawn" in contract
+    assert "inject the exact requested model and effort" in contract
+    assert re.search(r"(?is)request injection.{0,100}(?:immutable|verified)", contract)
+    assert re.search(r"(?is)effective effort.{0,120}(?:unavailable|not exposed)", contract)
+    assert re.search(r"(?is)effective context.{0,120}(?:unavailable|not exposed)", contract)
+    assert re.search(r"(?is)never copy requested.{0,100}(?:resolved|readback)", contract)
+    _assert_effort_resolution_boundary(contract)
+    _assert_no_static_model_selection(text)
+    assert not re.search(r"(?i)host (?:configuration|default).{0,80}(?:choose|select|supply).{0,40}model", contract)
+    assert not re.search(r"(?is)prompt prose.{0,80}(?:enforces|guarantees|sets).{0,40}(?:model|effort)", contract)
+
+
+def _assert_global_runtime_consumer_contract(text: str) -> None:
+    for field in (
+        "RuntimeAssignment",
+        "request_injection_status",
+        "request_injection_source",
+        "request_injection_evidence",
+        "resolved_provider",
+        "resolved_model_id",
+        "model_readback_status",
+        "model_readback_source",
+        "model_readback_evidence",
+        "effort_readback_status",
+        "context_readback_status",
+    ):
+        assert field in text, f"missing global runtime consumer field: {field}"
+    assert re.search(r"(?is)requested.{0,80}inherited.{0,80}unresolved.{0,180}stop", text)
+    assert re.search(r"(?is)unverified model[- ]identity.{0,180}stop", text)
+    assert re.search(r"(?is)effort_readback_status.{0,100}(?:verified|unavailable)", text)
+    assert re.search(r"(?is)context_readback_status.{0,100}(?:verified|unavailable)", text)
+    assert re.search(r"(?is)never copy requested.{0,120}(?:resolved|readback)", text)
+    assert not re.search(
+        r"(?is)(?:resolved_effort|resolved_context_form|provider_readback_source|provider_readback_evidence).{0,160}must (?:all )?be non-unknown",
+        text,
+    )
+
+
+def _assert_research_runtime_role_contract(text: str) -> None:
+    if text.lstrip().startswith(("name =", "name=")):
+        match = re.search(r'developer_instructions\s*=\s*"""(.*?)"""', text, re.DOTALL)
+        contract = match.group(1) if match else text
+    else:
+        contract = text
     for field in RUNTIME_ASSIGNMENT_FIELDS:
-        assert field in text, f"missing runtime assignment field: {field}"
-    assert "inherited" in text
-    assert "unresolved" in text
-    _assert_effort_resolution_boundary(text)
+        assert field in contract, f"missing runtime assignment field: {field}"
+    assert "conductor-supplied certified `RuntimeAssignment`" in contract
+    assert "resolution_state must equal resolved" in contract
+    assert re.search(r"(?is)Requested, inherited, or unresolved.{0,120}SeedProposal", contract)
+    assert re.search(r"(?m)^(?:- )?resolved_provider: [^\n]*non-unknown[^\n]+unknown is forbidden[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?resolved_model_id: [^\n]*non-unknown[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?resolved_effort: [^\n]*non-unknown[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?resolved_context_form: [^\n]*non-unknown[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?provider_readback_source: [^\n]*non-unknown[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?provider_readback_evidence: [^\n]*non-unknown[^\n]*$", contract)
+    assert "stop before spawn" in contract
+    assert "inject the exact resolved model and effort" in contract
+    _assert_effort_resolution_boundary(contract)
+    assert not re.search(r"(?m)^\s*model\s*=", text)
     assert not re.search(r"(?m)^\s*model_reasoning_effort\s*=", text)
-    assert not re.search(r"(?i)host (?:configuration|default).{0,80}(?:choose|select|supply).{0,40}model", text)
+    assert not re.search(r"(?i)host (?:configuration|default).{0,80}(?:choose|select|supply).{0,40}model", contract)
+    assert not re.search(r"(?is)prompt prose.{0,80}(?:enforces|guarantees|sets).{0,40}(?:model|effort)", contract)
+
+
+def _assert_research_dispatch_boundary(text: str) -> None:
+    assert "conductor-supplied certified" in text
+    assert "RuntimeAssignment" in text
+    assert re.search(r"(?is)resolution_state.{0,80}(?:must (?:equal|be)|only).{0,20}`?resolved`?", text)
+    assert re.search(r"(?is)(?:requested|inherited|unresolved).{0,240}(?:stop|SeedProposal)", text)
+    for field in ("resolved_provider", "resolved_model_id"):
+        assert field in text
+    if "effort_readback_status" in text:
+        assert "context_readback_status" in text
+        assert re.search(r"(?is)effort_readback_status.{0,100}(?:verified|unavailable)", text)
+        assert re.search(r"(?is)context_readback_status.{0,100}(?:verified|unavailable)", text)
+        assert re.search(r"(?is)(?:launcher|host).{0,240}(?:inject|injected)", text) or re.search(
+            r"(?is)(?:inject|injected).{0,240}(?:launcher|host)", text
+        )
+        assert re.search(r"(?is)(?:inject|injected).{0,160}(?:model|effort)", text)
+    else:
+        for field in ("resolved_effort", "resolved_context_form"):
+            assert field in text
+        assert re.search(r"(?is)(?:launcher|host).{0,140}inject.{0,100}(?:model|effort)", text)
+        assert re.search(r"(?is)(?:cannot|can not|unable|does not).{0,180}inject.{0,180}SeedProposal", text)
+    assert not re.search(r"(?is)prompt prose.{0,80}(?:enforces|guarantees|sets).{0,40}(?:model|effort)", text)
+
+
+def _assert_research_director_authority(text: str) -> None:
+    assert "Research Director is Seeds-read-only" in text
+    assert "Do not create, claim, update, close, sync, or disposition Seeds" in text
+    assert text.count("SeedProposal {") == 1
+    assert not re.search(
+        r"(?is)Research Director.{0,120}(?:may|can|must|should).{0,60}(?:sd (?:create|update|close|sync)|(?:create|claim|update|close|sync|disposition).{0,20}Seeds?)",
+        text,
+    )
 
 
 def _assert_persistent_mutation_guard(text: str) -> None:
@@ -431,15 +618,63 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 )
                 self.assertNotRegex(text, r"(?im)^\s*(?:edit|change|mutate|write)\s+(?:user )?(?:settings|trust)\b")
 
-    def test_all_role_manifests_and_generator_require_runtime_assignment(self) -> None:
-        role_surfaces = tuple(sorted((ROOT / "agents" / "claude").glob("sdlc-*.md"))) + tuple(
-            sorted((ROOT / "agents" / "codex").glob("sdlc-*.toml"))
-        ) + tuple(sorted((ROOT / "agents" / "codex" / "research").glob("*.toml")))
+    def test_all_global_role_manifests_require_one_runtime_assignment_contract(self) -> None:
+        self.assertEqual(len(GLOBAL_ROLE_SURFACES), 14)
+        for path in GLOBAL_ROLE_SURFACES:
+            with self.subTest(role_surface=path):
+                _assert_global_runtime_role_contract(path.read_text(encoding="utf-8"))
+
+    def test_global_runtime_consumers_share_role_evidence_semantics(self) -> None:
+        for path in GLOBAL_RUNTIME_CONSUMERS:
+            with self.subTest(consumer=path):
+                _assert_global_runtime_consumer_contract(path.read_text(encoding="utf-8"))
+
+    def test_global_role_manifest_model_and_effort_mutants_fail(self) -> None:
+        claude = (ROOT / "agents" / "claude" / "sdlc-reviewer.md").read_text(encoding="utf-8")
+        codex = (ROOT / "agents" / "codex" / "sdlc-reviewer.toml").read_text(encoding="utf-8")
+        mutants = {
+            "valid quoted Claude YAML model": claude.replace(
+                "name: sdlc-reviewer", 'name: sdlc-reviewer\nmodel: "claude-sonnet-5"', 1
+            ),
+            "Codex TOML model": codex.replace('sandbox_mode = "', 'model = "gpt-5.6-luna"\nsandbox_mode = "', 1),
+            "Codex TOML effort": codex.replace(
+                'sandbox_mode = "', 'model_reasoning_effort = "high"\nsandbox_mode = "', 1
+            ),
+        }
+        for name, mutant in mutants.items():
+            with self.subTest(mutant=name):
+                with self.assertRaises(AssertionError):
+                    _assert_global_runtime_role_contract(mutant)
+
+    def test_runtime_assignment_allows_unavailable_effort_and_context_readback_without_overclaim(self) -> None:
+        role = (ROOT / "agents" / "codex" / "sdlc-reviewer.toml").read_text(encoding="utf-8")
+        _assert_global_runtime_role_contract(role)
+        self.assertIn("effort_readback_status: verified or unavailable", role)
+        self.assertIn("context_readback_status: verified or unavailable", role)
+        self.assertNotRegex(role, r"(?is)requested_effort.{0,160}resolved_effort")
+        self.assertNotRegex(role, r"(?is)requested_context_form.{0,160}resolved_context_form")
+
+    def test_runtime_contract_preserves_all_six_exact_bare_ids_and_four_tiers(self) -> None:
+        calibration = CALIBRATION.read_text(encoding="utf-8")
+        operational = _operational_cells(calibration)
+        observed = set(re.findall(r"`((?:gpt|claude)-[^`]+)`", operational))
+        self.assertEqual(observed & ALLOWED_EXACT_MODEL_IDS, ALLOWED_EXACT_MODEL_IDS)
+        for tier in ("Frontier", "Judgment workhorse", "Capable volume", "Mechanical floor"):
+            self.assertIn(tier, operational)
+
+    def test_all_research_role_manifests_and_generator_require_runtime_assignment(self) -> None:
+        role_surfaces = tuple(sorted((ROOT / "agents" / "codex" / "research").glob("*.toml")))
         generator = ROOT / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
         operating_model = ROOT / "skills" / "codex-research-os" / "references" / "operating-model.md"
+        self.assertEqual(len(role_surfaces), 17)
         for path in role_surfaces + (generator, operating_model):
             with self.subTest(role_surface=path):
-                _assert_runtime_role_contract(path.read_text(encoding="utf-8"))
+                _assert_research_runtime_role_contract(path.read_text(encoding="utf-8"))
+
+    def test_research_consumers_define_certified_spawn_boundary(self) -> None:
+        for path in RESEARCH_CONSUMERS:
+            with self.subTest(consumer=path):
+                _assert_research_dispatch_boundary(path.read_text(encoding="utf-8"))
 
     def test_research_director_is_seeds_read_only_and_emits_one_typed_proposal(self) -> None:
         director = ROOT / "agents" / "codex" / "research" / "research_director.toml"
@@ -448,11 +683,69 @@ class ModelTierRightsizingTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             with self.subTest(surface=path):
                 self.assertIn("Research Director is Seeds-read-only", text)
+                self.assertIn("Seeds(<target>, prime)", text)
                 self.assertIn("Seeds(<target>, ready --format json)", text)
-                self.assertIn("Do not create, claim, update, close, or disposition Seeds", text)
-                self.assertIn("SeedProposal {", text)
-                self.assertNotIn("Check sd ready", text)
-                self.assertNotIn("Claim or create a seeds issue", text)
+                self.assertIn("Seeds(<target>, blocked --format json)", text)
+                self.assertIn("MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec", text)
+                self.assertIn("node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>", text)
+                self.assertIn("Do not create, claim, update, close, sync, or disposition Seeds", text)
+                self.assertIn("exactly one typed `SeedProposal {", text)
+                for forbidden in (
+                    "sd create",
+                    "sd update",
+                    "sd close",
+                    "sd sync",
+                    "Seeds(<target>, create",
+                    "Seeds(<target>, update",
+                    "Seeds(<target>, close",
+                    "Seeds(<target>, sync",
+                ):
+                    self.assertNotIn(forbidden, text)
+                _assert_research_director_authority(text)
+
+    def test_runtime_assignment_and_director_authority_mutants_fail(self) -> None:
+        role = (ROOT / "agents" / "codex" / "research" / "experimentalist.toml").read_text(encoding="utf-8")
+        director = (ROOT / "agents" / "codex" / "research" / "research_director.toml").read_text(
+            encoding="utf-8"
+        )
+        runtime_mutations = {
+            "provider removal": role.replace("- resolved_provider:", "- omitted_provider:", 1),
+            "requested dispatch": role.replace(
+                "resolution_state must equal resolved",
+                "resolution_state may equal requested",
+                1,
+            ),
+            "inherited dispatch": role.replace(
+                "Requested, inherited, or unresolved assignments fail before dispatch",
+                "Requested or unresolved assignments fail before dispatch",
+                1,
+            ),
+            "unknown field dispatch": role.replace(
+                "resolved_provider: non-unknown provider read back by the selected adapter (unknown is forbidden)",
+                "resolved_provider: provider read back or unknown",
+                1,
+            ),
+            "static model": role.replace('sandbox_mode = "', 'model = "gpt-5.6-terra"\nsandbox_mode = "', 1),
+            "static effort": role.replace(
+                'sandbox_mode = "', 'model_reasoning_effort = "high"\nsandbox_mode = "', 1
+            ),
+        }
+        for name, mutation in runtime_mutations.items():
+            with self.subTest(runtime_mutation=name):
+                with self.assertRaises(AssertionError):
+                    _assert_research_runtime_role_contract(mutation)
+
+        authority_mutations = {
+            "create grant": director + "\nThe Research Director may run sd create.\n",
+            "claim grant": director + "\nThe Research Director may claim a Seed.\n",
+            "update grant": director + "\nThe Research Director may update Seeds.\n",
+            "close grant": director + "\nThe Research Director may close Seeds.\n",
+            "sync grant": director + "\nThe Research Director may sync Seeds.\n",
+        }
+        for name, mutation in authority_mutations.items():
+            with self.subTest(authority_mutation=name):
+                with self.assertRaises(AssertionError):
+                    _assert_research_director_authority(mutation)
 
     def test_persistent_trust_config_alias_and_credentials_require_operation_specific_approval(self) -> None:
         guidance = (
@@ -559,7 +852,7 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 "[1m] expands a larger upstream context window after dispatch.",
             ),
             "requested effort becomes upstream effort": (
-                _assert_runtime_role_contract,
+                _assert_research_runtime_role_contract,
                 runtime_contract
                 + "Requested effort guarantees resolved effort after successful dispatch.",
             ),
@@ -604,7 +897,7 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 "Let the host default model selection decide each worker.",
             ),
             "static effort pin": (
-                _assert_runtime_role_contract,
+                _assert_research_runtime_role_contract,
                 "\n".join(f"{field}: unknown" for field in RUNTIME_ASSIGNMENT_FIELDS)
                 + "\nresolution_state: inherited|unresolved\nmodel_reasoning_effort = 'high'\n",
             ),
