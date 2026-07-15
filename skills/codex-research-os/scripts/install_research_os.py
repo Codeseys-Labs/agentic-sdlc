@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import re
 import stat
 import textwrap
 from pathlib import Path
@@ -39,6 +40,35 @@ ONE_MILLION_CONTEXT_SEMANTICS = "A `[1m]` request or base-ID readback proves nei
 VALIDATION_ONLY_SEMANTICS = "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
 SEEDS_READ_ONLY_SEMANTICS = "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor."
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+RESEARCH_ROLE_IDS = frozenset(
+    {
+        "ablationist",
+        "adversarial_reviewer",
+        "benchmark_engineer",
+        "counterexample_hunter",
+        "data_engineer",
+        "experimentalist",
+        "formalizer",
+        "knowledge_librarian",
+        "literature_scout",
+        "novelty_auditor",
+        "replication_reviewer",
+        "repo_cartographer",
+        "research_director",
+        "safety_reviewer",
+        "synthesis_writer",
+        "systems_engineer",
+        "theorist",
+    }
+)
+REVIEWER_OUTWARD_AUTHORITY_PATTERN = re.compile(
+    r"(?i)\b(?:may|can|is\s+authorized\s+to|are\s+authorized\s+to|is\s+permitted\s+to|are\s+permitted\s+to)\b"
+    r".{0,100}\b(?:push|publish(?:ing|ation)?|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
+)
+SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
+    r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
+    r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
+)
 CANONICAL_RUNTIME_CONTRACT_SHA256 = "e1872645df2e036770491fab44c122336c2fcf3e3765b10485d04bac06f23314"
 EXACT_MODEL_PROVIDER_MAP = {
     "claude-fable-5": "anthropic",
@@ -193,6 +223,18 @@ RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 """
 
 
+def validate_source_pinned_role_authority() -> None:
+    director = developer_instructions_by_role()["research_director"]
+    protected_director = clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)
+    if director.count(protected_director) != 1:
+        raise ValueError("source-pinned protected role authority requires the exact Research Director Seeds block once")
+    if SEEDS_MUTATION_AUTHORITY_PATTERN.search(director.replace(protected_director, "", 1)):
+        raise ValueError("source-pinned protected role authority forbids Research Director Seeds mutation authority")
+    for role in ("adversarial_reviewer", "replication_reviewer", "safety_reviewer"):
+        if REVIEWER_OUTWARD_AUTHORITY_PATTERN.search(developer_instructions_by_role()[role]):
+            raise ValueError(f"source-pinned protected role authority forbids outward reviewer authority for {role}")
+
+
 AGENTS = {
     "research_director": (
         "Coordinates the research team, selects next actions, assigns specialists, and enforces claim discipline.",
@@ -323,12 +365,13 @@ You are the safety reviewer. Review destructive file operations, credential expo
 
 
 def validate_packaged_managed_roles() -> None:
+    validate_source_pinned_role_authority()
     try:
         roles = NORMATIVE_CONTRACT["managed_roles"]["research"]["roles"]
     except (KeyError, TypeError) as exc:
         raise ValueError(f"invalid packaged managed role contract: {exc}") from exc
-    if not isinstance(roles, dict) or set(roles) != set(AGENTS):
-        raise ValueError("packaged managed role roster differs from the 17 generator roles")
+    if not isinstance(roles, dict) or set(roles) != RESEARCH_ROLE_IDS or set(AGENTS) != RESEARCH_ROLE_IDS:
+        raise ValueError("packaged managed role roster differs from the source-pinned 17 Research OS roles")
     for role, (description, sandbox, _) in AGENTS.items():
         spec = roles.get(role)
         if not isinstance(spec, dict):

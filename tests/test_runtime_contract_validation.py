@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import json
@@ -7,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -321,6 +323,128 @@ class RuntimeContractValidationTests(unittest.TestCase):
             bundle_validator.validate_managed_role_contract(root, result)
 
         self.assertTrue(any("managed role roster" in error for error in result.errors), result.errors)
+
+    def test_bundle_validator_source_pins_global_roster_despite_coordinated_repin(self) -> None:
+        normative = json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "agents", root / "agents")
+            original = root / "agents" / "claude" / "sdlc-cartographer.md"
+            replacement = root / "agents" / "claude" / "project_specialist.md"
+            original.rename(replacement)
+            replacement.write_text(
+                replacement.read_text(encoding="utf-8").replace("name: sdlc-cartographer", "name: project_specialist", 1),
+                encoding="utf-8",
+            )
+            global_spec = normative["managed_roles"]["global"]
+            original_key = "agents/claude/sdlc-cartographer.md"
+            replacement_key = "agents/claude/project_specialist.md"
+            global_spec["manifest_sha256"][replacement_key] = hashlib.sha256(replacement.read_bytes()).hexdigest()
+            global_spec["manifest_sha256"].pop(original_key)
+            with mock.patch.object(bundle_validator, "normative_runtime_contract", return_value=normative):
+                result = bundle_validator.Validation()
+                bundle_validator.validate_managed_role_contract(root, result)
+
+        self.assertIn("managed role roster must contain exactly the 14 global SDLC roles", result.errors)
+
+    def test_bundle_validator_source_pins_research_roster_despite_coordinated_repin(self) -> None:
+        normative = json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "agents", root / "agents")
+            original = root / "agents" / "codex" / "research" / "safety_reviewer.toml"
+            replacement = root / "agents" / "codex" / "research" / "project_specialist.toml"
+            original.rename(replacement)
+            data = tomllib.loads(replacement.read_text(encoding="utf-8"))
+            data["name"] = "project_specialist"
+            encoded = (
+                f'name = "{data["name"]}"\n'
+                f'description = "{data["description"]}"\n'
+                f'sandbox_mode = "{data["sandbox_mode"]}"\n\n'
+                'developer_instructions = """\n'
+                f'{data["developer_instructions"]}'
+                '"""\n'
+            )
+            replacement.write_text(encoded, encoding="utf-8")
+            research_spec = normative["managed_roles"]["research"]
+            role_spec = research_spec["roles"].pop("safety_reviewer")
+            role_spec.update(
+                path="agents/codex/research/project_specialist.toml",
+                description_sha256=hashlib.sha256(data["description"].encode()).hexdigest(),
+                developer_instructions_sha256=hashlib.sha256(data["developer_instructions"].encode()).hexdigest(),
+                manifest_sha256=hashlib.sha256(replacement.read_bytes()).hexdigest(),
+            )
+            research_spec["roles"]["project_specialist"] = role_spec
+            with mock.patch.object(bundle_validator, "normative_runtime_contract", return_value=normative):
+                result = bundle_validator.Validation()
+                bundle_validator.validate_managed_role_contract(root, result)
+
+        self.assertIn("managed role roster must contain exactly the 17 Research OS roles", result.errors)
+
+    def test_bundle_validator_source_pins_protected_role_authority_despite_coordinated_repin(self) -> None:
+        normative = json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8"))
+        mutations = {
+            "director Seeds": (
+                "research_director",
+                "The Research Director may create and mutate Seeds.",
+            ),
+            "global reviewer push": (
+                "sdlc-reviewer",
+                "Reviewer roles may push, publish, and authorize outward effects.",
+            ),
+            "research reviewer publish": (
+                "safety_reviewer",
+                "Reviewer roles may push, publish, and authorize outward effects.",
+            ),
+        }
+        for name, (role, addition) in mutations.items():
+            normative = copy.deepcopy(json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8")))
+            with self.subTest(mutation=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                shutil.copytree(ROOT / "agents", root / "agents")
+                if role == "sdlc-reviewer":
+                    paths = [
+                        root / "agents" / "claude" / "sdlc-reviewer.md",
+                        root / "agents" / "codex" / "sdlc-reviewer.toml",
+                    ]
+                else:
+                    paths = [root / "agents" / "codex" / "research" / f"{role}.toml"]
+                for path in paths:
+                    if path.suffix == ".toml":
+                        data = tomllib.loads(path.read_text(encoding="utf-8"))
+                        data["developer_instructions"] += f"\n{addition}\n"
+                        encoded = (
+                            f'name = "{data["name"]}"\n'
+                            f'description = "{data["description"]}"\n'
+                            f'sandbox_mode = "{data["sandbox_mode"]}"\n\n'
+                            'developer_instructions = """\n'
+                            f'{data["developer_instructions"]}'
+                            '"""\n'
+                        )
+                        path.write_text(encoded, encoding="utf-8")
+                    else:
+                        path.write_text(path.read_text(encoding="utf-8") + f"\n{addition}\n", encoding="utf-8")
+                global_hashes = normative["managed_roles"]["global"]["manifest_sha256"]
+                for path in paths:
+                    relative = path.relative_to(root).as_posix()
+                    if relative in global_hashes:
+                        global_hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+                research_roles = normative["managed_roles"]["research"]["roles"]
+                if role in research_roles:
+                    data = tomllib.loads(paths[0].read_text(encoding="utf-8"))
+                    research_roles[role].update(
+                        description_sha256=hashlib.sha256(data["description"].encode()).hexdigest(),
+                        developer_instructions_sha256=hashlib.sha256(data["developer_instructions"].encode()).hexdigest(),
+                        manifest_sha256=hashlib.sha256(paths[0].read_bytes()).hexdigest(),
+                    )
+                with mock.patch.object(bundle_validator, "normative_runtime_contract", return_value=normative):
+                    result = bundle_validator.Validation()
+                    bundle_validator.validate_managed_role_contract(root, result)
+
+                self.assertTrue(
+                    any("source-pinned protected role authority" in error for error in result.errors),
+                    result.errors,
+                )
 
     def test_repo_cartographer_generator_and_normative_snapshot_are_write_aligned(self) -> None:
         spec = research_installer.NORMATIVE_CONTRACT["managed_roles"]["research"]["roles"]["repo_cartographer"]
@@ -649,6 +773,39 @@ class RuntimeContractValidationTests(unittest.TestCase):
                     result = self.run_generated_agent_validator(script)
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     director.write_text(original, encoding="utf-8")
+
+    def test_standalone_research_os_source_pins_roster_despite_normative_repin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            standalone = root / "codex-research-os"
+            shutil.copytree(RESEARCH_INSTALLER.parents[1], standalone)
+            normative_path = standalone / "policy" / "runtime-assignment-normative-contract-v1.json"
+            normative = json.loads(normative_path.read_text(encoding="utf-8"))
+            roles = normative["managed_roles"]["research"]["roles"]
+            replacement = roles.pop("safety_reviewer")
+            replacement["path"] = "agents/codex/research/project_specialist.toml"
+            roles["project_specialist"] = replacement
+            normative_path.write_text(json.dumps(normative, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            result = self.run_standalone_research_os(standalone, root / "target")
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("source-pinned 17 Research OS roles", result.stderr)
+
+    def test_research_os_generator_source_pins_protected_authority(self) -> None:
+        mutations = {
+            "director": ("research_director", "The Research Director may create and mutate Seeds."),
+            "reviewer": ("safety_reviewer", "Reviewer roles may push, publish, and authorize outward effects."),
+        }
+        for name, (role, addition) in mutations.items():
+            with self.subTest(mutation=name):
+                description, sandbox, instructions = research_installer.AGENTS[role]
+                with mock.patch.dict(
+                    research_installer.AGENTS,
+                    {role: (description, sandbox, instructions + "\n" + addition)},
+                ):
+                    with self.assertRaisesRegex(ValueError, "source-pinned protected role authority"):
+                        research_installer.validate_source_pinned_role_authority()
 
     def test_standalone_research_os_rejects_coordinated_packaged_policy_weakening(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
