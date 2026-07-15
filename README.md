@@ -103,10 +103,16 @@ start, or enable cmux or tmux merely to use this bundle.
   implementer, reviewer, **researcher** (bounded unknown-resolution), **critic** (standing
   snapshot-only critique team), **integrator** (the only merging agent). Full loop wiring:
   cartographers (parallel, per area) → planner → implementers → reviewers → integrator,
-  critic concurrent, researchers on demand. Provider-neutral role definitions do not dispatch:
-  their runtime assignment must carry a caller-injected certified exact model ID, explicit
-  requested effort/context form, and requested/resolved/inherited/unresolved receipt state, or
-  stop before delegation. No static role effort pin or host-default selection is policy.
+  critic concurrent, researchers on demand. Provider-neutral role definitions contain no static
+  model/effort pin, never dispatch, and consume a conductor-supplied certified
+  `RuntimeAssignment` with a certified exact model ID. `resolution_state` must be `resolved`.
+  Exact model/effort request injection is mandatory and immutable. `resolved_provider` and
+  `resolved_model_id` require verified model identity; independently observed provider/model
+  source may be unavailable only for a unique exact-ID mapping backed by immutable request/model
+  evidence. Effective effort/context readback may be honestly unavailable; requested values never
+  become readback. If the assignment is requested, inherited, unresolved, incomplete, or cannot
+  inject both requested model and effort, the conductor stops before dispatch and returns one
+  SeedProposal. Prompt prose does not enforce a Codex model or effort.
 - `agents/codex/research/`: the 17-role research-team TOMLs (repo-scoped reference
   copies — NOT globally installed; see its README; scaffolded per-repo by
   codex-research-os).
@@ -141,8 +147,11 @@ The checked-in `mise.toml` pins `uv`; `mise.lock` records source URLs and SHA-25
 for Linux, macOS, and Windows; `uv` supplies Python `3.12.11` for every authoritative Python
 entrypoint. Git, a documented Seeds distribution, supported trust behavior, and the selected
 adapter are also prerequisites. Resolve and record the actual provider/model only when the
-adapter proves it; otherwise record unresolved. The requested model ID and requested effort
-remain dispatch inputs; adapter readback alone may resolve provider/model. A passing local
+adapter proves it; otherwise record unresolved. Every dispatch receipt records requested
+model/effort/context separately from `resolved_provider`, `resolved_model_id`,
+`resolved_effort`, `resolved_context_form`, `provider_readback_source`, and
+`provider_readback_evidence`. Only a fully non-unknown resolved receipt can reach spawn. A
+passing local
 status or gate never authorizes push, publication, PR mutation, merge, deployment, credential, or other
 outward effect.
 

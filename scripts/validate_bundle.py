@@ -198,13 +198,35 @@ def validate_python(root: Path, result: Validation) -> None:
             result.error("Python bytecode must not be committed")
 
 
+def parse_frontmatter_metadata(text: str) -> dict[str, str]:
+    """Parse the flat YAML frontmatter shape used by Claude role manifests."""
+    metadata = frontmatter(text)
+    values: dict[str, str] = {}
+    for line in metadata.splitlines():
+        match = re.fullmatch(r"([A-Za-z_][\w-]*):\s*(.*)", line)
+        if not match:
+            continue
+        key, value = match.groups()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
 def validate_agents(root: Path, result: Validation) -> None:
     for agent in sorted((root / "agents" / "claude").glob("*.md")):
         text = agent.read_text(encoding="utf-8")
-        if not re.search(r"^name:", text, re.MULTILINE):
-            result.error(f"{agent}: missing name")
-        if not re.search(r"^description:", text, re.MULTILINE):
-            result.error(f"{agent}: missing description")
+        metadata = parse_frontmatter_metadata(text)
+        label = agent.relative_to(root)
+        if not metadata.get("name"):
+            result.error(f"{label}: missing name")
+        if not metadata.get("description"):
+            result.error(f"{label}: missing description")
+        if "model" in metadata:
+            result.error(f"{label}: static model is forbidden")
+        if "model_reasoning_effort" in metadata:
+            result.error(f"{label}: static model_reasoning_effort is forbidden")
     for agent in sorted((root / "agents" / "codex").glob("**/*.toml")):
         try:
             data = tomllib.loads(agent.read_text(encoding="utf-8"))
@@ -213,6 +235,10 @@ def validate_agents(root: Path, result: Validation) -> None:
             continue
         if not data.get("name") or not data.get("description"):
             result.error(f"{agent}: missing metadata")
+        if "model" in data:
+            result.error(f"{agent.relative_to(root)}: static model is forbidden")
+        if "model_reasoning_effort" in data:
+            result.error(f"{agent.relative_to(root)}: static model_reasoning_effort is forbidden")
 
 
 def validate_mise(root: Path, result: Validation) -> None:

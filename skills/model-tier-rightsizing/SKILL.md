@@ -59,7 +59,10 @@ Every delegated call or named-workflow worker consumes one provider-neutral
   model and effort sent by the launcher or adapter;
 - independent model-identity evidence: non-unknown `resolved_provider` and
   `resolved_model_id`, `model_readback_status: verified`, a non-unknown
-  `model_readback_source`, and non-unknown `model_readback_evidence`;
+  `model_readback_source`, and a non-unknown `model_readback_evidence`. An independently
+  observed provider/model source may honestly be `unavailable_in_transport` only when the exact
+  ID maps uniquely under the versioned policy and immutable request/model evidence verifies
+  identity;
 - `effort_readback_status` and `context_readback_status`, each `verified` with independent
   evidence when exposed or `unavailable` with explicit source/evidence markers when the
   transport cannot expose effective effort or context behavior;
@@ -69,10 +72,27 @@ Every delegated call or named-workflow worker consumes one provider-neutral
 
 A provider-neutral static role definition does not select a model. `resolution_state` must
 equal `resolved`. Requested, inherited, unresolved, or unverified model-identity assignments
-stop before dispatch. Request injection and effective readback are different evidence classes:
-never copy requested values into resolved or readback fields, and never require impossible
-effective effort or context readback after request injection and model identity are verified.
-A requested value, host default, alias, or echoed prompt text is not resolution evidence.
+stop before dispatch. Exact request injection is mandatory and immutable. Request injection
+and effective readback are different evidence classes: never copy requested values into
+resolved or readback fields, and never require impossible effective effort or context readback
+after request injection and model identity are verified. A requested value, host default,
+alias, or echoed prompt text is not resolution evidence.
+
+## Receipt admission boundary
+
+`skills/model-tier-rightsizing/scripts/receipt_admission.py` validates one concrete
+`RuntimeAssignment` request receipt against the versioned
+`policy/runtime-assignment-receipt-v1.json`. It admits only the six exact IDs, allowed effort
+and status values, non-empty/non-null evidence fields, unique provider mappings, and the
+cross-field rules above, then emits deterministic admitted/denied JSON with a canonical JSON
+SHA-256 digest. It is stdlib-only.
+
+This is receipt validation only. It does not launch workers, inject or intercept requests,
+prevent bypass, or prove a spawned worker used the receipt. An external harness must call it
+immediately before spawn and correlate the returned digest with its immutable spawn evidence.
+Unsupported native host paths fail closed until a host integration exists; do not replace that
+failure with a host default, adapter class, scheduler, retries, journal, queue, daemon, or
+Evolutionary Core.
 
 An executable Workflow call pins both fields on every worker; the second vendor is used
 only when it produces a distinct artifact:
