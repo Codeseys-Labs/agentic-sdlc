@@ -7,6 +7,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 
 
@@ -34,6 +35,7 @@ EXACT_NODE = Path(
     )
 )
 NODE = str(EXACT_NODE) if EXACT_NODE.is_file() else HOST_NODE
+RECEIPT_SCHEMA = 2
 
 
 @unittest.skipIf(NODE is None or os.name == "nt", "exact Node and POSIX fixture executables are required")
@@ -96,13 +98,9 @@ class SeedsLauncherTests(unittest.TestCase):
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
     def _make_tool_layout(self) -> None:
-        host_node = self._quote(str(Path(NODE).resolve()))
-        self._write_executable(
-            self.node_root / "bin" / "node",
-            "#!/bin/sh\n"
-            "if [ \"${1:-}\" = --version ]; then printf 'v22.22.3\\n'; exit 0; fi\n"
-            f"exec {host_node} \"$@\"\n",
-        )
+        self.node_executable = self.node_root / "bin" / "node"
+        self.node_executable.parent.mkdir(parents=True)
+        os.link(Path(NODE).resolve(), self.node_executable)
         environment_command = self._quote(str(shutil.which("env")))
         sort_command = self._quote(str(shutil.which("sort")))
         cat_command = self._quote(str(shutil.which("cat")))
@@ -111,6 +109,7 @@ class SeedsLauncherTests(unittest.TestCase):
             "#!/bin/sh\n"
             "if [ \"${1:-}\" = --version ]; then printf '1.3.10\\n'; exit 0; fi\n"
             f"printf '%s\\n' \"$*\" >> {self._quote(str(self.bun_log))}\n"
+            "case \" $* \" in *\" --no-macros \"*) ;; *) exit 98 ;; esac\n"
             f"{environment_command} | {sort_command} >> {self._quote(str(self.bun_log))}\n"
             f"if [ \"$({cat_command} {self._quote(str(self.bun_behavior))})\" = TERM ]; then kill -TERM $$; fi\n"
             f"exit \"$({cat_command} {self._quote(str(self.bun_behavior))})\"\n",
@@ -167,7 +166,7 @@ class SeedsLauncherTests(unittest.TestCase):
 
     def launcher(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [NODE, str(LAUNCHER), *args],
+            [str(self.node_executable), str(LAUNCHER), *args],
             text=True,
             capture_output=True,
             env=env or self.environment(),
@@ -176,6 +175,27 @@ class SeedsLauncherTests(unittest.TestCase):
 
     def bootstrap(self) -> subprocess.CompletedProcess[str]:
         return self.launcher("bootstrap", "--distribution", str(self.distribution))
+
+    def active_receipt_path(self) -> Path:
+        return self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json"
+
+    def installed_launcher_path(self) -> Path:
+        return self.active_receipt_path().parent / "seeds-launcher.mjs"
+
+    def install_current_launcher(self) -> Path:
+        installed = self.installed_launcher_path()
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_bytes(LAUNCHER.read_bytes())
+        return installed
+
+    def installed_launcher(self, *args: str, node: str | Path = NODE) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(node), str(self.installed_launcher_path()), *args],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
 
     def test_bootstrap_is_locked_validates_exact_tuple_and_publishes_active_prior_receipts(self) -> None:
         first = self.bootstrap()
@@ -187,7 +207,7 @@ class SeedsLauncherTests(unittest.TestCase):
             "--no-config where bun@1.3.10",
             "--no-config where npm:@os-eco/seeds-cli@0.5.14",
         ])
-        active = self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json"
+        active = self.active_receipt_path()
         receipt = json.loads(active.read_text(encoding="utf-8"))
         self.assertEqual(receipt["tuple"]["node"]["version"], "22.22.3")
         self.assertEqual(receipt["tuple"]["bun"]["version"], "1.3.10")
@@ -196,6 +216,7 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertIn("distribution", receipt["hashes"])
         self.assertTrue((active.parent / "trusted-bunfig.toml").is_file())
         self.assertEqual((active.parent / "trusted-bunfig.toml").read_bytes(), b"")
+        self.assertEqual((active.parent / "trusted-tsconfig.json").read_bytes(), b"{}\n")
         mise_environments = [json.loads(line) for line in self.mise_environment.read_text(encoding="utf-8").splitlines()]
         for environment in mise_environments:
             self.assertEqual(environment["npm_config_registry"], "https://registry.npmjs.org/")
@@ -213,6 +234,45 @@ class SeedsLauncherTests(unittest.TestCase):
         second = self.bootstrap()
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertTrue((active.parent / "previous.json").is_file())
+
+    def test_bootstrap_git_probes_ignore_repository_global_system_config_and_hooks(self) -> None:
+        marker = self.root / "git-execution-marker"
+        probe = self.root / "git-probe"
+        self._write_executable(
+            probe,
+            "#!/bin/sh\n"
+            f"printf executed >> {self._quote(str(marker))}\n"
+            "cat\n",
+        )
+        local_hooks = self.distribution / ".git" / "local-hooks"
+        local_hooks.mkdir()
+        shutil.copy2(probe, local_hooks / "post-index-change")
+        (local_hooks / "post-index-change").chmod(probe.stat().st_mode)
+        (self.distribution / ".gitattributes").write_text("mise.toml filter=hostile\n", encoding="utf-8")
+        self._run(["git", "add", ".gitattributes"], cwd=self.distribution)
+        self._run(["git", "commit", "-qm", "attribute fixture"], cwd=self.distribution)
+        self._run(["git", "config", "core.fsmonitor", str(probe)], cwd=self.distribution)
+        self._run(["git", "config", "core.hooksPath", str(local_hooks)], cwd=self.distribution)
+        self._run(["git", "config", "core.worktree", str(self.root / "hostile-worktree")], cwd=self.distribution)
+        self._run(["git", "config", "filter.hostile.clean", str(probe)], cwd=self.distribution)
+
+        global_config = self.root / "hostile-global-gitconfig"
+        global_config.write_text(
+            f"[core]\n\tfsmonitor = {probe}\n\thooksPath = {local_hooks}\n",
+            encoding="utf-8",
+        )
+        system_config = self.root / "hostile-system-gitconfig"
+        system_config.write_text(global_config.read_text(encoding="utf-8"), encoding="utf-8")
+        hostile = self.environment() | {
+            "GIT_CONFIG_GLOBAL": str(global_config),
+            "GIT_CONFIG_SYSTEM": str(system_config),
+            "GIT_CONFIG_NOSYSTEM": "0",
+        }
+        marker.unlink(missing_ok=True)
+
+        result = self.launcher("bootstrap", "--distribution", str(self.distribution), env=hostile)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists(), "Git admission must not execute config- or hook-selected programs")
 
     def test_bootstrap_rejects_nested_dirty_and_untracked_distribution_trees(self) -> None:
         nested = self.distribution / "nested"
@@ -240,7 +300,7 @@ class SeedsLauncherTests(unittest.TestCase):
         ignored = self.bootstrap()
         self.assertNotEqual(ignored.returncode, 0)
         self.assertIn("ignored", ignored.stderr)
-        self.assertFalse((self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json").exists())
+        self.assertFalse(self.active_receipt_path().exists())
 
     @unittest.skipIf(HOSTILE_NODE is None, "a non-22.22.3 Node is required for interpreter rejection fixture")
     def test_bootstrap_and_inspect_reject_launcher_process_running_under_wrong_node(self) -> None:
@@ -280,7 +340,51 @@ class SeedsLauncherTests(unittest.TestCase):
                 result = self.bootstrap()
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("execution control", result.stderr)
-                self.assertFalse((self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json").exists())
+                self.assertFalse(self.active_receipt_path().exists())
+
+    def test_bootstrap_rejects_recursively_nested_package_control_files(self) -> None:
+        package = self.seeds_root / "lib" / "node_modules" / "@os-eco" / "seeds-cli"
+        controls = (
+            "src/bunfig.toml",
+            "src/bunfig.json",
+            "src/tsconfig.json",
+            "src/jsconfig.json",
+            "src/deeper/macro.ts",
+            "src/deeper/macros.ts",
+            "src/deeper/preload.ts",
+            "src/deeper/preload.js",
+        )
+        for relative_control in controls:
+            with self.subTest(control=relative_control):
+                control = package / relative_control
+                control.parent.mkdir(parents=True, exist_ok=True)
+                control.write_text("{}\n", encoding="utf-8")
+                result = self.bootstrap()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("execution control", result.stderr)
+                self.assertFalse(self.active_receipt_path().exists())
+                control.unlink()
+                while control.parent != package and not any(control.parent.iterdir()):
+                    parent = control.parent
+                    parent.rmdir()
+                    control = parent
+
+    def test_bootstrap_rejects_nested_package_metadata_and_symlink_controls(self) -> None:
+        package = self.seeds_root / "lib" / "node_modules" / "@os-eco" / "seeds-cli"
+        nested_metadata = package / "src" / "package.json"
+        nested_metadata.write_text('{"bun":{"preload":["./hostile.ts"]}}\n', encoding="utf-8")
+        metadata_result = self.bootstrap()
+        self.assertNotEqual(metadata_result.returncode, 0)
+        self.assertIn("execution control", metadata_result.stderr)
+        self.assertFalse(self.active_receipt_path().exists())
+        nested_metadata.unlink()
+
+        symlink_control = package / "src" / "preload.ts"
+        os.symlink("index.ts", symlink_control)
+        symlink_result = self.bootstrap()
+        self.assertNotEqual(symlink_result.returncode, 0)
+        self.assertIn("execution control", symlink_result.stderr)
+        self.assertFalse(self.active_receipt_path().exists())
 
     def test_inspect_uses_receipt_never_mise_and_filters_environment_before_exact_bun(self) -> None:
         self.assertEqual(self.bootstrap().returncode, 0)
@@ -290,6 +394,7 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertEqual(self.calls.read_text(encoding="utf-8"), before)
         contents = self.bun_log.read_text(encoding="utf-8")
         self.assertIn("--config=", contents)
+        self.assertIn("--no-macros", contents)
         self.assertIn("--no-env-file --no-install", contents)
         self.assertIn("ready --format json", contents)
         self.assertIn(f"PWD={self.target}", contents)
@@ -302,8 +407,8 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertNotEqual(missing.returncode, 0)
         self.assertFalse(self.bun_log.exists())
         self.assertEqual(self.bootstrap().returncode, 0)
-        active = self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json"
-        active.write_text('{"schema":1}\n', encoding="utf-8")
+        active = self.active_receipt_path()
+        active.write_text(f'{{"schema":{RECEIPT_SCHEMA}}}\n', encoding="utf-8")
         partial = self.launcher("inspect", "--target", str(self.target), "prime")
         self.assertNotEqual(partial.returncode, 0)
         self.assertFalse(self.bun_log.exists())
@@ -316,6 +421,68 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertEqual(self.bootstrap().returncode, 0)
         grammar = self.launcher("inspect", "--target", str(self.target), "create", "no")
         self.assertNotEqual(grammar.returncode, 0)
+        self.assertFalse(self.bun_log.exists())
+
+    def test_inspect_binds_executing_node_to_recorded_exact_binary_and_hash(self) -> None:
+        self.install_current_launcher()
+        bootstrap = self.installed_launcher("bootstrap", "--distribution", str(self.distribution), node=self.node_executable)
+        self.assertEqual(bootstrap.returncode, 0, bootstrap.stderr)
+
+        wrong_same_version = self.root / "wrong-node" / "bin" / "node"
+        wrong_same_version.parent.mkdir(parents=True)
+        os.link(Path(NODE).resolve(), wrong_same_version)
+        inspect = self.installed_launcher("inspect", "--target", str(self.target), "prime", node=wrong_same_version)
+        self.assertNotEqual(inspect.returncode, 0)
+        self.assertIn("executing Node", inspect.stderr)
+        self.assertFalse(self.bun_log.exists())
+
+    def test_receipt_has_closed_distribution_shape_and_binds_installed_launcher(self) -> None:
+        installed = self.install_current_launcher()
+        bootstrap = self.installed_launcher("bootstrap", "--distribution", str(self.distribution), node=self.node_executable)
+        self.assertEqual(bootstrap.returncode, 0, bootstrap.stderr)
+        active = self.active_receipt_path()
+        pristine = json.loads(active.read_text(encoding="utf-8"))
+        distribution = pristine["distribution"]
+        self.assertEqual(
+            set(distribution),
+            {"root", "commit", "gitTree", "tree", "miseToml", "miseLock", "launcher", "launcherHash"},
+        )
+        self.assertEqual(pristine["hashes"]["nodeExecutable"], sha256(self.node_executable.read_bytes()).hexdigest())
+        self.assertEqual(Path(distribution["launcher"]), installed.resolve())
+        self.assertEqual(distribution["launcherHash"], sha256(installed.read_bytes()).hexdigest())
+
+    def test_inspect_rejects_open_or_partial_distribution_provenance(self) -> None:
+        self.install_current_launcher()
+        bootstrap = self.installed_launcher("bootstrap", "--distribution", str(self.distribution), node=self.node_executable)
+        self.assertEqual(bootstrap.returncode, 0, bootstrap.stderr)
+        active = self.active_receipt_path()
+        pristine = json.loads(active.read_text(encoding="utf-8"))
+        mutations = (
+            lambda receipt: receipt.pop("distribution"),
+            lambda receipt: receipt["hashes"]["distribution"].pop("gitTree"),
+            lambda receipt: receipt["distribution"].__setitem__("extra", "forged"),
+            lambda receipt: receipt["hashes"].pop("distribution"),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                if self.bun_log.exists():
+                    self.bun_log.unlink()
+                receipt = json.loads(json.dumps(pristine))
+                mutate(receipt)
+                active.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+                rejected = self.installed_launcher("inspect", "--target", str(self.target), "prime", node=self.node_executable)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("partial or invalid", rejected.stderr)
+                self.assertFalse(self.bun_log.exists())
+
+    def test_inspect_rejects_current_installed_launcher_hash_drift(self) -> None:
+        installed = self.install_current_launcher()
+        bootstrap = self.installed_launcher("bootstrap", "--distribution", str(self.distribution), node=self.node_executable)
+        self.assertEqual(bootstrap.returncode, 0, bootstrap.stderr)
+        installed.write_text(installed.read_text(encoding="utf-8") + "\n// drift\n", encoding="utf-8")
+        drift = self.installed_launcher("inspect", "--target", str(self.target), "prime", node=self.node_executable)
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertIn("launcher", drift.stderr)
         self.assertFalse(self.bun_log.exists())
 
     def test_inspect_preserves_exact_child_exit_code_and_signal(self) -> None:
@@ -403,7 +570,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             self.assertEqual(inspected.returncode, 0, inspected.stderr)
             self.assertEqual(inspected.stdout.strip(), "0.5.14")
             receipt = json.loads(
-                (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / "v1" / "active.json").read_text(encoding="utf-8")
+                (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
             )
             self.assertEqual(receipt["platform"], "win32")
             self.assertTrue(receipt["tuple"]["node"]["executable"].lower().endswith("node.exe"))

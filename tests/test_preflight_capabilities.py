@@ -45,6 +45,7 @@ EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
     }
 )
 SEEDS_ACTION = r"(?:init|claim|create|update|close|sync|disposition)"
+SEEDS_QUOTE_DELIMITERS = str.maketrans("", "", "'\"`‘’“”")
 SEEDS_ACTION_LIST = rf"{SEEDS_ACTION}(?:\s*(?:/|or|,|and|-)\s*{SEEDS_ACTION})*"
 SEEDS_OBJECT = r"(?:Seeds?\s+(?:issues?|items?|records?|states?|queues?(?:[-\s]states?)?)|Seed[-\s]queues?(?:[-\s]states?)?)"
 SEEDS_PSEUDO_OPERATION = re.compile(
@@ -262,14 +263,15 @@ def is_neutral_descriptive_topic_prose(text: str, action_end: int) -> bool:
 
 
 def seeds_mutation_operations(text: str) -> list[str]:
+    normalized = text.translate(SEEDS_QUOTE_DELIMITERS)
     operations = []
-    for match in SEEDS_PSEUDO_OPERATION.finditer(text):
-        if not pseudo_operation_is_negated(text, match.start()):
+    for match in SEEDS_PSEUDO_OPERATION.finditer(normalized):
+        if not pseudo_operation_is_negated(normalized, match.start()):
             operations.append(match.group("action").lower())
     for pattern in (SEEDS_ACTION_FIRST, SEEDS_ACTION_SUBJECT_FIRST):
-        for match in pattern.finditer(text):
-            if not operation_is_negated(text, match.start("actions")) and not is_neutral_descriptive_topic_prose(
-                text, match.end("actions")
+        for match in pattern.finditer(normalized):
+            if not operation_is_negated(normalized, match.start("actions")) and not is_neutral_descriptive_topic_prose(
+                normalized, match.end("actions")
             ):
                 operations.extend(action_names(match.group("actions")))
     return operations
@@ -1011,6 +1013,36 @@ class SeedsDocumentationContractTests(unittest.TestCase):
         self.assertEqual(
             sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
             6,
+        )
+
+    def test_shipped_surface_scanner_rejects_quoted_authority_tokens_without_broadening_topics(self) -> None:
+        quoted_mutations = (
+            "Workers may 'create' Seeds issues.",
+            "Workers may `claim` Seeds items.",
+            "Workers may ‘update’ Seeds records.",
+            "Workers may “close” Seeds states.",
+            "Workers may sync `Seeds queues`.",
+            "Workers may disposition ‘Seeds queue-states’.",
+        )
+        benign = (
+            "The quoted topic verb `create` is Seeds terminology.",
+            "The phrase ‘Seeds issues’ is a documentation topic.",
+            "Workers must not 'create' Seeds issues.",
+            "Workers never `claim` Seeds items.",
+            "Workers cannot ‘update’ Seeds records.",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture_root = Path(temporary_directory)
+            worker = fixture_root / "agents" / "codex" / "worker.toml"
+            worker.parent.mkdir(parents=True)
+            worker.write_text("\n".join((*quoted_mutations, *benign)) + "\n", encoding="utf-8")
+
+            violations = shipped_surface_violations(fixture_root)
+
+        self.assertEqual(
+            sum("direct non-conductor Seeds queue mutation guidance" in item for item in violations),
+            len(quoted_mutations),
+            "\n".join(violations),
         )
 
     def test_shipped_surface_scanner_rejects_plural_seeds_authority_objects(self) -> None:
