@@ -1,0 +1,481 @@
+{
+  "allowed_context_forms": [
+    "base",
+    "[1m]"
+  ],
+  "allowed_efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "canonical_receipt_fields": [
+    "schema_version",
+    "requested_model_id",
+    "requested_effort",
+    "requested_context_form",
+    "request_injection_status",
+    "request_injection_evidence",
+    "resolution_state",
+    "resolved_provider",
+    "resolved_model_id",
+    "model_identity_basis",
+    "model_readback_status",
+    "model_readback_evidence",
+    "effort_readback_status",
+    "effort_readback_evidence",
+    "context_readback_status",
+    "context_readback_evidence"
+  ],
+  "canonical_receipt_policy_sha256": "a9e11c78e0f7fcd4f67298c67dad8a1eba5425bdfbec5242fccc83ca2348d042",
+  "canonical_runtime_contract_sha256": "e1872645df2e036770491fab44c122336c2fcf3e3765b10485d04bac06f23314",
+  "certified_context_forms_by_model": {
+    "claude-fable-5": [
+      "base"
+    ],
+    "claude-opus-4-8": [
+      "base"
+    ],
+    "claude-sonnet-5": [
+      "base"
+    ],
+    "gpt-5.6-luna": [
+      "base",
+      "[1m]"
+    ],
+    "gpt-5.6-sol": [
+      "base",
+      "[1m]"
+    ],
+    "gpt-5.6-terra": [
+      "base",
+      "[1m]"
+    ]
+  },
+  "certified_request_tuples": [
+    [
+      "gpt-5.6-sol",
+      "low",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "medium",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "high",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "xhigh",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "max",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "low",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "medium",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "high",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "xhigh",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "max",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "low",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "medium",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "high",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "xhigh",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "max",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "low",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "medium",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "high",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "xhigh",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "max",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "low",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "medium",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "high",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "xhigh",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "max",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "low",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "medium",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "high",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "xhigh",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "max",
+      "[1m]"
+    ],
+    [
+      "claude-fable-5",
+      "low",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "medium",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "high",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "xhigh",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "max",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "low",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "medium",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "high",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "xhigh",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "max",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "low",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "medium",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "high",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "xhigh",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "max",
+      "base"
+    ]
+  ],
+  "exact_model_pairs": {
+    "frontier": [
+      "gpt-5.6-sol",
+      "claude-fable-5"
+    ],
+    "judgment": [
+      "gpt-5.6-terra",
+      "claude-opus-4-8"
+    ],
+    "volume": [
+      "gpt-5.6-luna",
+      "claude-sonnet-5"
+    ]
+  },
+  "exact_model_provider_map": {
+    "claude-fable-5": "anthropic",
+    "claude-opus-4-8": "anthropic",
+    "claude-sonnet-5": "anthropic",
+    "gpt-5.6-luna": "openai",
+    "gpt-5.6-sol": "openai",
+    "gpt-5.6-terra": "openai"
+  },
+  "managed_roles": {
+    "global": {
+      "count": 14,
+      "manifest_sha256": {
+        "agents/claude/sdlc-cartographer.md": "2a4537f229646756a9cffae3177b8299a0503a08de3a02a0d8e71545050bd208",
+        "agents/claude/sdlc-critic.md": "7ac747f847f72057a927d94d93a25ce23f59609d4641c56b38d30540f4a6203d",
+        "agents/claude/sdlc-implementer.md": "3214f71cf3923b710afd7b1bbe66fd7094acd939d2449fb422ac065174889222",
+        "agents/claude/sdlc-integrator.md": "cd2e4d8e9b968824453d072561f3dea24062a06d0241ae15d3a5c3f07328aac9",
+        "agents/claude/sdlc-planner.md": "6f18ca418ed35acef524d9c16406576299109aa5ce1866e18058a9ebb2a4411b",
+        "agents/claude/sdlc-researcher.md": "f971579f6106d5efcd20c215f8c3c3bc5a15e8e59054db3c712157e0b3f21182",
+        "agents/claude/sdlc-reviewer.md": "2cc7132a36dd93127096448cf214c8a70ae5d7a9aed3d883df3a5af241ed8359",
+        "agents/codex/sdlc-cartographer.toml": "ed7545cdb34b335f92fb59873b8cac387da73367e37ea535ada46c1c836c3613",
+        "agents/codex/sdlc-critic.toml": "952f2a220d9f8977b418f172023a9e92ed6cbdc4c42a69deb77e9d7efacfdf12",
+        "agents/codex/sdlc-implementer.toml": "557a58e47376faa79c49e669d22af1d95dc3772ea45926e3024c1f52b4760b8a",
+        "agents/codex/sdlc-integrator.toml": "e9e91e8c4883a529f7869d3d07772283e8382efa0ce3cc82304f35abd98b7858",
+        "agents/codex/sdlc-planner.toml": "f452307058bffadeb059f1e4fc588520a7c6f19ccf9c288c9c83804d2a662784",
+        "agents/codex/sdlc-researcher.toml": "53eb907a579f7bf49ef36389c7bf93ef1e09828bc442f0c1dfcf45553415fcbd",
+        "agents/codex/sdlc-reviewer.toml": "31a77d96ea5184f2b4a2f87df250872b5c5e50ccd20c2adb8f15a30bfecba015"
+      }
+    },
+    "research": {
+      "count": 17,
+      "roles": {
+        "ablationist": {
+          "description_sha256": "1c6f988a9a4830d3e891b50e7cab214eb54fcc1f18177d2b81d87f404b2d21be",
+          "developer_instructions_sha256": "73942c17274e141870d9dee96191b2bb7a362c83e41bae451740638ad35a601a",
+          "manifest_sha256": "2cd3e5847069df205fe84087864c7e7163d7cafd783ad93cab9e74a1cfb91989",
+          "path": "agents/codex/research/ablationist.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "adversarial_reviewer": {
+          "description_sha256": "da7ac01b46be9e5df550f0fbc9de5fdb6ab77c8f47044d74eaf842665a2a9b88",
+          "developer_instructions_sha256": "182d6721f2b1205970f2097016a249af1dacd0de63538b6407a35841e58edf2b",
+          "manifest_sha256": "eb8af719f2f4d4c6075f8a7c108bde8f455b0e6db24390e06b348263fb3cb2ec",
+          "path": "agents/codex/research/adversarial_reviewer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "benchmark_engineer": {
+          "description_sha256": "977faad599f5de5fb6b87c30102b6beb64030b75d101598b3abf22cfff442171",
+          "developer_instructions_sha256": "23c277a03c6ef8a3476c9d671abd922e205cab68f05bb8051b43da73abcecd0d",
+          "manifest_sha256": "9459e4e6ce7a7984456f43e6a1fe6760fe552cc520f2edb4cc24d43232afa1a4",
+          "path": "agents/codex/research/benchmark_engineer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "counterexample_hunter": {
+          "description_sha256": "0dc6f39916751b35da28ce2fd1454f8580c5be3c56dbc76826bc4ebd5ba18b54",
+          "developer_instructions_sha256": "a2b5a340b2d4e5989176aa0d15b1c8a4fb68101a68b4ecab416c3b8f7c78b81c",
+          "manifest_sha256": "34eeb82c3345079e6fd30126dfdba46b9f755661addc02f1f384d71d4ccd5255",
+          "path": "agents/codex/research/counterexample_hunter.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "data_engineer": {
+          "description_sha256": "e870a94b7c96dcac477d8b357df954dbc7df095bbe9362e0589647f7bdf38621",
+          "developer_instructions_sha256": "0ffcf72f7253211e155c6db20dca7375111ee674db89d9a87da0c9c46f510587",
+          "manifest_sha256": "c8ab4c3d2df9d872afa0e9dc11fe06b68031a08d6b376abf9fd87e1a8c7b9328",
+          "path": "agents/codex/research/data_engineer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "experimentalist": {
+          "description_sha256": "9d5665725907b7ea44fcf4187156e34fcfca753f1d61b67863d0661215ed63ae",
+          "developer_instructions_sha256": "0dac570767a0eccfeaf2183845c2569d9cd4e79fbd523866790beca02d34ec36",
+          "manifest_sha256": "de175fbb3611c128a9927940f7565795e96ce14264fd9f6116ee8d674cd37046",
+          "path": "agents/codex/research/experimentalist.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "formalizer": {
+          "description_sha256": "fd8ab5b67cca00f751a001c7cd594ef5af288c6cc55208ddb5d455bcd9954759",
+          "developer_instructions_sha256": "543d36d89b62e6225e2eba23d0b5e0f95fafe9463f5b6c8cdf31a15cfeba53ea",
+          "manifest_sha256": "a5d00b2767b35e6501880d312d88b3ffb133908035efe9c0a6e0fbf1863dc599",
+          "path": "agents/codex/research/formalizer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "knowledge_librarian": {
+          "description_sha256": "7778a567930d64a283e10faff29b4d53bce313cd11f6618c28e6a0c3caa64374",
+          "developer_instructions_sha256": "a86bcc1fa9e77dafdafae4a384814ba89afe6f72b818f331b7f95f48b4c3fb90",
+          "manifest_sha256": "19d9cfb80da1fb52b43f311f8c838f7ca9a5f6b5775ac3b8d51a5224cb8f8472",
+          "path": "agents/codex/research/knowledge_librarian.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "literature_scout": {
+          "description_sha256": "7397c91d092c4a586b97e5a110e30af86c7280859fa459e800a06a7d77d1d28f",
+          "developer_instructions_sha256": "450eba3ad700f9533af43f484514ee87e86d66f31e07f3ce19ad861f6ba5d101",
+          "manifest_sha256": "5d303f05a28d1f65c1fb74649ce8c71a0c2eae5d490eb7bda1caae7146d33a7c",
+          "path": "agents/codex/research/literature_scout.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "novelty_auditor": {
+          "description_sha256": "94ea1d5c3cd4c2f55fff6567009b671accd97506073c78927c4de4983531c8e7",
+          "developer_instructions_sha256": "363cfc01bd6d98f2cd3c1e8c9fa85438e3b9b0b12386b40c6ce02f344c4b72e3",
+          "manifest_sha256": "510b9e511249ac00607e66a867530dcbc7cc25a63efcee1167a3e7780f14cc6a",
+          "path": "agents/codex/research/novelty_auditor.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "replication_reviewer": {
+          "description_sha256": "62c646b344ade47ccd2f45e621b1222571dfcf9cf289ec89f9c082ae75cd5017",
+          "developer_instructions_sha256": "ce6268492086142cfad616d36c7a7e13473cd24e009d35547acc2aa2bb8f9764",
+          "manifest_sha256": "10c549ad2d30fe76837611ee4e5015b6cebf3f646711c67ecf5dd81ab1fe8077",
+          "path": "agents/codex/research/replication_reviewer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "repo_cartographer": {
+          "description_sha256": "e2fc7ca631150c9bf677d9a4c8a7df84cc7018d912aac22e8dfc9271a2ba2fde",
+          "developer_instructions_sha256": "c299ab953c83ce47706a95f9ca015bffb4447d82d028fe7cb13e740e7c241e72",
+          "manifest_sha256": "c5d767c0658b316f4ee0b1771b954870641ad7d18609c4b7d92a0f89a8d5a56b",
+          "path": "agents/codex/research/repo_cartographer.toml",
+          "sandbox_mode": "read-only"
+        },
+        "research_director": {
+          "description_sha256": "28a363fe86b3382cf5c059d135b75059174cc356a9c32bd55a33490bc0839f8b",
+          "developer_instructions_sha256": "6ea5d0acaf63497963ee7087874ae20fdb735c0ae0afad8405b4de1c919a32bd",
+          "manifest_sha256": "92ab46674bf98dd80ef859b1d7ae6604a39bcf72efc3d56ff68e70468a520639",
+          "path": "agents/codex/research/research_director.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "safety_reviewer": {
+          "description_sha256": "a7be78bb76558b911d72906401ba28d9922d166a1b1b870034ea6690e0f93bd8",
+          "developer_instructions_sha256": "c94b8a9e44ce7db080934c69c856c3ec5b1c5aaefde7f79f93b924845fbf2a71",
+          "manifest_sha256": "1e385fae9448d436188fc84f010c3cbf6a608622c54bdeef6f14c182b5780fa4",
+          "path": "agents/codex/research/safety_reviewer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "synthesis_writer": {
+          "description_sha256": "0fe2fb623ce21333a407f3361fdafeaf63ca377b480ad585c1a3746ed33cfcbf",
+          "developer_instructions_sha256": "f43294ff244071aa61ba99abe89374aae3d8f2f717b36dbe203696137d217106",
+          "manifest_sha256": "453cf7e1a1d5ab9d50c51e93a7e6bcec749efd45ea74277ade24bdaa87ce1272",
+          "path": "agents/codex/research/synthesis_writer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "systems_engineer": {
+          "description_sha256": "c6468d80f2967d248359308963e910515b0f6eea1d76fc193559594b9c5c1f04",
+          "developer_instructions_sha256": "ad9d30d2189b999329280444136f1c965c6da56db78db63cd033d241f69d2e50",
+          "manifest_sha256": "cb562cfc98de514262a995a808ce33813f321ec5b5ef2d4a6af23c33899688ca",
+          "path": "agents/codex/research/systems_engineer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "theorist": {
+          "description_sha256": "58ce58a34adc03e081a765cf2e46b81ec347f10f6ed8f1c3ec6885ed164fbdc8",
+          "developer_instructions_sha256": "b1d6e6a9eaa0567f3ee846df2ac51ca21d7ba7b57c2c0cd2a93bb101ace6bb96",
+          "manifest_sha256": "2cab3610fb766d5ef557640fd68150e9825029fc6ee36e402da53a0ef5240b3e",
+          "path": "agents/codex/research/theorist.toml",
+          "sandbox_mode": "workspace-write"
+        }
+      }
+    }
+  },
+  "one_million_context_semantics": "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance.",
+  "production_efforts_by_model": {
+    "claude-fable-5": [
+      "xhigh",
+      "max"
+    ],
+    "claude-opus-4-8": [
+      "high",
+      "xhigh"
+    ],
+    "claude-sonnet-5": [
+      "high",
+      "xhigh"
+    ],
+    "gpt-5.6-luna": [
+      "high",
+      "xhigh"
+    ],
+    "gpt-5.6-sol": [
+      "high",
+      "xhigh"
+    ],
+    "gpt-5.6-terra": [
+      "xhigh",
+      "max"
+    ]
+  },
+  "research_director_seeds_contract_sha256": "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f",
+  "schema_version": "runtime-assignment-normative-contract/v1",
+  "seeds_read_only_semantics": "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor.",
+  "validation_only_semantics": "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
+}

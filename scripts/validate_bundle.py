@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -72,6 +73,55 @@ TASK_COMMANDS = {
     "self-test": "--script scripts/install_skill_bundle.py self-test",
 }
 RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
+PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
+RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+EXACT_MODEL_PROVIDER_MAP = {
+    "claude-fable-5": "anthropic",
+    "claude-opus-4-8": "anthropic",
+    "claude-sonnet-5": "anthropic",
+    "gpt-5.6-luna": "openai",
+    "gpt-5.6-sol": "openai",
+    "gpt-5.6-terra": "openai",
+}
+EXACT_MODEL_PAIRS = {
+    "frontier": ["gpt-5.6-sol", "claude-fable-5"],
+    "judgment": ["gpt-5.6-terra", "claude-opus-4-8"],
+    "volume": ["gpt-5.6-luna", "claude-sonnet-5"],
+}
+ALLOWED_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+ALLOWED_CONTEXT_FORMS = ["base", "[1m]"]
+CERTIFIED_CONTEXT_FORMS_BY_MODEL = {
+    "claude-fable-5": ["base"],
+    "claude-opus-4-8": ["base"],
+    "claude-sonnet-5": ["base"],
+    "gpt-5.6-luna": ["base", "[1m]"],
+    "gpt-5.6-sol": ["base", "[1m]"],
+    "gpt-5.6-terra": ["base", "[1m]"],
+}
+PRODUCTION_EFFORTS_BY_MODEL = {
+    "claude-fable-5": ["xhigh", "max"],
+    "claude-opus-4-8": ["high", "xhigh"],
+    "claude-sonnet-5": ["high", "xhigh"],
+    "gpt-5.6-luna": ["high", "xhigh"],
+    "gpt-5.6-sol": ["high", "xhigh"],
+    "gpt-5.6-terra": ["xhigh", "max"],
+}
+VALIDATION_ONLY_SEMANTICS = (
+    "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer "
+    "or prove external request injection, readback, spawn identity, or admission. The external authenticated "
+    "harness is the sole spawn and admission authority."
+)
+ONE_MILLION_CONTEXT_SEMANTICS = (
+    "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, "
+    "compaction, nor effort compliance."
+)
+SEEDS_READ_ONLY_SEMANTICS = (
+    "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: "
+    "managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or "
+    "otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal "
+    "values to the conductor."
+)
 RUNTIME_RECEIPT_SOURCE_FIELDS = frozenset(
     {
         "request_injection_source",
@@ -228,14 +278,156 @@ def parse_frontmatter_metadata(text: str) -> dict[str, object]:
     return value
 
 
-def runtime_receipt_policy() -> dict[str, object]:
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def load_json_object(path: Path, label: str) -> dict[str, object]:
     try:
-        policy = json.loads(RECEIPT_POLICY_PATH.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
-    if not isinstance(policy, dict):
-        raise ValueError("runtime receipt policy must be a JSON object")
-    return policy
+        raise ValueError(f"invalid {label}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def runtime_receipt_policy() -> dict[str, object]:
+    return load_json_object(RECEIPT_POLICY_PATH, "runtime receipt policy")
+
+
+def normative_runtime_contract() -> dict[str, object]:
+    return load_json_object(NORMATIVE_CONTRACT_PATH, "normative runtime contract")
+
+
+def validate_runtime_policy_contract(root: Path, result: Validation) -> None:
+    try:
+        policy = runtime_receipt_policy()
+        normative = normative_runtime_contract()
+    except ValueError as exc:
+        result.error(str(exc))
+        return
+
+    policy_path = RECEIPT_POLICY_PATH
+    if normative.get("schema_version") != "runtime-assignment-normative-contract/v1":
+        result.error("normative runtime contract schema_version mismatch")
+    expected_values = {
+        "canonical_receipt_fields": list(runtime_receipt_fields()),
+        "exact_model_provider_map": EXACT_MODEL_PROVIDER_MAP,
+        "exact_model_pairs": EXACT_MODEL_PAIRS,
+        "allowed_efforts": ALLOWED_EFFORTS,
+        "allowed_context_forms": ALLOWED_CONTEXT_FORMS,
+        "certified_context_forms_by_model": CERTIFIED_CONTEXT_FORMS_BY_MODEL,
+        "production_efforts_by_model": PRODUCTION_EFFORTS_BY_MODEL,
+        "validation_only_semantics": VALIDATION_ONLY_SEMANTICS,
+        "one_million_context_semantics": ONE_MILLION_CONTEXT_SEMANTICS,
+        "seeds_read_only_semantics": SEEDS_READ_ONLY_SEMANTICS,
+    }
+    for field, expected in expected_values.items():
+        if normative.get(field) != expected:
+            result.error(f"normative runtime contract {field} mismatch")
+
+    if policy.get("allowed_exact_model_ids") != EXACT_MODEL_PROVIDER_MAP:
+        result.error("runtime receipt policy exact model/provider map mismatch")
+    if policy.get("allowed_efforts") != ALLOWED_EFFORTS:
+        result.error("runtime receipt policy effort vocabulary mismatch")
+    if policy.get("allowed_context_forms") != ALLOWED_CONTEXT_FORMS:
+        result.error("runtime receipt policy context vocabulary mismatch")
+    if normative.get("certified_request_tuples") != policy.get("certified_request_tuples"):
+        result.error("normative runtime contract certified request tuples mismatch")
+
+    contract = policy.get("canonical_runtime_contract")
+    if not isinstance(contract, str):
+        result.error("runtime receipt policy must define a canonical runtime contract")
+        return
+    if normative.get("canonical_receipt_policy_sha256") != sha256_bytes(policy_path.read_bytes()):
+        result.error("normative runtime contract digest does not bind the canonical receipt policy")
+    if normative.get("canonical_runtime_contract_sha256") != sha256_bytes(contract.encode("utf-8")):
+        result.error("normative runtime contract digest does not bind the canonical runtime block")
+    if normative.get("research_director_seeds_contract_sha256") != RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256:
+        result.error("normative runtime contract digest does not bind the Research Director Seeds boundary")
+    packaged_receipt = PACKAGED_POLICY_DIR / RECEIPT_POLICY_PATH.name
+    packaged_normative = PACKAGED_POLICY_DIR / NORMATIVE_CONTRACT_PATH.name
+    if not packaged_receipt.is_file() or packaged_receipt.read_bytes() != policy_path.read_bytes():
+        result.error("packaged Research OS receipt policy must be byte-identical to the canonical policy")
+    if not packaged_normative.is_file() or packaged_normative.read_bytes() != NORMATIVE_CONTRACT_PATH.read_bytes():
+        result.error("packaged Research OS normative contract must be byte-identical to the canonical contract")
+    if VALIDATION_ONLY_SEMANTICS not in contract:
+        result.error("canonical runtime block must preserve validation-only semantics")
+    if ONE_MILLION_CONTEXT_SEMANTICS not in contract:
+        result.error("canonical runtime block must preserve evidence-qualified [1m] semantics")
+
+
+def managed_global_paths() -> set[str]:
+    return {
+        *(f"agents/claude/sdlc-{role}.md" for role in (
+            "cartographer", "critic", "implementer", "integrator", "planner", "researcher", "reviewer"
+        )),
+        *(f"agents/codex/sdlc-{role}.toml" for role in (
+            "cartographer", "critic", "implementer", "integrator", "planner", "researcher", "reviewer"
+        )),
+    }
+
+
+def validate_managed_role_contract(root: Path, result: Validation) -> None:
+    try:
+        normative = normative_runtime_contract()
+        managed = normative["managed_roles"]
+        global_spec = managed["global"]
+        research_spec = managed["research"]
+    except (ValueError, KeyError, TypeError) as exc:
+        result.error(f"invalid normative managed role contract: {exc}")
+        return
+
+    global_paths = managed_global_paths()
+    actual_global = {
+        str(path.relative_to(root)).replace("\\", "/")
+        for path in (
+            *(root / "agents" / "claude").glob("sdlc-*.md"),
+            *(root / "agents" / "codex").glob("sdlc-*.toml"),
+        )
+    }
+    expected_global_hashes = global_spec.get("manifest_sha256", {})
+    if global_spec.get("count") != 14 or set(expected_global_hashes) != global_paths or actual_global != global_paths:
+        result.error("managed role roster must contain exactly the 14 global SDLC roles")
+    for relative in sorted(global_paths & set(expected_global_hashes)):
+        path = root / relative
+        if not path.is_file() or sha256_bytes(path.read_bytes()) != expected_global_hashes[relative]:
+            result.error(f"{relative}: full manifest content differs from normative managed role contract")
+
+    expected_roles = research_spec.get("roles", {})
+    expected_research_paths = {
+        spec.get("path") for spec in expected_roles.values() if isinstance(spec, dict)
+    }
+    actual_research_paths = {
+        str(path.relative_to(root)).replace("\\", "/")
+        for path in (root / "agents" / "codex" / "research").glob("*.toml")
+    }
+    if research_spec.get("count") != 17 or len(expected_roles) != 17 or actual_research_paths != expected_research_paths:
+        result.error("managed role roster must contain exactly the 17 Research OS roles")
+    for role, spec in expected_roles.items():
+        if not isinstance(spec, dict) or not isinstance(spec.get("path"), str):
+            result.error(f"managed research role {role}: invalid normative specification")
+            continue
+        path = root / spec["path"]
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        if data.get("name") != role:
+            result.error(f"{spec['path']}: managed role name mismatch")
+        if data.get("sandbox_mode") != spec.get("sandbox_mode"):
+            result.error(f"{spec['path']}: sandbox_mode differs from normative managed role contract")
+        description = data.get("description")
+        instructions = data.get("developer_instructions")
+        if not isinstance(description, str) or sha256_bytes(description.encode("utf-8")) != spec.get("description_sha256"):
+            result.error(f"{spec['path']}: description differs from normative managed role contract")
+        if not isinstance(instructions, str) or sha256_bytes(instructions.encode("utf-8")) != spec.get("developer_instructions_sha256"):
+            result.error(f"{spec['path']}: developer instructions differ from normative managed role contract")
+        if sha256_bytes(path.read_bytes()) != spec.get("manifest_sha256"):
+            result.error(f"{spec['path']}: full manifest content differs from normative managed role contract")
 
 
 def runtime_receipt_contract() -> str:
@@ -631,7 +823,9 @@ def validate(root: Path) -> Validation:
     result = Validation()
     validate_skills(root, result)
     validate_python(root, result)
+    validate_runtime_policy_contract(root, result)
     validate_agents(root, result)
+    validate_managed_role_contract(root, result)
     validate_mise(root, result)
     validate_gate_graph(root, result)
     validate_versions(root, result)

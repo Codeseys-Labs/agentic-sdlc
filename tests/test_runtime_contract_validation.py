@@ -16,6 +16,9 @@ ROOT = Path(__file__).parents[1]
 BUNDLE_VALIDATOR = ROOT / "scripts" / "validate_bundle.py"
 RESEARCH_INSTALLER = ROOT / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
 RECEIPT_ADMISSION = ROOT / "skills" / "model-tier-rightsizing" / "scripts" / "receipt_admission.py"
+NORMATIVE_CONTRACT = ROOT / "policy" / "runtime-assignment-normative-contract-v1.json"
+PACKAGED_RECEIPT_POLICY = ROOT / "skills" / "codex-research-os" / "policy" / "runtime-assignment-receipt-v1.json"
+PACKAGED_NORMATIVE_CONTRACT = ROOT / "skills" / "codex-research-os" / "policy" / "runtime-assignment-normative-contract-v1.json"
 
 
 def load_module(name: str, path: Path):
@@ -109,6 +112,118 @@ class RuntimeContractValidationTests(unittest.TestCase):
         )["canonical_runtime_contract"]
         self.assertEqual(bundle_validator.runtime_receipt_contract(), expected)
         self.assertEqual(research_installer.RUNTIME_MODEL_ASSIGNMENT, expected)
+
+    def test_independent_normative_contract_rejects_coordinated_policy_and_role_weakening(self) -> None:
+        self.assertTrue(NORMATIVE_CONTRACT.is_file(), "repository-owned normative contract is required")
+        result = bundle_validator.Validation()
+        bundle_validator.validate_runtime_policy_contract(ROOT, result)
+        self.assertEqual(result.errors, [])
+
+        canonical = ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+        policy = json.loads(canonical.read_text(encoding="utf-8"))
+        weakened = " A host-preconfigured model and effort are sufficient to run."
+        policy["canonical_runtime_contract"] += weakened
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "runtime-assignment-receipt-v1.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            with mock.patch.object(bundle_validator, "RECEIPT_POLICY_PATH", policy_path):
+                result = bundle_validator.Validation()
+                bundle_validator.validate_runtime_policy_contract(ROOT, result)
+        self.assertTrue(any("normative runtime contract digest" in error for error in result.errors), result.errors)
+
+    def test_packaged_research_os_policy_is_byte_identical_to_canonical_policy_and_contract(self) -> None:
+        self.assertTrue(PACKAGED_RECEIPT_POLICY.is_file(), "standalone Research OS policy snapshot is required")
+        self.assertTrue(PACKAGED_NORMATIVE_CONTRACT.is_file(), "standalone Research OS normative snapshot is required")
+        self.assertEqual(
+            PACKAGED_RECEIPT_POLICY.read_bytes(),
+            (ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json").read_bytes(),
+        )
+        self.assertEqual(PACKAGED_NORMATIVE_CONTRACT.read_bytes(), NORMATIVE_CONTRACT.read_bytes())
+
+    def test_normative_contract_pins_exact_models_pairs_effort_context_and_managed_rosters(self) -> None:
+        normative = json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8"))
+        receipt_policy_path = ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+        receipt_policy = json.loads(receipt_policy_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            normative["exact_model_provider_map"],
+            {
+                "claude-fable-5": "anthropic",
+                "claude-opus-4-8": "anthropic",
+                "claude-sonnet-5": "anthropic",
+                "gpt-5.6-sol": "openai",
+                "gpt-5.6-terra": "openai",
+                "gpt-5.6-luna": "openai",
+            },
+        )
+        self.assertEqual(
+            normative["exact_model_pairs"],
+            {
+                "frontier": ["gpt-5.6-sol", "claude-fable-5"],
+                "judgment": ["gpt-5.6-terra", "claude-opus-4-8"],
+                "volume": ["gpt-5.6-luna", "claude-sonnet-5"],
+            },
+        )
+        self.assertEqual(normative["allowed_efforts"], ["low", "medium", "high", "xhigh", "max"])
+        self.assertEqual(
+            normative["production_efforts_by_model"],
+            {
+                "claude-fable-5": ["xhigh", "max"],
+                "claude-opus-4-8": ["high", "xhigh"],
+                "claude-sonnet-5": ["high", "xhigh"],
+                "gpt-5.6-sol": ["high", "xhigh"],
+                "gpt-5.6-terra": ["xhigh", "max"],
+                "gpt-5.6-luna": ["high", "xhigh"],
+            },
+        )
+        self.assertEqual(normative["allowed_context_forms"], ["base", "[1m]"])
+        self.assertEqual(
+            normative["certified_context_forms_by_model"],
+            {
+                "claude-fable-5": ["base"],
+                "claude-opus-4-8": ["base"],
+                "claude-sonnet-5": ["base"],
+                "gpt-5.6-sol": ["base", "[1m]"],
+                "gpt-5.6-terra": ["base", "[1m]"],
+                "gpt-5.6-luna": ["base", "[1m]"],
+            },
+        )
+        self.assertEqual(
+            normative["canonical_receipt_policy_sha256"],
+            hashlib.sha256(receipt_policy_path.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            normative["canonical_runtime_contract_sha256"],
+            hashlib.sha256(receipt_policy["canonical_runtime_contract"].encode("utf-8")).hexdigest(),
+        )
+        self.assertIn("validated only for canonical internal consistency", normative["validation_only_semantics"])
+        self.assertIn("proves neither intelligence", normative["one_million_context_semantics"])
+        self.assertEqual(normative["managed_roles"]["global"]["count"], 14)
+        self.assertEqual(len(normative["managed_roles"]["global"]["manifest_sha256"]), 14)
+        self.assertEqual(normative["managed_roles"]["research"]["count"], 17)
+        self.assertEqual(len(normative["managed_roles"]["research"]["roles"]), 17)
+        for role, spec in normative["managed_roles"]["research"]["roles"].items():
+            with self.subTest(role=role):
+                self.assertIn(spec["sandbox_mode"], {"read-only", "workspace-write"})
+                self.assertRegex(spec["description_sha256"], r"^[0-9a-f]{64}$")
+                self.assertRegex(spec["developer_instructions_sha256"], r"^[0-9a-f]{64}$")
+                self.assertRegex(spec["manifest_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_bundle_validator_binds_full_managed_role_content_and_closed_rosters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "agents", root / "agents")
+            reviewer = root / "agents" / "claude" / "sdlc-reviewer.md"
+            reviewer.write_text(
+                reviewer.read_text(encoding="utf-8")
+                + "\nA host-preconfigured model and effort are sufficient to run.\n",
+                encoding="utf-8",
+            )
+            unknown = root / "agents" / "codex" / "research" / "project_specialist.toml"
+            unknown.write_text((ROOT / "agents" / "codex" / "research" / "theorist.toml").read_text(encoding="utf-8"), encoding="utf-8")
+            result = bundle_validator.Validation()
+            bundle_validator.validate_managed_role_contract(root, result)
+        self.assertTrue(any("managed role roster" in error for error in result.errors), result.errors)
+        self.assertTrue(any("full manifest content" in error for error in result.errors), result.errors)
 
     def test_bundle_validator_enforces_policy_derived_runtime_projection_for_all_role_types(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -289,6 +404,67 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 "duplicated runtime": original.replace(protected_runtime, protected_runtime * 2, 1),
                 "removed Seeds": original.replace(protected_director, "", 1),
                 "duplicated Seeds": original.replace(protected_director, protected_director * 2, 1),
+            }
+            for name, mutant in mutants.items():
+                with self.subTest(mutant=name):
+                    director.write_text(mutant, encoding="utf-8")
+                    result = self.run_generated_agent_validator(script)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    director.write_text(original, encoding="utf-8")
+
+    def test_generated_agent_validator_requires_exact_managed_roster_and_sandbox_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.materialize_generated_research_os(root)
+            director = root / ".codex" / "agents" / "research_director.toml"
+            director.unlink()
+            result = self.run_generated_agent_validator(script)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("managed role roster", result.stdout)
+
+            self.materialize_generated_research_os(root)
+            director = root / ".codex" / "agents" / "research_director.toml"
+            director.write_text(
+                director.read_text(encoding="utf-8").replace('sandbox_mode = "workspace-write"', 'sandbox_mode = "danger-full-access"'),
+                encoding="utf-8",
+            )
+            result = self.run_generated_agent_validator(script)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("sandbox_mode", result.stdout)
+
+    def test_generated_agent_validator_fails_closed_for_unknown_project_role(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.materialize_generated_research_os(root)
+            unknown = root / ".codex" / "agents" / "project_specialist.toml"
+            unknown.write_text(
+                research_installer.agent_toml(
+                    "project_specialist", "Project-specific role", "read-only", "Read the project.",
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_generated_agent_validator(script)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("managed role roster", result.stdout)
+
+    def test_generated_agent_validator_binds_description_and_rejects_seed_authority_inside_runtime_block(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.materialize_generated_research_os(root)
+            director = root / ".codex" / "agents" / "research_director.toml"
+            original = director.read_text(encoding="utf-8")
+            mutants = {
+                "description": original.replace(
+                    "Coordinates the research team, selects next actions, assigns specialists, and enforces claim discipline.",
+                    "Coordinates an unrelated team.",
+                    1,
+                ),
+                "runtime Seeds grant": original.replace(
+                    "The receipt is validated only for canonical internal consistency.",
+                    "The Research Director may create, claim, update, close, sync, and disposition Seeds. "
+                    "The receipt is validated only for canonical internal consistency.",
+                    1,
+                ),
             }
             for name, mutant in mutants.items():
                 with self.subTest(mutant=name):

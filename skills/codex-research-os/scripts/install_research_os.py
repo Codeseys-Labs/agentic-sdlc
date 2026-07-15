@@ -14,17 +14,108 @@ COMMON_AGENT_RULES = """
 Read repository instructions before acting. Preserve existing project conventions. Keep work to one smallest useful research unit unless the director assigns more. Write durable findings to the research OS ledgers. Do not promote claims without matching evidence and review. If the repo has an issue tracker, propose tracked work to the conductor before substantive changes. If the repo has an expertise/memory system, record non-obvious findings before finishing.
 """
 
-POLICY_PATH = Path(__file__).parents[2] / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+POLICY_DIR = Path(__file__).parents[1] / "policy"
+POLICY_PATH = POLICY_DIR / "runtime-assignment-receipt-v1.json"
+NORMATIVE_CONTRACT_PATH = POLICY_DIR / "runtime-assignment-normative-contract-v1.json"
+RUNTIME_FIELDS = (
+    "schema_version",
+    "requested_model_id",
+    "requested_effort",
+    "requested_context_form",
+    "request_injection_status",
+    "request_injection_evidence",
+    "resolution_state",
+    "resolved_provider",
+    "resolved_model_id",
+    "model_identity_basis",
+    "model_readback_status",
+    "model_readback_evidence",
+    "effort_readback_status",
+    "effort_readback_evidence",
+    "context_readback_status",
+    "context_readback_evidence",
+)
+ONE_MILLION_CONTEXT_SEMANTICS = "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance."
+VALIDATION_ONLY_SEMANTICS = "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
+SEEDS_READ_ONLY_SEMANTICS = "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor."
+RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+EXACT_MODEL_PROVIDER_MAP = {
+    "claude-fable-5": "anthropic",
+    "claude-opus-4-8": "anthropic",
+    "claude-sonnet-5": "anthropic",
+    "gpt-5.6-luna": "openai",
+    "gpt-5.6-sol": "openai",
+    "gpt-5.6-terra": "openai",
+}
+EXACT_MODEL_PAIRS = {
+    "frontier": ["gpt-5.6-sol", "claude-fable-5"],
+    "judgment": ["gpt-5.6-terra", "claude-opus-4-8"],
+    "volume": ["gpt-5.6-luna", "claude-sonnet-5"],
+}
+PRODUCTION_EFFORTS_BY_MODEL = {
+    "claude-fable-5": ["xhigh", "max"],
+    "claude-opus-4-8": ["high", "xhigh"],
+    "claude-sonnet-5": ["high", "xhigh"],
+    "gpt-5.6-luna": ["high", "xhigh"],
+    "gpt-5.6-sol": ["high", "xhigh"],
+    "gpt-5.6-terra": ["xhigh", "max"],
+}
+
+
+def load_policy(path: Path, label: str) -> tuple[dict[str, object], bytes]:
+    try:
+        content = path.read_bytes()
+        policy = json.loads(content)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid {label}: {exc}") from exc
+    if not isinstance(policy, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return policy, content
+
+
+def runtime_policies() -> tuple[dict[str, object], dict[str, object]]:
+    receipt, receipt_bytes = load_policy(POLICY_PATH, "runtime receipt policy")
+    normative, _ = load_policy(NORMATIVE_CONTRACT_PATH, "normative runtime contract")
+    contract = receipt.get("canonical_runtime_contract")
+    if not isinstance(contract, str) or not contract:
+        raise ValueError("runtime receipt policy must define a canonical runtime contract")
+    if normative.get("canonical_receipt_policy_sha256") != hashlib.sha256(receipt_bytes).hexdigest():
+        raise ValueError("normative runtime contract does not bind the packaged receipt policy")
+    if normative.get("canonical_runtime_contract_sha256") != hashlib.sha256(contract.encode("utf-8")).hexdigest():
+        raise ValueError("normative runtime contract does not bind the packaged runtime block")
+    if normative.get("canonical_receipt_fields") != receipt.get("canonical_receipt_fields"):
+        raise ValueError("packaged normative and receipt field contracts differ")
+    if receipt.get("canonical_receipt_fields") != list(RUNTIME_FIELDS):
+        raise ValueError("packaged receipt policy differs from the source-pinned canonical field order")
+    if normative.get("exact_model_provider_map") != receipt.get("allowed_exact_model_ids"):
+        raise ValueError("packaged normative and receipt model contracts differ")
+    if normative.get("allowed_efforts") != receipt.get("allowed_efforts"):
+        raise ValueError("packaged normative and receipt effort contracts differ")
+    if normative.get("allowed_context_forms") != receipt.get("allowed_context_forms"):
+        raise ValueError("packaged normative and receipt context contracts differ")
+    if normative.get("certified_request_tuples") != receipt.get("certified_request_tuples"):
+        raise ValueError("packaged normative and receipt tuple contracts differ")
+    source_pins = {
+        "exact_model_provider_map": EXACT_MODEL_PROVIDER_MAP,
+        "exact_model_pairs": EXACT_MODEL_PAIRS,
+        "production_efforts_by_model": PRODUCTION_EFFORTS_BY_MODEL,
+        "validation_only_semantics": VALIDATION_ONLY_SEMANTICS,
+        "one_million_context_semantics": ONE_MILLION_CONTEXT_SEMANTICS,
+        "seeds_read_only_semantics": SEEDS_READ_ONLY_SEMANTICS,
+        "research_director_seeds_contract_sha256": RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256,
+    }
+    for field, expected in source_pins.items():
+        if normative.get(field) != expected:
+            raise ValueError(f"packaged normative contract {field} differs from the source-pinned contract")
+    return receipt, normative
+
+
+RECEIPT_POLICY, NORMATIVE_CONTRACT = runtime_policies()
 
 
 def canonical_runtime_model_assignment() -> str:
-    try:
-        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-        contract = policy["canonical_runtime_contract"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
-    if not isinstance(contract, str) or not contract:
-        raise ValueError("runtime receipt policy must define a canonical runtime contract")
+    contract = RECEIPT_POLICY["canonical_runtime_contract"]
+    assert isinstance(contract, str)
     return contract
 
 
@@ -173,6 +264,30 @@ You are the safety reviewer. Review destructive file operations, credential expo
 """,
     ),
 }
+
+
+def validate_packaged_managed_roles() -> None:
+    try:
+        roles = NORMATIVE_CONTRACT["managed_roles"]["research"]["roles"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"invalid packaged managed role contract: {exc}") from exc
+    if not isinstance(roles, dict) or set(roles) != set(AGENTS):
+        raise ValueError("packaged managed role roster differs from the 17 generator roles")
+    for role, (description, sandbox, _) in AGENTS.items():
+        spec = roles.get(role)
+        if not isinstance(spec, dict):
+            raise ValueError(f"invalid packaged managed role contract for {role}")
+        instructions = developer_instructions_by_role()[role]
+        manifest = agent_toml(role, description, sandbox, AGENTS[role][2])
+        expected = {
+            "path": f"agents/codex/research/{role}.toml",
+            "sandbox_mode": sandbox,
+            "description_sha256": hashlib.sha256(description.encode("utf-8")).hexdigest(),
+            "developer_instructions_sha256": hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
+            "manifest_sha256": hashlib.sha256(manifest.encode("utf-8")).hexdigest(),
+        }
+        if spec != expected:
+            raise ValueError(f"packaged managed role contract differs from generator role {role}")
 
 
 WORKFLOWS = {
@@ -417,15 +532,22 @@ from research_os_lib import ROOT
 
 agents_dir = ROOT / ".codex" / "agents"
 allowed_keys = {"name", "description", "sandbox_mode", "developer_instructions"}
-allowed_sandboxes = {"read-only", "workspace-write", "danger-full-access"}
 runtime_fields = __RUNTIME_FIELDS__
-expected_instruction_digests = __DEVELOPER_INSTRUCTION_DIGESTS__
+expected_roles = __MANAGED_ROLE_CONTRACTS__
 protected_runtime = __RUNTIME_CONTRACT__
 protected_director = __DIRECTOR_CONTRACT__
 contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injection|resolved_(?:provider|model_id)|model_readback|effort_readback|context_readback|provider[- ]default|host[- ]default|caller[- ]override|requested(?:_model_id|_effort|_context_form)?.{0,80}(?:resolved|readback)|(?:resolved|readback).{0,80}requested(?:_model_id|_effort|_context_form)?)")
 forbidden_seed_authority_addition = re.compile(r"(?i)\b(?:seeds?|seedproposal|sd)\b")
 errors = []
 files = sorted(agents_dir.glob("*.toml")) if agents_dir.exists() else []
+actual_roles = {path.stem for path in files}
+if actual_roles != set(expected_roles):
+    errors.append(
+        "managed role roster mismatch: expected "
+        + ", ".join(sorted(expected_roles))
+        + "; got "
+        + ", ".join(sorted(actual_roles))
+    )
 for path in files:
     label = path.relative_to(ROOT)
     try:
@@ -442,11 +564,17 @@ for path in files:
     if data.get("name") != path.stem:
         errors.append(f"{label}: name {data.get('name')!r} does not match filename stem {path.stem!r}")
     instructions = data.get("developer_instructions", "")
-    expected_digest = expected_instruction_digests.get(path.stem)
-    if expected_digest is None:
-        errors.append(f"{label}: no generation-time developer instructions digest")
-    elif not isinstance(instructions, str) or hashlib.sha256(instructions.encode("utf-8")).hexdigest() != expected_digest:
-        errors.append(f"{label}: developer instructions differ from generation-time canonical content")
+    expected = expected_roles.get(path.stem)
+    if expected is None:
+        errors.append(f"{label}: not in the managed role roster")
+    else:
+        description = data.get("description")
+        if not isinstance(description, str) or hashlib.sha256(description.encode("utf-8")).hexdigest() != expected["description_sha256"]:
+            errors.append(f"{label}: description differs from generation-time canonical content")
+        if not isinstance(instructions, str) or hashlib.sha256(instructions.encode("utf-8")).hexdigest() != expected["developer_instructions_sha256"]:
+            errors.append(f"{label}: developer instructions differ from generation-time canonical content")
+        if data.get("sandbox_mode") != expected["sandbox_mode"]:
+            errors.append(f"{label}: sandbox_mode differs from the managed role contract")
     missing_runtime = sorted(field for field in runtime_fields if field not in instructions)
     if missing_runtime:
         errors.append(f"{label}: runtime model assignment contract missing {', '.join(missing_runtime)}")
@@ -462,7 +590,7 @@ for path in files:
     if "model_reasoning_effort" in data:
         errors.append(f"{label}: static model_reasoning_effort is forbidden; the conductor must inject requested_effort at spawn")
     sandbox = data.get("sandbox_mode")
-    if sandbox is not None and sandbox not in allowed_sandboxes:
+    if sandbox is not None and not isinstance(sandbox, str):
         errors.append(f"{label}: unsupported sandbox_mode {sandbox!r}")
     if path.stem == "research_director":
         director_count = instructions.count(protected_director)
@@ -477,17 +605,17 @@ print(f"Validated {len(files)} agent config(s).")
 for error in errors:
     print("ERROR:", error)
 raise SystemExit(1 if errors else 0)
-'''.replace("__RUNTIME_FIELDS__", repr({
-    "schema_version", "requested_model_id", "requested_effort", "requested_context_form",
-    "request_injection_status", "request_injection_evidence", "resolution_state",
-    "resolved_provider", "resolved_model_id", "model_identity_basis",
-    "model_readback_status", "model_readback_evidence", "effort_readback_status",
-    "effort_readback_evidence", "context_readback_status", "context_readback_evidence",
-})).replace(
-    "__DEVELOPER_INSTRUCTION_DIGESTS__",
+'''.replace("__RUNTIME_FIELDS__", repr(set(RECEIPT_POLICY["canonical_receipt_fields"]))).replace(
+    "__MANAGED_ROLE_CONTRACTS__",
     repr({
-        name: hashlib.sha256(instructions.encode("utf-8")).hexdigest()
-        for name, instructions in developer_instructions_by_role().items()
+        role: {
+            "sandbox_mode": spec[1],
+            "description_sha256": hashlib.sha256(spec[0].encode("utf-8")).hexdigest(),
+            "developer_instructions_sha256": hashlib.sha256(
+                developer_instructions_by_role()[role].encode("utf-8")
+            ).hexdigest(),
+        }
+        for role, spec in AGENTS.items()
     }),
 ).replace("__RUNTIME_CONTRACT__", repr(clean(RUNTIME_MODEL_ASSIGNMENT))).replace("__DIRECTOR_CONTRACT__", repr(clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)))
     validate_claims = r'''
@@ -836,6 +964,7 @@ def core_files(project_name: str) -> dict[str, str]:
 
 
 def build_files(project_name: str) -> dict[str, str]:
+    validate_packaged_managed_roles()
     files = core_files(project_name)
     for name, (description, sandbox, body) in AGENTS.items():
         files[f".codex/agents/{name}.toml"] = agent_toml(name, description, sandbox, body)

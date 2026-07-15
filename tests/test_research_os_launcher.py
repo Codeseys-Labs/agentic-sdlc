@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,19 @@ class ResearchOSLauncherTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--target", result.stdout)
+
+    def test_research_os_installer_is_standalone_with_packaged_policy_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            standalone = Path(directory) / "codex-research-os"
+            shutil.copytree(SCRIPT.parents[1], standalone)
+            result = subprocess.run(
+                [sys.executable, str(standalone / "scripts" / "install_research_os.py"), "--dry-run", "--target", directory],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Research OS setup summary", result.stdout)
 
 
 if __name__ == "__main__":
