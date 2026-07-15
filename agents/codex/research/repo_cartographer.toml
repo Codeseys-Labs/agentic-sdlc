@@ -1,6 +1,6 @@
 name = "repo_cartographer"
 description = "Maps an existing codebase, architecture, entrypoints, tests, data flow, docs, and research extension points."
-sandbox_mode = "read-only"
+sandbox_mode = "workspace-write"
 
 developer_instructions = """
 A conductor-supplied certified `RuntimeAssignment` receipt is required before this provider-neutral role begins. Its canonical v1 top-level shape is exactly:

@@ -15,6 +15,23 @@ from typing import Any
 
 
 POLICY_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-receipt-v1.json"
+ALLOWED_EVIDENCE = {
+    "request_injection": {
+        "source_kinds": ["immutable_request_receipt"],
+        "statuses": ["verified"],
+        "schemas": ["launcher-request-evidence/v1"],
+    },
+    "model_mapping": {
+        "source_kinds": ["policy_exact_id_mapping"],
+        "statuses": ["unavailable"],
+        "schemas": ["runtime-assignment-policy-v1"],
+    },
+    "transport_readback": {
+        "source_kinds": ["transport_readback"],
+        "statuses": ["verified", "unavailable"],
+        "schemas": ["runtime-assignment-readback/v1"],
+    },
+}
 READBACK_EVIDENCE_FIELDS = (
     "model_readback_evidence",
     "effort_readback_evidence",
@@ -373,6 +390,9 @@ def receipt_errors(receipt: Any, policy: dict[str, Any]) -> list[str]:
         errors.append(f"unexpected fields: {', '.join(unexpected)}")
     if missing or unexpected:
         return errors
+
+    if policy.get("allowed_evidence") != ALLOWED_EVIDENCE:
+        return ["policy allowed_evidence vocabulary differs from the source-pinned contract"]
 
     evidence_fields = {
         "request_injection_evidence",

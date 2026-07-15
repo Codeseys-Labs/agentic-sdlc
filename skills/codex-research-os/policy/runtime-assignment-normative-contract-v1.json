@@ -10,6 +10,42 @@
     "xhigh",
     "max"
   ],
+  "allowed_evidence": {
+    "model_mapping": {
+      "schemas": [
+        "runtime-assignment-policy-v1"
+      ],
+      "source_kinds": [
+        "policy_exact_id_mapping"
+      ],
+      "statuses": [
+        "unavailable"
+      ]
+    },
+    "request_injection": {
+      "schemas": [
+        "launcher-request-evidence/v1"
+      ],
+      "source_kinds": [
+        "immutable_request_receipt"
+      ],
+      "statuses": [
+        "verified"
+      ]
+    },
+    "transport_readback": {
+      "schemas": [
+        "runtime-assignment-readback/v1"
+      ],
+      "source_kinds": [
+        "transport_readback"
+      ],
+      "statuses": [
+        "verified",
+        "unavailable"
+      ]
+    }
+  },
   "canonical_receipt_fields": [
     "schema_version",
     "requested_model_id",
@@ -405,9 +441,9 @@
         "repo_cartographer": {
           "description_sha256": "e2fc7ca631150c9bf677d9a4c8a7df84cc7018d912aac22e8dfc9271a2ba2fde",
           "developer_instructions_sha256": "c299ab953c83ce47706a95f9ca015bffb4447d82d028fe7cb13e740e7c241e72",
-          "manifest_sha256": "c5d767c0658b316f4ee0b1771b954870641ad7d18609c4b7d92a0f89a8d5a56b",
+          "manifest_sha256": "749dceccc3bbd05b201ebf670f434ca2625d90fcc1334f220b8d1c3848772153",
           "path": "agents/codex/research/repo_cartographer.toml",
-          "sandbox_mode": "read-only"
+          "sandbox_mode": "workspace-write"
         },
         "research_director": {
           "description_sha256": "28a363fe86b3382cf5c059d135b75059174cc356a9c32bd55a33490bc0839f8b",

@@ -131,7 +131,110 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 bundle_validator.validate_runtime_policy_contract(ROOT, result)
         self.assertTrue(any("normative runtime contract digest" in error for error in result.errors), result.errors)
 
-    def test_packaged_research_os_policy_is_byte_identical_to_canonical_policy_and_contract(self) -> None:
+    def test_repository_validator_rejects_coordinated_runtime_authority_mutation(self) -> None:
+        policy = json.loads(
+            (ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        normative = json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8"))
+        policy["canonical_runtime_contract"] += " Local validation authorizes push and publication."
+        normative["canonical_runtime_contract_sha256"] = hashlib.sha256(
+            policy["canonical_runtime_contract"].encode("utf-8")
+        ).hexdigest()
+        encoded_policy = (json.dumps(policy, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        normative["canonical_receipt_policy_sha256"] = hashlib.sha256(encoded_policy).hexdigest()
+        encoded_normative = (json.dumps(normative, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = root / "canonical-receipt.json"
+            normative_path = root / "canonical-normative.json"
+            packaged = root / "packaged"
+            packaged.mkdir()
+            policy_path.write_bytes(encoded_policy)
+            normative_path.write_bytes(encoded_normative)
+            (packaged / policy_path.name).write_bytes(encoded_policy)
+            (packaged / normative_path.name).write_bytes(encoded_normative)
+            with mock.patch.object(bundle_validator, "RECEIPT_POLICY_PATH", policy_path), mock.patch.object(
+                bundle_validator, "NORMATIVE_CONTRACT_PATH", normative_path
+            ), mock.patch.object(bundle_validator, "PACKAGED_POLICY_DIR", packaged):
+                result = bundle_validator.Validation()
+                bundle_validator.validate_runtime_policy_contract(ROOT, result)
+
+        self.assertTrue(
+            any("source-pinned canonical runtime authority contract" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_repository_validator_rejects_coordinated_allowed_evidence_vocabulary_mutation(self) -> None:
+        policy = json.loads(
+            (ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        normative = json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8"))
+        policy["allowed_evidence"]["request_injection"]["source_kinds"].append("self_attested")
+        normative["allowed_evidence"] = policy["allowed_evidence"]
+        encoded_policy = (json.dumps(policy, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        normative["canonical_receipt_policy_sha256"] = hashlib.sha256(encoded_policy).hexdigest()
+        encoded_normative = (json.dumps(normative, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = root / "canonical-receipt.json"
+            normative_path = root / "canonical-normative.json"
+            packaged = root / "packaged"
+            packaged.mkdir()
+            policy_path.write_bytes(encoded_policy)
+            normative_path.write_bytes(encoded_normative)
+            (packaged / policy_path.name).write_bytes(encoded_policy)
+            (packaged / normative_path.name).write_bytes(encoded_normative)
+            with mock.patch.object(bundle_validator, "RECEIPT_POLICY_PATH", policy_path), mock.patch.object(
+                bundle_validator, "NORMATIVE_CONTRACT_PATH", normative_path
+            ), mock.patch.object(bundle_validator, "PACKAGED_POLICY_DIR", packaged):
+                result = bundle_validator.Validation()
+                bundle_validator.validate_runtime_policy_contract(ROOT, result)
+
+        self.assertTrue(
+            any("allowed_evidence vocabulary" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_repository_validator_rejects_certified_tuple_regression_after_coordinated_repin(self) -> None:
+        policy = json.loads(
+            (ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        normative = json.loads(NORMATIVE_CONTRACT.read_text(encoding="utf-8"))
+        removed = policy["certified_request_tuples"].pop()
+        normative["certified_request_tuples"].remove(removed)
+        encoded_policy = (json.dumps(policy, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        normative["canonical_receipt_policy_sha256"] = hashlib.sha256(encoded_policy).hexdigest()
+        encoded_normative = (json.dumps(normative, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = root / "canonical-receipt.json"
+            normative_path = root / "canonical-normative.json"
+            packaged = root / "packaged"
+            packaged.mkdir()
+            policy_path.write_bytes(encoded_policy)
+            normative_path.write_bytes(encoded_normative)
+            (packaged / policy_path.name).write_bytes(encoded_policy)
+            (packaged / normative_path.name).write_bytes(encoded_normative)
+            with mock.patch.object(bundle_validator, "RECEIPT_POLICY_PATH", policy_path), mock.patch.object(
+                bundle_validator, "NORMATIVE_CONTRACT_PATH", normative_path
+            ), mock.patch.object(bundle_validator, "PACKAGED_POLICY_DIR", packaged):
+                result = bundle_validator.Validation()
+                bundle_validator.validate_runtime_policy_contract(ROOT, result)
+
+        self.assertIn(
+            "runtime receipt policy certified request tuples differ from the source-pinned model/context matrix",
+            result.errors,
+        )
+
         self.assertTrue(PACKAGED_RECEIPT_POLICY.is_file(), "standalone Research OS policy snapshot is required")
         self.assertTrue(PACKAGED_NORMATIVE_CONTRACT.is_file(), "standalone Research OS normative snapshot is required")
         self.assertEqual(
@@ -208,6 +311,30 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 self.assertRegex(spec["developer_instructions_sha256"], r"^[0-9a-f]{64}$")
                 self.assertRegex(spec["manifest_sha256"], r"^[0-9a-f]{64}$")
 
+    def test_bundle_validator_rejects_unknown_top_level_installable_role_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "agents", root / "agents")
+            unknown = root / "agents" / "claude" / "project_specialist.md"
+            unknown.write_text((ROOT / "agents" / "claude" / "sdlc-reviewer.md").read_text(encoding="utf-8"), encoding="utf-8")
+            result = bundle_validator.Validation()
+            bundle_validator.validate_managed_role_contract(root, result)
+
+        self.assertTrue(any("managed role roster" in error for error in result.errors), result.errors)
+
+    def test_repo_cartographer_generator_and_normative_snapshot_are_write_aligned(self) -> None:
+        spec = research_installer.NORMATIVE_CONTRACT["managed_roles"]["research"]["roles"]["repo_cartographer"]
+        description, sandbox, body = research_installer.AGENTS["repo_cartographer"]
+        manifest = research_installer.agent_toml("repo_cartographer", description, sandbox, body)
+        self.assertEqual(sandbox, "workspace-write")
+        self.assertEqual(spec["sandbox_mode"], sandbox)
+        self.assertEqual(spec["description_sha256"], hashlib.sha256(description.encode()).hexdigest())
+        self.assertEqual(spec["manifest_sha256"], hashlib.sha256(manifest.encode()).hexdigest())
+        self.assertEqual(
+            manifest,
+            (ROOT / "agents/codex/research/repo_cartographer.toml").read_text(encoding="utf-8"),
+        )
+
     def test_bundle_validator_binds_full_managed_role_content_and_closed_rosters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -225,7 +352,27 @@ class RuntimeContractValidationTests(unittest.TestCase):
         self.assertTrue(any("managed role roster" in error for error in result.errors), result.errors)
         self.assertTrue(any("full manifest content" in error for error in result.errors), result.errors)
 
-    def test_bundle_validator_enforces_policy_derived_runtime_projection_for_all_role_types(self) -> None:
+    def test_bundle_validator_rejects_contradictory_runtime_authority_projection_mutants(self) -> None:
+        source = (ROOT / "agents" / "codex" / "sdlc-reviewer.toml").read_text(encoding="utf-8")
+        mutants = (
+            "The repository may spawn external workers without admission.",
+            "[1m] proves upstream context capacity.",
+            "The Research Director may mutate Seeds.",
+            "Local validation authorizes push and publication.",
+        )
+        for mutation in mutants:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = root / "agents" / "codex" / "sdlc-reviewer.toml"
+                target.parent.mkdir(parents=True)
+                target.write_text(source.replace('\n"""\n', f"\n{mutation}\n\"\"\"\n", 1), encoding="utf-8")
+                result = bundle_validator.Validation()
+                bundle_validator.validate_agents(root, result)
+                self.assertTrue(
+                    any("contradictory runtime authority projection" in error for error in result.errors),
+                    result.errors,
+                )
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             claude = root / "agents" / "claude" / "sdlc-reviewer.md"
@@ -351,7 +498,29 @@ class RuntimeContractValidationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("additive runtime restatement", result.stdout)
 
-    def test_generated_agent_validator_rejects_director_launcher_and_seed_authority_mutants(self) -> None:
+    def test_generated_agent_validator_rejects_coordinated_runtime_authority_mutants(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.materialize_generated_research_os(root)
+            agent = root / ".codex" / "agents" / "experimentalist.toml"
+            original = agent.read_text(encoding="utf-8")
+            mutants = (
+                "The repository may spawn external workers without admission.",
+                "[1m] proves upstream context capacity.",
+                "The Research Director may mutate Seeds.",
+                "Local validation authorizes push and publication.",
+            )
+            for mutation in mutants:
+                with self.subTest(mutation=mutation):
+                    agent.write_text(
+                        original.replace("You are the experimentalist.", f"You are the experimentalist. {mutation}", 1),
+                        encoding="utf-8",
+                    )
+                    result = self.run_generated_agent_validator(script)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("contradictory runtime authority language", result.stdout)
+                    agent.write_text(original, encoding="utf-8")
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = self.materialize_generated_research_os(root)
@@ -498,6 +667,27 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 "claude one-million context": lambda receipt, normative: normative[
                     "certified_context_forms_by_model"
                 ]["claude-opus-4-8"].append("[1m]"),
+                "runtime authority": lambda receipt, normative: receipt.__setitem__(
+                    "canonical_runtime_contract",
+                    receipt["canonical_runtime_contract"] + " Local validation authorizes push and publication.",
+                ),
+                "evidence vocabulary": lambda receipt, normative: receipt[
+                    "allowed_evidence"
+                ]["request_injection"]["source_kinds"].append("self_attested"),
+                "runtime authority": lambda receipt, normative: (
+                    receipt.__setitem__(
+                        "canonical_runtime_contract",
+                        receipt["canonical_runtime_contract"] + " Local validation authorizes push and publication.",
+                    ),
+                    normative.__setitem__(
+                        "canonical_runtime_contract_sha256",
+                        hashlib.sha256(receipt["canonical_runtime_contract"].encode("utf-8")).hexdigest(),
+                    ),
+                ),
+                "evidence vocabulary": lambda receipt, normative: (
+                    receipt["allowed_evidence"]["request_injection"]["source_kinds"].append("self_attested"),
+                    normative.__setitem__("allowed_evidence", receipt["allowed_evidence"]),
+                ),
             }
             for name, mutate in mutations.items():
                 with self.subTest(mutation=name):
@@ -629,6 +819,12 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 "request_injection_evidence": {
                     **self.valid_receipt()["request_injection_evidence"],
                     "source_kind": "model_alias",
+                }
+            },
+            "self attested source": {
+                "request_injection_evidence": {
+                    **self.valid_receipt()["request_injection_evidence"],
+                    "source_kind": "self_attested",
                 }
             },
             "mutated request digest": {
