@@ -9,14 +9,22 @@ stdlib tool `tools/seeds-launcher.mjs`; first run its explicit bootstrap mode fr
 distribution checkout:
 
 ```text
-<exact-node-root>/bin/node tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>
+<exact-node-22.22.3-root>/bin/node tools/seeds-launcher.mjs bootstrap --distribution <exact-clean-git-root>
 ```
 
-Bootstrap alone runs `mise --locked install`, then consumes exact roots returned by
-`mise --no-config where` for Node `22.22.3`, Bun `1.3.10`, and
-`npm:@os-eco/seeds-cli@0.5.14`. It validates the version, platform layout, package name/version,
-separator-contained `sd` bin entry, prohibited package Bun/TypeScript/macro/preload controls, and
-a trusted owned empty Bun config. It hashes the reviewed distribution tree, distribution commit,
+The launcher itself must be executing as Node `22.22.3`. The distribution must be an exact clean Git
+root: its argument must equal `git rev-parse --show-toplevel`, and `HEAD`, index, tracked
+working tree, untracked files, and ignored files must resolve to one exact clean commit tree; nested paths and any live-tree addition or edit
+fail before acquisition. Bootstrap alone runs `mise --locked install` with the root's reviewed
+`mise.toml` and adjacent `mise.lock` as the only config. It uses private state-owned HOME, mise
+data/cache, and two distinct empty npmrc files; pins the official npm registry and npm backend;
+disables hooks/config environment; and ignores ambient HOME, npmrc/registry variables, and mise
+config/data/cache variables. It then consumes exact roots returned by `mise --no-config where` for
+Node `22.22.3`, Bun `1.3.10`, and `npm:@os-eco/seeds-cli@0.5.14`. It validates the version, platform
+layout, package name/version, separator-contained `sd` bin entry, and package controls. The released
+package's string `engines.bun` compatibility requirement is benign; Bun config, TypeScript config,
+macro, preload, and other actual execution-control forms remain forbidden. It creates a trusted
+owned empty Bun config and hashes the reviewed distribution tree, exact Git commit and tree,
 `mise.toml`, `mise.lock`, every tool tree, package metadata, entry, Git binary, and trusted configs,
 then atomically publishes an active versioned receipt under platform state while retaining the
 preceding receipt for rollback.
@@ -32,9 +40,9 @@ seeds-launcher.mjs inspect --target <target> <args...>
 ```
 
 `inspect` never installs, calls mise, acquires from a network, discovers ambient tools, repairs a
-receipt, or reads target package controls. It validates only the active receipt and current hashes,
-then permits precisely `--version`, `prime`, `ready [--format json]`, and
-`blocked [--format json]`. Other forms fail before Bun. Exact Node uses `shell:false` solely as
+receipt, or reads target package controls. The process must itself be exact Node `22.22.3`; it
+validates only the active receipt and current hashes, then permits precisely `--version`, `prime`,
+`ready [--format json]`, and `blocked [--format json]`. Other forms fail before Bun. Exact Node uses `shell:false` solely as
 an argv-safe wrapper for the exact absolute Bun executable and exact entry, with target as cwd.
 Bun uses `--config=<trusted-empty-file>`, `--no-env-file`, and `--no-install`. Its environment is
 an allowlist: `PATH` contains only the separately resolved recorded Git directory, and Git system

@@ -146,10 +146,16 @@ start, or enable cmux or tmux merely to use this bundle.
 ## Install and run the bundle
 
 **Mise 2026.4.27 or newer is the only bootstrap prerequisite.** The flagship skill ships the
-portable Node-stdlib `tools/seeds-launcher.mjs`. From a reviewed distribution checkout, run its
-explicit `bootstrap --distribution <distribution-root>` mode under exact Node; bootstrap alone runs
-reviewed `mise --locked install`, resolves exact config-free Node `22.22.3`, Bun `1.3.10`, and
-Seeds `npm:@os-eco/seeds-cli@0.5.14` roots, and atomically publishes an active tuple receipt.
+portable Node-stdlib `tools/seeds-launcher.mjs`. From an exact clean Git distribution root, run its
+explicit `bootstrap --distribution <distribution-root>` mode under Node `22.22.3`; both bootstrap
+and inspect reject any other executing Node. Bootstrap rejects nested, staged, dirty, untracked, or
+ignored distribution content, then alone runs reviewed `mise --locked install`. It isolates HOME,
+mise config/data/cache, hooks, npmrc, and registry selection from ambient values; only the reviewed
+root `mise.toml`/adjacent lock, fixed official npm registry, npm backend, and private empty configs
+select acquisition. It resolves exact config-free Node `22.22.3`, Bun `1.3.10`, and Seeds
+`npm:@os-eco/seeds-cli@0.5.14` roots, accepts the released package's benign string `engines.bun`
+compatibility metadata while rejecting actual config/macro/preload controls, and atomically
+publishes an exact Git commit/tree and tool-hash receipt.
 The Seeds lock proves the exact version and npm backend, not tarball or transitive dependency integrity. Neither that claim nor the receipt
 closes a same-UID TOCTOU race between validation and execution. Git, supported trust behavior,
 repository gates, and any selected adapter remain runtime-readiness capabilities, not additional
@@ -167,7 +173,7 @@ Bootstrap the repository and inspect available lifecycle tasks:
 
 ```bash
 mise -C <distribution-root> tasks
-<exact-node-root>/bin/node <installed-flagship>/tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>
+<exact-node-22.22.3-root>/bin/node <installed-flagship>/tools/seeds-launcher.mjs bootstrap --distribution <exact-clean-git-root>
 ```
 
 After explicit bootstrap, Seeds operations from any target use `inspect --target <target>` against

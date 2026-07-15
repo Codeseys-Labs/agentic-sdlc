@@ -37,6 +37,8 @@ const SEEDS_TOOL = `npm:@os-eco/seeds-cli@${SEEDS_VERSION}`;
 const SEEDS_PACKAGE = '@os-eco/seeds-cli';
 const SEEDS_BIN = 'sd';
 const TOOL_NAMES = Object.freeze({ node: `node@${NODE_VERSION}`, bun: `bun@${BUN_VERSION}`, seeds: SEEDS_TOOL });
+const NPM_REGISTRY = 'https://registry.npmjs.org/';
+const MISE_CONFIG_SENTINEL = '__agentic_sdlc_reviewed_config_only__';
 const FORBIDDEN_PACKAGE_KEYS = new Set(['bun', 'bunfig', 'tsconfig', 'jsconfig', 'macro', 'macros', 'preload']);
 const FORBIDDEN_PACKAGE_FILES = new Set(['bunfig.toml', 'bunfig.json', 'tsconfig.json', 'jsconfig.json']);
 const HELP = 'usage: seeds-launcher.mjs bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json])';
@@ -65,7 +67,7 @@ function realDirectory(path, label) {
     fail(`${label} is unavailable: ${path}`);
   }
   if (node.isSymbolicLink() || !node.isDirectory()) fail(`${label} must be a real directory: ${path}`);
-  return realpathSync(path);
+  return process.platform === 'win32' ? realpathSync.native(path) : realpathSync(path);
 }
 
 function realRegularFile(path, label) {
@@ -187,9 +189,8 @@ function findExecutable(name, label) {
   fail(`${label} is unavailable on PATH`);
 }
 
-function runMise(args, cwd) {
-  const mise = findExecutable('mise', 'mise');
-  const completed = spawnSync(mise, args, { cwd, encoding: 'utf8', shell: false, windowsHide: true });
+function runMise(mise, args, cwd, env) {
+  const completed = spawnSync(mise, args, { cwd, encoding: 'utf8', shell: false, windowsHide: true, env });
   if (completed.error || completed.status !== 0) fail(`mise ${args.join(' ')} failed: ${(completed.stderr || completed.error?.message || '').trim()}`);
   return (completed.stdout || '').trim();
 }
@@ -205,10 +206,14 @@ function parsePackage(path) {
   return parsed;
 }
 
-function packageHasExecutionControl(value) {
-  if (Array.isArray(value)) return value.some(packageHasExecutionControl);
+function packageHasExecutionControl(value, ancestors = []) {
+  if (Array.isArray(value)) return value.some((nested) => packageHasExecutionControl(nested, ancestors));
   if (!value || typeof value !== 'object') return false;
-  return Object.entries(value).some(([key, nested]) => FORBIDDEN_PACKAGE_KEYS.has(key.toLowerCase()) || packageHasExecutionControl(nested));
+  return Object.entries(value).some(([key, nested]) => {
+    const lowered = key.toLowerCase();
+    const compatibilityBun = lowered === 'bun' && ancestors.length === 1 && ancestors[0] === 'engines' && typeof nested === 'string';
+    return (!compatibilityBun && FORBIDDEN_PACKAGE_KEYS.has(lowered)) || packageHasExecutionControl(nested, [...ancestors, lowered]);
+  });
 }
 
 function packageRootFor(seedsRoot) {
@@ -351,27 +356,83 @@ function receiptDirectory() {
   return path;
 }
 
-function gitCommit(distribution) {
+function capture(git, args, message) {
+  const completed = spawnSync(git, args, { encoding: 'utf8', shell: false, windowsHide: true, env: {} });
+  if (completed.error || completed.status !== 0) fail(message);
+  return (completed.stdout || '').trim();
+}
+
+function samePath(left, right) {
+  if (process.platform === 'win32') return left.toLowerCase() === right.toLowerCase();
+  return left === right;
+}
+
+function gitDistribution(distribution) {
   const git = findExecutable('git', 'Git');
-  const completed = spawnSync(git, ['-C', distribution, 'rev-parse', '--verify', 'HEAD^{commit}'], { encoding: 'utf8', shell: false, windowsHide: true });
-  if (completed.error || completed.status !== 0) fail('reviewed distribution must have an exact Git commit');
-  return { path: git, hash: hashFile(git), commit: completed.stdout.trim() };
+  const root = realDirectory(capture(git, ['-C', distribution, 'rev-parse', '--show-toplevel'], 'reviewed distribution must be an exact Git root'), 'Git root');
+  if (!samePath(root, distribution)) fail('reviewed distribution must equal its exact Git root');
+  const commit = capture(git, ['-C', distribution, 'rev-parse', '--verify', 'HEAD^{commit}'], 'reviewed distribution must have an exact Git commit');
+  const expectedTree = capture(git, ['-C', distribution, 'rev-parse', '--verify', 'HEAD^{tree}'], 'reviewed distribution must have an exact Git tree');
+  const indexTree = capture(git, ['-C', distribution, 'write-tree'], 'reviewed distribution index must match its exact Git tree');
+  if (indexTree !== expectedTree) fail('reviewed distribution must have a clean Git tree and index');
+  const tracked = spawnSync(git, ['-C', distribution, 'diff', '--quiet', 'HEAD', '--'], { shell: false, windowsHide: true, env: {} });
+  if (tracked.error || tracked.status !== 0) fail('reviewed distribution must have a clean Git tree and index');
+  const untracked = capture(git, ['-C', distribution, 'ls-files', '--others'], 'cannot enumerate untracked distribution files');
+  if (untracked) fail('reviewed distribution must contain no untracked or ignored files');
+  return { path: git, hash: hashFile(git), commit, tree: expectedTree };
+}
+
+function bootstrapPath(mise) {
+  const platform = process.platform === 'win32'
+    ? [join(resolve(process.env.SystemRoot || 'C:\\Windows'), 'System32'), resolve(process.env.SystemRoot || 'C:\\Windows')]
+    : ['/usr/bin', '/bin'];
+  return [dirname(mise), ...platform].join(process.platform === 'win32' ? ';' : ':');
+}
+
+function bootstrapEnvironment(distribution, directory, mise) {
+  const home = join(directory, 'bootstrap-home');
+  ensurePrivateDirectory(home);
+  const userconfig = trustedEmptyFile(directory, 'bootstrap-user.npmrc');
+  const globalconfig = trustedEmptyFile(directory, 'bootstrap-global.npmrc');
+  return Object.freeze({
+    HOME: home,
+    USERPROFILE: home,
+    PATH: bootstrapPath(mise),
+    MISE_DATA_DIR: join(directory, 'bootstrap-mise-data'),
+    MISE_CACHE_DIR: join(directory, 'bootstrap-mise-cache'),
+    MISE_GLOBAL_CONFIG_FILE: join(distribution, 'mise.toml'),
+    MISE_SYSTEM_CONFIG_FILE: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    MISE_OVERRIDE_CONFIG_FILENAMES: MISE_CONFIG_SENTINEL,
+    MISE_NO_ENV: '1',
+    MISE_NO_HOOKS: '1',
+    MISE_NPM_PACKAGE_MANAGER: 'npm',
+    NPM_CONFIG_REGISTRY: NPM_REGISTRY,
+    NPM_CONFIG_USERCONFIG: userconfig,
+    NPM_CONFIG_GLOBALCONFIG: globalconfig,
+    NPM_CONFIG_STRICT_SSL: 'true',
+  });
+}
+
+function exactLauncherNode() {
+  if (process.versions.node !== NODE_VERSION) fail(`launcher Node version mismatch: expected ${NODE_VERSION}, got ${process.versions.node}`);
 }
 
 function bootstrap(distributionArgument) {
   const distribution = realDirectory(distributionArgument, 'reviewed distribution');
   const miseToml = containedFile(distribution, join(distribution, 'mise.toml'), 'reviewed mise.toml');
   const miseLock = containedFile(distribution, join(distribution, 'mise.lock'), 'reviewed mise.lock');
-  const git = gitCommit(distribution);
-  runMise(['--locked', 'install'], distribution);
+  const git = gitDistribution(distribution);
+  const directory = receiptDirectory();
+  const mise = findExecutable('mise', 'mise');
+  const miseEnvironment = bootstrapEnvironment(distribution, directory, mise);
+  runMise(mise, ['--locked', 'install'], miseEnvironment.HOME, miseEnvironment);
   const roots = {
-    node: runMise(['--no-config', 'where', TOOL_NAMES.node], distribution),
-    bun: runMise(['--no-config', 'where', TOOL_NAMES.bun], distribution),
-    seeds: runMise(['--no-config', 'where', TOOL_NAMES.seeds], distribution),
+    node: runMise(mise, ['--no-config', 'where', TOOL_NAMES.node], miseEnvironment.HOME, miseEnvironment),
+    bun: runMise(mise, ['--no-config', 'where', TOOL_NAMES.bun], miseEnvironment.HOME, miseEnvironment),
+    seeds: runMise(mise, ['--no-config', 'where', TOOL_NAMES.seeds], miseEnvironment.HOME, miseEnvironment),
   };
   if (!Object.values(roots).every((value) => isAbsolute(value))) fail('mise must return absolute exact tool roots');
   const tuple = validateTuple(roots);
-  const directory = receiptDirectory();
   const bunfig = trustedEmptyFile(directory, 'trusted-bunfig.toml');
   const gitconfig = trustedEmptyFile(directory, 'trusted-gitconfig');
   const receipt = {
@@ -387,7 +448,7 @@ function bootstrap(distributionArgument) {
       trusted: { bunfig, gitconfig },
     },
     hashes: {
-      distribution: { tree: distributionTreeHash(distribution), miseToml: hashFile(miseToml), miseLock: hashFile(miseLock), commit: hashBytes(Buffer.from(git.commit, 'utf8')) },
+      distribution: { tree: distributionTreeHash(distribution), gitTree: git.tree, miseToml: hashFile(miseToml), miseLock: hashFile(miseLock), commit: hashBytes(Buffer.from(git.commit, 'utf8')) },
       node: treeHash(tuple.nodeRoot),
       bun: treeHash(tuple.bunRoot),
       seeds: treeHash(tuple.seedsRoot),
@@ -497,6 +558,7 @@ function parse(argv) {
 }
 
 try {
+  exactLauncherNode();
   const command = parse(process.argv.slice(2));
   if (command.mode === 'bootstrap') bootstrap(command.distribution);
   else inspect(command.target, command.args);

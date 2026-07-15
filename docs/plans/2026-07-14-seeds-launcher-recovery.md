@@ -1,154 +1,77 @@
-# Seeds Launcher Recovery Implementation Plan
+# Receipt-Based Seeds Launcher Recovery Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Repair the exact Seeds launcher so acquisition is isolated from target-controlled and ambient npm configuration, while native Windows and POSIX safely execute the exact mise-provided executable without a shell.
+**Goal:** Ship the portable receipt launcher with fail-closed acquisition, distribution, package, interpreter, authority-scanner, and native-Windows contracts.
 
-**Architecture:** Retain the Bash preflight as the POSIX implementation, but delegate the runtime command to the exact pinned Node 22.22.3 executable. Node locates the exact Seeds executable from mise's injected PATH, changes child cwd to the canonical target, and spawns it with an argv array and `shell: false`; its Windows branch invokes `cmd.exe` with the exact `sd.cmd` path because Windows cannot directly spawn `.cmd` with no shell. POSIX creates neutral state under fixed `/var/tmp` and supplies two separate empty `.npmrc` files. The Windows runbook uses the OS temp root, two separate empty config files, and an equivalent Node trampoline; neither platform persists variables/configuration.
+**Architecture:** The installed Node-stdlib launcher has two modes. `bootstrap` is the only acquiring mode: exact Node 22.22.3 admits one exact clean Git distribution, invokes the reviewed locked mise config in an isolated acquisition environment, validates the exact Node/Bun/Seeds tuple, and writes a versioned hash receipt. `inspect` is offline and receipt-only: exact Node 22.22.3 validates current hashes and executes the exact absolute Bun/package entry with a finite read-only grammar and allowlisted runtime environment.
 
-**Tech Stack:** Bash, exact Node 22.22.3, mise 2026.4.27+, Python unittest, native Windows PowerShell 5.1.
+**Tech Stack:** Node.js 22.22.3 stdlib, mise 2026.4.27+, Bun 1.3.10, @os-eco/seeds-cli 0.5.14, Python 3.12 unittest, native Windows and POSIX.
 
 ---
 
-### Task 1: Add focused launcher regression tests
+### Task 1: Reproduce the released-package and admission defects
 
 **Files:**
-- Modify: `tests/test_preflight_capabilities.py:538-825`
-- Test: `tests/test_preflight_capabilities.py`
+- Modify: `tests/test_seeds_launcher.py`
+- Create: `tests/fixtures/seeds-cli-0.5.14/package.json`
 
-**Step 1: Write the failing tests**
+**Steps:**
+1. Copy the byte-for-byte `package.json` from the real mise-installed `@os-eco/seeds-cli@0.5.14` into the fixture directory.
+2. Make launcher fixtures consume that metadata so benign `engines.bun` is exercised.
+3. Add failing executable cases for ambient npm/mise config isolation, nested distribution roots, dirty/staged/untracked/ignored trees, and a non-22.22.3 launcher process.
+4. Run `mise exec uv@0.11.17 -- uv run --python 3.12.11 python -m unittest tests.test_seeds_launcher` and verify each new case fails for the intended missing control.
 
-Extend the fake mise fixture to record neutral directory/config paths and run a supplied Node trampoline. Add tests that require:
-
-```python
-self.assertTrue(call["mise_cd"].startswith("/var/tmp/agentic-sdlc-seeds."))
-self.assertNotIn("TMPDIR", call["environment"])
-self.assertNotEqual(call["npm_environment"]["NPM_CONFIG_USERCONFIG"], call["npm_environment"]["NPM_CONFIG_GLOBALCONFIG"])
-self.assertEqual(Path(call["npm_environment"]["NPM_CONFIG_USERCONFIG"]).read_text(), "")
-self.assertEqual(Path(call["npm_environment"]["NPM_CONFIG_GLOBALCONFIG"]).read_text(), "")
-```
-
-Add cases for hostile `TMPDIR`/`TEMP`, inherited mixed-case `NPM_CONFIG_*`, every exit/failure cleanup path, and arguments with spaces/metacharacters. Require the fake exact launcher to receive cwd and argv unchanged, without `sh -c`.
-
-Add a documentation test requiring the fixed POSIX `/var/tmp` boundary and the Windows `[IO.Path]::GetTempPath()` boundary, two distinct empty config files, an explicit cleanup `finally`, `sd.cmd`, and Node's `shell: false` execution.
-
-**Step 2: Run test to verify it fails**
-
-Run:
-
-```bash
-mise exec uv@0.11.17 -- uv run --python 3.12.11 python -m unittest tests.test_preflight_capabilities.PreflightCapabilityTests tests.test_preflight_capabilities.SeedsDocumentationContractTests
-```
-
-Expected: FAIL because the current launcher inherits `TMPDIR`, uses `/dev/null` twice, retains `sh -c`, and does not guarantee cleanup on signals.
-
-### Task 2: Implement the minimal POSIX launcher repair
+### Task 2: Harden bootstrap and interpreter admission
 
 **Files:**
-- Modify: `scripts/check-agentic-sdlc-prereqs.sh:12-79`
-- Test: `tests/test_preflight_capabilities.py`
+- Modify: `skills/agentic-sdlc-orchestrator/tools/seeds-launcher.mjs`
+- Test: `tests/test_seeds_launcher.py`
 
-**Step 1: Create fixed neutral resources**
+**Steps:**
+1. Permit only a string-valued `engines.bun` compatibility declaration; retain recursive rejection of Bun config, TypeScript config, macro, and preload controls.
+2. Require `process.versions.node === 22.22.3` in bootstrap and inspect.
+3. Require the distribution argument to equal the physical Git top level and require `HEAD` tree, index, tracked worktree, untracked, and ignored surfaces to be exact and clean before mise runs.
+4. Resolve mise once, then invoke `mise --locked install` with only the reviewed root config/lock plus private HOME, data/cache, distinct empty npmrc files, fixed official registry/npm backend, disabled hooks/config environment, and a finite system/mise PATH. Resolve exact tuple roots with `mise --no-config where` under the same environment.
+5. Record the exact Git commit and tree along with existing typed hashes.
+6. Run the focused launcher tests and a real clean Linux bootstrap followed by offline `inspect --version`; expect `0.5.14`.
 
-Create the neutral parent only with `/var/tmp`, not `TMPDIR`, `TEMP`, the target, or target ancestry. Use `mktemp -d /var/tmp/agentic-sdlc-seeds.XXXXXX`, `umask 077`, and two distinct empty files beneath that neutral directory for `NPM_CONFIG_USERCONFIG` and `NPM_CONFIG_GLOBALCONFIG`.
-
-**Step 2: Install unconditional cleanup before acquisition**
-
-Install a scoped cleanup trap for `EXIT`, `HUP`, `INT`, and `TERM` immediately after creating the neutral resources. Capture and return the child exit status after cleanup. Restore caller traps/avoid trapping when sourced so the launcher does not change the source shell's later behavior.
-
-**Step 3: Replace shell command execution with Node trampoline**
-
-Pass a small literal Node program after `--` to `mise exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14`. The program receives the target and original args separately, finds the exact `sd` or `sd.cmd` by checking only mise-provided PATH entries, and `spawn`s it with `cwd: target`, `shell: false`, inherited stdio, and `windowsHide: true`.
-
-On Windows, invoke `process.env.ComSpec` with `['/d', '/s', '/c', exactSdCmd, ...args]`, still under `shell: false`; this is the documented no-shell Node path for `.cmd` files and retains array boundaries. Propagate the code; for a terminating child signal, re-signal the trampoline so the parent observes failure. Explicitly handle spawn failure.
-
-**Step 4: Run focused test to verify it passes**
-
-Run the command from Task 1.
-
-Expected: PASS.
-
-### Task 3: Correct portable execution documentation
+### Task 3: Close plural authority and native-Windows test gaps
 
 **Files:**
-- Modify: `skills/agentic-sdlc-orchestrator/SKILL.md:27-45`
-- Modify: `skills/agentic-sdlc-orchestrator/references/seeds-worktrees.md:4-69`
-- Modify: `README.md:150-168`
-- Test: `tests/test_preflight_capabilities.py`
+- Modify: `tests/test_preflight_capabilities.py`
+- Modify: `tests/test_seeds_launcher.py`
 
-**Step 1: Document POSIX root boundary**
+**Steps:**
+1. Add a failing scanner fixture for Seeds issues, items, records, states, queues, and queue-states.
+2. Extend only the finite Seeds object grammar to accept singular and plural forms, retaining existing topic false-positive exclusions and authority exceptions.
+3. Add an executable `os.name == "nt"` fixture that runs real native Node/mise/Git, bootstraps the locked tuple under hostile ambient config, inspects `--version`, and asserts native receipt paths/layout.
+4. Run the focused scanner and launcher suites on Linux and native Windows.
 
-State that POSIX neutral state is created directly beneath fixed `/var/tmp`, never inherited `TMPDIR`/`TEMP`, never the target, and never target-controlled ancestry. State that both user and global npm config paths are distinct empty files inside it.
-
-**Step 2: Document native Windows boundary**
-
-State precisely that Windows uses `[IO.Path]::GetTempPath()`—the OS-selected local temporary root independent of the target—and a random private directory directly below it. State the target and all its ancestors are excluded. Create two distinct `[IO.Path]::GetTempFileName()` empty files under the private neutral directory; do not reuse a path.
-
-**Step 3: Document exact trampoline and cleanup rule**
-
-Replace every `sh -c` example with the Node 22.22.3 trampoline contract. Explain native Windows executes the exact `sd.cmd` via `ComSpec` as an argv array while Node's `shell` option remains false. Declare cleanup on success, failure, and `HUP`/`INT`/`TERM`, and keep the honest npm tarball/transitive integrity limitation unchanged.
-
-**Step 4: Run documentation tests**
-
-Run the focused command from Task 1.
-
-Expected: PASS.
-
-### Task 4: Run real isolated cross-platform probes and final gates
+### Task 4: Align executable documentation
 
 **Files:**
-- Verify only: repository files
+- Modify: `README.md`
+- Modify: `AGENTS.md`
+- Modify: `skills/agentic-sdlc-orchestrator/SKILL.md`
+- Modify: `skills/agentic-sdlc-orchestrator/references/seeds-worktrees.md`
+- Replace: `docs/plans/2026-07-14-seeds-launcher-recovery.md`
 
-**Step 1: Run fake mise mutation tests**
+**Steps:**
+1. Document exact Node 22.22.3 as the executing process in both modes.
+2. Document exact clean Git root/tree binding and rejection of nested/dirty/staged/untracked/ignored distributions.
+3. Document isolated reviewed mise/npm acquisition and the narrow `engines.bun` compatibility exception.
+4. Keep the honest lock-integrity and same-UID TOCTOU limitations unchanged.
+5. Describe the receipt launcher only; remove the superseded Bash temp trampoline, ComSpec `sd.cmd`, and transient wrapper design.
 
-Run the focused unittest classes. Confirm fake mise observes two different empty configs, only reviewed npm variables, `/var/tmp` acquisition, no inherited `NPM_CONFIG_*`, exact tool tuple, target cwd, and preserved hostile arguments.
-
-**Step 2: Run cold Linux real mise/npm probe**
-
-Create an external temporary target with a target `.npmrc`, ancestor `.npmrc`, and hostile inherited `NPM_CONFIG_*`. Set fresh `MISE_DATA_DIR`, `MISE_CACHE_DIR`, and `HOME`; invoke the launcher against the target. Confirm version `0.5.14`, npm acquisition cannot read target/ancestor/ambient registry, exactly two empty config files are passed, and all probe resources are removed.
-
-**Step 3: Run cold native Windows PowerShell real mise/npm probe**
-
-Invoke `powershell.exe -NoProfile -NonInteractive` directly—not Git Bash/MSYS—with the equivalent isolated target/ancestor/ambient registries and fresh mise directories. Confirm `sd.cmd` resolves from exact mise data, `--version` returns `0.5.14`, config files are distinct and empty, target cwd/arguments survive, and cleanup completes. Do not modify the known foreign installer-state record; report it if encountered.
-
-**Step 4: Run repository gates**
-
-Run:
-
-```bash
-mise run check
-./scripts/install-skill-bundle.sh self-test
-```
-
-Run native Windows:
-
-```powershell
-mise run check
-```
-
-Expected: all applicable gates pass. If native Windows finds an invalid foreign installer-state record, preserve it and report it rather than mutating it.
-
-### Task 5: Commit the verified successor locally
+### Task 5: Verify and commit one cumulative successor
 
 **Files:**
-- Stage only: changed launcher, tests, and execution documentation
+- Verify all changed files above.
 
-**Step 1: Review scope**
-
-Run `git status --short`, `git diff --check`, and `git diff --stat`. Confirm no policy/config/identity/remote files and no foreign installer-state changes are staged.
-
-**Step 2: Create local commit**
-
-Commit using the existing concise Conventional Commit style:
-
-```text
-fix: harden Seeds execution trampoline
-
-Use neutral config isolation and the pinned Node launcher to avoid shell and target-config execution paths.
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-```
-
-**Step 3: Verify commit**
-
-Run `git log -1 --oneline` and `git status --short`. Do not push or contact remotes.
+**Steps:**
+1. Run focused launcher/scanner tests.
+2. Run the authoritative Linux `mise run check` and `./scripts/install-skill-bundle.sh self-test`.
+3. Run native Windows `mise run check` and confirm the executable Windows launcher fixture is not skipped.
+4. Run `git diff --check`, review the cumulative diff and exact scope, and confirm no trust/config/outward mutation.
+5. Commit locally with a concise Conventional Commit subject and `Co-Authored-By: Claude <noreply@anthropic.com>` trailer. Do not push or merge.

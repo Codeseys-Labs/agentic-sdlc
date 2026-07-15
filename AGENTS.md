@@ -53,15 +53,20 @@ as the router.
 
 ## Installing this bundle
 
-Mise 2026.4.27+ is the only bootstrap prerequisite. From a reviewed distribution checkout, run
+Mise 2026.4.27+ is the only bootstrap prerequisite. From an exact clean Git distribution root, run
 the installed flagship `tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>`
-under exact Node. Bootstrap explicitly invokes reviewed `mise --locked install`, resolves only
+under Node 22.22.3. Bootstrap and inspect both reject any other executing Node. Bootstrap rejects
+nested, staged, dirty, untracked, or ignored distribution content, then explicitly invokes reviewed
+`mise --locked install` with isolated HOME, mise config/data/cache, hooks, npmrc files, and fixed
+official registry/npm backend. Ambient npm/mise config cannot select acquisition. It resolves only
 config-free exact roots, validates Node 22.22.3, Bun 1.3.10, and the
-`npm:@os-eco/seeds-cli@0.5.14` package/bin/layout and controls, then atomically records its hashes
-and a prior receipt for rollback. Inspect is separate and never installs, networks, invokes mise,
-or repairs: it admits only an active receipt and exact current hashes, accepts only `--version`,
-`prime`, `ready [--format json]`, and `blocked [--format json]`, then Node starts the exact
-absolute Bun/entry with `shell:false`, a trusted empty Bun config, and no ambient runtime options.
+`npm:@os-eco/seeds-cli@0.5.14` package/bin/layout; the released package's string `engines.bun` is
+benign while actual config/macro/preload controls remain forbidden. It then atomically records the
+exact Git commit/tree, tool hashes, and a prior receipt for rollback. Inspect is separate and never
+installs, networks, invokes mise, or repairs: it admits only an active receipt and exact current
+hashes, accepts only `--version`, `prime`, `ready [--format json]`, and
+`blocked [--format json]`, then Node starts the exact absolute Bun/entry with `shell:false`, a
+trusted empty Bun config, and no ambient runtime options.
 The child environment is an allowlist, including a PATH limited to a separately recorded Git
 directory and portable Git config isolation. Target/ambient Bun, Node, npm, mise, and unreviewed
 Seeds debug controls have no effect. The receipt detects ordinary drift, not a same-UID TOCTOU
