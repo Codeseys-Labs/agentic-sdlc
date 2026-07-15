@@ -655,6 +655,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
             )
             self.assertTrue(os.path.samefile(receipt["tuple"]["git"]["path"], recorded_git))
+            self.assertEqual(receipt["tuple"]["git"]["hash"], sha256(recorded_git.read_bytes()).hexdigest())
             recorded_git_log.unlink(missing_ok=True)
             seeds_dir = distribution / ".seeds"
             seeds_dir.mkdir()
@@ -746,6 +747,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(direct_hostile.returncode, 0, direct_hostile.stderr)
+            self.assertEqual(direct_hostile.stdout, ".git\n")
             self.assertTrue(hostile_marker.exists(), "the target-local hostile executable must be runnable")
             hostile_marker.unlink()
             recorded_git_log.unlink()
@@ -818,6 +820,25 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 check=False,
                 timeout=60,
             )
+            receipt_git_failure = subprocess.run(
+                [
+                    receipt["tuple"]["git"]["path"],
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "core.hooksPath=NUL",
+                    "rev-parse",
+                    "--git-dir",
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                env=adapter_environment,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(git_failure.returncode, receipt_git_failure.returncode)
+            self.assertEqual(git_failure.stderr, receipt_git_failure.stderr)
             self.assertNotEqual(git_failure.returncode, 0)
             self.assertIn("not a git repository", git_failure.stderr)
             hostile_git.unlink()
