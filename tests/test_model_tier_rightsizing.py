@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import tempfile
 import tomllib
@@ -26,51 +27,32 @@ CONSUMERS = (
 POLICY_SURFACES = CONSUMERS + (ROUTER, CALIBRATION)
 
 RUNTIME_ASSIGNMENT_FIELDS = (
+    "schema_version",
     "requested_model_id",
     "requested_effort",
     "requested_context_form",
     "request_injection_status",
-    "request_injection_source",
     "request_injection_evidence",
     "resolution_state",
     "resolved_provider",
     "resolved_model_id",
-    "model_readback_status",
     "model_identity_basis",
-    "model_readback_source",
+    "model_readback_status",
     "model_readback_evidence",
     "effort_readback_status",
-    "effort_readback_source",
     "effort_readback_evidence",
     "context_readback_status",
-    "context_readback_source",
     "context_readback_evidence",
 )
 
-GLOBAL_RUNTIME_ASSIGNMENT_FIELDS = (
-    "requested_model_id",
-    "requested_effort",
-    "requested_context_form",
-    "request_injection_status",
-    "request_injection_source",
-    "request_injection_evidence",
-    "resolution_state",
-    "resolved_provider",
-    "resolved_model_id",
-    "model_readback_status",
-    "model_readback_source",
-    "model_readback_evidence",
-    "effort_readback_status",
-    "effort_readback_source",
-    "effort_readback_evidence",
-    "context_readback_status",
-    "context_readback_source",
-    "context_readback_evidence",
-)
+GLOBAL_RUNTIME_ASSIGNMENT_FIELDS = RUNTIME_ASSIGNMENT_FIELDS
 
 GLOBAL_ROLE_SURFACES = tuple(sorted((ROOT / "agents" / "claude").glob("sdlc-*.md"))) + tuple(
     sorted((ROOT / "agents" / "codex").glob("sdlc-*.toml"))
 )
+RESEARCH_ROLE_SURFACES = tuple(sorted((ROOT / "agents" / "codex" / "research").glob("*.toml")))
+RECEIPT_POLICY = ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+CANONICAL_RECEIPT_FIELDS = tuple(json.loads(RECEIPT_POLICY.read_text(encoding="utf-8"))["canonical_receipt_fields"])
 
 GLOBAL_RUNTIME_CONSUMERS = (
     ROOT / "commands" / "sdlc-wave.md",
@@ -403,22 +385,29 @@ def _assert_global_runtime_role_contract(text: str) -> None:
         contract = text
     for field in GLOBAL_RUNTIME_ASSIGNMENT_FIELDS:
         assert field in contract, f"missing runtime assignment field: {field}"
+    assert "canonical v1 top-level shape is exactly" in contract
+    assert "validated only for canonical internal consistency" in contract
+    assert "external authenticated harness is the sole spawn and admission authority" in contract
     assert "conductor-supplied certified `RuntimeAssignment`" in contract
     assert re.search(r"(?is)resolution_state.{0,80}(?:must equal|must be).{0,30}resolved", contract)
     assert re.search(r"(?is)Requested, inherited, or unresolved.{0,180}SeedProposal", contract)
     assert re.search(r"(?is)unverified model identity.{0,180}SeedProposal", contract)
-    assert re.search(r"(?m)^(?:- )?`?resolved_provider`?: [^\n]*non-unknown[^\n]+unknown is forbidden[^\n]*$", contract)
-    assert re.search(r"(?m)^(?:- )?`?resolved_model_id`?: [^\n]*non-unknown[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?resolved_provider`?: [^\n]*provider[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?resolved_model_id`?: [^\n]*exact model ID[^\n]*$", contract)
     assert re.search(r"(?m)^(?:- )?`?request_injection_status`?: [^\n]*verified[^\n]*$", contract)
     assert re.search(r"(?m)^(?:- )?`?model_readback_status`?: [^\n]*verified[^\n]*$", contract)
     assert re.search(r"(?m)^(?:- )?`?effort_readback_status`?: [^\n]*verified[^\n]*unavailable[^\n]*$", contract)
     assert re.search(r"(?m)^(?:- )?`?context_readback_status`?: [^\n]*verified[^\n]*unavailable[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?model_readback_evidence`?: [^\n]*closed[^\n]*cross-field[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?effort_readback_evidence`?: [^\n]*closed[^\n]*cross-field[^\n]*$", contract)
+    assert re.search(r"(?m)^(?:- )?`?context_readback_evidence`?: [^\n]*closed[^\n]*cross-field[^\n]*$", contract)
     assert "stop before spawn" in contract
-    assert "inject the exact requested model and effort" in contract
+    assert "Exact model and effort request injection is mandatory and immutable" in contract
     assert re.search(r"(?is)request injection.{0,100}(?:immutable|verified)", contract)
-    assert re.search(r"(?is)effective effort.{0,120}(?:unavailable|not exposed)", contract)
-    assert re.search(r"(?is)effective context.{0,120}(?:unavailable|not exposed)", contract)
-    assert re.search(r"(?is)never copy requested.{0,100}(?:resolved|readback)", contract)
+    assert re.search(r"(?is)effective effort.{0,120}(?:unavailable|not expose)", contract)
+    assert re.search(r"(?is)(?:effective effort and context|effective context).{0,120}(?:unavailable|not expose)", contract)
+    assert re.search(r"(?is)(?:copied requested values|prompt echoes).{0,100}(?:resolution|readback)", contract)
+    assert not re.search(r"\b(?:request_injection|model_readback|effort_readback|context_readback)_source\b", contract)
     _assert_effort_resolution_boundary(contract)
     _assert_no_static_model_selection(text)
     assert not re.search(r"(?i)host (?:configuration|default).{0,80}(?:choose|select|supply).{0,40}model", contract)
@@ -426,48 +415,31 @@ def _assert_global_runtime_role_contract(text: str) -> None:
 
 
 def _assert_global_runtime_consumer_contract(text: str) -> None:
-    for field in (
-        "RuntimeAssignment",
-        "request_injection_status",
-        "request_injection_source",
-        "request_injection_evidence",
-        "resolved_provider",
-        "resolved_model_id",
-        "model_readback_status",
-        "model_readback_source",
-        "model_readback_evidence",
-        "effort_readback_status",
-        "context_readback_status",
-    ):
-        assert field in text, f"missing global runtime consumer field: {field}"
+    assert "RuntimeAssignment" in text
+    assert "receipt" in text.lower()
     assert re.search(r"(?is)requested.{0,80}inherited.{0,80}unresolved.{0,180}stop", text)
-    assert re.search(r"(?is)unverified model[- ]identity.{0,180}stop", text)
-    assert re.search(r"(?is)effort_readback_status.{0,100}(?:verified|unavailable)", text)
-    assert re.search(r"(?is)context_readback_status.{0,100}(?:verified|unavailable)", text)
-    assert re.search(r"(?is)never copy requested.{0,120}(?:resolved|readback)", text)
-    assert not re.search(
-        r"(?is)(?:resolved_effort|resolved_context_form|provider_readback_source|provider_readback_evidence).{0,160}must (?:all )?be non-unknown",
-        text,
-    )
+    assert re.search(r"(?is)(?:unverified\s+model[- ]identity|model[- ]identity.{0,120}unverified).{0,180}stop", text)
+    assert re.search(r"(?is)effort.{0,120}(?:verified|unavailable)", text)
+    assert re.search(r"(?is)context.{0,120}(?:verified|unavailable)", text)
+    assert re.search(r"(?is)(?:never copy requested|copied requested values).{0,120}(?:resolved|readback)", text)
+    assert not re.search(r"\b(?:request_injection|model_readback|effort_readback|context_readback)_source\b", text)
 
 
 def _assert_research_runtime_role_contract(text: str) -> None:
     if text.lstrip().startswith(("name =", "name=")):
-        match = re.search(r'developer_instructions\s*=\s*"""(.*?)"""', text, re.DOTALL)
-        contract = match.group(1) if match else text
+        _assert_global_runtime_role_contract(text)
+        contract = re.search(r'developer_instructions\s*=\s*"""(.*?)"""', text, re.DOTALL)
+        contract = contract.group(1) if contract else text
     else:
         contract = text
     for field in RUNTIME_ASSIGNMENT_FIELDS:
         assert field in contract, f"missing runtime assignment field: {field}"
     assert "conductor-supplied certified `RuntimeAssignment`" in contract
     assert re.search(r"(?is)resolution_state.{0,80}(?:must equal|must be).{0,30}resolved", contract)
-    assert re.search(r"(?is)Exact model and effort request injection is mandatory.{0,80}immutable", contract)
-    assert re.search(r"(?is)(?:may honestly be unavailable only when the exact ID maps unambiguously|source may be unavailable only when an\s+unambiguous exact-ID mapping)", contract)
-    assert re.search(r"(?is)(?:Effective effort or context may honestly be unavailable|effort and context may be honestly unavailable)", contract)
-    assert re.search(r"(?is)(?:never become resolved or readback evidence|requested values never become readback)", contract)
+    assert re.search(r"(?is)(?:Exact model and effort request injection is mandatory|exact model\nand effort request injection is mandatory).{0,80}immutable", contract)
+    assert re.search(r"(?is)Effective effort.{0,80}context.{0,80}(?:unavailable|not expose)", contract)
+    assert re.search(r"(?is)(?:copied requested values|prompt echoes).{0,100}(?:resolution|readback)", contract)
     assert "stop before spawn" in contract
-    assert re.search(r"(?is)inject.{0,80}exact (?:requested|resolved) model and effort", contract)
-    _assert_effort_resolution_boundary(contract)
     assert not re.search(r"(?m)^\s*model\s*=", text)
     assert not re.search(r"(?m)^\s*model_reasoning_effort\s*=", text)
 
@@ -606,6 +578,16 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 )
                 self.assertNotRegex(text, r"(?im)^\s*(?:edit|change|mutate|write)\s+(?:user )?(?:settings|trust)\b")
 
+    def test_all_runtime_role_manifests_share_the_canonical_receipt_projection(self) -> None:
+        self.assertEqual(len(GLOBAL_ROLE_SURFACES), 14)
+        self.assertEqual(len(RESEARCH_ROLE_SURFACES), 17)
+        for path in GLOBAL_ROLE_SURFACES + RESEARCH_ROLE_SURFACES:
+            with self.subTest(role_surface=path):
+                text = path.read_text(encoding="utf-8")
+                for field in CANONICAL_RECEIPT_FIELDS:
+                    self.assertIn(field, text)
+                self.assertNotRegex(text, r"\b(?:request_injection|model_readback|effort_readback|context_readback)_source\b")
+
     def test_all_global_role_manifests_require_one_runtime_assignment_contract(self) -> None:
         self.assertEqual(len(GLOBAL_ROLE_SURFACES), 14)
         for path in GLOBAL_ROLE_SURFACES:
@@ -637,8 +619,8 @@ class ModelTierRightsizingTests(unittest.TestCase):
     def test_runtime_assignment_allows_unavailable_effort_and_context_readback_without_overclaim(self) -> None:
         role = (ROOT / "agents" / "codex" / "sdlc-reviewer.toml").read_text(encoding="utf-8")
         _assert_global_runtime_role_contract(role)
-        self.assertIn("effort_readback_status: verified or unavailable", role)
-        self.assertIn("context_readback_status: verified or unavailable", role)
+        self.assertIn("effort_readback_status`: `verified` or `unavailable`", role)
+        self.assertIn("context_readback_status`: `verified` or `unavailable`", role)
         self.assertNotRegex(role, r"(?is)requested_effort.{0,160}resolved_effort")
         self.assertNotRegex(role, r"(?is)requested_context_form.{0,160}resolved_context_form")
 
@@ -696,8 +678,8 @@ class ModelTierRightsizingTests(unittest.TestCase):
         role = (ROOT / "agents" / "codex" / "research" / "experimentalist.toml").read_text(encoding="utf-8")
         director = (ROOT / "agents" / "codex" / "research" / "research_director.toml").read_text(encoding="utf-8")
         runtime_mutations = {
-            "provider removal": role.replace("- resolved_provider:", "- omitted_provider:", 1),
-            "requested dispatch": role.replace("resolution_state must equal resolved", "resolution_state may equal requested", 1),
+            "provider removal": role.replace("- `resolved_provider`:", "- `omitted_provider`:", 1),
+            "requested dispatch": role.replace("must equal `resolved`", "may equal `requested`", 1),
             "immutable injection removal": role.replace("Exact model and effort request injection is mandatory and immutable", "Request injection is optional", 1),
             "static model": role.replace('sandbox_mode = "', 'model = "gpt-5.6-terra"\nsandbox_mode = "', 1),
             "static effort": role.replace('sandbox_mode = "', 'model_reasoning_effort = "high"\nsandbox_mode = "', 1),

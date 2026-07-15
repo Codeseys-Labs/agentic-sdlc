@@ -13,27 +13,25 @@ COMMON_AGENT_RULES = """
 Read repository instructions before acting. Preserve existing project conventions. Keep work to one smallest useful research unit unless the director assigns more. Write durable findings to the research OS ledgers. Do not promote claims without matching evidence and review. If the repo has an issue tracker, propose tracked work to the conductor before substantive changes. If the repo has an expertise/memory system, record non-obvious findings before finishing.
 """
 
-RUNTIME_MODEL_ASSIGNMENT = """A conductor-supplied certified `RuntimeAssignment` is required before this provider-neutral role begins:
-- requested_model_id: caller-requested certified exact bare ID
-- requested_effort: caller-requested explicit low, medium, high, xhigh, or max
-- requested_context_form: caller-requested base or transport-certified exact [1m] form
-- request_injection_status: verified
-- request_injection_source: non-unknown launcher or adapter request source
-- request_injection_evidence: non-unknown immutable request receipt proving exact model and effort injection
-- resolution_state: requested, resolved, inherited, or unresolved; resolution_state must equal resolved
-- resolved_provider: non-unknown independently observed provider, or the unique provider mapped from the exact model ID
-- resolved_model_id: non-unknown exact model ID verified by independent readback or unambiguous exact-ID mapping
-- model_readback_status: verified
-- model_identity_basis: independent_readback or unambiguous_exact_id_mapping
-- model_readback_source: independent provider/model source, or unavailable_in_transport only for unambiguous exact-ID mapping
-- model_readback_evidence: non-unknown immutable model-identity receipt, or the immutable policy mapping reference for unambiguous exact-ID mapping
-- effort_readback_status: verified or unavailable
-- effort_readback_source: independent telemetry source, or unavailable_in_transport
-- effort_readback_evidence: immutable effective-effort receipt, or unavailable_in_transport
-- context_readback_status: verified or unavailable
-- context_readback_source: independent telemetry source, or unavailable_in_transport
-- context_readback_evidence: immutable effective-context receipt, or unavailable_in_transport
-Requested, inherited, or unresolved assignments and any unverified model identity fail before dispatch: stop before spawn and return one `SeedProposal` to the conductor. Exact model and effort request injection is mandatory and immutable. Independently observed provider/model evidence may honestly be unavailable only when the exact ID maps unambiguously and immutable request/model evidence verifies identity. Effective effort or context may honestly be unavailable when the transport does not expose them. Roles consume this assignment but never dispatch themselves. The conductor launches the role only through a host or launcher that injects the exact requested model and effort before spawn; if it cannot, stop and return one `SeedProposal`, not a dispatch. Prompt prose does not enforce a Codex model or effort. Requested values, aliases, prompt echoes, and host defaults never become resolved or readback evidence. A [1m] request or base-ID readback does not prove intelligence, upstream context capacity, compaction, or effort compliance.
+RUNTIME_MODEL_ASSIGNMENT = """A conductor-supplied certified `RuntimeAssignment` receipt is required before this provider-neutral role begins. Its canonical v1 top-level shape is exactly:
+- `schema_version`: `runtime-assignment-receipt/v1`
+- `requested_model_id`: caller-requested certified exact bare ID
+- `requested_effort`: caller-requested explicit `low`, `medium`, `high`, `xhigh`, or `max`
+- `requested_context_form`: caller-requested `base` or transport-certified exact `[1m]` form
+- `request_injection_status`: `verified`
+- `request_injection_evidence`: immutable request receipt bound to the requested model, effort, and context
+- `resolution_state`: must equal `resolved`
+- `resolved_provider`: the policy-mapped provider for the exact resolved model
+- `resolved_model_id`: the immutable injected exact model ID
+- `model_identity_basis`: `independent_readback` or `unambiguous_exact_id_mapping`
+- `model_readback_status`: `verified`
+- `model_readback_evidence`: closed structured evidence with a cross-field assignment binding to the resolved provider, model, requested effort, and requested context
+- `effort_readback_status`: `verified` or `unavailable`
+- `effort_readback_evidence`: closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and the effective effort when verified
+- `context_readback_status`: `verified` or `unavailable`
+- `context_readback_evidence`: closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and the effective context when verified
+
+The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority. Requested, inherited, or unresolved assignments and any unverified model identity stop before spawn and return one advisory `SeedProposal` to the conductor. Exact model and effort request injection is mandatory and immutable. Prompt echoes, caller defaults, aliases, host defaults, copied requested values, and arbitrary provenance never become resolution or readback evidence. Effective effort and context may honestly be unavailable when the transport does not expose them. A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance.
 """
 
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
@@ -57,7 +55,7 @@ Classify work as greenfield, brownfield, or hybrid. Identify the highest-leverag
 """
         + RESEARCH_DIRECTOR_SEEDS_AUTHORITY
         + """
-End with current state, strongest evidence, weakest assumption, exact next action, recommended next agent, and the one `SeedProposal` when required.
+End with current state, strongest evidence, weakest assumption, exact next action, and recommended next agent.
 """,
     ),
     "repo_cartographer": (
@@ -411,13 +409,11 @@ from research_os_lib import ROOT
 agents_dir = ROOT / ".codex" / "agents"
 allowed_keys = {"name", "description", "sandbox_mode", "developer_instructions"}
 allowed_sandboxes = {"read-only", "workspace-write", "danger-full-access"}
-runtime_fields = {"requested_model_id", "requested_effort", "requested_context_form", "request_injection_status", "request_injection_source", "request_injection_evidence", "resolution_state", "resolved_provider", "resolved_model_id", "model_readback_status", "model_identity_basis", "model_readback_source", "model_readback_evidence", "effort_readback_status", "effort_readback_source", "effort_readback_evidence", "context_readback_status", "context_readback_source", "context_readback_evidence"}
+runtime_fields = __RUNTIME_FIELDS__
 protected_runtime = __RUNTIME_CONTRACT__
 protected_director = __DIRECTOR_CONTRACT__
-contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injection|resolved_(?:provider|model_id)|model_readback|effort_readback|context_readback|provider_readback|host[- ]default|caller[- ]override|requested(?:_model_id|_effort|_context_form)?.{0,80}(?:resolved|readback)|(?:resolved|readback).{0,80}requested(?:_model_id|_effort|_context_form)?)")
-forbidden_seed_launcher = re.compile(r"(?i)(?:Seeds\(|\bsd\s+(?:prime|ready|blocked|create|claim|update|close|sync|disposition)\b)")
-forbidden_seed_grant = re.compile(r"(?i)Research Director.{0,120}\b(?:may|can|must|should)\b.{0,80}\b(?:create|claim|update|close|sync|disposition)\b.{0,80}\bSeeds?\b")
-forbidden_seed_waiver = re.compile(r"(?i)\b(?:exception|waiver|override|bypass|ignore)\b.{0,100}\b(?:Seeds?|SeedProposal|authority|rule|contract)\b|\b(?:Seeds?|SeedProposal|authority|rule|contract)\b.{0,100}\b(?:exception|waiver|override|bypass|ignore)\b")
+contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injection|resolved_(?:provider|model_id)|model_readback|effort_readback|context_readback|provider[- ]default|host[- ]default|caller[- ]override|requested(?:_model_id|_effort|_context_form)?.{0,80}(?:resolved|readback)|(?:resolved|readback).{0,80}requested(?:_model_id|_effort|_context_form)?)")
+forbidden_seed_authority_addition = re.compile(r"(?i)\b(?:seeds?|seedproposal|sd)\b")
 errors = []
 files = sorted(agents_dir.glob("*.toml")) if agents_dir.exists() else []
 for path in files:
@@ -439,6 +435,7 @@ for path in files:
     missing_runtime = sorted(field for field in runtime_fields if field not in instructions)
     if missing_runtime:
         errors.append(f"{label}: runtime model assignment contract missing {', '.join(missing_runtime)}")
+    outside_runtime = instructions
     if instructions.count(protected_runtime) != 1:
         errors.append(f"{label}: protected runtime block must occur exactly once")
     else:
@@ -456,20 +453,22 @@ for path in files:
         director_count = instructions.count(protected_director)
         if director_count != 1:
             errors.append(f"{label}: protected Seeds authority block must occur exactly once")
-            director_outside = instructions
+            director_outside = outside_runtime
         else:
-            director_outside = instructions.replace(protected_director, "", 1)
-        if forbidden_seed_launcher.search(director_outside):
-            errors.append(f"{label}: additive Seeds launcher or changed protected Seeds authority block is forbidden")
-        if forbidden_seed_grant.search(director_outside):
-            errors.append(f"{label}: affirmative Seeds authority grant is forbidden")
-        if forbidden_seed_waiver.search(director_outside):
-            errors.append(f"{label}: plain-language Seeds waiver is forbidden")
+            director_outside = outside_runtime.replace(protected_director, "", 1)
+        if forbidden_seed_authority_addition.search(director_outside):
+            errors.append(f"{label}: additive Seeds or SeedProposal authority language is forbidden")
 print(f"Validated {len(files)} agent config(s).")
 for error in errors:
     print("ERROR:", error)
 raise SystemExit(1 if errors else 0)
-'''.replace("__RUNTIME_CONTRACT__", repr(clean(RUNTIME_MODEL_ASSIGNMENT))).replace("__DIRECTOR_CONTRACT__", repr(clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)))
+'''.replace("__RUNTIME_FIELDS__", repr({
+    "schema_version", "requested_model_id", "requested_effort", "requested_context_form",
+    "request_injection_status", "request_injection_evidence", "resolution_state",
+    "resolved_provider", "resolved_model_id", "model_identity_basis",
+    "model_readback_status", "model_readback_evidence", "effort_readback_status",
+    "effort_readback_evidence", "context_readback_status", "context_readback_evidence",
+})).replace("__RUNTIME_CONTRACT__", repr(clean(RUNTIME_MODEL_ASSIGNMENT))).replace("__DIRECTOR_CONTRACT__", repr(clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)))
     validate_claims = r'''
 #!/usr/bin/env python3
 from research_os_lib import CLAIMS_PATH, as_records, load_structured

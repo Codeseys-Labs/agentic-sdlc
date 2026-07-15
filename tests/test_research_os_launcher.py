@@ -19,24 +19,21 @@ sys.modules[SPEC.name] = installer
 SPEC.loader.exec_module(installer)
 
 RUNTIME_FIELDS = (
+    "schema_version",
     "requested_model_id",
     "requested_effort",
     "requested_context_form",
     "request_injection_status",
-    "request_injection_source",
     "request_injection_evidence",
     "resolution_state",
     "resolved_provider",
     "resolved_model_id",
-    "model_readback_status",
     "model_identity_basis",
-    "model_readback_source",
+    "model_readback_status",
     "model_readback_evidence",
     "effort_readback_status",
-    "effort_readback_source",
     "effort_readback_evidence",
     "context_readback_status",
-    "context_readback_source",
     "context_readback_evidence",
 )
 
@@ -55,14 +52,16 @@ class ResearchOSLauncherTests(unittest.TestCase):
         instructions = tomllib.loads(text)["developer_instructions"]
         for field in RUNTIME_FIELDS:
             self.assertIn(field, instructions)
-        self.assertIn("conductor-supplied certified `RuntimeAssignment`", instructions)
-        self.assertIn("resolution_state must equal resolved", instructions)
+        self.assertIn("canonical v1 top-level shape is exactly", instructions)
+        self.assertIn("resolution_state`: must equal `resolved`", instructions)
         self.assertIn("Exact model and effort request injection is mandatory and immutable", instructions)
-        self.assertIn("unavailable only when the exact ID maps unambiguously", instructions)
-        self.assertIn("Effective effort or context may honestly be unavailable", instructions)
-        self.assertIn("Requested values, aliases, prompt echoes, and host defaults never become resolved or readback evidence", instructions)
+        self.assertIn("validated only for canonical internal consistency", instructions)
+        self.assertIn("Effective effort and context may honestly be unavailable", instructions)
+        self.assertIn("Prompt echoes, caller defaults, aliases, host defaults, copied requested values", instructions)
+        self.assertIn("external authenticated harness is the sole spawn and admission authority", instructions)
+        self.assertNotRegex(instructions, r"\b(?:request_injection|model_readback|effort_readback|context_readback)_source\b")
         self.assertIn("stop before spawn", instructions)
-        self.assertIn("injects the exact requested model and effort", instructions)
+        self.assertIn("Exact model and effort request injection is mandatory and immutable", instructions)
         self.assertNotIn("resolved_effort", instructions)
         self.assertNotIn("resolved_context_form", instructions)
         self.assertNotIn("provider_readback_source", instructions)
@@ -120,6 +119,13 @@ class ResearchOSLauncherTests(unittest.TestCase):
         self.assertIn("Do not create, claim, update, close, sync, or disposition Seeds", director)
         self.assertIn("exactly one typed `SeedProposal {", director)
         self.assertEqual(director.count("Seeds authority:"), 1)
+
+    def test_generated_agent_validator_accepts_canonical_scaffold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            script = self.generated_scaffold(Path(directory))
+            result = self.run_validator(script)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Validated 17 agent config(s).", result.stdout)
 
     def test_generated_agent_validator_rejects_static_pins_and_runtime_mutants(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

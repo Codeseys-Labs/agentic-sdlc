@@ -14,17 +14,17 @@ Before any spawn, the conductor supplies a conductor-supplied certified `Runtime
 with a certified exact model ID. Its `resolution_state` must equal `resolved`;
 `request_injection_status` and `model_readback_status` must equal `verified`; and
 `resolved_provider` and `resolved_model_id` must be non-unknown. The request side records
-`request_injection_source` plus immutable `request_injection_evidence` proving the exact
-requested model and effort were injected by the selected host or launcher. The independent
-`model_readback_source` plus immutable `model_readback_evidence` proving the resolved model.
-Provider-neutral roles consume the assignment and never dispatch. Requested, inherited,
-unresolved, incomplete, or unverified model-identity assignments stop before spawn and return
-one `SeedProposal` for conductor adjudication.
+closed `request_injection_evidence` proving the exact requested model, effort, and context;
+closed `model_readback_evidence` proving resolved provider/model; and closed effort/context
+readback evidence when verified. The canonical receipt has exactly the policy-derived 16 fields
+and no `*_source` projections. Validation proves only canonical internal consistency; the
+external authenticated harness alone admits and spawns. Provider-neutral roles consume the
+assignment and never dispatch. Requested, inherited, unresolved, incomplete, or unverified
+model-identity assignments stop before spawn and return one `SeedProposal` for conductor adjudication.
 
 Effective readback is separate from immutable request injection. Record
-`effort_readback_status` and `context_readback_status` as `verified` with independent evidence
-when exposed, or `unavailable` with explicit source/evidence markers when the transport cannot
-expose effective effort or context behavior. Never copy requested values into resolved or
+`effort_readback_status` and `context_readback_status` as `verified` with bound evidence when
+exposed, or `unavailable` when the transport cannot expose effective effort or context behavior. Never copy requested values into resolved or
 readback fields, and never require impossible effective readback after request injection and
 model identity are verified. Prompt prose does not enforce a model or effort; an assignment
 carried in a prompt is an audit copy only. `[1m]` is independent: use only a

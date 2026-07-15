@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = []
+# dependencies = ["pyyaml==6.0.3"]
 # ///
 """Validate Agentic SDLC bundle metadata and lifecycle contracts."""
 
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import yaml
 
 
 SECRET_PATTERN = re.compile(
@@ -67,9 +68,19 @@ TASK_COMMANDS = {
     "bundle:install:all-hosts": "--script scripts/run_all_hosts.py install",
     "bundle:status:all-hosts": "--script scripts/run_all_hosts.py status",
     "research-os:install": "--script skills/codex-research-os/scripts/install_research_os.py",
-    "test": "python -m unittest discover -s tests",
+    "test": "--with pyyaml==6.0.3 python -m unittest discover -s tests",
     "self-test": "--script scripts/install_skill_bundle.py self-test",
 }
+RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+RUNTIME_RECEIPT_SOURCE_FIELDS = frozenset(
+    {
+        "request_injection_source",
+        "model_readback_source",
+        "effort_readback_source",
+        "context_readback_source",
+    }
+)
+
 VALIDATOR_WRAPPER = """#!/usr/bin/env bash
 # Compatibility entrypoint; the authoritative task is `mise run validate`.
 set -euo pipefail
@@ -198,31 +209,81 @@ def validate_python(root: Path, result: Validation) -> None:
             result.error("Python bytecode must not be committed")
 
 
-def parse_frontmatter_metadata(text: str) -> dict[str, str]:
-    """Parse bounded flat YAML frontmatter for Claude role manifests.
-
-    This is deliberately not a general YAML parser: only a single quoted or unquoted
-    scalar key followed by optional whitespace and a colon is needed for pin detection.
-    """
+def parse_frontmatter_metadata(text: str) -> dict[str, object]:
+    """Parse Claude frontmatter semantically with PyYAML's safe loader."""
     metadata = frontmatter(text)
-    values: dict[str, str] = {}
-    for line in metadata.splitlines():
-        match = re.fullmatch(r"\s*(?:([A-Za-z_][\w-]*)|['\"]([A-Za-z_][\w-]*)['\"])\s*:\s*(.*)", line)
-        if not match:
+    if not metadata:
+        return {}
+    try:
+        for event in yaml.parse(metadata, Loader=yaml.SafeLoader):
+            if isinstance(event, yaml.events.AliasEvent):
+                raise ValueError("YAML aliases are forbidden in frontmatter")
+        value = yaml.safe_load(metadata)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"YAML parser rejected frontmatter: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("frontmatter must be a YAML mapping")
+    if not all(isinstance(key, str) for key in value):
+        raise ValueError("frontmatter keys must be strings")
+    return value
+
+
+def runtime_receipt_fields() -> tuple[str, ...]:
+    try:
+        policy = json.loads(RECEIPT_POLICY_PATH.read_text(encoding="utf-8"))
+        fields = policy["canonical_receipt_fields"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
+    if (
+        not isinstance(fields, list)
+        or len(fields) != 16
+        or not all(isinstance(field, str) and field for field in fields)
+        or len(set(fields)) != len(fields)
+    ):
+        raise ValueError("runtime receipt policy must define exactly 16 unique non-empty canonical fields")
+    return tuple(fields)
+
+
+def projected_runtime_receipt_fields(text: str) -> tuple[str, ...]:
+    marker = "canonical v1 top-level shape is exactly:\n"
+    if text.count(marker) != 1:
+        return ()
+    projection: list[str] = []
+    for line in text.split(marker, 1)[1].splitlines():
+        match = re.fullmatch(r"- `([a-z][a-z0-9_]*)`: .+", line)
+        if match:
+            projection.append(match.group(1))
             continue
-        key = match.group(1) or match.group(2)
-        value = match.group(3).strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
+        if projection:
+            break
+    return tuple(projection)
+
+
+def validate_runtime_receipt_projection(text: str, label: Path | str, result: Validation) -> None:
+    try:
+        required = runtime_receipt_fields()
+    except ValueError as exc:
+        result.error(str(exc))
+        return
+    projected = projected_runtime_receipt_fields(text)
+    missing = sorted(set(required) - set(projected))
+    if missing:
+        result.error(f"{label}: runtime receipt projection missing {', '.join(missing)}")
+    if projected != required:
+        result.error(f"{label}: runtime receipt projection must equal the exact policy-derived 16-field block")
+    if any(field in text for field in RUNTIME_RECEIPT_SOURCE_FIELDS):
+        result.error(f"{label}: stale runtime receipt source projection is forbidden")
 
 
 def validate_agents(root: Path, result: Validation) -> None:
     for agent in sorted((root / "agents" / "claude").glob("*.md")):
         text = agent.read_text(encoding="utf-8")
-        metadata = parse_frontmatter_metadata(text)
         label = agent.relative_to(root)
+        try:
+            metadata = parse_frontmatter_metadata(text)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            result.error(f"{label}: invalid YAML frontmatter: {exc}")
+            continue
         if not metadata.get("name"):
             result.error(f"{label}: missing name")
         if not metadata.get("description"):
@@ -231,6 +292,7 @@ def validate_agents(root: Path, result: Validation) -> None:
             result.error(f"{label}: static model is forbidden")
         if "model_reasoning_effort" in metadata:
             result.error(f"{label}: static model_reasoning_effort is forbidden")
+        validate_runtime_receipt_projection(text, label, result)
     for agent in sorted((root / "agents" / "codex").glob("**/*.toml")):
         try:
             data = tomllib.loads(agent.read_text(encoding="utf-8"))
@@ -243,6 +305,7 @@ def validate_agents(root: Path, result: Validation) -> None:
             result.error(f"{agent.relative_to(root)}: static model is forbidden")
         if "model_reasoning_effort" in data:
             result.error(f"{agent.relative_to(root)}: static model_reasoning_effort is forbidden")
+        validate_runtime_receipt_projection(agent.read_text(encoding="utf-8"), agent.relative_to(root), result)
 
 
 def validate_mise(root: Path, result: Validation) -> None:
