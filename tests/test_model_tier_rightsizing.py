@@ -11,102 +11,6 @@ ROUTER = ROOT / "skills" / "model-tier-rightsizing" / "SKILL.md"
 CALIBRATION = ROUTER.parent / "references" / "model-routing-calibration.md"
 FLAGSHIP = ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "tiered-orchestration.md"
 
-DISPATCH_HEADER = (
-    "Consequence lane",
-    "Exact model ID",
-    "Requested effort",
-    "Complement",
-    "Required gate or control",
-)
-DISPATCH_ROWS = (
-    (
-        "Derail / settled truth",
-        "`gpt-5.6-sol`",
-        "`high`, `xhigh`",
-        "`claude-fable-5` at `max` searches a bounded assumptions packet",
-        "Re-derivation; conductor adjudicates the advisory recommendation",
-    ),
-    (
-        "Contained silent-degrade",
-        "`gpt-5.6-terra`",
-        "`xhigh`, `max`",
-        "`claude-opus-4-8` at `high`, `xhigh` reviews an immutable semantic delta",
-        "Explicit acceptance criteria and independent review",
-    ),
-    (
-        "Deterministic-gated volume",
-        "`gpt-5.6-luna`",
-        "`high`, `xhigh`",
-        "`claude-sonnet-5` at `high`, `xhigh` checks stable evidence",
-        "Compiler, tests, schema, diff, or deterministic verifier",
-    ),
-    (
-        "Bounded adversarial specialist",
-        "`claude-fable-5`",
-        "`max`",
-        "`gpt-5.6-sol` at `xhigh` receives the counterexample artifact",
-        "Bounded packet; advisory analysis only; conductor adjudicates",
-    ),
-    (
-        "Semantic-review specialist",
-        "`claude-opus-4-8`",
-        "`high`, `xhigh`",
-        "`gpt-5.6-terra` at `xhigh`, `max` reproduces the candidate",
-        "Immutable candidate and named acceptance criteria",
-    ),
-    (
-        "Gated-verification specialist",
-        "`claude-sonnet-5`",
-        "`high`, `xhigh`",
-        "`gpt-5.6-luna` at `high`, `xhigh` produces deterministic receipts",
-        "Same deterministic gate remains required",
-    ),
-)
-
-ROADMAP_HEADER = (
-    "Roadmap lane",
-    "Primary exact model ID",
-    "Requested effort and context",
-    "Complementary assignment",
-    "Gate or escalation",
-)
-ROADMAP_ROWS = (
-    ("S1 Seeds toolchain retention", "`gpt-5.6-luna`", "`high`", "`claude-sonnet-5` at `high` checks evidence-to-claim coverage", "`gpt-5.6-terra` at `xhigh` analyzes semantic drift and recommends disposition"),
-    ("S2 Seeds execution contract", "`gpt-5.6-terra`", "`xhigh`", "`gpt-5.6-sol` at `xhigh` analyzes queue evidence; `claude-opus-4-8` at `xhigh` reviews stable diff", "Null or mismatch fails closed; conductor adjudicates Seeds action"),
-    ("Seeds fan-in", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-luna` at `high` re-gates exact ranges", "Authorized integrator only; `gpt-5.6-sol` at `xhigh` analyzes stop/go ambiguity for conductor adjudication"),
-    ("Wave 1 CAO deletion", "`gpt-5.6-terra`", "`xhigh`", "`gpt-5.6-luna` at `high` inventories residues; `claude-opus-4-8` at `high` reviews removed surface", "Any shipped or runtime residue blocks"),
-    ("Wave 2 state-v3 identity cutover", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-sol` at `xhigh` analyzes migration invariants; `gpt-5.6-luna` at `xhigh` runs crash matrix; `claude-opus-4-8` at `xhigh` reviews recovery", "Fail closed on foreign ownership; conductor adjudicates"),
-    ("Claude marketplace/plugin plane", "`gpt-5.6-terra`", "`xhigh`", "`claude-opus-4-8` at `xhigh` checks supported-operation boundary", "Never edit opaque state"),
-    ("Local checkout rename gate", "`gpt-5.6-sol`", "`xhigh`", "`gpt-5.6-luna` at `high` verifies pre/post receipts", "Human approval before mutation"),
-    ("GitHub repository rename gate", "`gpt-5.6-sol`", "`xhigh`", "`claude-sonnet-5` at `high` inventories post-authorization evidence", "Human approval; model never authorizes"),
-    ("A1 change-writing", "`gpt-5.6-terra`", "`xhigh`", "`claude-opus-4-8` at `high` reviews evidence and attribution; `gpt-5.6-luna` at `high` builds fixtures", "Output-only contract"),
-    ("A2 Git-default sdlc-init", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-sol` at `xhigh` analyzes defaults and refusals; `claude-opus-4-8` at `xhigh` reviews safety; `gpt-5.6-luna` at `high` builds fixtures", "Dry-run and no-write cancellation"),
-    ("A3 hierarchical instructions", "`gpt-5.6-terra`", "`xhigh`", "`claude-sonnet-5` at `high` checks conformance; `claude-opus-4-8` at `high` reviews markers and ownership", "Preserve foreign prose"),
-    ("R1 shared role contracts", "`gpt-5.6-terra`", "`xhigh`", "`gpt-5.6-sol` at `xhigh` analyzes separation of powers; `claude-fable-5` at `max` attacks authority packet; `gpt-5.6-luna` at `high` projects fixtures", "All analysis advisory; conductor adjudicates"),
-    ("R2 bounded Deep Work Loop", "`gpt-5.6-terra`", "`xhigh`", "`gpt-5.6-sol` at `xhigh` analyzes bounds and backflow; `claude-opus-4-8` at `xhigh` reviews recursion; `gpt-5.6-luna` at `high` tests", "No second queue or unbounded recursion"),
-    ("R3 HyperResearch/Research OS", "`gpt-5.6-terra`", "`max`", "`claude-sonnet-5` extracts evidence; `claude-opus-4-8` reviews crash recovery; `gpt-5.6-sol` analyzes load-bearing unknowns", "Typed `SeedProposal`; conductor alone mutates Seeds"),
-    ("G1 Git change-flow family", "`gpt-5.6-terra`", "`xhigh`", "`claude-opus-4-8` at `xhigh` reviews rebase, squash, and stack; `gpt-5.6-luna` at `high` builds fixtures", "Stable commit and merge-base evidence"),
-    ("G2 toolchain/security", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-sol` at `xhigh` analyzes trust evidence; `claude-opus-4-8` reviews semantic security; `gpt-5.6-luna` tests falsifiability", "Exact gate argv, status, and log digest"),
-    ("J1 jj certification", "`gpt-5.6-terra`", "`[1m]` at `xhigh`", "`gpt-5.6-sol` at `[1m]`, `xhigh` analyzes framing; `gpt-5.6-luna` at `high` builds fixture matrix; `claude-fable-5` at `max` attacks data-loss assumptions", "Official docs and immutable Git handoff; conductor adjudicates"),
-    ("J2 jj implementation", "`gpt-5.6-terra`", "`max`", "`claude-opus-4-8` at `xhigh` reviews handoff and recovery; `gpt-5.6-luna` at `xhigh` builds fixtures", "Conflict-free exact Git OID"),
-    ("A2j jj init amendment", "`gpt-5.6-terra`", "`xhigh`", "`claude-sonnet-5` at `high` checks explicit selection and receipt", "Only after J1/J2 certification"),
-    ("M0a Mermaid browser ADR/spike", "`gpt-5.6-terra`", "`[1m]` at `xhigh`", "`gpt-5.6-sol` at `xhigh` analyzes dependency evidence; `claude-opus-4-8` reviews browser dependency; `gpt-5.6-luna` builds host/offline matrix", "Stop before M1 without portable provider; conductor adjudicates"),
-    ("M0b Mermaid security foundation", "`gpt-5.6-terra`", "`max`", "`claude-opus-4-8` at `xhigh` reviews malicious SVG; `gpt-5.6-luna` builds parser/render matrix", "Strict allowlist and bounded resources"),
-    ("M1 structural Mermaid skills", "`gpt-5.6-luna`", "`xhigh`", "`claude-sonnet-5` at `high` checks docs, citations, and fixtures", "One writer and pipeline reviewer"),
-    ("M2 planning Mermaid skills", "`gpt-5.6-luna`", "`xhigh`", "`claude-sonnet-5` at `high` checks docs, citations, and fixtures", "One writer and pipeline reviewer"),
-    ("M3 quantitative Mermaid skills", "`gpt-5.6-luna`", "`xhigh`", "`claude-sonnet-5` at `high` checks docs, citations, and fixtures", "One writer and pipeline reviewer"),
-    ("M4 technical Mermaid skills", "`gpt-5.6-luna`", "`xhigh`", "`claude-sonnet-5` at `high` checks docs, citations, and fixtures", "One writer and pipeline reviewer"),
-    ("M5 conceptual Mermaid skills", "`gpt-5.6-luna`", "`xhigh`", "`claude-sonnet-5` at `high` checks docs, citations, and fixtures", "One writer and pipeline reviewer"),
-    ("M6 Mermaid router", "`gpt-5.6-terra`", "`xhigh`", "`claude-sonnet-5` at `high` inventories exact-one routing", "Reject unsupported or ambiguous requests"),
-    ("M7 Mermaid conformance", "`gpt-5.6-luna`", "`xhigh`", "`claude-opus-4-8` reviews malicious output semantics; `gpt-5.6-sol` at `high` analyzes final evidence", "Exactly one router plus 30 skills; conductor adjudicates"),
-    ("Release hardening", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-luna` builds cross-platform fixtures; `claude-opus-4-8` reviews semantics; `gpt-5.6-sol` recommends promotion", "Publication separately authorized by humans"),
-    ("Evolutionary Core M2", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-sol` at `xhigh` analyzes kernel contracts; `gpt-5.6-luna` runs crash suite; `claude-opus-4-8` reviews immutable candidate", "Deterministic receipt and idempotent reconcile"),
-    ("Claude Golden Wave M3", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-sol` at `xhigh` analyzes adapter and authority contract; `claude-opus-4-8` reviews semantics; `claude-sonnet-5` checks conformance; `claude-fable-5` attacks bounded assumptions", "Exact Claude ID, effort, and context readback"),
-    ("Portability M4", "`gpt-5.6-terra`", "`max`", "`gpt-5.6-sol` at `xhigh` analyzes portability evidence; `gpt-5.6-luna` runs common fault suite; `claude-opus-4-8` reviews assumptions; `claude-sonnet-5` checks conformance", "No public ABI before three adapters"),
-    ("CCP/ccodex certification", "`gpt-5.6-terra`", "`[1m]` at `max`", "`gpt-5.6-sol` at `xhigh` analyzes package evidence; `gpt-5.6-luna` checks lifecycle; `claude-fable-5` attacks credential assumptions; `claude-opus-4-8` reviews implementation", "Exact version, checksum, and readback"),
-    ("Final family wiring", "`gpt-5.6-terra`", "`xhigh`", "`claude-sonnet-5` at `high` verifies cross-links and inventory", "No unrelated family co-mingling"),
-)
-
 CONSUMERS = (
     ROOT / "AGENTS.md",
     ROOT / "README.md",
@@ -120,57 +24,6 @@ CONSUMERS = (
 )
 POLICY_SURFACES = CONSUMERS + (ROUTER, CALIBRATION)
 
-TIER_HEADER = (
-    "Semantic tier",
-    "Wrong-output consequence",
-    "Eligible exact pair",
-    "Requested effort",
-    "Required gate or control",
-)
-TIER_ROWS = (
-    (
-        "Frontier",
-        "Derail / settled truth",
-        "`gpt-5.6-sol` or `claude-fable-5`",
-        "Sol `high`/`xhigh`; Fable `xhigh`/`max`",
-        "Solo or bounded; independent re-derivation; conductor adjudicates",
-    ),
-    (
-        "Judgment workhorse",
-        "Contained silent degradation",
-        "`gpt-5.6-terra` or `claude-opus-4-8`",
-        "Terra `xhigh`/`max`; Opus `high`/`xhigh`",
-        "Explicit acceptance criteria and independent immutable-candidate review",
-    ),
-    (
-        "Capable volume",
-        "Gated visible retry",
-        "`gpt-5.6-luna` or `claude-sonnet-5`",
-        "Luna `high`/`xhigh`; Sonnet `high`/`xhigh`",
-        "Compiler, tests, schema, diff, evidence check, or deterministic verifier",
-    ),
-    (
-        "Mechanical floor",
-        "Cheap fully checked redo",
-        "Cheapest certified route from `gpt-5.6-luna` or `claude-sonnet-5`",
-        "`low`/`medium` after route-specific certification",
-        "Complete deterministic check; retry or escalate on any mismatch",
-    ),
-)
-
-ROLE_SURFACES = tuple(sorted((ROOT / "agents" / "claude").glob("sdlc-*.md"))) + tuple(
-    sorted((ROOT / "agents" / "codex").glob("sdlc-*.toml"))
-) + tuple(sorted((ROOT / "agents" / "codex" / "research").glob("*.toml")))
-ROLE_GENERATOR = ROOT / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
-RESEARCH_DIRECTOR = ROOT / "agents" / "codex" / "research" / "research_director.toml"
-OPERATING_MODEL = ROOT / "skills" / "codex-research-os" / "references" / "operating-model.md"
-PERSISTENT_GUIDANCE = (
-    ROOT / "README.md",
-    ROOT / "commands" / "sdlc-init.md",
-    ROOT / "commands" / "sdlc-wave.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "seeds-worktrees.md",
-)
-
 RUNTIME_ASSIGNMENT_FIELDS = (
     "requested_model_id",
     "requested_effort",
@@ -180,6 +33,95 @@ RUNTIME_ASSIGNMENT_FIELDS = (
     "resolved_effort",
     "resolved_context_form",
 )
+
+PRIMARY_PAIRS = {
+    "frontier": ("gpt-5.6-sol", "claude-fable-5"),
+    "judgment": ("gpt-5.6-terra", "claude-opus-4-8"),
+    "volume": ("gpt-5.6-luna", "claude-sonnet-5"),
+}
+
+ROUTE_MATRICES = {
+    "## Exact dispatch and requested effort": {
+        "row_header": "Consequence lane",
+        "rows": {
+            "Derail / settled truth": "frontier",
+            "Contained silent-degrade": "judgment",
+            "Deterministic-gated volume": "volume",
+            "Cheap fully checked redo": "volume",
+        },
+    },
+    "## Blast-radius production routing": {
+        "row_header": "Wrong-output consequence",
+        "rows": {
+            "Cheap deterministic retry": "volume",
+            "Visible compiler/test/gate failure": "volume",
+            "Silent candidate degradation": "judgment",
+            "Run derailment or settled truth": "frontier",
+            "Trust, credentials, authority, or data-loss boundary": "frontier",
+        },
+    },
+    "## Agentic SDLC phase routing": {
+        "row_header": "Phase",
+        "rows": {
+            "Frame": "frontier",
+            "Discover": "judgment",
+            "Research": "judgment",
+            "Plan": "frontier",
+            "Act, contained": "judgment",
+            "Act, deterministic-gated": "volume",
+            "Review, semantic": "judgment",
+            "Review, trust or authority": "frontier",
+            "Reconcile": "judgment",
+            "Integrate": "judgment",
+            "Ship recommendation": "frontier",
+        },
+    },
+    "## Approved roadmap family lanes": {
+        "row_header": "Roadmap lane",
+        "rows": {
+            "S1 Seeds toolchain retention": "volume",
+            "S2 Seeds execution contract": "judgment",
+            "Seeds fan-in": "judgment",
+            "Wave 1 CAO deletion": "judgment",
+            "Wave 2 state-v3 identity cutover": "judgment",
+            "Claude marketplace/plugin plane": "judgment",
+            "Local checkout rename gate": "frontier",
+            "GitHub repository rename gate": "frontier",
+            "A1 change-writing": "judgment",
+            "A2 Git-default sdlc-init": "judgment",
+            "A3 hierarchical instructions": "judgment",
+            "R1 shared role contracts": "judgment",
+            "R2 bounded Deep Work Loop": "judgment",
+            "R3 HyperResearch/Research OS": "judgment",
+            "G1 Git change-flow family": "judgment",
+            "G2 toolchain/security": "judgment",
+            "J1 jj certification": "judgment",
+            "J2 jj implementation": "judgment",
+            "A2j jj init amendment": "judgment",
+            "M0a Mermaid browser ADR/spike": "judgment",
+            "M0b Mermaid security foundation": "judgment",
+            "M1 structural Mermaid skills": "volume",
+            "M2 planning Mermaid skills": "volume",
+            "M3 quantitative Mermaid skills": "volume",
+            "M4 technical Mermaid skills": "volume",
+            "M5 conceptual Mermaid skills": "volume",
+            "M6 Mermaid router": "judgment",
+            "M7 Mermaid conformance": "volume",
+            "Release hardening": "judgment",
+            "Evolutionary Core M2": "judgment",
+            "Claude Golden Wave M3": "judgment",
+            "Portability M4": "judgment",
+            "CCP/ccodex certification": "judgment",
+            "Final family wiring": "judgment",
+        },
+    },
+}
+
+FABLE_BOUNDARY = (
+    "Fable is eligible only for a certified, bounded frontier/adversarial packet; "
+    "it never settles truth or replaces the Sol peer."
+)
+FABLE_NO_PEER = "Settled-truth work stops or reduces scope if no certified peer is available."
 
 
 def _table(text: str, heading: str) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
@@ -211,12 +153,75 @@ def _table(text: str, heading: str) -> tuple[tuple[str, ...], tuple[tuple[str, .
 def _operational_cells(text: str) -> str:
     headings = (
         "## Four semantic tiers and eligible pairs",
-        "## Exact dispatch and requested effort",
-        "## Blast-radius production routing",
-        "## Agentic SDLC phase routing",
-        "## Approved roadmap family lanes",
+        *ROUTE_MATRICES,
     )
-    return "\n".join(" | ".join(cell for row in (_table(text, heading)[1],) for cells in row for cell in cells) for heading in headings)
+    return "\n".join(
+        " | ".join(cell for row in _table(text, heading)[1] for cell in row)
+        for heading in headings
+    )
+
+
+def _expected_pair_cell(pair: str) -> str:
+    left, right = PRIMARY_PAIRS[pair]
+    return f"`{left}` or `{right}`"
+
+
+def _assert_primary_route_allocation(text: str) -> None:
+    for heading, matrix in ROUTE_MATRICES.items():
+        header, rows = _table(text, heading)
+        assert matrix["row_header"] in header, f"missing row key in {heading}"
+        assert "Eligible primary exact IDs" in header, f"missing pair allocation in {heading}"
+        assert "Selection condition" in header, f"missing selection condition in {heading}"
+        row_index = header.index(matrix["row_header"])
+        primary_index = header.index("Eligible primary exact IDs")
+        selection_index = header.index("Selection condition")
+        by_name = {row[row_index]: row for row in rows}
+        assert set(by_name) == set(matrix["rows"]), f"unexpected routing rows in {heading}"
+        for name, pair in matrix["rows"].items():
+            row = by_name[name]
+            allocation = row[primary_index]
+            selection = row[selection_index]
+            assert allocation == _expected_pair_cell(pair), (heading, name, allocation)
+            assert re.search(r"(?i)\bchoose\b", selection), (heading, name, selection)
+            assert len(selection.split()) >= 8, (heading, name, selection)
+
+
+def _assert_tier_pair_allocation(text: str) -> None:
+    header, rows = _table(text, "## Four semantic tiers and eligible pairs")
+    assert header == (
+        "Semantic tier",
+        "Wrong-output consequence",
+        "Eligible exact pair",
+        "Requested effort",
+        "Required gate or control",
+    )
+    by_tier = {row[0]: row for row in rows}
+    assert by_tier["Frontier"][2] == _expected_pair_cell("frontier")
+    assert by_tier["Judgment workhorse"][2] == _expected_pair_cell("judgment")
+    assert by_tier["Capable volume"][2] == _expected_pair_cell("volume")
+    assert by_tier["Mechanical floor"][2] == (
+        "Cheapest certified route from `gpt-5.6-luna` or `claude-sonnet-5`"
+    )
+
+
+def _assert_fable_boundary(text: str) -> None:
+    assert FABLE_BOUNDARY in text
+    assert FABLE_NO_PEER in text
+    assert "retention" in text.lower()
+    assert "refusal" in text.lower()
+    assert re.search(r"(?is)(?:new[- ]model|day[- ]one).{0,100}(?:503|capacity)", text)
+
+
+def _assert_no_unsafe_executable_aliases(text: str) -> None:
+    bare = r"(?:fable|opus|sonnet|haiku)"
+    assert not re.search(
+        rf"(?ix)\bmodel\s*(?::|=|\s)\s*['\"`]?{bare}['\"`]?\b",
+        text,
+    )
+    assert not re.search(
+        r"(?ix)\bmodel\s*(?::|=|\s)\s*['\"`]?(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+['\"`]?\b",
+        text,
+    )
 
 
 def _assert_authority(text: str) -> None:
@@ -229,22 +234,23 @@ def _assert_authority(text: str) -> None:
 
 
 def _assert_calibration(text: str) -> None:
-    assert _table(text, "## Four semantic tiers and eligible pairs") == (TIER_HEADER, TIER_ROWS)
-    assert _table(text, "## Exact dispatch and requested effort") == (DISPATCH_HEADER, DISPATCH_ROWS)
-    assert _table(text, "## Approved roadmap family lanes") == (ROADMAP_HEADER, ROADMAP_ROWS)
+    _assert_tier_pair_allocation(text)
+    _assert_primary_route_allocation(text)
     operational = _operational_cells(text)
-    assert not re.search(r"(?i)\b(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+\b", operational)
-    for family in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"):
+    for family in (*PRIMARY_PAIRS["frontier"], *PRIMARY_PAIRS["judgment"], *PRIMARY_PAIRS["volume"]):
         assert family in operational, f"missing primary model family: {family}"
     assert "Mechanical floor" in operational
     assert "same deterministic gate remains" in text.lower()
     assert "immutable candidate and explicit acceptance criteria" in text.lower()
     assert "If no certified route exists, fail closed" in text
+    _assert_no_unsafe_executable_aliases(operational)
+    _assert_fable_boundary(text)
     _assert_authority(text)
 
 
 def _assert_no_unsafe_operational_prose(text: str) -> None:
     assert not re.search(r"(?i)\b(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+\b", text)
+    _assert_no_unsafe_executable_aliases(text)
     assert not re.search(r"(?i)\b(?:use|set|route|dispatch|select)\b.{0,80}\b(?:fable|opus|sonnet|haiku)\b\s*(?:alias|by default)", text)
     assert not re.search(r"(?i)\b(?:host|provider)\s+default\b.{0,100}\b(?:model|selection|dispatch)", text)
 
@@ -277,8 +283,69 @@ def _assert_persistent_mutation_guard(text: str) -> None:
         assert re.search(r"(?i)(?:explicit|operation-specific).{0,80}(?:approval|authorization)", window), line
 
 
+def _assert_historical_evidence(text: str) -> None:
+    for value in (
+        "80 task-local passes",
+        "10 harness-inconclusive cells",
+        "0 observed task-local model failures",
+        "not a total ranking",
+        "not production proof",
+        "provisional and requested-only",
+        "does not prove compaction or context handling occurred",
+        "Exact Claude `[1m]` forms\nwere not separately certified",
+        "2026-07-05",
+        "account-, region-,\nprovider-, and date-specific",
+        "`gpt-5.6-sol` → `gpt-5.5` → `gpt-5.4`",
+        "`gpt-5.6-terra` → `gpt-5.5` → `gpt-5.4`",
+        "`gpt-5.6-luna` → `gpt-5.4-mini` → `gpt-5.3-codex-spark`",
+        "61 agents / 9.05M subagent tokens / 2h12m",
+        "wf_497ea95a-e7f",
+        "dcperf-automation",
+        "6-dimension review + adversarial verification",
+        "Historical rejected alias evidence",
+    ):
+        assert value in text, value
+    quota_header, quota_rows = _table(text, "## Quota and concurrency evidence")
+    assert quota_header == (
+        "Historical Claude lane",
+        "Cross-region TPM",
+        "Global cross-region TPM",
+        "Global CRIS tokens/day",
+        "Invocation tokens/day",
+        "RPM",
+        "Historical fully-gated concurrency",
+    )
+    quota_by_name = {row[0]: row for row in quota_rows}
+    assert "Haiku 4.5" in quota_by_name
+    assert quota_by_name["Haiku 4.5"] == (
+        "Haiku 4.5",
+        "5M",
+        "5M",
+        "7.2B",
+        "3.6B",
+        "10K",
+        "~20–50 heavy agents",
+    )
+    assert quota_by_name["Fable 5"][-1] == "1, maybe 2 bounded agents"
+    assert "mandatory provider_data_share retention" in text
+    assert "stricter refusal/safety behavior" in text
+    assert "day-one capacity can flap independently of quota" in text or re.search(
+        r"(?is)day-one\s+capacity.{0,80}independently of quota", text
+    )
+    assert "not deterministic receipts" in text
+    for alias in (
+        "`global.anthropic.claude-fable-5`",
+        "`us.anthropic.claude-opus-4-8`",
+        "`global.anthropic.claude-sonnet-5`",
+    ):
+        assert alias in text
+    assert re.search(r"(?is)requested effort.{0,240}resolved effort", text)
+    assert re.search(r"(?is)resolved effort.{0,100}(?:unknown|unavailable|not exposed)", text)
+    assert re.search(r"(?is)\[1m\].{0,240}(?:does not|not).{0,100}(?:1M|context|intelligence)", text)
+
+
 class ModelTierRightsizingTests(unittest.TestCase):
-    def test_exact_structural_dispatch_and_roadmap_tuples(self) -> None:
+    def test_canonical_operational_matrices_allocate_pairs_with_selection_conditions(self) -> None:
         _assert_calibration(CALIBRATION.read_text(encoding="utf-8"))
 
     def test_router_and_flagship_are_single_authority_handoffs(self) -> None:
@@ -289,36 +356,12 @@ class ModelTierRightsizingTests(unittest.TestCase):
         self.assertIn("does not restate a routing matrix", flagship)
         self.assertIn("Sol/Fable, Terra/Opus, and Luna/Sonnet", flagship)
         self.assertNotIn("| Consequence lane | Exact model ID |", flagship)
+        self.assertIn("certified bounded frontier/adversarial", router)
+        self.assertIn("stops or reduces scope", router)
+        _assert_no_unsafe_operational_prose(router)
 
-    def test_canonical_evidence_boundaries_and_historical_aliases_remain_explicit(self) -> None:
-        text = CALIBRATION.read_text(encoding="utf-8")
-        for value in (
-            "80 task-local passes",
-            "10 harness-inconclusive cells",
-            "0 observed task-local model failures",
-            "not a total ranking",
-            "not production proof",
-            "provisional and requested-only",
-            "does not prove compaction or context handling occurred",
-            "Exact Claude `[1m]` forms\nwere not separately certified",
-            "2026-07-05",
-            "account-, region-,\nprovider-, and date-specific",
-            "`gpt-5.6-sol` → `gpt-5.5` → `gpt-5.4`",
-            "`gpt-5.6-terra` → `gpt-5.5` → `gpt-5.4`",
-            "`gpt-5.6-luna` → `gpt-5.4-mini` → `gpt-5.3-codex-spark`",
-            "61 agents / 9.05M subagent tokens / 2h12m",
-            "6-dimension review + adversarial verification",
-        ):
-            self.assertIn(value, text)
-        for alias in (
-            "`global.anthropic.claude-fable-5`",
-            "`us.anthropic.claude-opus-4-8`",
-            "`global.anthropic.claude-sonnet-5`",
-        ):
-            self.assertIn(alias, text)
-        self.assertRegex(text, r"(?is)requested effort.{0,240}resolved effort")
-        self.assertRegex(text, r"(?is)resolved effort.{0,100}(?:unknown|unavailable|not exposed)")
-        self.assertRegex(text, r"(?is)\[1m\].{0,240}(?:does not|not).{0,100}(?:1M|context|intelligence)")
+    def test_canonical_evidence_boundaries_historical_aliases_and_quota_history_remain_explicit(self) -> None:
+        _assert_historical_evidence(CALIBRATION.read_text(encoding="utf-8"))
 
     def test_dispatching_consumers_require_injected_certified_ids(self) -> None:
         for path in CONSUMERS:
@@ -333,7 +376,9 @@ class ModelTierRightsizingTests(unittest.TestCase):
         for path in POLICY_SURFACES:
             text = path.read_text(encoding="utf-8")
             with self.subTest(surface=path):
-                if path != CALIBRATION:
+                if path == CALIBRATION:
+                    _assert_no_unsafe_executable_aliases(_operational_cells(text))
+                else:
                     _assert_no_unsafe_operational_prose(text)
                 _assert_context_claims(text)
                 self.assertNotRegex(
@@ -343,15 +388,21 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 self.assertNotRegex(text, r"(?im)^\s*(?:edit|change|mutate|write)\s+(?:user )?(?:settings|trust)\b")
 
     def test_all_role_manifests_and_generator_require_runtime_assignment(self) -> None:
-        for path in ROLE_SURFACES + (ROLE_GENERATOR, OPERATING_MODEL):
+        role_surfaces = tuple(sorted((ROOT / "agents" / "claude").glob("sdlc-*.md"))) + tuple(
+            sorted((ROOT / "agents" / "codex").glob("sdlc-*.toml"))
+        ) + tuple(sorted((ROOT / "agents" / "codex" / "research").glob("*.toml")))
+        generator = ROOT / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
+        operating_model = ROOT / "skills" / "codex-research-os" / "references" / "operating-model.md"
+        for path in role_surfaces + (generator, operating_model):
             with self.subTest(role_surface=path):
                 _assert_runtime_role_contract(path.read_text(encoding="utf-8"))
 
     def test_research_director_is_seeds_read_only_and_emits_one_typed_proposal(self) -> None:
-        director = RESEARCH_DIRECTOR.read_text(encoding="utf-8")
-        generator = ROLE_GENERATOR.read_text(encoding="utf-8")
-        for text in (director, generator):
-            with self.subTest(surface="director" if text is director else "generator"):
+        director = ROOT / "agents" / "codex" / "research" / "research_director.toml"
+        generator = ROOT / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
+        for path in (director, generator):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(surface=path):
                 self.assertIn("Research Director is Seeds-read-only", text)
                 self.assertIn("Seeds(<target>, ready --format json)", text)
                 self.assertIn("Do not create, claim, update, close, or disposition Seeds", text)
@@ -360,16 +411,21 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 self.assertNotIn("Claim or create a seeds issue", text)
 
     def test_persistent_trust_config_alias_and_credentials_require_operation_specific_approval(self) -> None:
-        for path in PERSISTENT_GUIDANCE:
+        guidance = (
+            ROOT / "README.md",
+            ROOT / "commands" / "sdlc-init.md",
+            ROOT / "commands" / "sdlc-wave.md",
+            ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "seeds-worktrees.md",
+        )
+        for path in guidance:
             with self.subTest(guidance=path):
                 _assert_persistent_mutation_guard(path.read_text(encoding="utf-8"))
 
     def test_process_scoped_no_config_gate_remains_allowed(self) -> None:
-        text = (
+        _assert_persistent_mutation_guard(
             "For a process-scoped test run, use `mise --no-config --cd <target> exec ...`; "
             "this does not persist trust."
         )
-        _assert_persistent_mutation_guard(text)
 
     def test_canonical_links_resolve_and_no_second_active_matrix_exists(self) -> None:
         for source in (ROUTER, FLAGSHIP):
@@ -385,32 +441,37 @@ class ModelTierRightsizingTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("| Consequence lane | Exact model ID |", path.read_text(encoding="utf-8"))
 
-    def test_mutations_fail_from_temporary_copies(self) -> None:
+    def test_mutations_fail_for_primary_allocation_fable_constraints_and_history(self) -> None:
         original = CALIBRATION.read_text(encoding="utf-8")
         mutations = {
-            "swapped dispatch rows": original.replace(
-                "| Derail / settled truth | `gpt-5.6-sol`", "| TEMP | `gpt-5.6-sol`", 1
-            ).replace(
-                "| Contained silent-degrade | `gpt-5.6-terra`", "| Derail / settled truth | `gpt-5.6-terra`", 1
-            ).replace("| TEMP | `gpt-5.6-sol`", "| Contained silent-degrade | `gpt-5.6-sol`", 1),
-            "swapped paired tier models": original.replace(
-                "`gpt-5.6-sol` or `claude-fable-5`", "PAIR-TEMP", 1
-            ).replace(
-                "`gpt-5.6-terra` or `claude-opus-4-8`",
-                "`gpt-5.6-sol` or `claude-fable-5`",
+            "GPT-primary monoculture": original.replace(
+                "`gpt-5.6-sol` or `claude-fable-5`", "`gpt-5.6-sol`", 1
+            ),
+            "provider family removal": original.replace(
+                "`gpt-5.6-terra` or `claude-opus-4-8`", "`gpt-5.6-terra`", 1
+            ),
+            "row swap": original.replace(
+                "| Derail / settled truth | `gpt-5.6-sol` or `claude-fable-5`",
+                "| TEMP | `gpt-5.6-sol` or `claude-fable-5`",
                 1,
-            ).replace("PAIR-TEMP", "`gpt-5.6-terra` or `claude-opus-4-8`", 1),
-            "deleted GPT provider family": original.replace("`gpt-5.6-sol`", "`claude-fable-5`", 1),
-            "deleted Claude provider family": original.replace("`claude-fable-5`", "`gpt-5.6-sol`", 1),
-            "deleted mechanical tier": original.replace("| Mechanical floor |", "| Retry floor |", 1),
-            "swapped roadmap rows": original.replace(
-                "| S1 Seeds toolchain retention | `gpt-5.6-luna`", "| TEMP | `gpt-5.6-luna`", 1
             ).replace(
-                "| S2 Seeds execution contract | `gpt-5.6-terra`", "| S1 Seeds toolchain retention | `gpt-5.6-terra`", 1
-            ).replace("| TEMP | `gpt-5.6-luna`", "| S2 Seeds execution contract | `gpt-5.6-luna`", 1),
-            "unsafe operational alias": original.replace("`gpt-5.6-sol`", "`global.anthropic.claude-fable-5`", 1),
-            "malformed table": original.replace("| Derail / settled truth | `gpt-5.6-sol`", "| Derail / settled truth | `gpt-5.6-sol`", 1).replace("recommendation |\n", "recommendation \n", 1),
-            "model-owned authority": original + "\n`gpt-5.6-sol` authorizes Seeds.\n",
+                "| Contained silent-degrade | `gpt-5.6-terra` or `claude-opus-4-8`",
+                "| Derail / settled truth | `gpt-5.6-terra` or `claude-opus-4-8`",
+                1,
+            ).replace(
+                "| TEMP | `gpt-5.6-sol` or `claude-fable-5`",
+                "| Contained silent-degrade | `gpt-5.6-sol` or `claude-fable-5`",
+                1,
+            ),
+            "Fable settles truth": original.replace(
+                FABLE_BOUNDARY,
+                "Fable may settle truth without a certified peer.",
+                1,
+            ),
+            "Haiku quota history deletion": original.replace(
+                "| Haiku 4.5 | 5M | 5M | 7.2B | 3.6B | 10K | ~20–50 heavy agents |\n", "", 1
+            ),
+            "legacy receipt identity deletion": original.replace("wf_497ea95a-e7f", "redacted", 1),
         }
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / CALIBRATION.name
@@ -418,14 +479,37 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 with self.subTest(mutation=name):
                     target.write_text(mutation, encoding="utf-8")
                     with self.assertRaises(AssertionError):
-                        _assert_calibration(target.read_text(encoding="utf-8"))
+                        if name in {"Haiku quota history deletion", "legacy receipt identity deletion"}:
+                            _assert_historical_evidence(target.read_text(encoding="utf-8"))
+                        else:
+                            _assert_calibration(target.read_text(encoding="utf-8"))
+
+    def test_all_executable_alias_forms_fail_while_historical_rejection_examples_remain_allowed(self) -> None:
+        for alias in ("fable", "opus", "sonnet", "haiku"):
+            for expression in (
+                f"model: '{alias}'",
+                f'model = "{alias}"',
+                f"model {alias}",
+            ):
+                with self.subTest(expression=expression):
+                    with self.assertRaises(AssertionError):
+                        _assert_no_unsafe_executable_aliases(expression)
+        for expression in (
+            "model: 'global.anthropic.claude-fable-5'",
+            'model = "us.anthropic.claude-opus-4-8"',
+            "model global.anthropic.claude-sonnet-5",
+            "model: 'ap.anthropic.claude-haiku-4-5'",
+        ):
+            with self.subTest(expression=expression):
+                with self.assertRaises(AssertionError):
+                    _assert_no_unsafe_executable_aliases(expression)
+        text = CALIBRATION.read_text(encoding="utf-8")
+        self.assertIn("### Historical rejected alias evidence", text)
+        self.assertIn("`global.anthropic.claude-fable-5`", text)
+        _assert_no_unsafe_executable_aliases(_operational_cells(text))
 
     def test_policy_mutation_helpers_reject_new_loopholes(self) -> None:
         mutations = {
-            "unsafe alias insertion": (
-                _assert_no_unsafe_operational_prose,
-                "Dispatch using global.anthropic.claude-fable-5 for frontier work.",
-            ),
             "host default policy": (
                 _assert_no_unsafe_operational_prose,
                 "Let the host default model selection decide each worker.",
