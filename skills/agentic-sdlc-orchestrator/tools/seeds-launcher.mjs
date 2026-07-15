@@ -43,10 +43,11 @@ const MISE_CONFIG_SENTINEL = '__agentic_sdlc_reviewed_config_only__';
 const FORBIDDEN_PACKAGE_KEYS = new Set(['bun', 'bunfig', 'tsconfig', 'jsconfig', 'macro', 'macros', 'preload']);
 const FORBIDDEN_PACKAGE_FILES = new Set(['bunfig.toml', 'bunfig.json', 'tsconfig.json', 'jsconfig.json']);
 const FORBIDDEN_PACKAGE_STEMS = new Set(['macro', 'macros', 'preload']);
-const RECEIPT_KEYS = new Set(['schema', 'platform', 'createdAt', 'distribution', 'tuple', 'hashes']);
+const RECEIPT_KEYS = new Set(['schema', 'platform', 'createdAt', 'distribution', 'runtime', 'tuple', 'hashes']);
 const DISTRIBUTION_KEYS = new Set(['root', 'commit', 'gitTree', 'tree', 'miseToml', 'miseLock', 'launcher', 'launcherHash']);
 const HASH_KEYS = new Set(['distribution', 'node', 'nodeExecutable', 'bun', 'seeds', 'packageJson', 'entry', 'git', 'bunfig', 'tsconfig', 'gitconfig']);
 const DISTRIBUTION_HASH_KEYS = new Set(['tree', 'gitTree', 'miseToml', 'miseLock', 'commit']);
+const RUNTIME_KEYS = new Set(['node', 'nodeHash', 'launcherHash']);
 const TUPLE_KEYS = new Set(['node', 'bun', 'seeds', 'git', 'trusted']);
 const NODE_KEYS = new Set(['root', 'executable', 'version']);
 const BUN_KEYS = new Set(['root', 'executable', 'version']);
@@ -668,11 +669,13 @@ function bootstrap(distributionArgument) {
   const tsconfig = trustedEmptyJsonFile(directory, 'trusted-tsconfig.json');
   const gitconfig = trustedEmptyFile(directory, 'trusted-gitconfig');
   const distributionHashes = { tree: distributionTreeHash(distribution), gitTree: git.tree, miseToml: hashFile(miseToml), miseLock: hashFile(miseLock), commit: hashBytes(Buffer.from(git.commit, 'utf8')) };
+  const runtime = { node: realRegularFile(process.execPath, 'executing Node'), nodeHash: hashFile(realRegularFile(process.execPath, 'executing Node')), launcherHash: hashFile(launcher) };
   const receipt = {
     schema: SCHEMA,
     platform: process.platform,
     createdAt: new Date().toISOString(),
     distribution: { root: distribution, commit: git.commit, gitTree: git.tree, tree: distributionHashes.tree, miseToml: distributionHashes.miseToml, miseLock: distributionHashes.miseLock, launcher, launcherHash: hashFile(launcher) },
+    runtime,
     tuple: {
       node: { root: tuple.nodeRoot, executable: tuple.node, version: NODE_VERSION },
       bun: { root: tuple.bunRoot, executable: tuple.bun, version: BUN_VERSION },
@@ -734,18 +737,21 @@ function loadReceipt(path = receiptPath()) {
     fail(`active tuple receipt is missing or corrupt: ${path}`);
   }
   if (!exactKeys(receipt, RECEIPT_KEYS) || receipt.schema !== SCHEMA || receipt.platform !== process.platform || !text(receipt.createdAt)
-    || !exactKeys(receipt.distribution, DISTRIBUTION_KEYS) || !exactKeys(receipt.tuple, TUPLE_KEYS) || !exactKeys(receipt.hashes, HASH_KEYS)
+    || !exactKeys(receipt.distribution, DISTRIBUTION_KEYS) || !exactKeys(receipt.runtime, RUNTIME_KEYS) || !exactKeys(receipt.tuple, TUPLE_KEYS) || !exactKeys(receipt.hashes, HASH_KEYS)
     || !exactKeys(receipt.hashes.distribution, DISTRIBUTION_HASH_KEYS)) {
     fail('active tuple receipt is partial or invalid');
   }
   const { node, bun, seeds, git, trusted } = receipt.tuple;
   const distribution = receipt.distribution;
+  const runtime = receipt.runtime;
   const distributionHashes = receipt.hashes.distribution;
   if (!exactKeys(node, NODE_KEYS) || !exactKeys(bun, BUN_KEYS) || !exactKeys(seeds, SEEDS_KEYS) || !exactKeys(git, GIT_KEYS) || !exactKeys(trusted, TRUSTED_KEYS)
     || node.version !== NODE_VERSION || bun.version !== BUN_VERSION || seeds.package !== SEEDS_PACKAGE || seeds.version !== SEEDS_VERSION || seeds.bin !== SEEDS_BIN
     || ![node.root, node.executable, bun.root, bun.executable, seeds.root, seeds.packageRoot, seeds.binValue, seeds.entry, git.path, git.hash, git.commit, git.tree, trusted.bunfig, trusted.tsconfig, trusted.gitconfig].every(text)
     || ![distribution.root, distribution.commit, distribution.gitTree, distribution.tree, distribution.miseToml, distribution.miseLock, distribution.launcher, distribution.launcherHash].every(text)
+    || ![runtime.node, runtime.nodeHash, runtime.launcherHash].every(text)
     || ![distributionHashes.tree, distributionHashes.gitTree, distributionHashes.miseToml, distributionHashes.miseLock, distributionHashes.commit].every(text)
+    || runtime.nodeHash !== receipt.hashes.nodeExecutable || runtime.launcherHash !== distribution.launcherHash
     || distribution.commit !== git.commit || distribution.gitTree !== git.tree
     || distribution.tree !== distributionHashes.tree || distribution.miseToml !== distributionHashes.miseToml || distribution.miseLock !== distributionHashes.miseLock
     || distributionHashes.commit !== hashBytes(Buffer.from(distribution.commit, 'utf8'))
@@ -762,7 +768,7 @@ function checkCurrentReceipt(receipt) {
   const tuple = validateTuple({ node: node.root, bun: bun.root, seeds: seeds.root });
   if (tuple.node !== node.executable || tuple.bun !== bun.executable || tuple.packageRoot !== seeds.packageRoot || tuple.binValue !== seeds.binValue || tuple.entry !== seeds.entry) fail('active tuple receipt does not match exact platform layout');
   const executingNode = realRegularFile(process.execPath, 'executing Node');
-  if (!samePath(executingNode, node.executable) || hashFile(executingNode) !== expected.nodeExecutable) fail('executing Node does not match exact recorded Node');
+  if (!samePath(executingNode, receipt.runtime.node) || hashFile(executingNode) !== expected.nodeExecutable) fail('executing Node does not match exact recorded Node');
   if (treeHash(node.root) !== expected.node || treeHash(bun.root) !== expected.bun || treeHash(seeds.root) !== expected.seeds || hashFile(tuple.packageJson) !== expected.packageJson || hashFile(tuple.entry) !== expected.entry) fail('exact tuple hash drift detected');
   if (realRegularFile(git.path, 'recorded Git executable') !== git.path || hashFile(git.path) !== expected.git || hashFile(git.path) !== git.hash) fail('recorded Git executable hash drift detected');
   const launcher = currentLauncher();
