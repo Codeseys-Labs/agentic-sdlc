@@ -76,6 +76,91 @@ RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsi
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
+- Research Director is Seeds-read-only.
+- Use only the exact accepted Seeds inspection contract:
+  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>`.
+- Inspect `Seeds(<target>, prime)`, `Seeds(<target>, ready --format json)`, and `Seeds(<target>, blocked --format json)` before substantive orchestration when Seeds is available.
+- Do not create, claim, update, close, sync, or disposition Seeds.
+- For work that outlives the session, emit exactly one typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.
+"""
+CLAUDE_GLOBAL_ROLE_FILENAMES = frozenset(
+    {
+        "sdlc-cartographer.md",
+        "sdlc-critic.md",
+        "sdlc-implementer.md",
+        "sdlc-integrator.md",
+        "sdlc-planner.md",
+        "sdlc-researcher.md",
+        "sdlc-reviewer.md",
+    }
+)
+CODEX_GLOBAL_ROLE_FILENAMES = frozenset(
+    {
+        "sdlc-cartographer.toml",
+        "sdlc-critic.toml",
+        "sdlc-implementer.toml",
+        "sdlc-integrator.toml",
+        "sdlc-planner.toml",
+        "sdlc-researcher.toml",
+        "sdlc-reviewer.toml",
+    }
+)
+RESEARCH_ROLE_IDS = frozenset(
+    {
+        "ablationist",
+        "adversarial_reviewer",
+        "benchmark_engineer",
+        "counterexample_hunter",
+        "data_engineer",
+        "experimentalist",
+        "formalizer",
+        "knowledge_librarian",
+        "literature_scout",
+        "novelty_auditor",
+        "replication_reviewer",
+        "repo_cartographer",
+        "research_director",
+        "safety_reviewer",
+        "synthesis_writer",
+        "systems_engineer",
+        "theorist",
+    }
+)
+PROTECTED_REVIEWER_PATHS = frozenset(
+    {
+        "agents/claude/sdlc-reviewer.md",
+        "agents/codex/sdlc-reviewer.toml",
+        "agents/codex/research/adversarial_reviewer.toml",
+        "agents/codex/research/replication_reviewer.toml",
+        "agents/codex/research/safety_reviewer.toml",
+    }
+)
+SOURCE_PINNED_GLOBAL_PATHS = frozenset(
+    {
+        *(f"agents/claude/{filename}" for filename in CLAUDE_GLOBAL_ROLE_FILENAMES),
+        *(f"agents/codex/{filename}" for filename in CODEX_GLOBAL_ROLE_FILENAMES),
+    }
+)
+SOURCE_PINNED_RESEARCH_PATHS = frozenset(
+    f"agents/codex/research/{role}.toml" for role in RESEARCH_ROLE_IDS
+)
+REVIEWER_NO_OUTWARD_AUTHORITY = "You never decide release status, authorize a mutation, merge, push, or edit code."
+REVIEWER_OUTWARD_AUTHORITY_PATTERN = re.compile(
+    r"(?i)\b(?:may|can|is\s+authorized\s+to|are\s+authorized\s+to|is\s+permitted\s+to|are\s+permitted\s+to)\b"
+    r".{0,100}\b(?:push|publish(?:ing|ation)?|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
+)
+SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
+    r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
+    r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
+)
+SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256 = {
+    "agents/claude/sdlc-reviewer.md": "2cc7132a36dd93127096448cf214c8a70ae5d7a9aed3d883df3a5af241ed8359",
+    "agents/codex/sdlc-reviewer.toml": "31a77d96ea5184f2b4a2f87df250872b5c5e50ccd20c2adb8f15a30bfecba015",
+    "agents/codex/research/adversarial_reviewer.toml": "eb8af719f2f4d4c6075f8a7c108bde8f455b0e6db24390e06b348263fb3cb2ec",
+    "agents/codex/research/replication_reviewer.toml": "10c549ad2d30fe76837611ee4e5015b6cebf3f646711c67ecf5dd81ab1fe8077",
+    "agents/codex/research/safety_reviewer.toml": "1e385fae9448d436188fc84f010c3cbf6a608622c54bdeef6f14c182b5780fa4",
+}
 CANONICAL_RUNTIME_CONTRACT_SHA256 = "e1872645df2e036770491fab44c122336c2fcf3e3765b10485d04bac06f23314"
 EXACT_MODEL_PROVIDER_MAP = {
     "claude-fable-5": "anthropic",
@@ -441,6 +526,53 @@ def managed_global_paths(root: Path) -> set[str]:
     }
 
 
+def managed_role_instructions(path: Path) -> str:
+    if path.suffix == ".toml":
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        instructions = data.get("developer_instructions")
+        return instructions if isinstance(instructions, str) else ""
+    return path.read_text(encoding="utf-8")
+
+
+def validate_source_pinned_protected_role_authority(root: Path, result: Validation) -> None:
+    director_path = root / "agents" / "codex" / "research" / "research_director.toml"
+    if director_path.is_file():
+        try:
+            director_instructions = managed_role_instructions(director_path)
+        except (OSError, tomllib.TOMLDecodeError):
+            director_instructions = ""
+        if director_instructions.count(RESEARCH_DIRECTOR_SEEDS_AUTHORITY) != 1:
+            result.error(
+                "agents/codex/research/research_director.toml: source-pinned protected role authority "
+                "requires the exact Seeds-read-only block once"
+            )
+        else:
+            director_outside = director_instructions.replace(RESEARCH_DIRECTOR_SEEDS_AUTHORITY, "", 1)
+            if SEEDS_MUTATION_AUTHORITY_PATTERN.search(director_outside):
+                result.error(
+                    "agents/codex/research/research_director.toml: source-pinned protected role authority "
+                    "forbids Seeds mutation authority"
+                )
+
+    for relative in sorted(PROTECTED_REVIEWER_PATHS):
+        path = root / relative
+        if not path.is_file():
+            continue
+        if sha256_bytes(path.read_bytes()) != SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256[relative]:
+            result.error(f"{relative}: source-pinned protected role authority content differs")
+        try:
+            instructions = managed_role_instructions(path)
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        if relative in {
+            "agents/claude/sdlc-reviewer.md",
+            "agents/codex/sdlc-reviewer.toml",
+        } and REVIEWER_NO_OUTWARD_AUTHORITY not in instructions:
+            result.error(f"{relative}: source-pinned protected role authority requires the reviewer boundary")
+        if REVIEWER_OUTWARD_AUTHORITY_PATTERN.search(instructions):
+            result.error(f"{relative}: source-pinned protected role authority forbids outward reviewer authority")
+
+
 def validate_managed_role_contract(root: Path, result: Validation) -> None:
     try:
         normative = normative_runtime_contract()
@@ -460,11 +592,16 @@ def validate_managed_role_contract(root: Path, result: Validation) -> None:
         )
     }
     expected_global_hashes = global_spec.get("manifest_sha256", {})
-    if global_spec.get("count") != 14 or set(expected_global_hashes) != global_paths or actual_global != global_paths:
+    if (
+        global_spec.get("count") != 14
+        or set(expected_global_hashes) != SOURCE_PINNED_GLOBAL_PATHS
+        or global_paths != SOURCE_PINNED_GLOBAL_PATHS
+        or actual_global != SOURCE_PINNED_GLOBAL_PATHS
+    ):
         result.error("managed role roster must contain exactly the 14 global SDLC roles")
-    for relative in sorted(global_paths & set(expected_global_hashes)):
+    for relative in sorted(SOURCE_PINNED_GLOBAL_PATHS):
         path = root / relative
-        if not path.is_file() or sha256_bytes(path.read_bytes()) != expected_global_hashes[relative]:
+        if not path.is_file() or sha256_bytes(path.read_bytes()) != expected_global_hashes.get(relative):
             result.error(f"{relative}: full manifest content differs from normative managed role contract")
 
     expected_roles = research_spec.get("roles", {})
@@ -475,10 +612,16 @@ def validate_managed_role_contract(root: Path, result: Validation) -> None:
         str(path.relative_to(root)).replace("\\", "/")
         for path in (root / "agents" / "codex" / "research").glob("*.toml")
     }
-    if research_spec.get("count") != 17 or len(expected_roles) != 17 or actual_research_paths != expected_research_paths:
+    if (
+        research_spec.get("count") != 17
+        or set(expected_roles) != RESEARCH_ROLE_IDS
+        or expected_research_paths != SOURCE_PINNED_RESEARCH_PATHS
+        or actual_research_paths != SOURCE_PINNED_RESEARCH_PATHS
+    ):
         result.error("managed role roster must contain exactly the 17 Research OS roles")
-    for role, spec in expected_roles.items():
-        if not isinstance(spec, dict) or not isinstance(spec.get("path"), str):
+    for role in sorted(RESEARCH_ROLE_IDS):
+        spec = expected_roles.get(role)
+        if not isinstance(spec, dict) or spec.get("path") != f"agents/codex/research/{role}.toml":
             result.error(f"managed research role {role}: invalid normative specification")
             continue
         path = root / spec["path"]
@@ -500,6 +643,8 @@ def validate_managed_role_contract(root: Path, result: Validation) -> None:
             result.error(f"{spec['path']}: developer instructions differ from normative managed role contract")
         if sha256_bytes(path.read_bytes()) != spec.get("manifest_sha256"):
             result.error(f"{spec['path']}: full manifest content differs from normative managed role contract")
+
+    validate_source_pinned_protected_role_authority(root, result)
 
 
 def runtime_receipt_contract() -> str:
