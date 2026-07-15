@@ -14,18 +14,28 @@ Route the consequence of a wrong answer, not task prestige or marketing rank.
 
 ## Dispatch ladder
 
-The stable policy has four tiers and three eligible primary pairs:
+The stable policy has four tiers and three eligible primary pairs. A pair declares the
+eligible route family; the row-specific selection condition decides which exact member can
+run. Do not convert this into a provider default or a requirement to spend tokens on both.
 
-1. **Frontier / derail:** `gpt-5.6-sol` or `claude-fable-5`. The output sets
-   scope, authority, cross-system invariants, data-loss policy, final stop/go, or settled
-   truth. Keep it solo or bounded and require independent re-derivation.
+1. **Frontier / derail:** `gpt-5.6-sol` or `claude-fable-5`. Sol carries an advisory
+   frame, scale-setting recommendation, or candidate settled-truth derivation. Fable is
+   eligible only for a certified bounded frontier/adversarial packet that independently
+   re-derives assumptions or supplies counterexamples; it never settles truth, replaces a
+   Sol peer, or runs as an unbounded fan-out. Its use also requires the current transport to
+   certify the applicable retention, refusal, and capacity constraints. Settled-truth work
+   stops or reduces scope if no certified peer is available.
 2. **Judgment workhorse / degrade:** `gpt-5.6-terra` or `claude-opus-4-8`.
-   An error may pass ordinary gates and silently weaken an artifact. Require explicit
-   acceptance criteria and independent review of an immutable candidate.
-3. **Capable volume / retry:** `gpt-5.6-luna` or `claude-sonnet-5`. A
-   compiler, test, schema, deterministic comparison, evidence check, or diff makes a wrong
-   answer visible. This is the default for gated and cross-checked fan-out.
-4. **Mechanical floor / redo:** use the cheapest certified route from the capable-volume
+   An error may pass ordinary gates and silently weaken an artifact. Choose Terra for the
+   semantic candidate or synthesis, and Opus for an immutable-delta review or another
+   certified independent judgment artifact. Require explicit acceptance criteria and
+   independent review of an immutable candidate.
+3. **Capable volume / retry:** `gpt-5.6-luna` or `claude-sonnet-5`. A compiler, test,
+   schema, deterministic comparison, evidence check, or diff makes a wrong answer visible.
+   Choose the member that has the better verified transport, task fit, and independent
+   perspective for the bounded artifact. This is the default for gated and cross-checked
+   fan-out.
+4. **Mechanical floor / redo:** use the cheapest certified member of the capable-volume
    pair when a complete deterministic check makes the result cheap to repeat. Historical
    Haiku/Spark evidence may justify a recertified fallback, but those models are not part of
    the six-primary set.

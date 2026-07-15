@@ -44,6 +44,13 @@ support a fallback after the exact route is recertified, but neither belongs to 
 set. A mechanical task without a complete deterministic check moves back to capable volume
 or judgment workhorse.
 
+### Fable eligibility constraint
+
+Fable is eligible only for a certified, bounded frontier/adversarial packet; it never settles truth or replaces the Sol peer. Its packet must be independently re-derived, must
+name its assumptions and counterexamples, and remains advisory to the conductor. Settled-truth work stops or reduces scope if no certified peer is available. This boundary is semantic as
+well as capacity control: a Fable answer can attack a conclusion but cannot be silently
+promoted into that conclusion.
+
 ## Exact dispatch and requested effort
 
 Every dispatching Workflow consumer must receive an exact bare ID certified by the active
@@ -53,14 +60,12 @@ tier aliases are unsafe in the current path because settings expand them to
 provider-qualified IDs that ccodex rejects. This calibration does not change settings,
 trust, or configuration.
 
-| Consequence lane | Exact model ID | Requested effort | Complement | Required gate or control |
-|---|---|---|---|---|
-| Derail / settled truth | `gpt-5.6-sol` | `high`, `xhigh` | `claude-fable-5` at `max` searches a bounded assumptions packet | Re-derivation; conductor adjudicates the advisory recommendation |
-| Contained silent-degrade | `gpt-5.6-terra` | `xhigh`, `max` | `claude-opus-4-8` at `high`, `xhigh` reviews an immutable semantic delta | Explicit acceptance criteria and independent review |
-| Deterministic-gated volume | `gpt-5.6-luna` | `high`, `xhigh` | `claude-sonnet-5` at `high`, `xhigh` checks stable evidence | Compiler, tests, schema, diff, or deterministic verifier |
-| Bounded adversarial specialist | `claude-fable-5` | `max` | `gpt-5.6-sol` at `xhigh` receives the counterexample artifact | Bounded packet; advisory analysis only; conductor adjudicates |
-| Semantic-review specialist | `claude-opus-4-8` | `high`, `xhigh` | `gpt-5.6-terra` at `xhigh`, `max` reproduces the candidate | Immutable candidate and named acceptance criteria |
-| Gated-verification specialist | `claude-sonnet-5` | `high`, `xhigh` | `gpt-5.6-luna` at `high`, `xhigh` produces deterministic receipts | Same deterministic gate remains required |
+| Consequence lane | Eligible primary exact IDs | Selection condition | Requested effort | Complement | Required gate or control |
+|---|---|---|---|---|---|
+| Derail / settled truth | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol when it must form the advisory frame or settled-truth derivation; choose Fable only when it is the certified bounded adversarial packet and Sol remains the peer. | Sol `high`, `xhigh`; Fable `xhigh`, `max` | The non-selected member supplies a distinct frame or counterexample artifact. | Re-derivation; conductor adjudicates the advisory recommendation. |
+| Contained silent-degrade | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for the semantic candidate or synthesis; choose Opus when it reviews an immutable semantic delta or produces a separately certified judgment artifact. | Terra `xhigh`, `max`; Opus `high`, `xhigh` | The non-selected member reproduces the candidate or reviews the immutable delta. | Explicit acceptance criteria and independent review. |
+| Deterministic-gated volume | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the member with verified transport, task fit, and the less-correlated evidence path when the same deterministic gate catches failure. | Luna `high`, `xhigh`; Sonnet `high`, `xhigh` | The non-selected member checks stable evidence or produces deterministic receipts. | Compiler, tests, schema, diff, or deterministic verifier. |
+| Cheap fully checked redo | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the cheapest certified member only when a complete deterministic check makes every wrong result cheap to repeat. | `low`, `medium` after route-specific certification | The other capable-volume member is a fallback only while the same complete check remains. | Complete deterministic check; retry or escalate on any mismatch. |
 
 The complete requested effort vocabulary accepted by the smoke transport was:
 
@@ -75,21 +80,25 @@ are explicitly **provisional and requested-only** until representative evaluatio
 upstream telemetry expose the effective effort. Smoke acceptance at all five values does
 not establish an effort-quality curve.
 
-### Current unsafe alias behavior
+### Historical rejected alias evidence
 
 The original run requested aliases. Settings expanded each alias before ccodex validation,
-and all 15 cells per model (five efforts times three lenses) failed transport:
+and all 15 cells per model (five efforts times three lenses) failed transport. These are
+historical rejection examples, not affirmative executable syntax:
 
 | Alias requested | Settings-expanded request | Observed result | Required exact replacement |
 |---|---|---|---|
 | `fable` | `global.anthropic.claude-fable-5` | HTTP 400 unknown model | `claude-fable-5` |
 | `opus` | `us.anthropic.claude-opus-4-8` | HTTP 400 unknown model | `claude-opus-4-8` |
 | `sonnet` | `global.anthropic.claude-sonnet-5` | HTTP 400 unknown model | `claude-sonnet-5` |
+| `haiku` | no accepted current ccodex alias receipt | not certified as executable | use a separately certified exact fallback only |
 
 This is configuration/transport evidence, not evidence that the Claude models are
 unavailable or incapable. Exact bare Claude IDs later completed. An alias becomes safe
 only after its outbound request and transcript readback match the intended exact model in
-the active session.
+the active session. Do not write bare aliases or provider-qualified aliases in executable
+`model` fields; historical rejection examples above are retained solely to prevent that
+regression.
 
 ### Requested versus resolved effort
 
@@ -146,14 +155,16 @@ penalized a response for not answering other independent lenses.
 
 ## Blast-radius production routing
 
-| Wrong-output consequence | Exact model ID | Requested effort | Complement | Required control |
-|---|---|---|---|---|
-| Cheap deterministic retry | `gpt-5.6-luna` | `high` | `claude-sonnet-5` at `high` checks evidence rather than repeating the task | Exact comparison, schema, or bounded retry |
-| Visible compiler/test/gate failure | `gpt-5.6-luna` | `high`, `xhigh` | `claude-sonnet-5` at `high`, `xhigh` checks the stable result | Compiler, tests, diff, or deterministic verifier |
-| Silent candidate degradation | `gpt-5.6-terra` | `xhigh`, `max` | `claude-opus-4-8` at `high`, `xhigh` reviews the semantic delta | Immutable candidate and independent acceptance review |
-| Run derailment or settled truth | `gpt-5.6-sol` | `high`, `xhigh` | `claude-fable-5` at `max` attacks a bounded assumptions packet | Re-derivation; conductor records the stop/go disposition |
-| Trust, credentials, authority, or data-loss boundary | `gpt-5.6-sol` | `xhigh` | `claude-fable-5` searches a bounded packet; `claude-opus-4-8` reviews implementation semantics | Conductor adjudicates; fail closed and demand concrete evidence |
-| Outward or irreversible operation | Human authorization | Not a model dispatch | Models may recommend only | Separate operation-specific human approval |
+| Wrong-output consequence | Eligible primary exact IDs | Selection condition | Requested effort | Complement | Required control |
+|---|---|---|---|---|---|
+| Cheap deterministic retry | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the cheaper certified member when exact comparison, schema, or bounded retry catches every mismatch. | `high`, or `low`/`medium` only after route certification | The non-selected member checks evidence rather than repeating the task. | Exact comparison, schema, or bounded retry. |
+| Visible compiler/test/gate failure | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the member with verified transport and a distinct evidence path when compiler, tests, diff, or verifier makes failure visible. | `high`, `xhigh` | The non-selected member checks the stable result. | Compiler, tests, diff, or deterministic verifier. |
+| Silent candidate degradation | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra when producing the candidate; choose Opus only for a separately certified immutable semantic review. | Terra `xhigh`, `max`; Opus `high`, `xhigh` | The non-selected member reviews the semantic delta or reproduces the candidate. | Immutable candidate and independent acceptance review. |
+| Run derailment or settled truth | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory frame or truth derivation; choose Fable only as the certified bounded assumptions attacker with Sol as peer. | Sol `high`, `xhigh`; Fable `xhigh`, `max` | The non-selected member provides the re-derivation or bounded counterexample packet. | Re-derivation; conductor records the stop/go disposition. |
+| Trust, credentials, authority, or data-loss boundary | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol to analyze the authority boundary; choose Fable only for certified bounded adversarial counterexamples, never to settle the boundary. | Sol `xhigh`; Fable `xhigh`, `max` | The non-selected member attacks assumptions or reviews implementation semantics. | Conductor adjudicates; fail closed and demand concrete evidence. |
+
+Outward or irreversible operations require human authorization, not a model dispatch. Models
+may recommend only; separate operation-specific human approval remains required.
 
 No model grants queue, fan-in, publication, or user authority. The conductor alone
 adjudicates and mutates Seeds; only an authorized integrator performs an already-authorized
@@ -161,61 +172,61 @@ fan-in; humans authorize outward actions.
 
 ## Agentic SDLC phase routing
 
-| Phase | Exact model ID | Requested effort and context | Complement | Gate or control |
-|---|---|---|---|---|
-| Frame | `gpt-5.6-sol` | `high`; `xhigh` at trust or authority boundaries; `[1m]` only for transcript or repository-heavy frames | `claude-fable-5` at `max` analyzes load-bearing assumptions | Re-derive; conductor adjudicates the recommendation |
-| Discover | `gpt-5.6-terra` | `xhigh`; `[1m]` for repository-wide readers | `claude-sonnet-5` at `high` checks citations and omissions | Partitioned scope and evidence inventory |
-| Research | `gpt-5.6-terra` | `xhigh`, `max`; `[1m]` only for long corpora | `claude-sonnet-5` extracts; `gpt-5.6-sol` analyzes load-bearing unknowns | Conductor adjudicates unknown disposition |
-| Plan | `gpt-5.6-sol` | `xhigh`; `[1m]` when repository-wide evidence is consumed | `claude-fable-5` at `max` attacks multiplier assumptions | Advisory plan; conductor alone mutates Seeds |
-| Act, contained | `gpt-5.6-terra` | `xhigh`; `max` for interacting constraints | `claude-opus-4-8` reviews immutable candidate decisions | Unsuffixed unless artifact-heavy |
-| Act, deterministic-gated | `gpt-5.6-luna` | `high`, `xhigh` | `claude-sonnet-5` checks stable evidence | Unsuffixed by default; same deterministic gate |
-| Review, semantic | `claude-opus-4-8` | `high`, `xhigh`; Claude `[1m]` only after exact route certification | `gpt-5.6-terra` reproduces and classifies findings | Immutable candidate and acceptance criteria |
-| Review, trust or authority | `gpt-5.6-sol` | `xhigh` | `claude-fable-5` searches a bounded packet for counterexamples | Advisory analysis; conductor adjudicates |
-| Reconcile | `gpt-5.6-terra` | `xhigh` | `claude-sonnet-5` validates evidence links | Conductor alone records Seeds mutations |
-| Integrate | `gpt-5.6-terra` | `max` | `gpt-5.6-luna` re-runs gates; `claude-opus-4-8` reviews fan-in semantics | Authorized integrator only; re-gate on integration head |
-| Ship recommendation | `gpt-5.6-sol` | `xhigh` | `gpt-5.6-luna`, `claude-sonnet-5` validate receipts | Human separately authorizes outward action |
+| Phase | Eligible primary exact IDs | Selection condition | Requested effort and context | Complement | Gate or control |
+|---|---|---|---|---|---|
+| Frame | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory frame; choose Fable only as the certified bounded adversarial assumptions packet. | Sol `high`; `xhigh` at trust or authority boundaries; `[1m]` only for transcript or repository-heavy frames; Fable `max` bounded packet | The non-selected member re-derives or attacks multiplier assumptions. | Re-derive; conductor adjudicates the recommendation. |
+| Discover | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for dense mapping; choose Opus when an immutable semantic candidate needs independent review. | Terra `xhigh`; `[1m]` for repository-wide readers; Opus `high`, `xhigh` | The non-selected member checks citations and omissions. | Partitioned scope and evidence inventory. |
+| Research | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for synthesis; choose Opus for a certified semantic review of the evidence packet. | Terra `xhigh`, `max`; `[1m]` only for long corpora; Opus `high`, `xhigh` | Luna/Sonnet can extract; Sol analyzes load-bearing unknowns. | Conductor adjudicates unknown disposition. |
+| Plan | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory plan; choose Fable only to attack certified bounded multiplier assumptions. | Sol `xhigh`; `[1m]` when repository-wide evidence is consumed; Fable `max` bounded packet | The non-selected member returns the plan or counterexample artifact. | Advisory plan; conductor alone mutates Seeds. |
+| Act, contained | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to implement interacting constraints; choose Opus to review immutable candidate decisions. | Terra `xhigh`; `max` for interacting constraints; Opus `high`, `xhigh` | The non-selected member produces candidate or review. | Unsuffixed unless artifact-heavy. |
+| Act, deterministic-gated | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the member with verified transport and independent evidence when the deterministic gate remains complete. | `high`, `xhigh` | The non-selected member checks stable evidence. | Unsuffixed by default; same deterministic gate. |
+| Review, semantic | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Opus for semantic review; choose Terra to reproduce and classify an immutable candidate. | Opus `high`, `xhigh`; Terra `xhigh`, `max`; Claude `[1m]` only after exact route certification | The non-selected member supplies review or reproduction. | Immutable candidate and acceptance criteria. |
+| Review, trust or authority | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for authority analysis; choose Fable only to search a certified bounded counterexample packet. | Sol `xhigh`; Fable `max` bounded packet | The non-selected member supplies authority analysis or counterexamples. | Advisory analysis; conductor adjudicates. |
+| Reconcile | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to reconcile semantic evidence; choose Opus to review the immutable reconciliation candidate. | Terra `xhigh`; Opus `high`, `xhigh` | Sonnet validates evidence links. | Conductor alone records Seeds mutations. |
+| Integrate | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to integrate; choose Opus to review fan-in semantics after the integration head is immutable. | Terra `max`; Opus `high`, `xhigh` | Luna re-runs gates; the non-selected judgment member reviews or integrates. | Authorized integrator only; re-gate on integration head. |
+| Ship recommendation | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for promotion analysis; choose Fable only as a certified bounded adversarial receipt packet. | Sol `xhigh`; Fable `xhigh`, `max` bounded packet | Luna/Sonnet validate receipts. | Human separately authorizes outward action. |
 
 ## Approved roadmap family lanes
 
 Each complement produces an orthogonal artifact rather than duplicating the whole task.
 Every route below remains provisional/requested-only under the effort-readback boundary.
 
-| Roadmap lane | Primary exact model ID | Requested effort and context | Complementary assignment | Gate or escalation |
-|---|---|---|---|---|
-| S1 Seeds toolchain retention | `gpt-5.6-luna` | `high` | `claude-sonnet-5` at `high` checks evidence-to-claim coverage | `gpt-5.6-terra` at `xhigh` analyzes semantic drift and recommends disposition |
-| S2 Seeds execution contract | `gpt-5.6-terra` | `xhigh` | `gpt-5.6-sol` at `xhigh` analyzes queue evidence; `claude-opus-4-8` at `xhigh` reviews stable diff | Null or mismatch fails closed; conductor adjudicates Seeds action |
-| Seeds fan-in | `gpt-5.6-terra` | `max` | `gpt-5.6-luna` at `high` re-gates exact ranges | Authorized integrator only; `gpt-5.6-sol` at `xhigh` analyzes stop/go ambiguity for conductor adjudication |
-| Wave 1 CAO deletion | `gpt-5.6-terra` | `xhigh` | `gpt-5.6-luna` at `high` inventories residues; `claude-opus-4-8` at `high` reviews removed surface | Any shipped or runtime residue blocks |
-| Wave 2 state-v3 identity cutover | `gpt-5.6-terra` | `max` | `gpt-5.6-sol` at `xhigh` analyzes migration invariants; `gpt-5.6-luna` at `xhigh` runs crash matrix; `claude-opus-4-8` at `xhigh` reviews recovery | Fail closed on foreign ownership; conductor adjudicates |
-| Claude marketplace/plugin plane | `gpt-5.6-terra` | `xhigh` | `claude-opus-4-8` at `xhigh` checks supported-operation boundary | Never edit opaque state |
-| Local checkout rename gate | `gpt-5.6-sol` | `xhigh` | `gpt-5.6-luna` at `high` verifies pre/post receipts | Human approval before mutation |
-| GitHub repository rename gate | `gpt-5.6-sol` | `xhigh` | `claude-sonnet-5` at `high` inventories post-authorization evidence | Human approval; model never authorizes |
-| A1 change-writing | `gpt-5.6-terra` | `xhigh` | `claude-opus-4-8` at `high` reviews evidence and attribution; `gpt-5.6-luna` at `high` builds fixtures | Output-only contract |
-| A2 Git-default sdlc-init | `gpt-5.6-terra` | `max` | `gpt-5.6-sol` at `xhigh` analyzes defaults and refusals; `claude-opus-4-8` at `xhigh` reviews safety; `gpt-5.6-luna` at `high` builds fixtures | Dry-run and no-write cancellation |
-| A3 hierarchical instructions | `gpt-5.6-terra` | `xhigh` | `claude-sonnet-5` at `high` checks conformance; `claude-opus-4-8` at `high` reviews markers and ownership | Preserve foreign prose |
-| R1 shared role contracts | `gpt-5.6-terra` | `xhigh` | `gpt-5.6-sol` at `xhigh` analyzes separation of powers; `claude-fable-5` at `max` attacks authority packet; `gpt-5.6-luna` at `high` projects fixtures | All analysis advisory; conductor adjudicates |
-| R2 bounded Deep Work Loop | `gpt-5.6-terra` | `xhigh` | `gpt-5.6-sol` at `xhigh` analyzes bounds and backflow; `claude-opus-4-8` at `xhigh` reviews recursion; `gpt-5.6-luna` at `high` tests | No second queue or unbounded recursion |
-| R3 HyperResearch/Research OS | `gpt-5.6-terra` | `max` | `claude-sonnet-5` extracts evidence; `claude-opus-4-8` reviews crash recovery; `gpt-5.6-sol` analyzes load-bearing unknowns | Typed `SeedProposal`; conductor alone mutates Seeds |
-| G1 Git change-flow family | `gpt-5.6-terra` | `xhigh` | `claude-opus-4-8` at `xhigh` reviews rebase, squash, and stack; `gpt-5.6-luna` at `high` builds fixtures | Stable commit and merge-base evidence |
-| G2 toolchain/security | `gpt-5.6-terra` | `max` | `gpt-5.6-sol` at `xhigh` analyzes trust evidence; `claude-opus-4-8` reviews semantic security; `gpt-5.6-luna` tests falsifiability | Exact gate argv, status, and log digest |
-| J1 jj certification | `gpt-5.6-terra` | `[1m]` at `xhigh` | `gpt-5.6-sol` at `[1m]`, `xhigh` analyzes framing; `gpt-5.6-luna` at `high` builds fixture matrix; `claude-fable-5` at `max` attacks data-loss assumptions | Official docs and immutable Git handoff; conductor adjudicates |
-| J2 jj implementation | `gpt-5.6-terra` | `max` | `claude-opus-4-8` at `xhigh` reviews handoff and recovery; `gpt-5.6-luna` at `xhigh` builds fixtures | Conflict-free exact Git OID |
-| A2j jj init amendment | `gpt-5.6-terra` | `xhigh` | `claude-sonnet-5` at `high` checks explicit selection and receipt | Only after J1/J2 certification |
-| M0a Mermaid browser ADR/spike | `gpt-5.6-terra` | `[1m]` at `xhigh` | `gpt-5.6-sol` at `xhigh` analyzes dependency evidence; `claude-opus-4-8` reviews browser dependency; `gpt-5.6-luna` builds host/offline matrix | Stop before M1 without portable provider; conductor adjudicates |
-| M0b Mermaid security foundation | `gpt-5.6-terra` | `max` | `claude-opus-4-8` at `xhigh` reviews malicious SVG; `gpt-5.6-luna` builds parser/render matrix | Strict allowlist and bounded resources |
-| M1 structural Mermaid skills | `gpt-5.6-luna` | `xhigh` | `claude-sonnet-5` at `high` checks docs, citations, and fixtures | One writer and pipeline reviewer |
-| M2 planning Mermaid skills | `gpt-5.6-luna` | `xhigh` | `claude-sonnet-5` at `high` checks docs, citations, and fixtures | One writer and pipeline reviewer |
-| M3 quantitative Mermaid skills | `gpt-5.6-luna` | `xhigh` | `claude-sonnet-5` at `high` checks docs, citations, and fixtures | One writer and pipeline reviewer |
-| M4 technical Mermaid skills | `gpt-5.6-luna` | `xhigh` | `claude-sonnet-5` at `high` checks docs, citations, and fixtures | One writer and pipeline reviewer |
-| M5 conceptual Mermaid skills | `gpt-5.6-luna` | `xhigh` | `claude-sonnet-5` at `high` checks docs, citations, and fixtures | One writer and pipeline reviewer |
-| M6 Mermaid router | `gpt-5.6-terra` | `xhigh` | `claude-sonnet-5` at `high` inventories exact-one routing | Reject unsupported or ambiguous requests |
-| M7 Mermaid conformance | `gpt-5.6-luna` | `xhigh` | `claude-opus-4-8` reviews malicious output semantics; `gpt-5.6-sol` at `high` analyzes final evidence | Exactly one router plus 30 skills; conductor adjudicates |
-| Release hardening | `gpt-5.6-terra` | `max` | `gpt-5.6-luna` builds cross-platform fixtures; `claude-opus-4-8` reviews semantics; `gpt-5.6-sol` recommends promotion | Publication separately authorized by humans |
-| Evolutionary Core M2 | `gpt-5.6-terra` | `max` | `gpt-5.6-sol` at `xhigh` analyzes kernel contracts; `gpt-5.6-luna` runs crash suite; `claude-opus-4-8` reviews immutable candidate | Deterministic receipt and idempotent reconcile |
-| Claude Golden Wave M3 | `gpt-5.6-terra` | `max` | `gpt-5.6-sol` at `xhigh` analyzes adapter and authority contract; `claude-opus-4-8` reviews semantics; `claude-sonnet-5` checks conformance; `claude-fable-5` attacks bounded assumptions | Exact Claude ID, effort, and context readback |
-| Portability M4 | `gpt-5.6-terra` | `max` | `gpt-5.6-sol` at `xhigh` analyzes portability evidence; `gpt-5.6-luna` runs common fault suite; `claude-opus-4-8` reviews assumptions; `claude-sonnet-5` checks conformance | No public ABI before three adapters |
-| CCP/ccodex certification | `gpt-5.6-terra` | `[1m]` at `max` | `gpt-5.6-sol` at `xhigh` analyzes package evidence; `gpt-5.6-luna` checks lifecycle; `claude-fable-5` attacks credential assumptions; `claude-opus-4-8` reviews implementation | Exact version, checksum, and readback |
-| Final family wiring | `gpt-5.6-terra` | `xhigh` | `claude-sonnet-5` at `high` verifies cross-links and inventory | No unrelated family co-mingling |
+| Roadmap lane | Eligible primary exact IDs | Selection condition | Requested effort and context | Complementary assignment | Gate or escalation |
+|---|---|---|---|---|---|
+| S1 Seeds toolchain retention | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the certified member with the more independent evidence path when checks are deterministic. | `high` | The non-selected member checks evidence-to-claim coverage; Terra analyzes semantic drift. | Terra at `xhigh` recommends disposition. |
+| S2 Seeds execution contract | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for contract synthesis; choose Opus for immutable stable-diff review. | Terra `xhigh`; Opus `xhigh` | Sol analyzes queue evidence; the non-selected judgment member reviews or synthesizes. | Null or mismatch fails closed; conductor adjudicates Seeds action. |
+| Seeds fan-in | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to integrate; choose Opus only to review the immutable fan-in candidate. | Terra `max`; Opus `xhigh` | Luna re-gates exact ranges; Sol analyzes stop/go ambiguity. | Authorized integrator only; conductor adjudicates. |
+| Wave 1 CAO deletion | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for removal implementation; choose Opus for removed-surface review. | Terra `xhigh`; Opus `high` | Luna inventories residues. | Any shipped or runtime residue blocks. |
+| Wave 2 state-v3 identity cutover | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for cutover implementation; choose Opus for recovery review of the immutable candidate. | Terra `max`; Opus `xhigh` | Sol analyzes migration invariants; Luna runs crash matrix. | Fail closed on foreign ownership; conductor adjudicates. |
+| Claude marketplace/plugin plane | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for supported operation work; choose Opus for opaque-boundary review. | Terra `xhigh`; Opus `xhigh` | The non-selected member produces the separate semantic artifact. | Never edit opaque state. |
+| Local checkout rename gate | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory rename frame; choose Fable only for certified bounded adversarial receipt review. | Sol `xhigh`; Fable `max` bounded packet | Luna verifies pre/post receipts. | Human approval before mutation. |
+| GitHub repository rename gate | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for authority analysis; choose Fable only to attack a certified bounded authorization packet. | Sol `xhigh`; Fable `max` bounded packet | Sonnet inventories post-authorization evidence. | Human approval; model never authorizes. |
+| A1 change-writing | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for writing; choose Opus for immutable evidence and attribution review. | Terra `xhigh`; Opus `high` | Luna builds fixtures. | Output-only contract. |
+| A2 Git-default sdlc-init | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for implementation; choose Opus for the certified safety review. | Terra `max`; Opus `xhigh` | Sol analyzes defaults and refusals; Luna builds fixtures. | Dry-run and no-write cancellation. |
+| A3 hierarchical instructions | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for instruction work; choose Opus for markers and ownership review. | Terra `xhigh`; Opus `high` | Sonnet checks conformance. | Preserve foreign prose. |
+| R1 shared role contracts | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for contracts; choose Opus for stable-diff semantic review. | Terra `xhigh`; Opus `xhigh` | Sol analyzes separation of powers; Fable attacks a bounded authority packet; Luna projects fixtures. | All analysis advisory; conductor adjudicates. |
+| R2 bounded Deep Work Loop | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for loop implementation; choose Opus for bounded-recursion review. | Terra `xhigh`; Opus `xhigh` | Sol analyzes bounds and backflow; Luna tests. | No second queue or unbounded recursion. |
+| R3 HyperResearch/Research OS | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for bounded orchestration; choose Opus for crash-recovery semantic review. | Terra `max`; Opus `xhigh` | Sonnet extracts evidence; Sol analyzes load-bearing unknowns. | Typed `SeedProposal`; conductor alone mutates Seeds. |
+| G1 Git change-flow family | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for change-flow work; choose Opus for rebase, squash, and stack review. | Terra `xhigh`; Opus `xhigh` | Luna builds fixtures. | Stable commit and merge-base evidence. |
+| G2 toolchain/security | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for semantic implementation; choose Opus for semantic security review. | Terra `max`; Opus `high` | Sol analyzes trust evidence; Luna tests falsifiability. | Exact gate argv, status, and log digest. |
+| J1 jj certification | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for certification synthesis; choose Opus for immutable handoff review. | Terra `[1m]` at `xhigh`; Opus `xhigh` | Sol analyzes framing; Luna builds fixture matrix; Fable attacks data-loss assumptions. | Official docs and immutable Git handoff; conductor adjudicates. |
+| J2 jj implementation | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for implementation; choose Opus for handoff and recovery review. | Terra `max`; Opus `xhigh` | Luna builds fixtures. | Conflict-free exact Git OID. |
+| A2j jj init amendment | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for amendment work; choose Opus for an immutable semantic review if the gate no longer catches risk. | Terra `xhigh`; Opus `high` | Sonnet checks explicit selection and receipt. | Only after J1/J2 certification. |
+| M0a Mermaid browser ADR/spike | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for ADR/spike synthesis; choose Opus for browser-dependency review. | Terra `[1m]` at `xhigh`; Opus `xhigh` | Sol analyzes dependency evidence; Luna builds host/offline matrix. | Stop before M1 without portable provider; conductor adjudicates. |
+| M0b Mermaid security foundation | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for foundation implementation; choose Opus for malicious-SVG semantic review. | Terra `max`; Opus `xhigh` | Luna builds parser/render matrix. | Strict allowlist and bounded resources. |
+| M1 structural Mermaid skills | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the certified member with the strongest deterministic document/fixture evidence path. | `xhigh` | The non-selected member checks docs, citations, and fixtures. | One writer and pipeline reviewer. |
+| M2 planning Mermaid skills | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the certified member with the strongest deterministic document/fixture evidence path. | `xhigh` | The non-selected member checks docs, citations, and fixtures. | One writer and pipeline reviewer. |
+| M3 quantitative Mermaid skills | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the certified member with the strongest deterministic document/fixture evidence path. | `xhigh` | The non-selected member checks docs, citations, and fixtures. | One writer and pipeline reviewer. |
+| M4 technical Mermaid skills | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the certified member with the strongest deterministic document/fixture evidence path. | `xhigh` | The non-selected member checks docs, citations, and fixtures. | One writer and pipeline reviewer. |
+| M5 conceptual Mermaid skills | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the certified member with the strongest deterministic document/fixture evidence path. | `xhigh` | The non-selected member checks docs, citations, and fixtures. | One writer and pipeline reviewer. |
+| M6 Mermaid router | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for router synthesis; choose Opus for semantic review of exact-one routing. | Terra `xhigh`; Opus `high` | Sonnet inventories exact-one routing. | Reject unsupported or ambiguous requests. |
+| M7 Mermaid conformance | `gpt-5.6-luna` or `claude-sonnet-5` | Choose Luna for deterministic conformance; choose Sonnet for a separately certified gated evidence pass. | `xhigh` | Opus reviews malicious output semantics; Sol analyzes final evidence. | Exactly one router plus 30 skills; conductor adjudicates. |
+| Release hardening | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for hardening synthesis; choose Opus for immutable release-semantic review. | Terra `max`; Opus `high` | Luna builds cross-platform fixtures; Sol recommends promotion. | Publication separately authorized by humans. |
+| Evolutionary Core M2 | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for core implementation; choose Opus for immutable candidate review. | Terra `max`; Opus `xhigh` | Sol analyzes kernel contracts; Luna runs crash suite. | Deterministic receipt and idempotent reconcile. |
+| Claude Golden Wave M3 | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for adapter work; choose Opus for semantics review after exact Claude readback. | Terra `max`; Opus `xhigh` | Sol analyzes adapter/authority; Sonnet checks conformance; Fable attacks bounded assumptions. | Exact Claude ID, effort, and context readback. |
+| Portability M4 | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for portability implementation; choose Opus for immutable assumptions review. | Terra `max`; Opus `xhigh` | Sol analyzes portability; Luna runs common fault suite; Sonnet checks conformance. | No public ABI before three adapters. |
+| CCP/ccodex certification | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for certification; choose Opus for implementation semantics review. | Terra `[1m]` at `max`; Opus `xhigh` | Sol analyzes package evidence; Luna checks lifecycle; Fable attacks credential assumptions. | Exact version, checksum, and readback. |
+| Final family wiring | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for wiring; choose Opus for an immutable semantic review when conformance evidence is incomplete. | Terra `xhigh`; Opus `high` | Sonnet verifies cross-links and inventory. | No unrelated family co-mingling. |
 
 ## Complementary vendor roles
 
@@ -259,7 +270,7 @@ real verifier changes the failure into a visible retry.
    apply bounded provider backoff and retry the same certified exact model/effort once.
 3. On 429 or overload, reduce concurrency. Do not lower effort, gate strength, or
    blast-radius class merely to make pressure disappear.
-4. Never fall back from an exact Claude ID to the unsafe aliases in this session.
+4. Never fall back from an exact Claude ID to the historical rejected aliases in this session.
 5. A deterministic-gated lane may cross `gpt-5.6-luna` and `claude-sonnet-5` only while
    the same deterministic gate remains.
 6. A contained semantic lane may cross `gpt-5.6-terra` and `claude-opus-4-8` only against
@@ -278,15 +289,24 @@ real verifier changes the failure into a visible retry.
 ## Quota and concurrency evidence
 
 No quotas were freshly measured for this calibration. The table is **inherited evidence**
-from one Bedrock account in `us-east-1`, dated 2026-07-05. It is account-, region-,
+from one Amazon Bedrock account in `us-east-1`, dated 2026-07-05. It is account-, region-,
 provider-, and date-specific and may not describe ccodex traffic. Re-query before using it
-for fan-out sizing.
+for fan-out sizing. The provider/account/region/date qualifier applies to every value and
+caveat in this section, not to the six-model policy itself.
 
-| Historical Claude lane | Cross-region TPM | Global cross-region TPM | Global CRIS tokens/day | Invocation tokens/day |
-|---|---:|---:|---:|---:|
-| Fable 5 | 200K | 500K | 720M | 144M |
-| Opus 4.8 | 30M | 30M | 43.2B | 21.6B |
-| Sonnet 5 | 6M | 6M | 8.64B | 4.32B |
+| Historical Claude lane | Cross-region TPM | Global cross-region TPM | Global CRIS tokens/day | Invocation tokens/day | RPM | Historical fully-gated concurrency |
+|---|---:|---:|---:|---:|---:|---|
+| Fable 5 | 200K | 500K | 720M | 144M | TPM-bound | 1, maybe 2 bounded agents |
+| Opus 4.8 | 30M | 30M | 43.2B | 21.6B | TPM-bound | Dozens in parallel |
+| Sonnet 5 | 6M | 6M | 8.64B | 4.32B | TPM-bound | ~20–60 heavy agents |
+| Haiku 4.5 | 5M | 5M | 7.2B | 3.6B | 10K | ~20–50 heavy agents |
+
+Historical Fable use on that Bedrock account required mandatory provider_data_share retention,
+carried stricter refusal/safety behavior on dual-use content, and could encounter day-one
+capacity can flap independently of quota. Those are provider/account/region/date-qualified
+operational caveats, not claims about every Fable transport. A Fable 503 on an early-capacity
+path can be a capacity symptom rather than a configuration proof; preserve the transport
+receipt before reclassifying it.
 
 There is no Sol, Terra, or Luna quota evidence available: no GPT RPM, TPM, daily,
 concurrency, or cost limit was measured. Successful parallel completion is not a quota
@@ -296,15 +316,20 @@ Semantic caps apply regardless of capacity: one canonical scale-setter at a time
 bounded adversarial attacker, one writer per worktree, one conductor, integrator WIP 1,
 and bounded passes/review-fix rounds.
 
-Historical operational receipts remain useful but do not certify the current transport:
+Historical operational receipts remain useful but do not certify the current transport and
+are not deterministic receipts:
 
-- On 2026-07-05, a Sonnet-5 fleet completed **61 agents / 9.05M subagent tokens / 2h12m**
-  with zero observed throttling in that run. Adversarial verification preserved 16/21
-  critical/high findings, including a real critical security finding. The structural
+- Historical operator note for `wf_497ea95a-e7f` (2026-07-05): a Sonnet-5 fleet completed
+  **61 agents / 9.05M subagent tokens / 2h12m** with zero observed throttling in that run.
+  Adversarial verification preserved 16/21 critical/high findings, including a real critical
+  security finding. Its published linkage is incomplete, so this is retained as a clearly
+  downgraded historical claim rather than a current concurrency certification. The structural
   verifier, not a total intelligence claim, justified that gated volume lane.
-- On 2026-06-11, an Opus-era **6-dimension review + adversarial verification** used the
-  then-current workhorse lane. It is historical rationale for preserving an ungated semantic
-  workhorse, not evidence that current work must use the same provider or model.
+- Historical operator note for `dcperf-automation` (2026-06-11): an Opus-era
+  **6-dimension review + adversarial verification** used the then-current workhorse lane.
+  Its published linkage is incomplete, so it is historical rationale for preserving an
+  ungated semantic workhorse, not evidence that current work must use the same provider or
+  model.
 
 Reproduce representative current workloads before turning either receipt into concurrency,
 quality, cost, or quota policy.
