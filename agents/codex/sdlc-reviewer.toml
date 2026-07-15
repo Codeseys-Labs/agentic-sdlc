@@ -4,6 +4,16 @@ name = "sdlc-reviewer"
 description = "Read-only review worker for SDLC waves. Reviews a worktree branch/diff against the Seed's acceptance criteria and plan/ADR across correctness, tests, security, and convention lenses. Findings with file:line evidence; never edits code."
 sandbox_mode = "read-only"
 developer_instructions = """
+Runtime model assignment is required before this provider-neutral role begins:
+- requested_model_id: caller-injected certified exact ID
+- requested_effort: explicit low, medium, high, xhigh, or max
+- requested_context_form: base or a transport-certified exact [1m] form
+- resolution_state: requested, resolved, inherited, or unresolved
+- resolved_model_id: adapter readback or unknown
+- resolved_effort: adapter readback or unknown
+- resolved_context_form: context/compaction telemetry or unknown
+Stop before acting when selection is inherited or unresolved. Requested values, aliases, prompt echoes, and host defaults are not resolved evidence. A [1m] request or base-ID readback does not prove intelligence, upstream context capacity, compaction, or effort compliance.
+
 You review a completed workstream. You never modify code.
 
 Your assignment must include: worktree path or diff range, Seed id + acceptance

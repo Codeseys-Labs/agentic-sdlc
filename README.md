@@ -52,10 +52,15 @@ start, or enable cmux or tmux merely to use this bundle.
   (director + specialists), claim/experiment ledgers, greenfield/brownfield workflows,
   schemas, and Make validation gates into any target repo. Pairs with the flagship's
   `references/research-team.md` (the distilled principles).
-- `skills/model-tier-rightsizing/`: model-routing trigger and discovery pointer. Load it
-  before any model dispatch; its canonical calibration records exact certified IDs,
-  requested effort, transport hazards, evidence boundaries, complements, controls, and
-  roadmap lanes. The flagship hands off through `references/tiered-orchestration.md`.
+- `skills/model-tier-rightsizing/`: first-class model-routing skill. Load it before any
+  model dispatch. Its four-tier policy pairs exact Sol/Fable for frontier derail work,
+  Terra/Opus for judgment-workhorse silent-degrade work, and Luna/Sonnet for capable-volume
+  visible-retry work; the mechanical floor selects the cheapest certified fully gated route.
+  The canonical calibration records exact IDs, explicit requested effort, transport hazards,
+  evidence boundaries, complements, controls, quotas, and roadmap lanes. Selection is by task
+  fit, independent perspective, quota, and verified transport—not provider preference or
+  artificial all-six representation. The flagship hands off through
+  `references/tiered-orchestration.md`.
 - `skills/cmux-event-bus-messaging/`: optional cmux-only event-bus pub/sub pattern (publish via
   `cmux log --source msg:<topic>`, subscribe via `cmux events` with replay/resume, the
   claim-check pattern, both race gotchas). Pairs with `references/cmux-integration.md`
@@ -99,7 +104,9 @@ start, or enable cmux or tmux merely to use this bundle.
   snapshot-only critique team), **integrator** (the only merging agent). Full loop wiring:
   cartographers (parallel, per area) → planner → implementers → reviewers → integrator,
   critic concurrent, researchers on demand. Provider-neutral role definitions do not dispatch:
-  their caller must inject a certified exact model ID or stop before delegation.
+  their runtime assignment must carry a caller-injected certified exact model ID, explicit
+  requested effort/context form, and requested/resolved/inherited/unresolved receipt state, or
+  stop before delegation. No static role effort pin or host-default selection is policy.
 - `agents/codex/research/`: the 17-role research-team TOMLs (repo-scoped reference
   copies — NOT globally installed; see its README; scaffolded per-repo by
   codex-research-os).
@@ -139,6 +146,12 @@ remain dispatch inputs; adapter readback alone may resolve provider/model. A pas
 status or gate never authorizes push, publication, PR mutation, merge, deployment, credential, or other
 outward effect.
 
+Before any persistent `mise trust` operation—including the bootstrap below—obtain explicit
+operation-specific approval for the exact reviewed config path. The same gate applies to
+persistent Codex/global config edits, shell aliases, and credential writes; a general run or
+implementation approval is insufficient. Process-scoped validation may instead use
+`mise --no-config --cd <repo> exec ...` without persisting trust.
+
 Bootstrap the repository and inspect the available lifecycle tasks:
 
 ```bash
@@ -147,10 +160,11 @@ mise install
 mise tasks
 ```
 
-Mise trust is scoped to each absolute config path, so every linked worktree must trust its own
-`mise.toml` after reviewing the diff. `MISE_PARANOID=1` deliberately rejects an untrusted
-worktree; approve it with `MISE_PARANOID=1 mise trust <worktree>/mise.toml`, then rerun the
-command. Locked resolution fails closed when the current platform is absent from `mise.lock`.
+Mise trust is scoped to each absolute config path, so every linked worktree needs separate
+explicit operation-specific approval before trusting its reviewed `mise.toml`.
+`MISE_PARANOID=1` deliberately rejects an untrusted worktree; after that approval, apply
+`MISE_PARANOID=1 mise trust <worktree>/mise.toml`, then rerun the command. Locked
+resolution fails closed when the current platform is absent from `mise.lock`.
 
 The public task surface is intentionally small:
 

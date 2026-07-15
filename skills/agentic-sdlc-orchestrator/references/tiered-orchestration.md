@@ -5,10 +5,19 @@ structure with the canonical routing policy; it does not restate a routing matri
 
 Before dispatch, load the [model-tier-rightsizing skill](../../model-tier-rightsizing/SKILL.md)
 and its [canonical calibration](../../model-tier-rightsizing/references/model-routing-calibration.md).
-The caller must inject a certified exact model ID and requested effort; provider-neutral
-role definitions are allowed only when they do not dispatch. Stop before dispatch while that
-identity is unresolved. Record provider, model, effort, and context as resolved only after adapter
-readback. A recommendation, gate, or route never authorizes an outward action.
+The four semantic tiers are frontier, judgment workhorse, capable volume, and mechanical
+floor. Their eligible primary pairs are Sol/Fable, Terra/Opus, and Luna/Sonnet; choose within
+a pair by task fit, independent perspective, quota, and verified transport. Never apply a
+global provider preference or artificial all-six representation.
+
+The caller must inject a certified exact model ID and **explicit requested effort** into
+every named-workflow worker and direct subagent; provider-neutral role definitions are
+allowed only when they do not dispatch. Stop before dispatch while that identity is
+unresolved. Record requested, resolved, inherited, and unresolved state separately. Record
+provider, model, effort, and context as resolved only after adapter readback. `[1m]` is
+independent: use only a transport-certified exact form for context-heavy work, and never infer
+intelligence, upstream context capacity, compaction, or effort compliance from its request or
+base-ID readback. A recommendation, gate, or route never authorizes an outward action.
 
 ## Mission integration
 
@@ -20,8 +29,10 @@ do not lower a class or control merely to recover capacity. If the certified sam
 is unavailable, stop or reduce scope.
 
 Every delegated workstream has a bounded artifact, owner, stop condition, wrong-output
-class, exact requested identity, requested effort/context, evidence gate, and predeclared
-fallback. Null, malformed, truncated, missing, or transport-rejected output is failure.
+class, exact requested identity, explicit requested effort/context, evidence gate, and
+predeclared fallback. Every executable `agent()` carries both `model` and `effort`; the same
+rule applies when a host encodes those values outside the prompt for a named workflow or
+subagent. Null, malformed, truncated, missing, or transport-rejected output is failure.
 
 The conductor adjudicates advisory Maps, ResearchBriefs, SeedProposals, Candidates,
 ReviewFindings, and IntegrationReports, and alone mutates Seeds. An authorized integrator

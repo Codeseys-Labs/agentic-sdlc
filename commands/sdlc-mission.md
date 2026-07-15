@@ -16,11 +16,16 @@ Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` an
    (impact × severity × unblocks × confidence) / effort. Only ACTIVE_MILESTONE executes.
 3. **Research** only load-bearing unknowns (delegated research pipeline, synthesize before
    acting). New ideas become classified Seeds, not detours.
-4. **Plan the wave**: load `model-tier-rightsizing`, then define workstreams with owner
-   role, worktree, scope, gates, rollback, caller-injected certified exact model ID, and
-   requested effort. Provider-neutral roles do not select models; stop before dispatch when
-   identity or adapter readback is unresolved. Scale-setter outputs are advisory
-   recommendations for conductor adjudication and do not authorize outward effects.
+4. **Plan the wave**: load `model-tier-rightsizing`, classify each artifact into the four
+   semantic tiers, and choose within the eligible Sol/Fable, Terra/Opus, or Luna/Sonnet pair
+   by task fit, independent perspective, quota, and verified transport. Define each workstream
+   with owner role, worktree, scope, gates, rollback, caller-injected certified exact model ID,
+   **explicit requested effort**, and requested context form. Provider-neutral roles do not
+   select models; stop before dispatch when identity or adapter readback is unresolved. Use
+   `[1m]` only for a context-heavy exact form whose route is certified, and record base-ID
+   readback separately from upstream context, compaction, intelligence, and effort claims.
+   Scale-setter outputs are advisory recommendations for conductor adjudication and do not
+   authorize outward effects. Never require artificial all-six representation.
 5. **Execute** via `/sdlc-wave` semantics: provider-native workers in worktrees by
    default. Use provider-native background or persistent tasks for bounded work. WIP caps: impl ≤3,
    research ≤2, integration ≤1, critique ≤1, nesting ≤2.

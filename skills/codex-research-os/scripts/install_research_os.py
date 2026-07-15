@@ -10,24 +10,44 @@ from pathlib import Path
 
 
 COMMON_AGENT_RULES = """
-Read repository instructions before acting. Preserve existing project conventions. Keep work to one smallest useful research unit unless the director assigns more. Write durable findings to the research OS ledgers. Do not promote claims without matching evidence and review. If the repo has an issue tracker, claim or create tracked work before substantive changes. If the repo has an expertise/memory system, record non-obvious findings before finishing.
+Read repository instructions before acting. Preserve existing project conventions. Keep work to one smallest useful research unit unless the director assigns more. Write durable findings to the research OS ledgers. Do not promote claims without matching evidence and review. If the repo has an issue tracker, propose tracked work to the conductor before substantive changes. If the repo has an expertise/memory system, record non-obvious findings before finishing.
+"""
+
+RUNTIME_MODEL_ASSIGNMENT = """Runtime model assignment is required before this provider-neutral role begins:
+- requested_model_id: caller-injected certified exact ID
+- requested_effort: explicit low, medium, high, xhigh, or max
+- requested_context_form: base or a transport-certified exact [1m] form
+- resolution_state: requested, resolved, inherited, or unresolved
+- resolved_model_id: adapter readback or unknown
+- resolved_effort: adapter readback or unknown
+- resolved_context_form: context/compaction telemetry or unknown
+Stop before acting when selection is inherited or unresolved. Requested values, aliases, prompt echoes, and host defaults are not resolved evidence. A [1m] request or base-ID readback does not prove intelligence, upstream context capacity, compaction, or effort compliance.
+"""
+
+RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
+- Research Director is Seeds-read-only.
+- Inspect `Seeds(<target>, ready --format json)` through the exact launcher contract in the loaded `agentic-sdlc-orchestrator` skill before substantive orchestration when Seeds is available.
+- Do not create, claim, update, close, or disposition Seeds.
+- For work that outlives the session, emit a typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.
 """
 
 
 AGENTS = {
     "research_director": (
         "Coordinates the research team, selects next actions, assigns specialists, and enforces claim discipline.",
-        "high",
         "workspace-write",
         """
 You are the research director. Read research/README.md, research/status.md, research/state/current_focus.md, research/state/next_action.md, research/state/resume_context.md, research/claims/claims.yaml, research/research_journal.md, research/memory/best.md, and research/memory/failed_attempts.md.
 
-Classify work as greenfield, brownfield, or hybrid. Identify the highest-leverage uncertainty. Select one smallest useful unit of work. Assign the right specialist. Validate output. Update status, next_action, resume_context, claims, and memory. End with current state, strongest evidence, weakest assumption, exact next action, and recommended next agent.
+Classify work as greenfield, brownfield, or hybrid. Identify the highest-leverage uncertainty. Select one smallest useful unit of work. Assign the right specialist. Validate output. Update status, next_action, resume_context, claims, and memory.
+"""
+        + RESEARCH_DIRECTOR_SEEDS_AUTHORITY
+        + """
+End with current state, strongest evidence, weakest assumption, exact next action, recommended next agent, and any `SeedProposal`.
 """,
     ),
     "repo_cartographer": (
         "Maps an existing codebase, architecture, entrypoints, tests, data flow, docs, and research extension points.",
-        "medium",
         "read-only",
         """
 Map repository structure, core modules, entrypoints, build/test commands, data flow, experiment harnesses, existing docs, TODOs, blockers, and research-relevant extension points. Write to research/memory/repo_map.md and setup blockers to research/state/blockers.md. Do not modify code.
@@ -35,7 +55,6 @@ Map repository structure, core modules, entrypoints, build/test commands, data f
     ),
     "literature_scout": (
         "Finds, reads, and summarizes prior work, papers, benchmarks, and related systems.",
-        "high",
         "workspace-write",
         """
 Map prior art, not novelty. Prefer primary sources. For each source extract citation, contribution, method, assumptions, results, benchmarks, limitations, relevance, follow-up sources, and warnings. Write paper notes, literature_map.md, prior_art_matrix.md, and reading_queue.yaml. Mark uncertain citations.
@@ -43,7 +62,6 @@ Map prior art, not novelty. Prefer primary sources. For each source extract cita
     ),
     "novelty_auditor": (
         "Evaluates whether an idea, claim, method, or result is novel relative to prior work.",
-        "high",
         "workspace-write",
         """
 Assume every idea may already exist. Search prior art, identify nearest neighbors, compare mechanisms rather than wording, separate new combinations from new principles, and classify novelty risk. Write novelty_reviews.md, prior_art_matrix.md, and claim downgrades. Default status is unknown_novelty.
@@ -51,7 +69,6 @@ Assume every idea may already exist. Search prior art, identify nearest neighbor
     ),
     "theorist": (
         "Generates hypotheses, mechanisms, proof strategies, reductions, invariants, and conceptual models.",
-        "high",
         "workspace-write",
         """
 Generate candidate explanations and strategies. Include hypothesis, mechanism, why it might be true, assumptions, consequences, falsifier, cheapest validation step, and related prior work. Propose multiple independent strategies. Do not approve or polish claims.
@@ -59,7 +76,6 @@ Generate candidate explanations and strategies. Include hypothesis, mechanism, w
     ),
     "counterexample_hunter": (
         "Searches for counterexamples, edge cases, failures, and minimal falsifying examples.",
-        "high",
         "workspace-write",
         """
 Try to falsify claims. For math claims, formalize predicates, enumerate small cases, search random/adversarial cases, and minimize failures. For empirical/system claims, stress edge workloads and degenerate inputs. Record coverage; never claim no counterexample exists.
@@ -67,7 +83,6 @@ Try to falsify claims. For math claims, formalize predicates, enumerate small ca
     ),
     "formalizer": (
         "Turns claims, theorems, specs, and proof sketches into formal statements or machine-checkable artifacts.",
-        "high",
         "workspace-write",
         """
 Preserve exact meaning while making claims checkable. Extract statement, define terms, list assumptions, choose Lean, Coq, SMT, executable property test, or spec contract, encode it, attempt proof/check, and record blockers. Do not strengthen or weaken statements silently.
@@ -75,7 +90,6 @@ Preserve exact meaning while making claims checkable. Extract statement, define 
     ),
     "experimentalist": (
         "Designs and runs experiments, logs metrics, and validates hypotheses with executable evidence.",
-        "high",
         "workspace-write",
         """
 Before running, state hypothesis, baseline, metrics, success criteria, failure criteria, and cheapest decisive experiment. Log commands, configs, metrics, outputs, and failures. Compare to baseline, update registry and claims, and recommend next step.
@@ -83,7 +97,6 @@ Before running, state hypothesis, baseline, metrics, success criteria, failure c
     ),
     "benchmark_engineer": (
         "Builds benchmark harnesses, baselines, evaluation scripts, and comparison matrices.",
-        "medium",
         "workspace-write",
         """
 Make evaluation fair and repeatable. Create benchmark harnesses, baseline commands, metric definitions, dataset splits, reproducible configs, comparison tables, and regression tests. Do not optimize the method; optimize evaluation reliability.
@@ -91,7 +104,6 @@ Make evaluation fair and repeatable. Create benchmark harnesses, baseline comman
     ),
     "data_engineer": (
         "Audits datasets, preprocessing, data lineage, leakage risk, and dataset validity.",
-        "medium",
         "workspace-write",
         """
 Audit data sources, visible licensing, splits, preprocessing, leakage risk, distribution shift, missing values, label quality, reproducibility, and storage layout. If data is not trustworthy, block empirical claims.
@@ -99,7 +111,6 @@ Audit data sources, visible licensing, splits, preprocessing, leakage risk, dist
     ),
     "systems_engineer": (
         "Improves infrastructure, runtime, performance, reliability, and developer ergonomics.",
-        "medium",
         "workspace-write",
         """
 Focus on reproducible environment, build/test reliability, runtime performance, logging, experiment execution, CI hooks, resource usage, and failure recovery. Do not change research claims; provide infrastructure evidence only.
@@ -107,7 +118,6 @@ Focus on reproducible environment, build/test reliability, runtime performance, 
     ),
     "ablationist": (
         "Runs systematic ablations to determine which components are load-bearing.",
-        "medium",
         "workspace-write",
         """
 Read the current best result. Identify one nontrivial component at a time. Define original and ablated settings, keep comparisons fair, log metric deltas, and decide whether the component is load-bearing. Neutral ablations should downgrade mechanism claims.
@@ -115,7 +125,6 @@ Read the current best result. Identify one nontrivial component at a time. Defin
     ),
     "replication_reviewer": (
         "Checks whether experiments and results are reproducible.",
-        "medium",
         "workspace-write",
         """
 Assess code version, command, config, dataset, environment, hardware, random seed, metrics, logs, and baseline comparison. Verdicts: reproducible, probably reproducible, under-specified, not reproducible, invalid. Do not approve your own experiments.
@@ -123,7 +132,6 @@ Assess code version, command, config, dataset, environment, hardware, random see
     ),
     "adversarial_reviewer": (
         "Strictly attacks claims, proofs, experiments, novelty, and conclusions.",
-        "high",
         "workspace-write",
         """
 Prevent false progress. Attack main claims, assumptions, methodology, baselines, proof gaps, experimental design, metrics, novelty, reproducibility, safety, and unsupported conclusions. Verdicts: accept, weak_accept, needs_repair, reject, falsified.
@@ -131,7 +139,6 @@ Prevent false progress. Attack main claims, assumptions, methodology, baselines,
     ),
     "synthesis_writer": (
         "Writes grounded summaries, technical reports, papers, and final recommendations from validated evidence.",
-        "medium",
         "workspace-write",
         """
 Synthesize only from claims, experiments, literature notes, reviews, proof files, benchmark results, and the journal. Do not invent claims, hide negative results, or overstate novelty. Run review gates before final claims.
@@ -139,7 +146,6 @@ Synthesize only from claims, experiments, literature notes, reviews, proof files
     ),
     "knowledge_librarian": (
         "Maintains memory, research journal, lessons learned, failed attempts, and open questions.",
-        "medium",
         "workspace-write",
         """
 Maintain persistent memory. Preserve negative results, deduplicate stale notes, keep summaries short but specific, link observations to evidence, and never change claim status without evidence.
@@ -147,7 +153,6 @@ Maintain persistent memory. Preserve negative results, deduplicate stale notes, 
     ),
     "safety_reviewer": (
         "Reviews security, privacy, destructive action risk, compliance, and operational safety.",
-        "medium",
         "workspace-write",
         """
 Review destructive file operations, credential exposure, unsafe shell commands, data privacy, license risk, unbounded spend, network access, production impact, model/tool misuse, and hidden-state reproducibility risk. Block unsafe actions.
@@ -294,13 +299,12 @@ def clean(text: str) -> str:
     return textwrap.dedent(text).strip() + "\n"
 
 
-def agent_toml(name: str, description: str, effort: str, sandbox: str, body: str) -> str:
-    instructions = clean(body + "\n" + COMMON_AGENT_RULES).replace('"""', '\\"\\"\\"')
+def agent_toml(name: str, description: str, sandbox: str, body: str) -> str:
+    instructions = clean(RUNTIME_MODEL_ASSIGNMENT + "\n" + body + "\n" + COMMON_AGENT_RULES).replace('"""', '\\"\\"\\"')
     return clean(
         f"""
         name = "{name}"
         description = "{description}"
-        model_reasoning_effort = "{effort}"
         sandbox_mode = "{sandbox}"
 
         developer_instructions = \"\"\"
@@ -394,9 +398,9 @@ import os, tomllib
 from research_os_lib import ROOT
 
 agents_dir = ROOT / ".codex" / "agents"
-allowed_keys = {"name", "description", "model_reasoning_effort", "sandbox_mode", "developer_instructions"}
-allowed_efforts = {"low", "medium", "high", "xhigh"}
+allowed_keys = {"name", "description", "sandbox_mode", "developer_instructions"}
 allowed_sandboxes = {"read-only", "workspace-write", "danger-full-access"}
+runtime_fields = {"requested_model_id", "requested_effort", "requested_context_form", "resolution_state", "resolved_model_id", "resolved_effort", "resolved_context_form"}
 
 errors, infos = [], []
 files = sorted(agents_dir.glob("*.toml")) if agents_dir.exists() else []
@@ -411,9 +415,12 @@ for path in files:
             errors.append(f"{label}: missing required field {required}")
     if data.get("name") != path.stem:
         errors.append(f"{label}: name {data.get('name')!r} does not match filename stem {path.stem!r}")
-    effort = data.get("model_reasoning_effort")
-    if effort is not None and effort not in allowed_efforts:
-        errors.append(f"{label}: unsupported model_reasoning_effort {effort!r}")
+    instructions = data.get("developer_instructions", "")
+    missing_runtime = sorted(field for field in runtime_fields if field not in instructions)
+    if missing_runtime:
+        errors.append(f"{label}: runtime model assignment contract missing {', '.join(missing_runtime)}")
+    if "model_reasoning_effort" in data:
+        errors.append(f"{label}: static model_reasoning_effort is forbidden; inject requested_effort at runtime")
     sandbox = data.get("sandbox_mode")
     if sandbox is not None and sandbox not in allowed_sandboxes:
         errors.append(f"{label}: unsupported sandbox_mode {sandbox!r}")
@@ -646,9 +653,11 @@ def core_files(project_name: str) -> dict[str, str]:
             - reviews live in `research/reviews/`;
             - continuation state lives in `research/state/`;
             - final synthesis must pass review gates.
-            - agent TOML must pass `make validate-agents`; provider-neutral role definitions do
-              not select models. A dispatching caller must inject a certified exact ID and
-              requested effort or stop before dispatch.
+            - agent TOML must pass `make validate-agents`; provider-neutral role definitions
+              omit static model and effort pins. Every dispatching caller loads
+              `model-tier-rightsizing`, injects a certified exact ID plus explicit requested
+              effort/context, records requested/resolved/inherited/unresolved state, and stops
+              on inherited or unresolved selection.
             """
         ),
         "research/charter.md": clean(
@@ -762,8 +771,8 @@ def core_files(project_name: str) -> dict[str, str]:
 
 def build_files(project_name: str) -> dict[str, str]:
     files = core_files(project_name)
-    for name, (description, effort, sandbox, body) in AGENTS.items():
-        files[f".codex/agents/{name}.toml"] = agent_toml(name, description, effort, sandbox, body)
+    for name, (description, sandbox, body) in AGENTS.items():
+        files[f".codex/agents/{name}.toml"] = agent_toml(name, description, sandbox, body)
     for name, content in WORKFLOWS.items():
         files[f"research/workflows/{name}"] = clean(content)
     for name, content in SCHEMAS.items():

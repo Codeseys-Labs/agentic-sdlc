@@ -90,9 +90,11 @@ before any synthesis ships:
 - `review-gates` — flags: promoted empirical claims without replication review;
   proof-like claims without formalization; novelty claims without novelty review.
 - `validate-agents` — role configs contain only known keys and names match files. A
-  provider-neutral role definition may omit `model`, but the dispatching caller must inject a
-  certified exact ID and requested effort or stop. Reject unverified aliases and do not
-  dispatch from inherited/default routing.
+  provider-neutral role definition omits static `model` and `model_reasoning_effort` pins.
+  Every runtime assignment carries caller-injected `requested_model_id`, explicit
+  `requested_effort`, `requested_context_form`, a `resolution_state` of requested, resolved,
+  inherited, or unresolved, and separate resolved fields. Stop on inherited/unresolved model
+  selection; reject unverified aliases and host-default policy.
 
 This mirrors the bundle's validate-bundle.sh philosophy: silent failure modes get a
 gate, not a guideline.

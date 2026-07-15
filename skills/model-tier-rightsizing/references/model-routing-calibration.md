@@ -22,6 +22,28 @@ Keep four facts separate:
 4. **Production recommendation:** a provisional policy based on blast radius, gates,
    authority, inherited operational evidence, and the approved roadmap.
 
+## Four semantic tiers and eligible pairs
+
+The six exact primary IDs form three peer pairs inside four semantic tiers. Pair membership
+expresses a failure class, not a global provider preference or an equivalence-score claim.
+Choose within a pair by task fit, the value of an independent vendor perspective, current
+quota, correlated-error risk, and verified transport. A workflow uses only the models its
+artifacts need; artificial one-of-each representation wastes tokens and can weaken review
+independence.
+
+| Semantic tier | Wrong-output consequence | Eligible exact pair | Requested effort | Required gate or control |
+|---|---|---|---|---|
+| Frontier | Derail / settled truth | `gpt-5.6-sol` or `claude-fable-5` | Sol `high`/`xhigh`; Fable `xhigh`/`max` | Solo or bounded; independent re-derivation; conductor adjudicates |
+| Judgment workhorse | Contained silent degradation | `gpt-5.6-terra` or `claude-opus-4-8` | Terra `xhigh`/`max`; Opus `high`/`xhigh` | Explicit acceptance criteria and independent immutable-candidate review |
+| Capable volume | Gated visible retry | `gpt-5.6-luna` or `claude-sonnet-5` | Luna `high`/`xhigh`; Sonnet `high`/`xhigh` | Compiler, tests, schema, diff, evidence check, or deterministic verifier |
+| Mechanical floor | Cheap fully checked redo | Cheapest certified route from `gpt-5.6-luna` or `claude-sonnet-5` | `low`/`medium` after route-specific certification | Complete deterministic check; retry or escalate on any mismatch |
+
+The mechanical tier is a cost-and-gate selection within the capable-volume class, not a
+seventh primary model. Historical `claude-haiku-4-5` and `gpt-5.3-codex-spark` evidence may
+support a fallback after the exact route is recertified, but neither belongs to the six-primary
+set. A mechanical task without a complete deterministic check moves back to capable volume
+or judgment workhorse.
+
 ## Exact dispatch and requested effort
 
 Every dispatching Workflow consumer must receive an exact bare ID certified by the active
@@ -216,6 +238,22 @@ Use cross-vendor calls for different artifacts, not duplicated votes:
 
 ## Fallback and escalation
 
+The current six-primary pair policy is the production default. Preserve these older GPT
+fallback observations as historical compatibility evidence; re-certify their current
+transport and keep the same blast-radius controls before use:
+
+- Derail-class history: `gpt-5.6-sol` → `gpt-5.5` → `gpt-5.4`; if none is certified,
+  stop or explicitly reduce scope.
+- Contained-degrade history: `gpt-5.6-terra` → `gpt-5.5` → `gpt-5.4`.
+- Visible-retry history: `gpt-5.6-luna` → `gpt-5.4-mini` → `gpt-5.3-codex-spark`
+  only for a sufficiently bounded, fully verified artifact.
+- Cheap-mechanical history: `gpt-5.6-luna` → `gpt-5.3-codex-spark` →
+  `gpt-5.4-mini`; historical `claude-haiku-4-5` remains a possible recertified mechanical
+  fallback, not a seventh primary.
+
+These rows are evidence, not a host-default fallback chain. Never cross downward unless a
+real verifier changes the failure into a visible retry.
+
 1. Treat null, malformed, truncated, missing, or transport-rejected output as failure.
 2. Inspect the transcript; distinguish transport/harness failure from an answered task;
    apply bounded provider backoff and retry the same certified exact model/effort once.
@@ -257,6 +295,19 @@ benchmark. Start with bounded width and record overlap, 429s, latency, and token
 Semantic caps apply regardless of capacity: one canonical scale-setter at a time, one
 bounded adversarial attacker, one writer per worktree, one conductor, integrator WIP 1,
 and bounded passes/review-fix rounds.
+
+Historical operational receipts remain useful but do not certify the current transport:
+
+- On 2026-07-05, a Sonnet-5 fleet completed **61 agents / 9.05M subagent tokens / 2h12m**
+  with zero observed throttling in that run. Adversarial verification preserved 16/21
+  critical/high findings, including a real critical security finding. The structural
+  verifier, not a total intelligence claim, justified that gated volume lane.
+- On 2026-06-11, an Opus-era **6-dimension review + adversarial verification** used the
+  then-current workhorse lane. It is historical rationale for preserving an ungated semantic
+  workhorse, not evidence that current work must use the same provider or model.
+
+Reproduce representative current workloads before turning either receipt into concurrency,
+quality, cost, or quota policy.
 
 ## Rerun triggers
 

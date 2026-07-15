@@ -92,10 +92,13 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 - Use Codex workers for implementation, refactors, tests, docs, repo inspection, and review when provider-native Claude workflows are not needed.
 - Keep nested orchestration to one mid-tier at most and give each tier an explicit worker list,
   regardless of delegation backend.
-- Before any model dispatch, load `../model-tier-rightsizing/SKILL.md`. The caller must
-  inject a certified exact model ID and requested effort; provider-neutral role definitions
-  do not select a model. Stop before dispatch when identity or adapter readback is
-  unresolved.
+- Before any model dispatch, load `../model-tier-rightsizing/SKILL.md`. Classify the
+  artifact into the four semantic tiers and choose within the eligible Sol/Fable, Terra/Opus,
+  or Luna/Sonnet pair by task fit, independent perspective, quota, and verified transport.
+  The caller must inject a certified exact model ID and **explicit requested effort** for
+  every worker; provider-neutral role definitions do not select a model. Stop before dispatch
+  when identity or adapter readback is unresolved. No host-default policy or artificial
+  all-six representation.
 - Keep one macro conductor responsible for Seeds adjudication, worktree ownership, and
   evidence-backed recommendations. The conductor alone mutates Seeds; an authorized
   integrator alone performs an already-authorized fan-in. Humans authorize push,

@@ -23,5 +23,7 @@ theorist, counterexample_hunter, formalizer, experimentalist, benchmark_engineer
 data_engineer, systems_engineer, ablationist, replication_reviewer,
 adversarial_reviewer, synthesis_writer, knowledge_librarian, safety_reviewer.
 Principles: `skills/agentic-sdlc-orchestrator/references/research-team.md`. These
-provider-neutral role definitions do not dispatch: their caller injects a certified exact
-model ID and requested effort, or stops before delegation.
+provider-neutral role definitions omit static model/effort pins and do not dispatch. Their
+caller loads `model-tier-rightsizing`, injects a certified exact model ID plus explicit
+requested effort/context, records requested/resolved/inherited/unresolved state, and stops
+before delegation unless the route is resolved.

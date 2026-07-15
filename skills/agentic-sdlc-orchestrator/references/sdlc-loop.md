@@ -23,11 +23,14 @@ Research:
 - Feed the final report path into Plan; do not paste large reports into prompts.
 
 Plan:
-- Load `model-tier-rightsizing` before planning a dispatch. Emit workstreams with owner role,
-  target worktree, dependencies, files in scope, gates, rollback, caller-injected certified
-  exact model ID, and requested effort. Provider-neutral roles do not select models; stop
-  before dispatch when identity or adapter readback is unresolved. Roles and verdicts are
-  advisory submissions.
+- Load `model-tier-rightsizing` before planning a dispatch. Classify each workstream into the
+  four semantic tiers; choose within the eligible Sol/Fable, Terra/Opus, or Luna/Sonnet pair
+  by task fit, independent perspective, quota, and verified transport. Emit workstreams with
+  owner role, target worktree, dependencies, files in scope, gates, rollback, caller-injected
+  certified exact model ID, **explicit requested effort**, and requested context form.
+  Provider-neutral roles do not select models; stop before dispatch when identity or adapter
+  readback is unresolved. Record requested, resolved, inherited, and unresolved state
+  separately. Roles and verdicts are advisory submissions; do not manufacture all-six usage.
 - Return every actionable finding as a SeedProposal for conductor adjudication before Act;
   the conductor alone mutates Seeds.
 - Mark workstreams that require Claude Code dynamic workflows.

@@ -11,16 +11,21 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
    their own serial wave.
 3. Create one worktree per write-capable worker:
    `git worktree add ../<repo>-wt-<seed-id> -b work/<seed-id>-<slug>`
-   Before launching any worker, run `mise trust <absolute-worktree-path>` after verifying
-   that worktree's checked-in mise config. If Codex workers will run, also pre-trust each
-   worktree path in `~/.codex/config.toml`. Missing, unpinned, untrusted, or ambiguous
-   required capability fails closed. Stop the Wave if either required trust step fails; do
+   Persistent `mise trust` and `~/.codex/config.toml` mutation are separate operations:
+   obtain explicit operation-specific user approval for each exact worktree path before
+   applying either after reviewing its checked-in config. Without that approval, use only a
+   certified process-scoped test route such as `mise --no-config --cd <worktree> exec ...`,
+   or stop. Missing, unpinned, untrusted, or ambiguous required capability fails closed; do
    not let workers bypass the repository gate.
-4. Load `model-tier-rightsizing` before launching a model-dispatching worker. The caller
-   must inject a certified exact model ID and requested effort; a provider-neutral role does
-   not select one. Stop before dispatch if identity or adapter readback is unresolved. Each
-   worker prompt must carry: Seed id + acceptance criteria, absolute worktree path, files in
-   scope, gates to run, artifact report path.
+4. Load `model-tier-rightsizing` before launching a model-dispatching worker. Classify each
+   assignment into the four semantic tiers and choose within the eligible Sol/Fable,
+   Terra/Opus, or Luna/Sonnet pair by task fit, independent perspective, quota, and verified
+   transport. The caller must inject a certified exact model ID and **explicit requested
+   effort**; a provider-neutral role does not select one. Stop before dispatch if identity or
+   adapter readback is unresolved. Do not use host-default selection or artificial all-six
+   representation. Each worker prompt must carry: Seed id + acceptance criteria, absolute
+   worktree path, files in scope, gates to run, artifact report path, requested context form,
+   and requested/resolved/inherited/unresolved receipt state.
 5. If cmux is already active, optionally publish wave status. Native workers require neither
    cmux nor tmux.
 6. Collect artifact reports. Review each worktree (diff + gates, not summaries) —

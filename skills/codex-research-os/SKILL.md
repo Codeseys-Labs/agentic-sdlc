@@ -67,6 +67,8 @@ Read `references/operating-model.md` when designing or modifying the OS. Read `r
 - No important synthesis without adversarial review.
 - Negative results stay in memory and experiment logs.
 - Every loop updates `research/state/next_action.md`.
-- Provider-neutral generated roles may omit `model`, but they do not dispatch. A caller must
-  inject a certified exact model ID and requested effort or stop before dispatch; reject
-  inherited/default routing and unverified aliases.
+- Provider-neutral generated roles omit static `model` and `model_reasoning_effort` pins;
+  they do not dispatch. A caller loads `model-tier-rightsizing`, injects a certified exact
+  model ID plus **explicit requested effort/context**, records requested/resolved/inherited/
+  unresolved state separately, and stops on inherited or unresolved selection. Reject
+  host-default policy and unverified aliases.

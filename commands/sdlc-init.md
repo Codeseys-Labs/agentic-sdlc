@@ -25,9 +25,10 @@ claiming wave readiness.
      or ambiguous required capability fails closed; missing optional cmux or tmux
      never triggers implicit installation. `mise` is the managed-tool bootstrap, not the sole
      readiness prerequisite; repository tools are pinned through it. A dispatching consumer
-     later needs a caller-injected certified exact model ID and requested effort; a
-     provider-neutral role does not select one and must stop before unresolved dispatch.
-     Record resolved provider/model only after adapter readback.
+     later needs a caller-injected certified exact model ID, **explicit requested effort**, and
+     requested context form; a provider-neutral role does not select one and must stop before
+     inherited or unresolved dispatch. Record requested/resolved/inherited/unresolved state;
+     record resolved provider/model/effort/context only after adapter readback.
    - If the repository is dirty, do not commit, stage, or absorb pre-existing changes.
      Produce the activation proposal and ask the user to commit/stash/select an explicit
      activation worktree before write steps.
@@ -64,7 +65,10 @@ claiming wave readiness.
    - Wire the secrets gate into `mise run check` and CI. Run `betterleaks git .` only after
      explicit consent when history scanning is appropriate (public release/migration), and
      never plant a credential-shaped value in durable history to test it.
-   - Run `mise trust <repo-path>` only after showing the exact task/config diff.
+   - Persistent `mise trust <repo-path>` is a separate state mutation. After showing the
+     exact task/config diff, obtain explicit operation-specific user approval for that exact
+     path before running it. A general activation approval is insufficient; process-scoped
+     validation may use `mise --no-config --cd <repo-path> exec ...` without persisting trust.
    - Prove falsifiability with a reversible, non-secret temporary fixture that is never
      committed; observe `mise run check` fail, restore the fixture, then require a clean
      pass.
@@ -79,10 +83,12 @@ claiming wave readiness.
    - Never duplicate the full orchestration doctrine into the repository.
 
 6. **Trust propagation and CI parity**
-   - Trust the main project path for Codex only when Codex is present and the user permits
-     the user-config change.
-   - Record that every future Wave worktree needs both `mise trust <worktree>` and Codex
-     path trust before workers start; Git hooks themselves remain shared.
+   - Trust the main project path for Codex only when Codex is present and explicit
+     operation-specific user approval covers that exact user-config mutation.
+   - Record that every future Wave worktree requires separate operation-specific approval
+     for persistent `mise trust <worktree>` and Codex path-trust config before workers start;
+     Git hooks themselves remain shared. The absence of approval is a stop or a reason to use
+     a certified process-scoped no-config gate, never permission to mutate user config.
    - Detect the forge/CI provider. If ambiguous, ask before creating a workflow. CI invokes
      the same `mise run check`; it does not reimplement the gate.
 
