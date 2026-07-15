@@ -254,12 +254,13 @@ def _assert_fable_boundary(text: str) -> None:
 
 def _assert_no_unsafe_executable_aliases(text: str) -> None:
     bare = r"(?:fable|opus|sonnet|haiku)"
+    key = r"['\"`]?model['\"`]?"
     assert not re.search(
-        rf"(?ix)\bmodel\s*(?::|=|\s)\s*['\"`]?{bare}['\"`]?\b",
+        rf"(?ix)\b{key}\s*(?::|=|\s)\s*['\"`]?{bare}['\"`]?\b",
         text,
     )
     assert not re.search(
-        r"(?ix)\bmodel\s*(?::|=|\s)\s*['\"`]?(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+['\"`]?\b",
+        rf"(?ix)\b{key}\s*(?::|=|\s)\s*['\"`]?(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+['\"`]?\b",
         text,
     )
 
@@ -574,6 +575,8 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 f"model: '{alias}'",
                 f'model = "{alias}"',
                 f"model {alias}",
+                f'{{"model":"{alias}"}}',
+                f"{{'model':'{alias}'}}",
             ):
                 with self.subTest(expression=expression):
                     with self.assertRaises(AssertionError):
@@ -583,6 +586,8 @@ class ModelTierRightsizingTests(unittest.TestCase):
             'model = "us.anthropic.claude-opus-4-8"',
             "model global.anthropic.claude-sonnet-5",
             "model: 'ap.anthropic.claude-haiku-4-5'",
+            '{"model":"global.anthropic.claude-fable-5"}',
+            "{'model':'us.anthropic.claude-opus-4-8'}",
         ):
             with self.subTest(expression=expression):
                 with self.assertRaises(AssertionError):
