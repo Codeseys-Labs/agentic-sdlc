@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import stat
 import textwrap
@@ -13,26 +14,27 @@ COMMON_AGENT_RULES = """
 Read repository instructions before acting. Preserve existing project conventions. Keep work to one smallest useful research unit unless the director assigns more. Write durable findings to the research OS ledgers. Do not promote claims without matching evidence and review. If the repo has an issue tracker, propose tracked work to the conductor before substantive changes. If the repo has an expertise/memory system, record non-obvious findings before finishing.
 """
 
-RUNTIME_MODEL_ASSIGNMENT = """A conductor-supplied certified `RuntimeAssignment` receipt is required before this provider-neutral role begins. Its canonical v1 top-level shape is exactly:
-- `schema_version`: `runtime-assignment-receipt/v1`
-- `requested_model_id`: caller-requested certified exact bare ID
-- `requested_effort`: caller-requested explicit `low`, `medium`, `high`, `xhigh`, or `max`
-- `requested_context_form`: caller-requested `base` or transport-certified exact `[1m]` form
-- `request_injection_status`: `verified`
-- `request_injection_evidence`: immutable request receipt bound to the requested model, effort, and context
-- `resolution_state`: must equal `resolved`
-- `resolved_provider`: the policy-mapped provider for the exact resolved model
-- `resolved_model_id`: the immutable injected exact model ID
-- `model_identity_basis`: `independent_readback` or `unambiguous_exact_id_mapping`
-- `model_readback_status`: `verified`
-- `model_readback_evidence`: closed structured evidence with a cross-field assignment binding to the resolved provider, model, requested effort, and requested context
-- `effort_readback_status`: `verified` or `unavailable`
-- `effort_readback_evidence`: closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and the effective effort when verified
-- `context_readback_status`: `verified` or `unavailable`
-- `context_readback_evidence`: closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and the effective context when verified
+POLICY_PATH = Path(__file__).parents[2] / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
 
-The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority. Requested, inherited, or unresolved assignments and any unverified model identity stop before spawn and return one advisory `SeedProposal` to the conductor. Exact model and effort request injection is mandatory and immutable. Prompt echoes, caller defaults, aliases, host defaults, copied requested values, and arbitrary provenance never become resolution or readback evidence. Effective effort and context may honestly be unavailable when the transport does not expose them. A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance.
-"""
+
+def canonical_runtime_model_assignment() -> str:
+    try:
+        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+        contract = policy["canonical_runtime_contract"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
+    if not isinstance(contract, str) or not contract:
+        raise ValueError("runtime receipt policy must define a canonical runtime contract")
+    return contract
+
+
+RUNTIME_MODEL_ASSIGNMENT = canonical_runtime_model_assignment()
+# Canonical content is policy-owned at runtime; this phrase preserves the source-level role contract.
+RUNTIME_MODEL_ASSIGNMENT_SOURCE = "conductor-supplied certified `RuntimeAssignment`"
+RUNTIME_MODEL_ASSIGNMENT_INJECTION = "Exact model and effort request injection is mandatory and immutable"
+RUNTIME_MODEL_ASSIGNMENT_READBACK = "Effective effort and context may honestly be unavailable"
+RUNTIME_MODEL_ASSIGNMENT_BOUNDARY = "stop before spawn"
+RUNTIME_MODEL_ASSIGNMENT_NO_COPIED_READBACK = "Prompt echoes and copied requested values never become resolution or readback evidence"
 
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 - Research Director is Seeds-read-only.
@@ -323,6 +325,13 @@ def agent_toml(name: str, description: str, sandbox: str, body: str) -> str:
     )
 
 
+def developer_instructions_by_role() -> dict[str, str]:
+    return {
+        name: clean(RUNTIME_MODEL_ASSIGNMENT + "\n" + body + "\n" + COMMON_AGENT_RULES)
+        for name, (_, _, body) in AGENTS.items()
+    }
+
+
 def script_files() -> dict[str, str]:
     lib = r'''
 from __future__ import annotations
@@ -403,13 +412,14 @@ if not experiments:
 '''
     validate_agents = r'''
 #!/usr/bin/env python3
-import re, tomllib
+import hashlib, re, tomllib
 from research_os_lib import ROOT
 
 agents_dir = ROOT / ".codex" / "agents"
 allowed_keys = {"name", "description", "sandbox_mode", "developer_instructions"}
 allowed_sandboxes = {"read-only", "workspace-write", "danger-full-access"}
 runtime_fields = __RUNTIME_FIELDS__
+expected_instruction_digests = __DEVELOPER_INSTRUCTION_DIGESTS__
 protected_runtime = __RUNTIME_CONTRACT__
 protected_director = __DIRECTOR_CONTRACT__
 contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injection|resolved_(?:provider|model_id)|model_readback|effort_readback|context_readback|provider[- ]default|host[- ]default|caller[- ]override|requested(?:_model_id|_effort|_context_form)?.{0,80}(?:resolved|readback)|(?:resolved|readback).{0,80}requested(?:_model_id|_effort|_context_form)?)")
@@ -432,6 +442,11 @@ for path in files:
     if data.get("name") != path.stem:
         errors.append(f"{label}: name {data.get('name')!r} does not match filename stem {path.stem!r}")
     instructions = data.get("developer_instructions", "")
+    expected_digest = expected_instruction_digests.get(path.stem)
+    if expected_digest is None:
+        errors.append(f"{label}: no generation-time developer instructions digest")
+    elif not isinstance(instructions, str) or hashlib.sha256(instructions.encode("utf-8")).hexdigest() != expected_digest:
+        errors.append(f"{label}: developer instructions differ from generation-time canonical content")
     missing_runtime = sorted(field for field in runtime_fields if field not in instructions)
     if missing_runtime:
         errors.append(f"{label}: runtime model assignment contract missing {', '.join(missing_runtime)}")
@@ -468,7 +483,13 @@ raise SystemExit(1 if errors else 0)
     "resolved_provider", "resolved_model_id", "model_identity_basis",
     "model_readback_status", "model_readback_evidence", "effort_readback_status",
     "effort_readback_evidence", "context_readback_status", "context_readback_evidence",
-})).replace("__RUNTIME_CONTRACT__", repr(clean(RUNTIME_MODEL_ASSIGNMENT))).replace("__DIRECTOR_CONTRACT__", repr(clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)))
+})).replace(
+    "__DEVELOPER_INSTRUCTION_DIGESTS__",
+    repr({
+        name: hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+        for name, instructions in developer_instructions_by_role().items()
+    }),
+).replace("__RUNTIME_CONTRACT__", repr(clean(RUNTIME_MODEL_ASSIGNMENT))).replace("__DIRECTOR_CONTRACT__", repr(clean(RESEARCH_DIRECTOR_SEEDS_AUTHORITY)))
     validate_claims = r'''
 #!/usr/bin/env python3
 from research_os_lib import CLAIMS_PATH, as_records, load_structured

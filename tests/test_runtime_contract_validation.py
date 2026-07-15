@@ -79,6 +79,37 @@ class RuntimeContractValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "aliases are forbidden"):
             bundle_validator.parse_frontmatter_metadata(f"---\n{metadata}\n---\n")
 
+    def test_bundle_validator_enforces_exact_policy_derived_runtime_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "agents" / "claude" / "sdlc-planner.md"
+            target.parent.mkdir(parents=True)
+            source = (ROOT / "agents" / "claude" / "sdlc-planner.md").read_text(encoding="utf-8")
+            target.write_text(
+                source.replace(
+                    "`schema_version`: `runtime-assignment-receipt/v1`",
+                    "`schema_version`: `runtime-assignment-receipt/v2`",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = bundle_validator.Validation()
+            bundle_validator.validate_agents(root, result)
+
+        self.assertIn(
+            "agents/claude/sdlc-planner.md: runtime receipt projection must equal the exact policy-derived canonical runtime block",
+            result.errors,
+        )
+
+    def test_runtime_contract_is_policy_derived_for_static_and_generated_roles(self) -> None:
+        expected = receipt_admission.parse_no_duplicate_members(
+            (ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )["canonical_runtime_contract"]
+        self.assertEqual(bundle_validator.runtime_receipt_contract(), expected)
+        self.assertEqual(research_installer.RUNTIME_MODEL_ASSIGNMENT, expected)
+
     def test_bundle_validator_enforces_policy_derived_runtime_projection_for_all_role_types(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -152,6 +183,32 @@ class RuntimeContractValidationTests(unittest.TestCase):
             capture_output=True,
             check=False,
         )
+
+    def test_generated_agent_validator_rejects_replaced_or_additive_instruction_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.materialize_generated_research_os(root)
+            agent = root / ".codex" / "agents" / "research_director.toml"
+            original = agent.read_text(encoding="utf-8")
+            mutants = {
+                "semantic host default waiver": original.replace(
+                    "You are the research director for this repository.",
+                    "The default host selects the model. You are the research director for this repository.",
+                    1,
+                ),
+                "replaced instructions": original.replace(
+                    "You are the research director for this repository.",
+                    "You are the research director for a different repository.",
+                    1,
+                ),
+            }
+            for name, mutant in mutants.items():
+                with self.subTest(mutant=name):
+                    agent.write_text(mutant, encoding="utf-8")
+                    result = self.run_generated_agent_validator(script)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("developer instructions", result.stdout)
+                    agent.write_text(original, encoding="utf-8")
 
     def test_generated_agent_validator_rejects_additive_runtime_restatements(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

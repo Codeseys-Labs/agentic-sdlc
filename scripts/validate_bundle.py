@@ -228,11 +228,28 @@ def parse_frontmatter_metadata(text: str) -> dict[str, object]:
     return value
 
 
-def runtime_receipt_fields() -> tuple[str, ...]:
+def runtime_receipt_policy() -> dict[str, object]:
     try:
         policy = json.loads(RECEIPT_POLICY_PATH.read_text(encoding="utf-8"))
-        fields = policy["canonical_receipt_fields"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
+    if not isinstance(policy, dict):
+        raise ValueError("runtime receipt policy must be a JSON object")
+    return policy
+
+
+def runtime_receipt_contract() -> str:
+    policy = runtime_receipt_policy()
+    contract = policy.get("canonical_runtime_contract")
+    if not isinstance(contract, str) or not contract:
+        raise ValueError("runtime receipt policy must define a canonical runtime contract")
+    return contract
+
+
+def runtime_receipt_fields() -> tuple[str, ...]:
+    try:
+        fields = runtime_receipt_policy()["canonical_receipt_fields"]
+    except (KeyError, TypeError) as exc:
         raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
     if (
         not isinstance(fields, list)
@@ -271,6 +288,13 @@ def validate_runtime_receipt_projection(text: str, label: Path | str, result: Va
         result.error(f"{label}: runtime receipt projection missing {', '.join(missing)}")
     if projected != required:
         result.error(f"{label}: runtime receipt projection must equal the exact policy-derived 16-field block")
+    try:
+        contract = runtime_receipt_contract()
+    except ValueError as exc:
+        result.error(str(exc))
+    else:
+        if text.count(contract) != 1:
+            result.error(f"{label}: runtime receipt projection must equal the exact policy-derived canonical runtime block")
     if any(field in text for field in RUNTIME_RECEIPT_SOURCE_FIELDS):
         result.error(f"{label}: stale runtime receipt source projection is forbidden")
 
