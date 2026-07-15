@@ -614,11 +614,13 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             receipt = json.loads(
                 (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
             )
+            hostile_git = distribution / "git.exe"
+            shutil.copy2(Path(os.environ["SystemRoot"]) / "System32" / "hostname.exe", hostile_git)
             adapter_probe = root / "adapter-probe.ts"
             adapter_probe.write_text(
                 'const allowed=Bun.spawnSync(["git","rev-parse","--git-dir"]);'
                 'const denied=Bun.spawnSync(["git","status"]);'
-                'if(allowed.exitCode!==0||denied.exitCode===0)process.exit(1);\n',
+                'if(allowed.exitCode!==0||allowed.stdout.toString().trim()!==".git"||denied.exitCode===0)process.exit(1);\n',
                 encoding="utf-8",
             )
             adapter_environment = {
@@ -628,6 +630,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 "GIT_CONFIG_GLOBAL": receipt["tuple"]["trusted"]["gitconfig"],
                 "GIT_OPTIONAL_LOCKS": "0",
                 "GIT_TERMINAL_PROMPT": "0",
+                "NoDefaultCurrentDirectoryInExePath": "1",
                 "PATHEXT": ".EXE",
                 "SystemRoot": os.environ["SystemRoot"],
             }
@@ -649,6 +652,53 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(adapter_result.returncode, 0, adapter_result.stderr)
+            adapter = Path(receipt["tuple"]["trusted"]["gitAdapter"])
+            for flag in ("--git-dir", "--git-common-dir"):
+                with self.subTest(flag=flag):
+                    direct = subprocess.run(
+                        [adapter, "rev-parse", flag],
+                        cwd=distribution,
+                        text=True,
+                        capture_output=True,
+                        env=adapter_environment,
+                        check=False,
+                        timeout=60,
+                    )
+                    self.assertEqual(direct.returncode, 0, direct.stderr)
+                    self.assertEqual(direct.stdout.strip(), ".git")
+            git_failure = subprocess.run(
+                [adapter, "rev-parse", "--git-dir"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                env=adapter_environment,
+                check=False,
+                timeout=60,
+            )
+            self.assertNotEqual(git_failure.returncode, 0)
+            self.assertIn("not a git repository", git_failure.stderr)
+            hostile_git.unlink()
+            second_bootstrap = subprocess.run(
+                [exact_node, LAUNCHER, "bootstrap", "--distribution", distribution],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+                timeout=300,
+            )
+            self.assertEqual(second_bootstrap.returncode, 0, second_bootstrap.stderr)
+            stale_build = Path(receipt["tuple"]["trusted"]["gitAdapter"]).parent / "git-adapter-build"
+            stale_build.mkdir()
+            stale_bootstrap = subprocess.run(
+                [exact_node, LAUNCHER, "bootstrap", "--distribution", distribution],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+                timeout=300,
+            )
+            self.assertNotEqual(stale_bootstrap.returncode, 0)
+            self.assertIn("build directory already exists", stale_bootstrap.stderr)
             self.assertEqual(receipt["platform"], "win32")
             self.assertTrue(receipt["tuple"]["node"]["executable"].lower().endswith("node.exe"))
             self.assertTrue(receipt["tuple"]["bun"]["executable"].lower().endswith("bun.exe"))

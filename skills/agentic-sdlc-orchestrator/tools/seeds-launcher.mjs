@@ -882,6 +882,7 @@ function inspect(targetArgument, values) {
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
     ...(process.platform === 'win32' ? {
+      NoDefaultCurrentDirectoryInExePath: '1',
       PATHEXT: '.EXE',
       SystemRoot: resolve(process.env.SystemRoot || 'C:\\Windows'),
     } : {}),
