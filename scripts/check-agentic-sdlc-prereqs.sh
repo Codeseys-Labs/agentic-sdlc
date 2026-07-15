@@ -10,8 +10,58 @@ AGENTIC_SDLC_SEEDS_TOOL="npm:@os-eco/seeds-cli@${AGENTIC_SDLC_SEEDS_VERSION}"
 AGENTIC_SDLC_NODE_TOOL=node@22.22.3
 AGENTIC_SDLC_BUN_TOOL=bun@1.3.10
 
+# Acquire exact Seeds in an empty, config-free operating-system temporary directory, then
+# execute it in the requested target. This keeps a target .npmrc out of package resolution
+# while preserving the target as sd's cwd and every caller argument boundary.
+agentic_sdlc_seeds_exec() {
+  if [ "$#" -lt 2 ]; then
+    printf 'usage: agentic_sdlc_seeds_exec <target> <command> [args...]\n' >&2
+    return 2
+  fi
+  seeds_target=$1
+  shift
+  if ! pushd "$seeds_target" >/dev/null; then
+    printf 'MISSING:  Seeds target %s is not a directory\n' "$seeds_target" >&2
+    return 2
+  fi
+  seeds_target=$PWD
+  popd >/dev/null
+  if ! seeds_neutral_dir=$(mktemp -d "${TMPDIR:-/tmp}/agentic-sdlc-seeds.XXXXXX"); then
+    printf 'MISSING:  neutral temporary directory for Seeds acquisition\n' >&2
+    return 2
+  fi
+
+  # env -i removes every NPM_CONFIG_* spelling, including scoped registry variables that
+  # cannot be represented as shell identifiers. Retain only mise's data/cache locations so
+  # a non-default mise installation remains usable; acquisition is otherwise process-local.
+  seeds_env=(
+    env -i
+    "PATH=$PATH"
+    "HOME=${HOME:-}"
+    "TMPDIR=${TMPDIR:-/tmp}"
+    'NPM_CONFIG_REGISTRY=https://registry.npmjs.org/'
+    'NPM_CONFIG_USERCONFIG=/dev/null'
+    'NPM_CONFIG_GLOBALCONFIG=/dev/null'
+    'NPM_CONFIG_STRICT_SSL=true'
+    'MISE_NPM_PACKAGE_MANAGER=npm'
+  )
+  if [ -n "${MISE_DATA_DIR:-}" ]; then
+    seeds_env+=("MISE_DATA_DIR=$MISE_DATA_DIR")
+  fi
+  if [ -n "${MISE_CACHE_DIR:-}" ]; then
+    seeds_env+=("MISE_CACHE_DIR=$MISE_CACHE_DIR")
+  fi
+  "${seeds_env[@]}" mise --no-config --cd "$seeds_neutral_dir" exec \
+    "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
+    -- "$@"
+  seeds_status=$?
+  rm -rf -- "$seeds_neutral_dir"
+  return "$seeds_status"
+}
+
 # Run exact Seeds from the target repository without loading that repository's or ambient
-# mise config. The target remains cwd and every caller argument crosses unchanged.
+# mise/npm configuration. npm's registry integrity metadata and strict TLS apply to acquisition;
+# pinning alone does not authenticate the tarball or its transitives.
 agentic_sdlc_seeds() {
   if [ "$#" -lt 1 ]; then
     printf 'usage: agentic_sdlc_seeds <target> [sd args...]\n' >&2
@@ -19,9 +69,14 @@ agentic_sdlc_seeds() {
   fi
   seeds_target=$1
   shift
-  MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd "$seeds_target" exec \
-    "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
-    -- sd "$@"
+  if ! pushd "$seeds_target" >/dev/null; then
+    printf 'MISSING:  Seeds target %s is not a directory\n' "$seeds_target" >&2
+    return 2
+  fi
+  seeds_target=$PWD
+  popd >/dev/null
+  agentic_sdlc_seeds_exec "$seeds_target" \
+    sh -c 'cd "$1" && shift && exec sd "$@"' agentic-sdlc-seeds "$seeds_target" "$@"
 }
 
 # Sourcing this script exposes only the launcher; executing it runs preflight.
@@ -62,14 +117,12 @@ if command -v mise >/dev/null 2>&1; then
   elif [ "$seeds_version" != "$AGENTIC_SDLC_SEEDS_VERSION" ]; then
     printf 'MISMATCH: Seeds version %s; required %s\n' "$seeds_version" "$AGENTIC_SDLC_SEEDS_VERSION" >&2
     missing=1
-  elif ! seeds_root=$(MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd "$seeds_target" exec \
-      "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
-      -- sh -c 'mise --no-config --cd "$1" where "$2"' agentic-sdlc "$seeds_target" "$AGENTIC_SDLC_SEEDS_TOOL" 2>/dev/null); then
+  elif ! seeds_root=$(agentic_sdlc_seeds_exec "$seeds_target" \
+      sh -c 'mise --no-config --cd "$1" where "$2"' agentic-sdlc "$seeds_target" "$AGENTIC_SDLC_SEEDS_TOOL" 2>/dev/null); then
     printf 'MISSING:  Seeds provenance root from mise (required)\n' >&2
     missing=1
-  elif ! seeds_executable=$(MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd "$seeds_target" exec \
-      "$AGENTIC_SDLC_NODE_TOOL" "$AGENTIC_SDLC_BUN_TOOL" "$AGENTIC_SDLC_SEEDS_TOOL" \
-      -- sh -c 'command -v sd' 2>/dev/null); then
+  elif ! seeds_executable=$(agentic_sdlc_seeds_exec "$seeds_target" \
+      sh -c 'command -v sd' 2>/dev/null); then
     printf 'MISSING:  Seeds executable from exact mise environment (required)\n' >&2
     missing=1
   else

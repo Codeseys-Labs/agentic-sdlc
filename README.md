@@ -171,17 +171,22 @@ mise -C <distribution-root> tasks
 ```
 
 Bootstrap commands deliberately run in the reviewed distribution checkout. Once installed,
-Seeds operations run from any target repository with no bundle-checkout dependency and ignore
-both target and ambient mise config while preserving target cwd:
+Seeds operations run from any target repository with no bundle-checkout dependency. The launcher
+acquires through an empty neutral temporary directory, clears every ambient `NPM_CONFIG_*`
+variable (including scoped registries), forces the public registry, empty user/global npm config,
+and strict TLS; only after acquisition does it restore the target cwd without altering argument
+boundaries:
 
 ```bash
-MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>
+NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <neutral-temp> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sh -c 'cd "$1" && shift && exec sd "$@"' agentic-sdlc-seeds <target> <args>
 ```
 
-Use process-scoped `$env:MISE_NPM_PACKAGE_MANAGER = 'npm'` with the same argument array on
-native Windows and restore its previous value afterward; do not make permanent trust or config
-changes. The skill and `references/seeds-worktrees.md` define the unambiguous
-`Seeds(<target>, <args...>)` shorthand for this exact command.
+`<neutral-temp>` is a newly-created empty operating-system temporary directory that is removed
+after the command. npm validates registry-published tarball integrity metadata, but neither that
+nor a version pin authenticates the tarball or its transitive dependency graph. Native Windows
+uses the same process-scoped neutral npm settings and temporary directory; restore all previous
+environment state. Do not make permanent trust or config changes. The skill and
+`references/seeds-worktrees.md` define the unambiguous `Seeds(<target>, <args...>)` shorthand.
 
 Mise trust is scoped to each absolute config path, so every linked worktree must trust its own
 `mise.toml` after reviewing the diff. `MISE_PARANOID=1` deliberately rejects an untrusted
