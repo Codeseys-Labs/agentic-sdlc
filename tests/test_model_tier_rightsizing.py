@@ -120,6 +120,67 @@ CONSUMERS = (
 )
 POLICY_SURFACES = CONSUMERS + (ROUTER, CALIBRATION)
 
+TIER_HEADER = (
+    "Semantic tier",
+    "Wrong-output consequence",
+    "Eligible exact pair",
+    "Requested effort",
+    "Required gate or control",
+)
+TIER_ROWS = (
+    (
+        "Frontier",
+        "Derail / settled truth",
+        "`gpt-5.6-sol` or `claude-fable-5`",
+        "Sol `high`/`xhigh`; Fable `xhigh`/`max`",
+        "Solo or bounded; independent re-derivation; conductor adjudicates",
+    ),
+    (
+        "Judgment workhorse",
+        "Contained silent degradation",
+        "`gpt-5.6-terra` or `claude-opus-4-8`",
+        "Terra `xhigh`/`max`; Opus `high`/`xhigh`",
+        "Explicit acceptance criteria and independent immutable-candidate review",
+    ),
+    (
+        "Capable volume",
+        "Gated visible retry",
+        "`gpt-5.6-luna` or `claude-sonnet-5`",
+        "Luna `high`/`xhigh`; Sonnet `high`/`xhigh`",
+        "Compiler, tests, schema, diff, evidence check, or deterministic verifier",
+    ),
+    (
+        "Mechanical floor",
+        "Cheap fully checked redo",
+        "Cheapest certified route from `gpt-5.6-luna` or `claude-sonnet-5`",
+        "`low`/`medium` after route-specific certification",
+        "Complete deterministic check; retry or escalate on any mismatch",
+    ),
+)
+
+ROLE_SURFACES = tuple(sorted((ROOT / "agents" / "claude").glob("sdlc-*.md"))) + tuple(
+    sorted((ROOT / "agents" / "codex").glob("sdlc-*.toml"))
+) + tuple(sorted((ROOT / "agents" / "codex" / "research").glob("*.toml")))
+ROLE_GENERATOR = ROOT / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
+RESEARCH_DIRECTOR = ROOT / "agents" / "codex" / "research" / "research_director.toml"
+OPERATING_MODEL = ROOT / "skills" / "codex-research-os" / "references" / "operating-model.md"
+PERSISTENT_GUIDANCE = (
+    ROOT / "README.md",
+    ROOT / "commands" / "sdlc-init.md",
+    ROOT / "commands" / "sdlc-wave.md",
+    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "seeds-worktrees.md",
+)
+
+RUNTIME_ASSIGNMENT_FIELDS = (
+    "requested_model_id",
+    "requested_effort",
+    "requested_context_form",
+    "resolution_state",
+    "resolved_model_id",
+    "resolved_effort",
+    "resolved_context_form",
+)
+
 
 def _table(text: str, heading: str) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
     marker = f"{heading}\n"
@@ -149,6 +210,7 @@ def _table(text: str, heading: str) -> tuple[tuple[str, ...], tuple[tuple[str, .
 
 def _operational_cells(text: str) -> str:
     headings = (
+        "## Four semantic tiers and eligible pairs",
         "## Exact dispatch and requested effort",
         "## Blast-radius production routing",
         "## Agentic SDLC phase routing",
@@ -167,14 +229,52 @@ def _assert_authority(text: str) -> None:
 
 
 def _assert_calibration(text: str) -> None:
+    assert _table(text, "## Four semantic tiers and eligible pairs") == (TIER_HEADER, TIER_ROWS)
     assert _table(text, "## Exact dispatch and requested effort") == (DISPATCH_HEADER, DISPATCH_ROWS)
     assert _table(text, "## Approved roadmap family lanes") == (ROADMAP_HEADER, ROADMAP_ROWS)
     operational = _operational_cells(text)
     assert not re.search(r"(?i)\b(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+\b", operational)
+    for family in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"):
+        assert family in operational, f"missing primary model family: {family}"
+    assert "Mechanical floor" in operational
     assert "same deterministic gate remains" in text.lower()
     assert "immutable candidate and explicit acceptance criteria" in text.lower()
     assert "If no certified route exists, fail closed" in text
     _assert_authority(text)
+
+
+def _assert_no_unsafe_operational_prose(text: str) -> None:
+    assert not re.search(r"(?i)\b(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+\b", text)
+    assert not re.search(r"(?i)\b(?:use|set|route|dispatch|select)\b.{0,80}\b(?:fable|opus|sonnet|haiku)\b\s*(?:alias|by default)", text)
+    assert not re.search(r"(?i)\b(?:host|provider)\s+default\b.{0,100}\b(?:model|selection|dispatch)", text)
+
+
+def _assert_context_claims(text: str) -> None:
+    assert not re.search(
+        r"(?i)\[1m\].{0,100}(?:more intelligent|higher intelligence|proves? (?:a )?1m|guarantees? (?:a )?1m|upstream capacity|effective capacity)",
+        text,
+    )
+
+
+def _assert_runtime_role_contract(text: str) -> None:
+    for field in RUNTIME_ASSIGNMENT_FIELDS:
+        assert field in text, f"missing runtime assignment field: {field}"
+    assert "inherited" in text
+    assert "unresolved" in text
+    assert not re.search(r"(?m)^\s*model_reasoning_effort\s*=", text)
+    assert not re.search(r"(?i)host (?:configuration|default).{0,80}(?:choose|select|supply).{0,40}model", text)
+
+
+def _assert_persistent_mutation_guard(text: str) -> None:
+    for match in re.finditer(
+        r"(?im)^.*(?:mise\s+trust|~[/\\]\.codex[/\\]config\.toml|settings\.json|shell\s+alias|credential(?:s)?\s+(?:write|store|mutation|change)).*$",
+        text,
+    ):
+        line = match.group(0)
+        window = text[max(0, match.start() - 280) : match.end() + 280]
+        if "mise --no-config" in line or re.search(r"(?i)mise trust\s+is\s+not", line):
+            continue
+        assert re.search(r"(?i)(?:explicit|operation-specific).{0,80}(?:approval|authorization)", window), line
 
 
 class ModelTierRightsizingTests(unittest.TestCase):
@@ -187,7 +287,8 @@ class ModelTierRightsizingTests(unittest.TestCase):
         self.assertEqual(router.count("](references/model-routing-calibration.md)"), 1)
         self.assertIn("same class and\ncontrol predicate", router)
         self.assertIn("does not restate a routing matrix", flagship)
-        self.assertNotRegex(flagship, r"(?i)\b(?:Fable|Opus|Sonnet|Sol|Terra|Luna)\b")
+        self.assertIn("Sol/Fable, Terra/Opus, and Luna/Sonnet", flagship)
+        self.assertNotIn("| Consequence lane | Exact model ID |", flagship)
 
     def test_canonical_evidence_boundaries_and_historical_aliases_remain_explicit(self) -> None:
         text = CALIBRATION.read_text(encoding="utf-8")
@@ -202,6 +303,11 @@ class ModelTierRightsizingTests(unittest.TestCase):
             "Exact Claude `[1m]` forms\nwere not separately certified",
             "2026-07-05",
             "account-, region-,\nprovider-, and date-specific",
+            "`gpt-5.6-sol` → `gpt-5.5` → `gpt-5.4`",
+            "`gpt-5.6-terra` → `gpt-5.5` → `gpt-5.4`",
+            "`gpt-5.6-luna` → `gpt-5.4-mini` → `gpt-5.3-codex-spark`",
+            "61 agents / 9.05M subagent tokens / 2h12m",
+            "6-dimension review + adversarial verification",
         ):
             self.assertIn(value, text)
         for alias in (
@@ -228,12 +334,42 @@ class ModelTierRightsizingTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             with self.subTest(surface=path):
                 if path != CALIBRATION:
-                    self.assertNotRegex(text, r"(?i)\b(?:global|us|eu|ap)\.anthropic\.claude-[\w.-]+\b")
+                    _assert_no_unsafe_operational_prose(text)
+                _assert_context_claims(text)
                 self.assertNotRegex(
                     text,
                     r"(?i)(?:`)?(?:gpt-5\.6-(?:sol|terra|luna)|claude-(?:fable-5|opus-4-8|sonnet-5))(?:`)?\s+(?:owns?|decides?|authori[sz]\w*|mutat\w*)\s+(?:Seeds|the queue|fan-in|outward)",
                 )
                 self.assertNotRegex(text, r"(?im)^\s*(?:edit|change|mutate|write)\s+(?:user )?(?:settings|trust)\b")
+
+    def test_all_role_manifests_and_generator_require_runtime_assignment(self) -> None:
+        for path in ROLE_SURFACES + (ROLE_GENERATOR, OPERATING_MODEL):
+            with self.subTest(role_surface=path):
+                _assert_runtime_role_contract(path.read_text(encoding="utf-8"))
+
+    def test_research_director_is_seeds_read_only_and_emits_one_typed_proposal(self) -> None:
+        director = RESEARCH_DIRECTOR.read_text(encoding="utf-8")
+        generator = ROLE_GENERATOR.read_text(encoding="utf-8")
+        for text in (director, generator):
+            with self.subTest(surface="director" if text is director else "generator"):
+                self.assertIn("Research Director is Seeds-read-only", text)
+                self.assertIn("Seeds(<target>, ready --format json)", text)
+                self.assertIn("Do not create, claim, update, close, or disposition Seeds", text)
+                self.assertIn("SeedProposal {", text)
+                self.assertNotIn("Check sd ready", text)
+                self.assertNotIn("Claim or create a seeds issue", text)
+
+    def test_persistent_trust_config_alias_and_credentials_require_operation_specific_approval(self) -> None:
+        for path in PERSISTENT_GUIDANCE:
+            with self.subTest(guidance=path):
+                _assert_persistent_mutation_guard(path.read_text(encoding="utf-8"))
+
+    def test_process_scoped_no_config_gate_remains_allowed(self) -> None:
+        text = (
+            "For a process-scoped test run, use `mise --no-config --cd <target> exec ...`; "
+            "this does not persist trust."
+        )
+        _assert_persistent_mutation_guard(text)
 
     def test_canonical_links_resolve_and_no_second_active_matrix_exists(self) -> None:
         for source in (ROUTER, FLAGSHIP):
@@ -257,6 +393,16 @@ class ModelTierRightsizingTests(unittest.TestCase):
             ).replace(
                 "| Contained silent-degrade | `gpt-5.6-terra`", "| Derail / settled truth | `gpt-5.6-terra`", 1
             ).replace("| TEMP | `gpt-5.6-sol`", "| Contained silent-degrade | `gpt-5.6-sol`", 1),
+            "swapped paired tier models": original.replace(
+                "`gpt-5.6-sol` or `claude-fable-5`", "PAIR-TEMP", 1
+            ).replace(
+                "`gpt-5.6-terra` or `claude-opus-4-8`",
+                "`gpt-5.6-sol` or `claude-fable-5`",
+                1,
+            ).replace("PAIR-TEMP", "`gpt-5.6-terra` or `claude-opus-4-8`", 1),
+            "deleted GPT provider family": original.replace("`gpt-5.6-sol`", "`claude-fable-5`", 1),
+            "deleted Claude provider family": original.replace("`claude-fable-5`", "`gpt-5.6-sol`", 1),
+            "deleted mechanical tier": original.replace("| Mechanical floor |", "| Retry floor |", 1),
             "swapped roadmap rows": original.replace(
                 "| S1 Seeds toolchain retention | `gpt-5.6-luna`", "| TEMP | `gpt-5.6-luna`", 1
             ).replace(
@@ -273,6 +419,39 @@ class ModelTierRightsizingTests(unittest.TestCase):
                     target.write_text(mutation, encoding="utf-8")
                     with self.assertRaises(AssertionError):
                         _assert_calibration(target.read_text(encoding="utf-8"))
+
+    def test_policy_mutation_helpers_reject_new_loopholes(self) -> None:
+        mutations = {
+            "unsafe alias insertion": (
+                _assert_no_unsafe_operational_prose,
+                "Dispatch using global.anthropic.claude-fable-5 for frontier work.",
+            ),
+            "host default policy": (
+                _assert_no_unsafe_operational_prose,
+                "Let the host default model selection decide each worker.",
+            ),
+            "static effort pin": (
+                _assert_runtime_role_contract,
+                "\n".join(f"{field}: unknown" for field in RUNTIME_ASSIGNMENT_FIELDS)
+                + "\nresolution_state: inherited|unresolved\nmodel_reasoning_effort = 'high'\n",
+            ),
+            "context intelligence overclaim": (
+                _assert_context_claims,
+                "Use [1m] because it guarantees a 1M upstream capacity and more intelligence.",
+            ),
+            "persistent trust without approval": (
+                _assert_persistent_mutation_guard,
+                "Run mise trust /repo/mise.toml before dispatch.",
+            ),
+            "persistent config without approval": (
+                _assert_persistent_mutation_guard,
+                "Add the repository to ~/.codex/config.toml before dispatch.",
+            ),
+        }
+        for name, (assertion, text) in mutations.items():
+            with self.subTest(mutation=name):
+                with self.assertRaises(AssertionError):
+                    assertion(text)
 
 
 if __name__ == "__main__":

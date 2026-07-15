@@ -54,7 +54,10 @@ needs, (c) lifetime beyond the conversation, (d) engine mixing.
 - Long-running: use the selected host's native background/persistent mechanism plus
   artifact files. Never hold a blocking call open for hours.
 - Results land in FILES at assigned artifact paths; chat summaries are hints, not evidence.
-- Before a dispatching consumer launches work, load `model-tier-rightsizing`; its caller must
-  inject a certified exact model ID and requested effort. A provider-neutral static role
+- Before a dispatching consumer launches work, load `model-tier-rightsizing`; classify the
+  artifact into frontier, judgment workhorse, capable volume, or mechanical floor, then choose
+  within the eligible Sol/Fable, Terra/Opus, or Luna/Sonnet pair by task fit, independent
+  perspective, quota, and verified transport. Its caller must inject a certified exact model
+  ID **and explicit requested effort** for every worker. A provider-neutral static role
   definition does not select a model; stop before dispatch if identity or adapter readback is
-  unresolved.
+  unresolved. Never rely on host-default selection or force all six models into a run.

@@ -17,10 +17,13 @@ Run the FRAME phase of the agentic-sdlc-orchestrator loop for: $ARGUMENTS
    ambiguous capability as a fail-closed stop. Detect optional cmux only when its CLI and
    `CMUX_WORKSPACE_ID` are already present. Never install, start, or enable cmux or
    tmux during framing.
-5. Before any model dispatch, load `model-tier-rightsizing`. A caller must inject a
-   certified exact model ID and requested effort into each delegation; provider-neutral roles
-   do not select models. Stop before dispatch if either identity or adapter readback is
-   unresolved.
+5. Before any model dispatch, load `model-tier-rightsizing`. Classify each worker as
+   frontier, judgment workhorse, capable volume, or mechanical floor; choose within its
+   Sol/Fable, Terra/Opus, or Luna/Sonnet pair by task fit, independent perspective, quota,
+   and verified transport. A caller must inject a certified exact model ID **and explicit
+   requested effort** into every delegation; provider-neutral roles do not select models.
+   Stop before dispatch if identity or adapter readback is unresolved. Do not force all six
+   models into the run.
 6. Decide the run shape (direct / native role or subagent / worktree wave / native provider delegation) and set caps:
    max workers, max worktrees, max review rounds, stop conditions.
 7. Emit the frame as a short plan: done condition, run shape, caps, phase list, capability

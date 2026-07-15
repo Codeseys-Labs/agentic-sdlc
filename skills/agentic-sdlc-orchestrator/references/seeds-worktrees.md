@@ -87,26 +87,31 @@ depend on does NOT follow:
   workers fall back to user-level settings. Copy it in if the wave needs project hooks.
 - `.mcp.json` — if gitignored, worker sessions in the worktree see NO project MCP servers.
   Copy or symlink it into each worktree when workers need those servers.
-- Codex per-path dir-trust — trust is keyed on the absolute path; every NEW worktree path
-  must be added to `~/.codex/config.toml` (`projects.'<path>'.trust_level='trusted'`) or
-  codex workers hang on the trust prompt. Batch-add when creating the wave.
+- Codex per-path dir-trust — trust is keyed on the absolute path. Adding a new worktree to
+  `~/.codex/config.toml` is a persistent user-config mutation: obtain explicit
+  operation-specific user approval for each exact path before changing it. Without approval,
+  stop or use a certified non-persistent execution plane; do not treat the trust prompt as
+  authorization.
 - mise per-path trust — same pattern: a fresh worktree is untrusted even when the main repo
-  is trusted, so git hooks (which ARE shared from the main repo's gitdir) fail on any
-  mise-shimmed command with "config not trusted". Run `mise trust <worktree-path>` per
-  worktree. Missing, unpinned, untrusted, or ambiguous required capability fails closed;
-  do not let workers bypass the repository gate. Full gate stack:
+  is trusted, so shared git hooks can fail on a mise-shimmed command. Persistent
+  `mise trust <worktree-path>` requires explicit operation-specific approval for that exact
+  reviewed config path. A process-scoped check may use `mise --no-config --cd <worktree>
+  exec ...` without persisting trust. Missing, unpinned, untrusted, or ambiguous required
+  capability fails closed; do not bypass the repository gate. Full gate stack:
   `skills/repo-toolchain-gates/`.
 
-Wave-creation checklist: create worktree → copy untracked config the workers need →
-trust the path for codex AND mise → then launch.
+Wave-creation checklist: create worktree → copy only approved untracked config the workers
+need → request operation-specific approval for each persistent Codex/mise trust mutation or
+select a certified process-scoped route → then launch.
 
 ## Worker substrates and optional viewers
 
 - Launch provider-native workers by default after capability and trust probes pass. Give every
   write-capable worker one worktree, its absolute path, and an artifact report path. Never
   share a write worktree.
-- Codex workers on any substrate need each new worktree path trusted in
-  `~/.codex/config.toml`; batch-add trust entries when creating the wave.
+- Codex workers on any substrate require a certified path-trust state. Persistent edits to
+  `~/.codex/config.toml` require explicit operation-specific user approval for each path;
+  absent that approval, stop or select a certified non-persistent route.
 - When cmux is already active, optionally publish wave status. Attach a
   native workers require neither cmux nor tmux.
 

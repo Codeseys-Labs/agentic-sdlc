@@ -16,10 +16,14 @@ as the router.
   `references/*.md` on demand only.
 - `skills/codex-research-os/` — repo-scaffolding installer for a 17-role research
   organization with claim ledgers and review gates.
-- `skills/model-tier-rightsizing/` — routing router for every model-dispatching
-  consumer. Load it before dispatch; the caller injects a certified exact ID and requested
-  effort, otherwise dispatch stops. Its canonical calibration owns generation-specific IDs,
-  effort bands, evidence, quotas, complements, controls, and roadmap lanes.
+- `skills/model-tier-rightsizing/` — first-class routing skill for every model-dispatching
+  consumer. It owns four semantic tiers: paired Sol/Fable frontier, Terra/Opus judgment
+  workhorse, Luna/Sonnet capable volume, and the cheapest certified fully gated mechanical
+  floor. Load it before dispatch; choose within a pair by task fit, independent perspective,
+  quota, and verified transport—not global provider preference or all-six tokenism. The
+  caller injects a certified exact ID plus explicit effort; otherwise dispatch stops. Its
+  canonical calibration preserves evidence, quotas, complements, fallbacks, controls, and
+  roadmap lanes.
 - `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
   critic, integrator) in Claude `.md` and Codex `.toml` forms, plus the repo-scoped
   research roster under `agents/codex/research/`.
@@ -52,13 +56,17 @@ mise 2026.4.27+ is the managed-tool bootstrap, not the sole readiness prerequisi
 uv, consumes the checked-in cross-platform `mise.lock`, and uv supplies Python 3.12.11 for
 all authoritative Python entrypoints. Git, a documented Seeds distribution, supported trust
 behavior, and any selected adapter must be present and verified; missing, unpinned, untrusted,
-or ambiguous capability means not Git-ready. Trust is scoped to each absolute config path:
-every linked worktree must review and trust its own `mise.toml`; `MISE_PARANOID=1` fails closed
-until that explicit trust step. A requested model is not a resolved model: requested ID and
-effort are dispatch inputs, while provider/model remains unresolved until adapter readback.
-A dispatching consumer must receive a caller-injected, certified exact model ID and requested
-effort; otherwise it stops before dispatch. A decorative model pin does not certify a
-transport or replace required adapter readback.
+or ambiguous capability means not Git-ready. Trust is scoped to each absolute config path,
+but persistent `mise trust`, Codex/global config, shell-alias, and credential mutations each
+require explicit operation-specific user approval. Process-scoped `mise --no-config` test
+execution is allowed without persisting trust. A requested model is not a resolved model:
+requested ID and effort are dispatch inputs, while provider/model remains unresolved until
+adapter readback.
+A dispatching consumer must receive a caller-injected, certified exact model ID, explicit
+requested effort, and requested context form; otherwise it stops before dispatch. Record
+requested, resolved, inherited, and unresolved state separately. Provider-neutral roles have
+no static effort pins and never recommend host-default model selection as policy. A decorative
+model pin does not certify a transport or replace required adapter readback.
 
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`

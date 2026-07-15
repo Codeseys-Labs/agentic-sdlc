@@ -26,10 +26,20 @@ Model tiering, external tools, seeds, or project-specific issue systems are opti
 
 ## Model Config Policy
 
-Generated roles are provider-neutral and do not select models. Before any dispatch, the
-caller injects a certified exact ID and requested effort, records adapter readback, and stops
-when either is unresolved. Never inherit a host default or use an unverified alias for an
-operational dispatch.
+Generated roles are provider-neutral and do not select models or pin static effort. Before
+any dispatch, the caller loads `model-tier-rightsizing`, chooses inside the appropriate exact
+six-model pair, and supplies a runtime assignment with these fields:
 
+- `requested_model_id`
+- `requested_effort`
+- `requested_context_form`
+- `resolution_state` (`requested`, `resolved`, `inherited`, or `unresolved`)
+- `resolved_model_id`
+- `resolved_effort`
+- `resolved_context_form`
+
+The caller records adapter readback and stops when the route is inherited or unresolved.
+Never use an unverified alias or host-default model selection for an operational dispatch.
 A project may maintain a local exact-ID allowlist for static validation, but allowlisting does
-not certify a live transport. Validate the caller's injected ID and readback before dispatch.
+not certify a live transport. `[1m]` request/base-ID readback is not evidence of intelligence,
+upstream capacity, compaction, or effort compliance.

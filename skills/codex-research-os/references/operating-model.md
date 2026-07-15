@@ -78,6 +78,25 @@ The gate is intentionally conservative; project-specific gates may be stricter.
 
 ## Agent Config Gate
 
-Run `make validate-agents` before trusting a generated research team. The gate checks that `.codex/agents/*.toml` contains only known top-level keys, that agent names match filenames, that reasoning efforts are known values, and that any explicit `model` pins are allowlisted.
+Run `make validate-agents` before trusting a generated research team. The gate checks that
+`.codex/agents/*.toml` contains only known top-level keys and that names match filenames.
+Provider-neutral role files intentionally omit both static `model` and
+`model_reasoning_effort`; the runtime assignment—not the host default—selects the route.
 
-Absent `model` fields are intentional: they avoid fake model claims and let the host Codex configuration choose the actual model.
+Every dispatch supplies this contract outside the static role manifest:
+
+```yaml
+requested_model_id: <certified exact ID>
+requested_effort: low|medium|high|xhigh|max
+requested_context_form: base|<transport-certified exact [1m] form>
+resolution_state: requested|resolved|inherited|unresolved
+resolved_model_id: <readback or unknown>
+resolved_effort: <readback or unknown>
+resolved_context_form: <telemetry or unknown>
+```
+
+`inherited` and `unresolved` are receipt states, never permission to dispatch. The caller
+loads `model-tier-rightsizing`, classifies the task into the four semantic tiers, chooses
+inside the eligible six-model pair, and stops unless the exact route is certified. `[1m]`
+request/base-ID readback does not establish intelligence, upstream context capacity,
+compaction, or effort compliance.
