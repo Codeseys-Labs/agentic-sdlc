@@ -430,7 +430,8 @@ class SeedsLauncherTests(unittest.TestCase):
 
         wrong_same_version = self.root / "wrong-node" / "bin" / "node"
         wrong_same_version.parent.mkdir(parents=True)
-        os.link(Path(NODE).resolve(), wrong_same_version)
+        shutil.copy2(Path(NODE).resolve(), wrong_same_version)
+        wrong_same_version.chmod(wrong_same_version.stat().st_mode | stat.S_IXUSR)
         inspect = self.installed_launcher("inspect", "--target", str(self.target), "prime", node=wrong_same_version)
         self.assertNotEqual(inspect.returncode, 0)
         self.assertIn("executing Node", inspect.stderr)
