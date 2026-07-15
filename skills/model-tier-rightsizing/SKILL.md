@@ -47,20 +47,32 @@ There is no global provider preference and no requirement to spend tokens on all
 
 ## Required dispatch contract
 
-Every delegated call or named-workflow worker must state:
+Every delegated call or named-workflow worker consumes one provider-neutral
+`RuntimeAssignment` and must state:
 
 - a caller-injected **exact model ID** certified by the active transport; never dispatch
   from an inherited/default model or unverified alias;
-- an explicit requested effort and context form, kept separate from resolved model,
-  resolved effort, provider, and context telemetry;
+- an explicit requested effort and context form, kept separate from independently observed
+  provider, model identity, effective effort, and effective context telemetry;
+- immutable request-injection evidence: `request_injection_status: verified`, a non-unknown
+  `request_injection_source`, and non-unknown `request_injection_evidence` proving the exact
+  model and effort sent by the launcher or adapter;
+- independent model-identity evidence: non-unknown `resolved_provider` and
+  `resolved_model_id`, `model_readback_status: verified`, a non-unknown
+  `model_readback_source`, and non-unknown `model_readback_evidence`;
+- `effort_readback_status` and `context_readback_status`, each `verified` with independent
+  evidence when exposed or `unavailable` with explicit source/evidence markers when the
+  transport cannot expose effective effort or context behavior;
 - one bounded artifact, owner, stop condition, and wrong-output class;
 - the gate or independent reviewer that detects failure; and
 - the fallback and escalation action before work starts.
 
-A provider-neutral static role definition does not select a model. Stop before dispatch
-unless the caller injects a certified exact ID. Record resolved facts only from adapter
-readback; absent readback is unresolved, and a requested value or echoed prompt text is
-not resolution evidence.
+A provider-neutral static role definition does not select a model. `resolution_state` must
+equal `resolved`. Requested, inherited, unresolved, or unverified model-identity assignments
+stop before dispatch. Request injection and effective readback are different evidence classes:
+never copy requested values into resolved or readback fields, and never require impossible
+effective effort or context readback after request injection and model identity are verified.
+A requested value, host default, alias, or echoed prompt text is not resolution evidence.
 
 An executable Workflow call pins both fields on every worker; the second vendor is used
 only when it produces a distinct artifact:

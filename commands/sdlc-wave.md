@@ -20,12 +20,26 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
 4. Load `model-tier-rightsizing` before launching a model-dispatching worker. Classify each
    assignment into the four semantic tiers and choose within the eligible Sol/Fable,
    Terra/Opus, or Luna/Sonnet pair by task fit, independent perspective, quota, and verified
-   transport. The caller must inject a certified exact model ID and **explicit requested
-   effort**; a provider-neutral role does not select one. Stop before dispatch if identity or
-   adapter readback is unresolved. Do not use host-default selection or artificial all-six
-   representation. Each worker prompt must carry: Seed id + acceptance criteria, absolute
-   worktree path, files in scope, gates to run, artifact report path, requested context form,
-   and requested/resolved/inherited/unresolved receipt state.
+   transport. The conductor must supply a conductor-supplied certified `RuntimeAssignment`
+   with a certified exact model ID before spawn. `resolution_state` must equal `resolved`;
+   `request_injection_status` and `model_readback_status` must equal `verified`;
+   `resolved_provider` and `resolved_model_id` must be non-unknown.
+   `request_injection_source` and immutable `request_injection_evidence` must prove the exact
+   requested model and effort injected by the selected host or launcher, while independent
+   `model_readback_source` and immutable `model_readback_evidence` prove the resolved model.
+   Requested, inherited,
+   unresolved, or unverified model-identity assignments stop before dispatch and stop before
+   spawn, returning one advisory SeedProposal. Effective effort and context readback are
+   separate: `effort_readback_status` and `context_readback_status` are each `verified` with
+   independent evidence when exposed, or `unavailable` with an explicit source/evidence marker
+   when the transport cannot expose it.
+   Never copy requested effort or context into resolved/readback fields, and never require
+   impossible effective readback after request injection and model identity are verified.
+   Prompt prose does not enforce a model or effort. Do not use host-default selection or
+   artificial all-six representation. Each worker prompt may carry the certified assignment
+   as an audit copy, but receipts—not the prompt—are the enforcement boundary. It must also
+   carry: Seed id + acceptance criteria, absolute worktree path, files in scope, gates to run,
+   artifact report path, and requested context form.
 5. If cmux is already active, optionally publish wave status. Native workers require neither
    cmux nor tmux.
 6. Collect artifact reports. Review each worktree (diff + gates, not summaries) —
