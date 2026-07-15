@@ -88,33 +88,32 @@ Before spawn, the conductor provides the assignment outside the static role mani
 conductor-supplied certified `RuntimeAssignment`:
 
 ```yaml
+schema_version: runtime-assignment-receipt/v1
 requested_model_id: <certified exact ID>
 requested_effort: low|medium|high|xhigh|max
 requested_context_form: base|<transport-certified exact [1m] form>
 request_injection_status: verified
-request_injection_source: <non-unknown immutable launcher/adapter request source>
-request_injection_evidence: <non-unknown immutable exact model/effort request receipt>
-resolution_state: requested|resolved|inherited|unresolved
-resolved_provider: <independent observation or unique exact-ID mapping>
-resolved_model_id: <exact ID verified by independent readback or mapping>
-model_readback_status: verified
+request_injection_evidence: <closed immutable request receipt bound to model, effort, and context>
+resolution_state: resolved
+resolved_provider: <policy-mapped provider for the exact model>
+resolved_model_id: <immutable injected exact ID>
 model_identity_basis: independent_readback|unambiguous_exact_id_mapping
-model_readback_source: <independent source or unavailable_in_transport for mapping>
-model_readback_evidence: <immutable receipt or immutable policy mapping reference>
+model_readback_status: verified
+model_readback_evidence: <closed structured evidence with a cross-field assignment binding to resolved provider, model, requested effort, and requested context>
 effort_readback_status: verified|unavailable
-effort_readback_source: <independent source or unavailable_in_transport>
-effort_readback_evidence: <immutable receipt or unavailable_in_transport>
+effort_readback_evidence: <closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and effective effort when verified>
 context_readback_status: verified|unavailable
-context_readback_source: <independent source or unavailable_in_transport>
-context_readback_evidence: <immutable receipt or unavailable_in_transport>
+context_readback_evidence: <closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and effective context when verified>
 ```
 
-`resolution_state` must equal `resolved`. Exact model and effort request injection is mandatory
-and immutable. An independently observed provider/model source may be unavailable only when an
-unambiguous exact-ID mapping plus immutable request/model evidence verifies identity. Effective
-effort and context may be honestly unavailable; requested values never become readback. Requested,
-inherited, or unresolved assignments stop before spawn and return one `SeedProposal` to the
-conductor. The selected host or launcher must inject the exact requested model and effort before
-spawn. If it cannot inject both, it does not dispatch and returns one `SeedProposal`; prompt prose
+The receipt is validated only for canonical internal consistency; it does not authenticate an issuer
+or prove external request injection, readback, spawn identity, or admission. The external authenticated
+harness is the sole spawn and admission authority. `resolution_state` must equal `resolved`. Exact model
+and effort request injection is mandatory and immutable. Effective effort and context may honestly be
+unavailable; prompt echoes, caller defaults, aliases, host defaults, copied requested values, and arbitrary
+provenance never become readback evidence. Requested, inherited, or unresolved assignments and any unverified
+model identity stop before spawn and return one `SeedProposal` to the conductor. The selected host or launcher
+must inject the exact requested model and effort before spawn. If it cannot inject both, it does not dispatch
+and returns one `SeedProposal`; prompt prose
 does not enforce a Codex model or effort. `[1m]` readback does not establish intelligence,
 upstream context capacity, compaction, or effort compliance.

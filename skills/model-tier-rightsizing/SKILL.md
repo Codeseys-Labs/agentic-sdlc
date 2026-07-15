@@ -54,13 +54,11 @@ Every delegated call or named-workflow worker consumes one provider-neutral
   from an inherited/default model or unverified alias;
 - an explicit requested effort and context form, kept separate from independently observed
   provider, model identity, effective effort, and effective context telemetry;
-- immutable request-injection evidence: `request_injection_status: verified`, a non-unknown
-  `request_injection_source`, and non-unknown `request_injection_evidence` proving the exact
-  model and effort sent by the launcher or adapter;
+- immutable request-injection evidence: `request_injection_status: verified` and closed
+  `request_injection_evidence` proving the exact model and effort sent by the launcher or adapter;
 - independent model-identity evidence: non-unknown `resolved_provider` and
-  `resolved_model_id`, `model_readback_status: verified`, a non-unknown
-  `model_readback_source`, and a non-unknown `model_readback_evidence`. An independently
-  observed provider/model source may honestly be `unavailable_in_transport` only when the exact
+  `resolved_model_id`, `model_readback_status: verified`, a closed
+  `model_readback_evidence`. Independent provider/model observation may honestly be unavailable
   ID maps uniquely under the versioned policy and immutable request/model evidence verifies
   identity;
 - `effort_readback_status` and `context_readback_status`, each `verified` with independent
@@ -81,31 +79,31 @@ alias, or echoed prompt text is not resolution evidence.
 ## Receipt admission boundary
 
 `skills/model-tier-rightsizing/scripts/receipt_admission.py` validates one concrete
-`RuntimeAssignment` request receipt against the versioned
+`RuntimeAssignment` receipt against the versioned
 `policy/runtime-assignment-receipt-v1.json`. The v1 receipt fields are exactly:
 `schema_version`, `requested_model_id`, `requested_effort`, `requested_context_form`,
 `request_injection_status`, `request_injection_evidence`, `resolution_state`,
-`resolved_provider`, `resolved_model_id`, `model_readback_status`,
-`model_identity_basis`, `model_readback_evidence`, `effort_readback_status`,
+`resolved_provider`, `resolved_model_id`, `model_identity_basis`,
+`model_readback_status`, `model_readback_evidence`, `effort_readback_status`,
 `effort_readback_evidence`, `context_readback_status`, and `context_readback_evidence`.
 
-It rejects duplicate JSON members and arbitrary provenance strings. Each evidence field is a
-policy-enumerated structured object with `source_kind`, `status`, and `schema`; request
-injection evidence also binds adapter ID/version/config digest and the SHA-256 of canonical
-bytes for the exact requested model, effort, and context tuple. `verified` means only that
-this internal schema and digest consistency check passed. It never claims external injection,
-readback, or spawn identity occurred. Effective effort and context remain `unavailable` when
-the transport does not expose them; requested values never become readback.
+It rejects duplicate JSON members and arbitrary provenance strings. Each evidence object has a
+closed shape: request evidence binds the canonical requested-tuple digest; mapping evidence is
+only the policy reference; verified transport evidence binds observed model/provider, effort, or
+context plus its digest to the top-level receipt. It rejects prompt echoes, caller defaults, and
+copied-request masquerading as readback. `validated` means only that this internal schema and
+digest consistency check passed; `invalid` means it did not. The validator never authenticates
+an issuer or claims external injection, readback, admission, or spawn identity.
 
-The policy admits only certified requested tuples. Claude base tuples remain eligible; exact
-Claude `[1m]` forms are denied until tuple-specific policy evidence exists. GPT `[1m]` forms
+The policy validates only certified requested tuples. Claude base tuples remain eligible; exact
+Claude `[1m]` forms are invalid until tuple-specific policy evidence exists. GPT `[1m]` forms
 remain eligible only where calibration supports that tuple. It emits deterministic
-admitted/denied JSON with a canonical JSON SHA-256 digest. It is stdlib-only.
+validated/invalid JSON with a canonical JSON SHA-256 digest. It is stdlib-only.
 
-This repository supplies no host launcher. An external harness must call admission immediately
-before spawn, correlate the digest with immutable spawn evidence, and remain responsible for
-no-bypass enforcement, request injection, and spawned-worker identity. Unsupported native host
-paths fail closed until a host integration exists; do not replace that failure with a host
+This repository supplies no host launcher. An external authenticated harness is the sole
+admission and spawn authority: it must invoke validation immediately before spawn, correlate
+the digest with immutable spawn evidence, and enforce no-bypass request injection and worker
+identity. Unsupported native host paths fail closed; do not replace that failure with a host
 default, adapter class, scheduler, retries, journal, queue, daemon, or Evolutionary Core.
 
 An executable Workflow call pins both fields on every worker; the second vendor is used

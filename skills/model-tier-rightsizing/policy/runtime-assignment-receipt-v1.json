@@ -1,5 +1,23 @@
 {
   "schema_version": "runtime-assignment-receipt/v1",
+  "canonical_receipt_fields": [
+    "schema_version",
+    "requested_model_id",
+    "requested_effort",
+    "requested_context_form",
+    "request_injection_status",
+    "request_injection_evidence",
+    "resolution_state",
+    "resolved_provider",
+    "resolved_model_id",
+    "model_identity_basis",
+    "model_readback_status",
+    "model_readback_evidence",
+    "effort_readback_status",
+    "effort_readback_evidence",
+    "context_readback_status",
+    "context_readback_evidence"
+  ],
   "allowed_exact_model_ids": {
     "claude-fable-5": "anthropic",
     "claude-opus-4-8": "anthropic",
@@ -74,6 +92,5 @@
     ["claude-sonnet-5", "xhigh", "base"],
     ["claude-sonnet-5", "max", "base"]
   ],
-  "model_mapping_reference": "model-provider-map",
-  "unavailable_marker": "unavailable_in_transport"
+  "model_mapping_reference": "model-provider-map"
 }

@@ -24,15 +24,14 @@ Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUM
    with a certified exact model ID before spawn. `resolution_state` must equal `resolved`;
    `request_injection_status` and `model_readback_status` must equal `verified`;
    `resolved_provider` and `resolved_model_id` must be non-unknown.
-   `request_injection_source` and immutable `request_injection_evidence` must prove the exact
-   requested model and effort injected by the selected host or launcher, while independent
-   `model_readback_source` and immutable `model_readback_evidence` prove the resolved model.
-   Requested, inherited,
-   unresolved, or unverified model-identity assignments stop before dispatch and stop before
-   spawn, returning one advisory SeedProposal. Effective effort and context readback are
-   separate: `effort_readback_status` and `context_readback_status` are each `verified` with
-   independent evidence when exposed, or `unavailable` with an explicit source/evidence marker
-   when the transport cannot expose it.
+   The canonical receipt has exactly the policy-derived 16 fields: `schema_version`, requested
+   model/effort/context, injection status/evidence, resolution/provider/model/basis/readback,
+   and effort/context status/evidence; it has no `*_source` projections. Closed evidence binds
+   its model/provider/effort/context values and digests to top-level receipt values. Validation
+   proves only canonical internal consistency; the external authenticated harness alone admits
+   and spawns. Requested, inherited, unresolved, or unverified model-identity assignments stop
+   before dispatch and spawn, returning one advisory SeedProposal. Effective effort and context
+   may be unavailable when the transport cannot expose them.
    Never copy requested effort or context into resolved/readback fields, and never require
    impossible effective readback after request injection and model identity are verified.
    Prompt prose does not enforce a model or effort. Do not use host-default selection or

@@ -55,8 +55,8 @@ run_windows = "uv.exe run --python 3.12.11 --script skills/codex-research-os/scr
 
 [tasks.test]
 description = "Run the Python installer tests"
-run = "uv run --python 3.12.11 python -m unittest discover -s tests"
-run_windows = "uv.exe run --python 3.12.11 python -m unittest discover -s tests"
+run = "uv run --python 3.12.11 --with pyyaml==6.0.3 python -m unittest discover -s tests"
+run_windows = "uv.exe run --python 3.12.11 --with pyyaml==6.0.3 python -m unittest discover -s tests"
 
 [tasks.self-test]
 description = "Verify installer lifecycle safety in a throwaway home"

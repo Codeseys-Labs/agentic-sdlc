@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -28,31 +29,111 @@ def load_module(name: str, path: Path):
 
 bundle_validator = load_module("bundle_validator_under_test", BUNDLE_VALIDATOR)
 research_installer = load_module("research_installer_under_test", RESEARCH_INSTALLER)
+receipt_admission = load_module("receipt_admission_under_test", RECEIPT_ADMISSION)
+RECEIPT_POLICY = receipt_admission.parse_no_duplicate_members(
+    receipt_admission.POLICY_PATH.read_text(encoding="utf-8")
+)
 
 
 class RuntimeContractValidationTests(unittest.TestCase):
     maxDiff = None
 
-    def test_bundle_validator_rejects_quoted_claude_model_and_effort_pins(self) -> None:
+    def test_bundle_validator_semantically_rejects_claude_model_and_effort_pins(self) -> None:
+        forms = {
+            "quoted": 'name: sdlc-reviewer\ndescription: test\n"model": "claude-sonnet-5"\n"model_reasoning_effort": "high"',
+            "escaped explicit key": 'name: sdlc-reviewer\ndescription: test\n"m\\u006fdel": "claude-sonnet-5"\n"model\\x5freasoning\\x5feffort": "high"',
+            "explicit key": 'name: sdlc-reviewer\ndescription: test\n? "model"\n: "claude-sonnet-5"\n? model_reasoning_effort\n: high',
+            "flow map": '{name: sdlc-reviewer, description: test, model: claude-sonnet-5, model_reasoning_effort: high}',
+        }
+        for name, metadata in forms.items():
+            with self.subTest(form=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                agent = root / "agents" / "claude" / "sdlc-reviewer.md"
+                agent.parent.mkdir(parents=True)
+                agent.write_text(
+                    "---\n"
+                    f"{metadata}\n"
+                    "---\n",
+                    encoding="utf-8",
+                )
+                result = bundle_validator.Validation()
+                bundle_validator.validate_agents(root, result)
+
+                self.assertIn("agents/claude/sdlc-reviewer.md: static model is forbidden", result.errors)
+                self.assertIn(
+                    "agents/claude/sdlc-reviewer.md: static model_reasoning_effort is forbidden",
+                    result.errors,
+                )
+
+    def test_bundle_validator_semantically_parses_yaml_without_system_ruby(self) -> None:
+        metadata = 'name: sdlc-reviewer\ndescription: test\n"m\\u006fdel": "claude-sonnet-5"'
+        with (
+            mock.patch.object(bundle_validator.shutil, "which", side_effect=AssertionError("host binary lookup")),
+            mock.patch.object(bundle_validator.subprocess, "run", side_effect=AssertionError("host subprocess")),
+        ):
+            parsed = bundle_validator.parse_frontmatter_metadata(f"---\n{metadata}\n---\n")
+        self.assertEqual(parsed["model"], "claude-sonnet-5")
+
+    def test_bundle_validator_rejects_yaml_aliases(self) -> None:
+        metadata = "name: &role sdlc-reviewer\ndescription: *role"
+        with self.assertRaisesRegex(ValueError, "aliases are forbidden"):
+            bundle_validator.parse_frontmatter_metadata(f"---\n{metadata}\n---\n")
+
+    def test_bundle_validator_enforces_policy_derived_runtime_projection_for_all_role_types(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            agent = root / "agents" / "claude" / "sdlc-reviewer.md"
-            agent.parent.mkdir(parents=True)
-            agent.write_text(
-                "---\n"
-                "name: sdlc-reviewer\n"
-                "description: test\n"
-                ' "model" : "claude-sonnet-5"\n'
-                " 'model_reasoning_effort' : 'high'\n"
-                "---\n",
+            claude = root / "agents" / "claude" / "sdlc-reviewer.md"
+            codex = root / "agents" / "codex" / "sdlc-reviewer.toml"
+            research = root / "agents" / "codex" / "research" / "experimentalist.toml"
+            for source, target in (
+                (ROOT / "agents" / "claude" / "sdlc-reviewer.md", claude),
+                (ROOT / "agents" / "codex" / "sdlc-reviewer.toml", codex),
+                (ROOT / "agents" / "codex" / "research" / "experimentalist.toml", research),
+            ):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            research.write_text(
+                research.read_text(encoding="utf-8")
+                .replace("`schema_version`:", "`omitted_schema_version`:", 1)
+                .replace(
+                    "- `request_injection_evidence`",
+                    "- `request_injection_source`: stale\n- `request_injection_evidence`",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            result = bundle_validator.Validation()
+            bundle_validator.validate_agents(root, result)
+
+        self.assertIn(
+            "agents/codex/research/experimentalist.toml: runtime receipt projection missing schema_version",
+            result.errors,
+        )
+        self.assertIn(
+            "agents/codex/research/experimentalist.toml: stale runtime receipt source projection is forbidden",
+            result.errors,
+        )
+
+    def test_bundle_validator_enforces_exact_policy_projection_not_keyword_substrings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "agents" / "codex" / "sdlc-reviewer.toml"
+            target.parent.mkdir(parents=True)
+            source = (ROOT / "agents" / "codex" / "sdlc-reviewer.toml").read_text(encoding="utf-8")
+            target.write_text(
+                source.replace(
+                    "`schema_version`: `runtime-assignment-receipt/v1`",
+                    "`schema_version_shadow`: `runtime-assignment-receipt/v1`",
+                    1,
+                ),
                 encoding="utf-8",
             )
             result = bundle_validator.Validation()
             bundle_validator.validate_agents(root, result)
 
-        self.assertIn("agents/claude/sdlc-reviewer.md: static model is forbidden", result.errors)
         self.assertIn(
-            "agents/claude/sdlc-reviewer.md: static model_reasoning_effort is forbidden",
+            "agents/codex/sdlc-reviewer.toml: runtime receipt projection must equal the exact policy-derived 16-field block",
             result.errors,
         )
 
@@ -108,29 +189,32 @@ class RuntimeContractValidationTests(unittest.TestCase):
             result = self.run_generated_agent_validator(script)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("affirmative Seeds authority grant", result.stdout)
+        self.assertIn("additive Seeds or SeedProposal authority language", result.stdout)
 
-    def test_generated_agent_validator_rejects_plain_language_waivers_and_direct_sd_variants(self) -> None:
+    def test_generated_agent_validator_rejects_plain_language_waivers_and_all_seed_mutations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = self.materialize_generated_research_os(root)
             director = root / ".codex" / "agents" / "research_director.toml"
             original = director.read_text(encoding="utf-8")
             mutants = {
-                "waiver": original.replace(
-                    "You are the research director for this repository.",
-                    "You are the research director for this repository. This is an exception to the Seeds rule.",
-                    1,
-                ),
-                "direct sd": original.replace(
-                    "You are the research director for this repository.",
-                    "You are the research director for this repository. Run sd ready --format json.",
-                    1,
-                ),
+                "waiver": "This is an exception to the Seeds rule.",
+                "host default waiver": "The host default runtime assignment waiver permits this.",
+                "direct sd": "Run sd ready --format json.",
+                "label": "The Research Director may label Seeds.",
+                "delete": "The Research Director may delete Seeds.",
+                "future verb": "The Research Director may archive Seeds.",
             }
-            for name, mutant in mutants.items():
+            for name, addition in mutants.items():
                 with self.subTest(mutant=name):
-                    director.write_text(mutant, encoding="utf-8")
+                    director.write_text(
+                        original.replace(
+                            "You are the research director for this repository.",
+                            f"You are the research director for this repository. {addition}",
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
                     result = self.run_generated_agent_validator(script)
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     director.write_text(original, encoding="utf-8")
@@ -157,58 +241,18 @@ class RuntimeContractValidationTests(unittest.TestCase):
                     director.write_text(original, encoding="utf-8")
 
     def valid_receipt(self) -> dict[str, object]:
-        injection_request = {
-            "context_form": "base",
-            "effort": "high",
-            "model_id": "gpt-5.6-terra",
-        }
-        request_bytes = json.dumps(
-            injection_request, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        ).encode("utf-8")
-        request_digest = hashlib.sha256(request_bytes).hexdigest()
-        adapter_config = {"provider": "openai", "transport": "workflow"}
-        adapter_config_digest = hashlib.sha256(
-            json.dumps(adapter_config, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        ).hexdigest()
-        return {
-            "schema_version": "runtime-assignment-receipt/v1",
-            "requested_model_id": "gpt-5.6-terra",
-            "requested_effort": "high",
-            "requested_context_form": "base",
-            "request_injection_status": "verified",
-            "request_injection_evidence": {
-                "source_kind": "immutable_request_receipt",
-                "status": "verified",
-                "schema": "launcher-request-evidence/v1",
-                "adapter_id": "workflow",
-                "adapter_version": "1.0.0",
-                "adapter_config_sha256": adapter_config_digest,
-                "request_bytes_sha256": request_digest,
-            },
-            "resolution_state": "resolved",
-            "resolved_provider": "openai",
-            "resolved_model_id": "gpt-5.6-terra",
-            "model_readback_status": "verified",
-            "model_identity_basis": "unambiguous_exact_id_mapping",
-            "model_readback_evidence": {
-                "source_kind": "policy_exact_id_mapping",
-                "status": "unavailable",
-                "schema": "runtime-assignment-policy-v1",
-                "reference": "model-provider-map",
-            },
-            "effort_readback_status": "unavailable",
-            "effort_readback_evidence": {
-                "source_kind": "transport_readback",
-                "status": "unavailable",
-                "schema": "runtime-assignment-readback/v1",
-            },
-            "context_readback_status": "unavailable",
-            "context_readback_evidence": {
-                "source_kind": "transport_readback",
-                "status": "unavailable",
-                "schema": "runtime-assignment-readback/v1",
-            },
-        }
+        return receipt_admission.construct_receipt(
+            policy=RECEIPT_POLICY,
+            requested_model_id="gpt-5.6-terra",
+            requested_effort="high",
+            requested_context_form="base",
+            adapter_id="workflow",
+            adapter_version="1.0.0",
+            adapter_config={"provider": "openai", "transport": "workflow"},
+            model_identity_basis="unambiguous_exact_id_mapping",
+            effort_readback_status="unavailable",
+            context_readback_status="unavailable",
+        )
 
     def admit_receipt(self, receipt: dict[str, object] | str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -219,15 +263,71 @@ class RuntimeContractValidationTests(unittest.TestCase):
             check=False,
         )
 
-    def test_receipt_admission_emits_a_deterministic_digest_for_bound_evidence(self) -> None:
-        first = self.admit_receipt(self.valid_receipt())
+    def test_receipt_validation_emits_a_deterministic_digest_for_bound_evidence(self) -> None:
+        receipt = self.valid_receipt()
+        self.assertEqual(tuple(receipt), tuple(RECEIPT_POLICY["canonical_receipt_fields"]))
+        self.assertEqual(receipt_admission.receipt_errors(receipt, RECEIPT_POLICY), [])
+        first = self.admit_receipt(receipt)
         second = self.admit_receipt(self.valid_receipt())
 
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(first.stdout, second.stdout)
-        admitted = json.loads(first.stdout)
-        self.assertEqual(admitted["status"], "admitted")
-        self.assertRegex(admitted["digest_sha256"], r"^[0-9a-f]{64}$")
+        validated = json.loads(first.stdout)
+        self.assertEqual(validated["status"], "validated")
+        self.assertRegex(validated["digest_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_receipt_validation_cross_binds_all_readback_evidence_to_one_assignment(self) -> None:
+        first = receipt_admission.construct_receipt(
+            policy=RECEIPT_POLICY,
+            requested_model_id="gpt-5.6-terra",
+            requested_effort="high",
+            requested_context_form="base",
+            adapter_id="workflow",
+            adapter_version="1.0.0",
+            adapter_config={"provider": "openai", "transport": "workflow"},
+            model_identity_basis="independent_readback",
+            observed_provider="openai",
+            observed_model_id="gpt-5.6-terra",
+            effort_readback_status="verified",
+            observed_effort="high",
+            context_readback_status="verified",
+            observed_context_form="base",
+        )
+        second = receipt_admission.construct_receipt(
+            policy=RECEIPT_POLICY,
+            requested_model_id="gpt-5.6-terra",
+            requested_effort="high",
+            requested_context_form="[1m]",
+            adapter_id="workflow",
+            adapter_version="1.0.0",
+            adapter_config={"provider": "openai", "transport": "workflow"},
+            model_identity_basis="independent_readback",
+            observed_provider="openai",
+            observed_model_id="gpt-5.6-terra",
+            effort_readback_status="verified",
+            observed_effort="high",
+            context_readback_status="verified",
+            observed_context_form="[1m]",
+        )
+        digests = {
+            first[field]["assignment_binding_sha256"]
+            for field in (
+                "model_readback_evidence",
+                "effort_readback_evidence",
+                "context_readback_evidence",
+            )
+        }
+        self.assertEqual(len(digests), 1)
+        for evidence_field in (
+            "model_readback_evidence",
+            "effort_readback_evidence",
+            "context_readback_evidence",
+        ):
+            with self.subTest(transplanted=evidence_field):
+                mutant = json.loads(json.dumps(second))
+                mutant[evidence_field] = first[evidence_field]
+                errors = receipt_admission.receipt_errors(mutant, RECEIPT_POLICY)
+                self.assertTrue(any("cross-field" in error for error in errors), errors)
 
     def test_receipt_admission_rejects_duplicate_json_members(self) -> None:
         receipt = json.dumps(self.valid_receipt())
@@ -281,20 +381,50 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 result = self.admit_receipt(receipt)
                 self.assertNotEqual(result.returncode, 0)
                 denied = json.loads(result.stdout)
-                self.assertEqual(denied["status"], "denied")
+                self.assertEqual(denied["status"], "invalid")
                 self.assertTrue(denied["errors"])
 
-    def test_receipt_admission_rejects_malformed_and_digest_mutated_evidence(self) -> None:
-        malformed = self.valid_receipt()
-        malformed["request_injection_evidence"] = {
-            "source_kind": "immutable_request_receipt",
-            "status": "verified",
-            "schema": "launcher-request-evidence/v1",
-            "adapter_id": "workflow",
+    def test_receipt_validation_rejects_closed_evidence_shapes_and_copied_readback(self) -> None:
+        mutations = {
+            "request extra": {
+                "request_injection_evidence": {
+                    **self.valid_receipt()["request_injection_evidence"],
+                    "arbitrary_provenance": "caller says so",
+                }
+            },
+            "model content-free": {
+                "model_readback_evidence": {
+                    "source_kind": "policy_exact_id_mapping",
+                    "status": "unavailable",
+                    "schema": "runtime-assignment-policy-v1",
+                    "reference": "model-provider-map",
+                    "model_id": "gpt-5.6-terra",
+                }
+            },
+            "copied effort readback": {
+                "effort_readback_status": "verified",
+                "effort_readback_evidence": {
+                    "source_kind": "transport_readback",
+                    "status": "verified",
+                    "schema": "runtime-assignment-readback/v1",
+                    "observed_effort": "high",
+                    "request_bytes_sha256": hashlib.sha256(
+                        json.dumps(
+                            {"context_form": "base", "effort": "high", "model_id": "gpt-5.6-terra"},
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                },
+            },
         }
-        result = self.admit_receipt(malformed)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertTrue(json.loads(result.stdout)["errors"])
+        for name, changes in mutations.items():
+            with self.subTest(mutation=name):
+                receipt = self.valid_receipt()
+                receipt.update(changes)
+                result = self.admit_receipt(receipt)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(json.loads(result.stdout)["status"], "invalid")
 
     def test_receipt_admission_rejects_uncertified_claude_context_tuple(self) -> None:
         receipt = self.valid_receipt()
@@ -331,7 +461,7 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 result = self.admit_receipt(receipt)
                 self.assertNotEqual(result.returncode, 0)
                 denied = json.loads(result.stdout)
-                self.assertEqual(denied["status"], "denied")
+                self.assertEqual(denied["status"], "invalid")
                 self.assertTrue(denied["errors"])
 
 
