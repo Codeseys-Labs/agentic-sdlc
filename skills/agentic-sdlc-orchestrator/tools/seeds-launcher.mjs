@@ -416,8 +416,8 @@ function captureBytes(git, args, message, env) {
 }
 
 function samePath(left, right) {
-  if (process.platform === 'win32') return left.toLowerCase() === right.toLowerCase();
-  return left === right;
+  const normalized = (path) => process.platform === 'win32' ? path.toLowerCase() : path;
+  return normalized(left) === normalized(right);
 }
 
 function gitEnvironment(gitDirectory, workTree, objectDirectory, indexFile) {
