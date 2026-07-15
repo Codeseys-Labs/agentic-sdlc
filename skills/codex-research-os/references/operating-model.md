@@ -81,22 +81,40 @@ The gate is intentionally conservative; project-specific gates may be stricter.
 Run `make validate-agents` before trusting a generated research team. The gate checks that
 `.codex/agents/*.toml` contains only known top-level keys and that names match filenames.
 Provider-neutral role files intentionally omit both static `model` and
-`model_reasoning_effort`; the runtime assignment—not the host default—selects the route.
+`model_reasoning_effort`; the runtime assignment—not a host default or prompt prose—selects
+the route. Roles consume the assignment and never dispatch themselves.
 
-Every dispatch supplies this contract outside the static role manifest:
+Before spawn, the conductor provides the assignment outside the static role manifest. It is a
+conductor-supplied certified `RuntimeAssignment`:
 
 ```yaml
 requested_model_id: <certified exact ID>
 requested_effort: low|medium|high|xhigh|max
 requested_context_form: base|<transport-certified exact [1m] form>
+request_injection_status: verified
+request_injection_source: <non-unknown immutable launcher/adapter request source>
+request_injection_evidence: <non-unknown immutable exact model/effort request receipt>
 resolution_state: requested|resolved|inherited|unresolved
-resolved_model_id: <readback or unknown>
-resolved_effort: <readback or unknown>
-resolved_context_form: <telemetry or unknown>
+resolved_provider: <independent observation or unique exact-ID mapping>
+resolved_model_id: <exact ID verified by independent readback or mapping>
+model_readback_status: verified
+model_identity_basis: independent_readback|unambiguous_exact_id_mapping
+model_readback_source: <independent source or unavailable_in_transport for mapping>
+model_readback_evidence: <immutable receipt or immutable policy mapping reference>
+effort_readback_status: verified|unavailable
+effort_readback_source: <independent source or unavailable_in_transport>
+effort_readback_evidence: <immutable receipt or unavailable_in_transport>
+context_readback_status: verified|unavailable
+context_readback_source: <independent source or unavailable_in_transport>
+context_readback_evidence: <immutable receipt or unavailable_in_transport>
 ```
 
-`inherited` and `unresolved` are receipt states, never permission to dispatch. The caller
-loads `model-tier-rightsizing`, classifies the task into the four semantic tiers, chooses
-inside the eligible six-model pair, and stops unless the exact route is certified. `[1m]`
-request/base-ID readback does not establish intelligence, upstream context capacity,
-compaction, or effort compliance.
+`resolution_state` must equal `resolved`. Exact model and effort request injection is mandatory
+and immutable. An independently observed provider/model source may be unavailable only when an
+unambiguous exact-ID mapping plus immutable request/model evidence verifies identity. Effective
+effort and context may be honestly unavailable; requested values never become readback. Requested,
+inherited, or unresolved assignments stop before spawn and return one `SeedProposal` to the
+conductor. The selected host or launcher must inject the exact requested model and effort before
+spawn. If it cannot inject both, it does not dispatch and returns one `SeedProposal`; prompt prose
+does not enforce a Codex model or effort. `[1m]` readback does not establish intelligence,
+upstream context capacity, compaction, or effort compliance.

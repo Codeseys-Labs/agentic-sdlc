@@ -26,20 +26,29 @@ Model tiering, external tools, seeds, or project-specific issue systems are opti
 
 ## Model Config Policy
 
-Generated roles are provider-neutral and do not select models or pin static effort. Before
-any dispatch, the caller loads `model-tier-rightsizing`, chooses inside the appropriate exact
-six-model pair, and supplies a runtime assignment with these fields:
+Generated roles are provider-neutral, do not dispatch, and contain no static `model` or
+`model_reasoning_effort` pin. Before spawn, the conductor loads `model-tier-rightsizing`,
+chooses inside the appropriate exact six-model pair, and supplies a conductor-supplied certified
+`RuntimeAssignment` with a certified exact model ID and these fields:
 
 - `requested_model_id`
 - `requested_effort`
 - `requested_context_form`
 - `resolution_state` (`requested`, `resolved`, `inherited`, or `unresolved`)
-- `resolved_model_id`
-- `resolved_effort`
-- `resolved_context_form`
+- `request_injection_status`, `request_injection_source`, and `request_injection_evidence`
+- `resolved_provider`, `resolved_model_id`, `model_readback_status`,
+  `model_identity_basis`, `model_readback_source`, and `model_readback_evidence`
+- `effort_readback_status`, `effort_readback_source`, and `effort_readback_evidence`
+- `context_readback_status`, `context_readback_source`, and `context_readback_evidence`
 
-The caller records adapter readback and stops when the route is inherited or unresolved.
-Never use an unverified alias or host-default model selection for an operational dispatch.
-A project may maintain a local exact-ID allowlist for static validation, but allowlisting does
-not certify a live transport. `[1m]` request/base-ID readback is not evidence of intelligence,
-upstream capacity, compaction, or effort compliance.
+`resolution_state` must be `resolved`. Exact model/effort request injection is mandatory and
+immutable. Provider/model source may be `unavailable_in_transport` only for an unambiguous
+exact-ID mapping backed by immutable request/model evidence. Effective effort and context may
+be honestly unavailable; requested values never become readback.
+Requested, inherited, unresolved, or incomplete assignments stop before spawn and return one
+`SeedProposal` to the conductor. The selected host or launcher must inject the exact resolved
+model and effort. If it cannot inject both, it does not dispatch and returns one `SeedProposal`.
+Prompt prose does not enforce a Codex model or effort. Never use an unverified alias or
+host-default model selection. An allowlist does not certify a live transport, and `[1m]`
+request/base-ID readback is not evidence of intelligence, upstream capacity, compaction, or
+effort compliance.

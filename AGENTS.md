@@ -20,8 +20,9 @@ as the router.
   consumer. It owns four semantic tiers: paired Sol/Fable frontier, Terra/Opus judgment
   workhorse, Luna/Sonnet capable volume, and the cheapest certified fully gated mechanical
   floor. Load it before dispatch; choose within a pair by task fit, independent perspective,
-  quota, and verified transport—not global provider preference or all-six tokenism. The
-  caller injects a certified exact ID plus explicit effort; otherwise dispatch stops. Its
+  quota, and verified transport—not global provider preference or all-six tokenism. Before
+  spawn, the conductor supplies a fully resolved conductor-supplied certified exact model ID
+  in a `RuntimeAssignment`; otherwise dispatch stops. Its
   canonical calibration preserves evidence, quotas, complements, fallbacks, controls, and
   roadmap lanes.
 - `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
@@ -59,14 +60,19 @@ behavior, and any selected adapter must be present and verified; missing, unpinn
 or ambiguous capability means not Git-ready. Trust is scoped to each absolute config path,
 but persistent `mise trust`, Codex/global config, shell-alias, and credential mutations each
 require explicit operation-specific user approval. Process-scoped `mise --no-config` test
-execution is allowed without persisting trust. A requested model is not a resolved model:
-requested ID and effort are dispatch inputs, while provider/model remains unresolved until
-adapter readback.
-A dispatching consumer must receive a caller-injected, certified exact model ID, explicit
-requested effort, and requested context form; otherwise it stops before dispatch. Record
-requested, resolved, inherited, and unresolved state separately. Provider-neutral roles have
-no static effort pins and never recommend host-default model selection as policy. A decorative
-model pin does not certify a transport or replace required adapter readback.
+execution is allowed without persisting trust. Before spawn, the conductor supplies a
+conductor-supplied certified `RuntimeAssignment` with requested model/effort/context values;
+`resolution_state` must be `resolved`. Exact model/effort request injection is mandatory and
+immutable. Requested model selection is recorded as resolved, inherited, or unresolved; it is
+never proof. `resolved_provider` and `resolved_model_id` require verified model identity; an
+independently observed provider/model source may be unavailable only for an unambiguous exact-ID
+mapping backed by immutable request/model evidence. Effective effort/context readback may be
+honestly unavailable, and requested values never become readback. Requested, inherited,
+unresolved, or incomplete assignments stop before dispatch and therefore stop before spawn. The
+selected host or launcher must inject the exact requested model and effort; if it cannot inject
+both, return one SeedProposal, not a dispatch. Prompt prose does not enforce a Codex model or
+effort. Provider-neutral roles contain no static model or effort pin and never recommend
+host-default model selection as policy.
 
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`

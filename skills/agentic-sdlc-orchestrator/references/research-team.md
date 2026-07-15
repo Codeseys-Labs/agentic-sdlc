@@ -90,11 +90,16 @@ before any synthesis ships:
 - `review-gates` — flags: promoted empirical claims without replication review;
   proof-like claims without formalization; novelty claims without novelty review.
 - `validate-agents` — role configs contain only known keys and names match files. A
-  provider-neutral role definition omits static `model` and `model_reasoning_effort` pins.
-  Every runtime assignment carries caller-injected `requested_model_id`, explicit
-  `requested_effort`, `requested_context_form`, a `resolution_state` of requested, resolved,
-  inherited, or unresolved, and separate resolved fields. Stop on inherited/unresolved model
-  selection; reject unverified aliases and host-default policy.
+  provider-neutral role definition omits static `model` and `model_reasoning_effort` pins and
+  never dispatches. Before spawn, the conductor supplies a conductor-supplied certified
+  `RuntimeAssignment` with a certified exact model ID and requested fields. `resolution_state`
+  must be `resolved`; exact model/effort request injection is mandatory and immutable.
+  Provider/model source may be unavailable only for an unambiguous exact-ID mapping backed by
+  immutable request/model evidence. Effective effort/context readback may honestly be unavailable,
+  and requested values never become readback. Requested, inherited, unresolved, or incomplete
+  assignments stop before spawn and return one `SeedProposal`. The selected host or launcher
+  must inject the exact requested model and effort; if it cannot inject both, it does not
+  dispatch and returns one `SeedProposal`. Prompt prose does not enforce a Codex model or effort.
 
 This mirrors the bundle's validate-bundle.sh philosophy: silent failure modes get a
 gate, not a guideline.

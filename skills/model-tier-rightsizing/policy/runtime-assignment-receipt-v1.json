@@ -1,0 +1,15 @@
+{
+  "schema_version": "runtime-assignment-receipt/v1",
+  "allowed_exact_model_ids": {
+    "claude-fable-5": "anthropic",
+    "claude-opus-4-8": "anthropic",
+    "claude-sonnet-5": "anthropic",
+    "gpt-5.6-sol": "openai",
+    "gpt-5.6-terra": "openai",
+    "gpt-5.6-luna": "openai"
+  },
+  "allowed_efforts": ["low", "medium", "high", "xhigh", "max"],
+  "allowed_context_forms": ["base", "[1m]"],
+  "unavailable_marker": "unavailable_in_transport",
+  "model_mapping_evidence": "policy:runtime-assignment-policy-v1#model-provider-map"
+}

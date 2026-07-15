@@ -67,8 +67,17 @@ Read `references/operating-model.md` when designing or modifying the OS. Read `r
 - No important synthesis without adversarial review.
 - Negative results stay in memory and experiment logs.
 - Every loop updates `research/state/next_action.md`.
-- Provider-neutral generated roles omit static `model` and `model_reasoning_effort` pins;
-  they do not dispatch. A caller loads `model-tier-rightsizing`, injects a certified exact
-  model ID plus **explicit requested effort/context**, records requested/resolved/inherited/
-  unresolved state separately, and stops on inherited or unresolved selection. Reject
-  host-default policy and unverified aliases.
+- Provider-neutral generated roles omit static `model` and `model_reasoning_effort` pins and
+  never dispatch themselves. Before spawn, the conductor supplies one conductor-supplied certified
+  `RuntimeAssignment` with a certified exact model ID. Its `resolution_state` must be `resolved`.
+  Exact model/effort request injection is mandatory and immutable. Provider/model source may be
+  unavailable only for an unambiguous exact-ID mapping backed by immutable request/model evidence;
+  effective effort/context readback may honestly be unavailable, and requested values never become
+  readback. Requested, inherited, unresolved, or incomplete assignments stop before spawn and
+  return one `SeedProposal`. The selected host or launcher must inject the exact requested model
+  and effort; if it cannot inject both, return one `SeedProposal`, not a dispatch. Prompt prose
+  does not enforce a Codex model or effort. Reject host-default policy and unverified aliases.
+- The Research Director is Seeds-read-only. It may inspect only through the exact
+  `Seeds(<target>, ...)` launcher contract in `agentic-sdlc-orchestrator`, and it emits exactly
+  one typed `SeedProposal` for conductor triage; it never creates, claims, updates, closes,
+  syncs, or dispositions Seeds.
