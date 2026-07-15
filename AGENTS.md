@@ -44,15 +44,21 @@ as the router.
 
 ## Installing this bundle
 
-Mise 2026.4.27+ is the only bootstrap prerequisite. Bootstrap from the reviewed distribution
-checkout with `mise -C <distribution-root> install`; it installs pinned uv, Node 22.22.3, Bun
-1.3.10, and `npm:@os-eco/seeds-cli@0.5.14`, while uv supplies Python 3.12.11 for all
-authoritative Python entrypoints. The Seeds lock proves the exact version and npm backend, not tarball or transitive dependency integrity. After bootstrap, execute Seeds in any target repository
-through the exact `Seeds(<target>, <args...>)` contract in the flagship skill; it acquires from
-a neutral config-free directory and restores the target only for `sd`, so neither target nor
-ambient npm configuration supplies executable package content. npm verifies the registry's
-tarball integrity metadata, but a version pin does not authenticate the tarball or transitives.
-Never accept ambient Seeds provenance or make permanent Windows environment/trust/config changes.
+Mise 2026.4.27+ is the only bootstrap prerequisite. From a reviewed distribution checkout, run
+the installed flagship `tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>`
+under exact Node. Bootstrap explicitly invokes reviewed `mise --locked install`, resolves only
+config-free exact roots, validates Node 22.22.3, Bun 1.3.10, and the
+`npm:@os-eco/seeds-cli@0.5.14` package/bin/layout and controls, then atomically records its hashes
+and a prior receipt for rollback. Inspect is separate and never installs, networks, invokes mise,
+or repairs: it admits only an active receipt and exact current hashes, accepts only `--version`,
+`prime`, `ready [--format json]`, and `blocked [--format json]`, then Node starts the exact
+absolute Bun/entry with `shell:false`, a trusted empty Bun config, and no ambient runtime options.
+The child environment is an allowlist, including a PATH limited to a separately recorded Git
+directory and portable Git config isolation. Target/ambient Bun, Node, npm, mise, and unreviewed
+Seeds debug controls have no effect. The receipt detects ordinary drift, not a same-UID TOCTOU
+racer. The Seeds lock proves the exact version and npm backend, not tarball or transitive dependency
+integrity. Never accept ambient Seeds provenance or make permanent Windows environment/trust/config
+changes.
 trust behavior, repository gates, and any selected adapter remain verified runtime-readiness
 capabilities; missing, unpinned, untrusted, or ambiguous capability means not Git-ready. Trust
 is scoped to each absolute config path:

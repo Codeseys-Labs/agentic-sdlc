@@ -21,7 +21,7 @@ import tomllib
 SECRET_PATTERN = re.compile(
     r"AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA|OPENSSH) PRIVATE KEY|amazon\.com/[a-z]|\.a2z\.com|aws\.dev/"
 )
-TEXT_SUFFIXES = {".md", ".sh", ".ps1", ".toml", ".json", ".yml", ".yaml", ".py"}
+TEXT_SUFFIXES = {".md", ".mjs", ".sh", ".ps1", ".toml", ".json", ".yml", ".yaml", ".py"}
 REQUIRED_TASKS = {
     "bundle:install",
     "bundle:status",

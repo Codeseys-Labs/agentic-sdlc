@@ -40,8 +40,18 @@ if ($TaskArgsJson.Trim() -eq '[]') {
         throw "TaskArgsJson must be a JSON array: $($_.Exception.Message)"
     }
 }
-if ($null -eq $decodedArgs -or $decodedArgs -isnot [System.Array]) {
+if ($null -eq $decodedArgs) {
     throw 'TaskArgsJson must be a JSON array.'
+}
+if ($decodedArgs -is [System.Array]) {
+    $decodedArgs = @($decodedArgs)
+} else {
+    # ConvertFrom-Json unwraps a one-element JSON array; restore that sole argument without
+    # accepting a non-array object or null.
+    if ($TaskArgsJson.Trim() -notmatch '^\s*\[\s*"') {
+        throw 'TaskArgsJson must be a JSON array.'
+    }
+    $decodedArgs = @($decodedArgs)
 }
 foreach ($argument in $decodedArgs) {
     if ($null -eq $argument) {
@@ -50,14 +60,33 @@ foreach ($argument in $decodedArgs) {
     $taskArgs.Add([string]$argument)
 }
 
-$arguments = [Collections.Generic.List[string]]::new()
-$arguments.Add('--cd')
-$arguments.Add($resolvedRoot)
-$arguments.Add('run')
-$arguments.Add($Task)
-foreach ($argument in $taskArgs) {
-    $arguments.Add($argument)
+$nodeRoot = & $mise.Source '--no-config' 'where' 'node@22.22.3'
+$nodeStatus = $LASTEXITCODE
+if ($nodeStatus -ne 0 -or -not $nodeRoot) {
+    throw 'The exact Node 22.22.3 root could not be resolved by mise --no-config where.'
+}
+$node = Join-Path $nodeRoot.Trim() 'node.exe'
+if (-not (Test-Path -LiteralPath $node -PathType Leaf)) {
+    throw "The exact Node executable is unavailable: $node"
 }
 
-& $mise.Source @arguments
-exit $LASTEXITCODE
+# Establish cleanup before setup. This wrapper preserves the direct child exit status rather
+# than allowing PowerShell cleanup or later commands to overwrite it.
+$cleanup = { }
+$childStatus = 2
+try {
+    $target = $resolvedRoot
+    $arguments = [Collections.Generic.List[string]]::new()
+    $arguments.Add('--cd')
+    $arguments.Add($target)
+    $arguments.Add('run')
+    $arguments.Add($Task)
+    foreach ($argument in $taskArgs) {
+        $arguments.Add($argument)
+    }
+    & $mise.Source @arguments
+    $childStatus = $LASTEXITCODE
+} finally {
+    & $cleanup
+}
+exit $childStatus
