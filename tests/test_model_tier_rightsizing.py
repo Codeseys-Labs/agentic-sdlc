@@ -166,6 +166,42 @@ def _expected_pair_cell(pair: str) -> str:
     return f"`{left}` or `{right}`"
 
 
+def _assert_conditionally_eligible_pair(selection: str) -> None:
+    assert not re.search(
+        r"(?is)\b(?:choose|select|route|dispatch)\s+(?:gpt|claude)\b.{0,100}\b(?:every|all)\s+(?:dispatch|route|task|case)s?\b",
+        selection,
+    ), selection
+    assert not re.search(
+        r"(?is)\b(?:gpt|claude)\b.{0,120}\b(?:documentary\s+only|never\s+(?:selected|chosen|eligible)|not\s+eligible)\b",
+        selection,
+    ), selection
+
+
+def _assert_frontier_selection_boundary(selection: str) -> None:
+    if re.search(r"(?i)\bfable\b", selection):
+        assert re.search(r"(?i)\bcertified\b", selection), selection
+        assert re.search(r"(?i)\bbounded\b", selection), selection
+        assert re.search(r"(?i)\b(?:adversarial|attack|counterexample)\w*\b", selection), selection
+        assert not re.search(r"(?is)\bfable\b.{0,100}\b(?:settle|form|derive)\w*.{0,40}\btruth\b", selection), selection
+    assert not re.search(r"(?is)\b(?:sol|peer)\b.{0,100}\boptional\b", selection), selection
+
+
+def _assert_no_context_window_expansion_claim(text: str) -> None:
+    qualifier = r"(?:larger|effective|one[-\s]million[-\s]token|1,000,000[-\s]token|1m(?:[-\s]token)?)"
+    window = r"(?:upstream\s+)?context\s+window"
+    assert not re.search(
+        rf"(?is)\[1m\].{{0,160}}\b(?:provides|expands|increases)\b.{{0,160}}(?:\b{qualifier}\b.{{0,80}}\b{window}\b|\b{window}\b.{{0,80}}\b{qualifier}\b)",
+        text,
+    )
+
+
+def _assert_effort_resolution_boundary(text: str) -> None:
+    assert not re.search(
+        r"(?is)\brequested\s+effort\s+(?:equals?|is|guarantees?|proves?)\s+(?:the\s+)?(?:resolved|effective\s+upstream)\s+effort\b.{0,100}\b(?:after|upon|on|with)\b.{0,50}\b(?:success|successful)\w*",
+        text,
+    )
+
+
 def _assert_primary_route_allocation(text: str) -> None:
     for heading, matrix in ROUTE_MATRICES.items():
         header, rows = _table(text, heading)
@@ -184,6 +220,9 @@ def _assert_primary_route_allocation(text: str) -> None:
             assert allocation == _expected_pair_cell(pair), (heading, name, allocation)
             assert re.search(r"(?i)\bchoose\b", selection), (heading, name, selection)
             assert len(selection.split()) >= 8, (heading, name, selection)
+            _assert_conditionally_eligible_pair(selection)
+            if pair == "frontier":
+                _assert_frontier_selection_boundary(selection)
 
 
 def _assert_tier_pair_allocation(text: str) -> None:
@@ -207,6 +246,7 @@ def _assert_tier_pair_allocation(text: str) -> None:
 def _assert_fable_boundary(text: str) -> None:
     assert FABLE_BOUNDARY in text
     assert FABLE_NO_PEER in text
+    assert "and remains advisory to the conductor." in text
     assert "retention" in text.lower()
     assert "refusal" in text.lower()
     assert re.search(r"(?is)(?:new[- ]model|day[- ]one).{0,100}(?:503|capacity)", text)
@@ -256,6 +296,7 @@ def _assert_no_unsafe_operational_prose(text: str) -> None:
 
 
 def _assert_context_claims(text: str) -> None:
+    _assert_no_context_window_expansion_claim(text)
     assert not re.search(
         r"(?i)\[1m\].{0,100}(?:more intelligent|higher intelligence|proves? (?:a )?1m|guarantees? (?:a )?1m|upstream capacity|effective capacity)",
         text,
@@ -267,6 +308,7 @@ def _assert_runtime_role_contract(text: str) -> None:
         assert field in text, f"missing runtime assignment field: {field}"
     assert "inherited" in text
     assert "unresolved" in text
+    _assert_effort_resolution_boundary(text)
     assert not re.search(r"(?m)^\s*model_reasoning_effort\s*=", text)
     assert not re.search(r"(?i)host (?:configuration|default).{0,80}(?:choose|select|supply).{0,40}model", text)
 
@@ -381,6 +423,7 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 else:
                     _assert_no_unsafe_operational_prose(text)
                 _assert_context_claims(text)
+                _assert_effort_resolution_boundary(text)
                 self.assertNotRegex(
                     text,
                     r"(?i)(?:`)?(?:gpt-5\.6-(?:sol|terra|luna)|claude-(?:fable-5|opus-4-8|sonnet-5))(?:`)?\s+(?:owns?|decides?|authori[sz]\w*|mutat\w*)\s+(?:Seeds|the queue|fan-in|outward)",
@@ -483,6 +526,47 @@ class ModelTierRightsizingTests(unittest.TestCase):
                             _assert_historical_evidence(target.read_text(encoding="utf-8"))
                         else:
                             _assert_calibration(target.read_text(encoding="utf-8"))
+
+    def test_semantic_mutants_fail_for_pair_choice_frontier_and_telemetry_claims(self) -> None:
+        original = CALIBRATION.read_text(encoding="utf-8")
+        frontier_choice = (
+            "Choose Sol when it must form the advisory frame or settled-truth derivation; "
+            "choose Fable only when it is the certified bounded adversarial packet and Sol remains the peer."
+        )
+        runtime_contract = "\n".join(
+            f"{field}: unknown" for field in RUNTIME_ASSIGNMENT_FIELDS
+        ) + "\ninherited\nunresolved\n"
+        mutations = {
+            "GPT-only selection condition": (
+                _assert_calibration,
+                original.replace(
+                    frontier_choice,
+                    "Choose GPT for every dispatch; Claude is documentary only and is never selected.",
+                    1,
+                ),
+            ),
+            "Fable settles truth and makes Sol optional": (
+                _assert_calibration,
+                original.replace(
+                    "it never settles truth or replaces the Sol peer.",
+                    "it may settle truth and makes Sol optional after success.",
+                    1,
+                ),
+            ),
+            "[1m] expands the upstream context window": (
+                _assert_context_claims,
+                "[1m] expands a larger upstream context window after dispatch.",
+            ),
+            "requested effort becomes upstream effort": (
+                _assert_runtime_role_contract,
+                runtime_contract
+                + "Requested effort guarantees resolved effort after successful dispatch.",
+            ),
+        }
+        for name, (assertion, text) in mutations.items():
+            with self.subTest(mutation=name):
+                with self.assertRaises(AssertionError):
+                    assertion(text)
 
     def test_all_executable_alias_forms_fail_while_historical_rejection_examples_remain_allowed(self) -> None:
         for alias in ("fable", "opus", "sonnet", "haiku"):
