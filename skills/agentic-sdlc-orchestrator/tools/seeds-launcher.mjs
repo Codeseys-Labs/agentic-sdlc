@@ -45,7 +45,7 @@ const FORBIDDEN_PACKAGE_FILES = new Set(['bunfig.toml', 'bunfig.json', 'tsconfig
 const FORBIDDEN_PACKAGE_STEMS = new Set(['macro', 'macros', 'preload']);
 const RECEIPT_KEYS = new Set(['schema', 'platform', 'createdAt', 'distribution', 'runtime', 'tuple', 'hashes']);
 const DISTRIBUTION_KEYS = new Set(['root', 'commit', 'gitTree', 'tree', 'miseToml', 'miseLock', 'launcher', 'launcherHash']);
-const HASH_KEYS = new Set(['distribution', 'node', 'nodeExecutable', 'bun', 'seeds', 'packageJson', 'entry', 'git', 'bunfig', 'tsconfig', 'gitconfig']);
+const HASH_KEYS = new Set(['distribution', 'node', 'nodeExecutable', 'bun', 'seeds', 'packageJson', 'entry', 'git', 'gitAdapter', 'bunfig', 'tsconfig', 'gitconfig']);
 const DISTRIBUTION_HASH_KEYS = new Set(['tree', 'gitTree', 'miseToml', 'miseLock', 'commit']);
 const RUNTIME_KEYS = new Set(['node', 'nodeHash', 'launcherHash']);
 const TUPLE_KEYS = new Set(['node', 'bun', 'seeds', 'git', 'trusted']);
@@ -53,7 +53,7 @@ const NODE_KEYS = new Set(['root', 'executable', 'version']);
 const BUN_KEYS = new Set(['root', 'executable', 'version']);
 const SEEDS_KEYS = new Set(['root', 'packageRoot', 'package', 'version', 'bin', 'binValue', 'entry']);
 const GIT_KEYS = new Set(['path', 'hash', 'commit', 'tree']);
-const TRUSTED_KEYS = new Set(['bunfig', 'tsconfig', 'gitconfig']);
+const TRUSTED_KEYS = new Set(['bunfig', 'tsconfig', 'gitconfig', 'gitAdapter']);
 const HELP = 'usage: seeds-launcher.mjs bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json])';
 
 class LauncherError extends Error {}
@@ -648,6 +648,44 @@ function trustedEmptyJsonFile(directory, name) {
   return realRegularFile(path, `trusted ${name}`);
 }
 
+function gitAdapterContent(git) {
+  const quote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
+  if (process.platform !== 'win32') {
+    return `#!/bin/sh\nif [ "$#" -ne 2 ] || [ "$1" != rev-parse ]; then exit 64; fi\ncase "$2" in --git-common-dir|--git-dir) ;; *) exit 64 ;; esac\nexec ${quote(git)} -c core.fsmonitor=false -c core.hooksPath=/dev/null rev-parse "$2"\n`;
+  }
+  const batchGit = git.replaceAll('%', '%%');
+  return `@echo off\r\nsetlocal DisableDelayedExpansion\r\nif /I not "%~1"=="rev-parse" exit /b 64\r\nif not "%~3"=="" exit /b 64\r\nif "%~2"=="--git-common-dir" goto run\r\nif "%~2"=="--git-dir" goto run\r\nexit /b 64\r\n:run\r\n"${batchGit}" -c core.fsmonitor=false -c core.hooksPath=NUL rev-parse "%~2"\r\nexit /b %ERRORLEVEL%\r\n`;
+}
+
+function trustedGitAdapter(directory, git) {
+  const name = process.platform === 'win32' ? 'git.cmd' : 'git';
+  const path = join(directory, name);
+  const content = gitAdapterContent(git);
+  if (!existsSync(path)) {
+    let descriptor;
+    try {
+      descriptor = openSync(path, 'wx', 0o700);
+      writeFileSync(descriptor, content, 'utf8');
+      fsyncSync(descriptor);
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+    fsyncDirectory(directory);
+  }
+  const node = lstatSync(path);
+  if (node.isSymbolicLink() || !node.isFile() || readFileSync(path, 'utf8') !== content) fail('trusted Git adapter must be an exact owned regular file');
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail('trusted Git adapter is not owned by this user');
+  if (process.platform !== 'win32') chmodSync(path, 0o700);
+  return realRegularFile(path, 'trusted Git adapter');
+}
+
+function existingTrustedAdapter(path, git) {
+  const node = lstatSync(path);
+  if (node.isSymbolicLink() || !node.isFile() || readFileSync(path, 'utf8') !== gitAdapterContent(git)) fail('trusted Git adapter must be an exact regular file');
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail('trusted Git adapter is not owned by this user');
+  return realRegularFile(path, 'trusted Git adapter');
+}
+
 function bootstrap(distributionArgument) {
   const distribution = realDirectory(distributionArgument, 'reviewed distribution');
   const miseToml = containedFile(distribution, join(distribution, 'mise.toml'), 'reviewed mise.toml');
@@ -668,6 +706,7 @@ function bootstrap(distributionArgument) {
   const bunfig = trustedEmptyFile(directory, 'trusted-bunfig.toml');
   const tsconfig = trustedEmptyJsonFile(directory, 'trusted-tsconfig.json');
   const gitconfig = trustedEmptyFile(directory, 'trusted-gitconfig');
+  const gitAdapter = trustedGitAdapter(directory, git.path);
   const distributionHashes = { tree: distributionTreeHash(distribution), gitTree: git.tree, miseToml: hashFile(miseToml), miseLock: hashFile(miseLock), commit: hashBytes(Buffer.from(git.commit, 'utf8')) };
   const runtime = { node: realRegularFile(process.execPath, 'executing Node'), nodeHash: hashFile(realRegularFile(process.execPath, 'executing Node')), launcherHash: hashFile(launcher) };
   const receipt = {
@@ -681,7 +720,7 @@ function bootstrap(distributionArgument) {
       bun: { root: tuple.bunRoot, executable: tuple.bun, version: BUN_VERSION },
       seeds: { root: tuple.seedsRoot, packageRoot: tuple.packageRoot, package: SEEDS_PACKAGE, version: SEEDS_VERSION, bin: SEEDS_BIN, binValue: tuple.binValue, entry: tuple.entry },
       git,
-      trusted: { bunfig, tsconfig, gitconfig },
+      trusted: { bunfig, tsconfig, gitconfig, gitAdapter },
     },
     hashes: {
       distribution: distributionHashes,
@@ -692,6 +731,7 @@ function bootstrap(distributionArgument) {
       packageJson: hashFile(tuple.packageJson),
       entry: hashFile(tuple.entry),
       git: hashFile(git.path),
+      gitAdapter: hashFile(gitAdapter),
       bunfig: hashFile(bunfig),
       tsconfig: hashFile(tsconfig),
       gitconfig: hashFile(gitconfig),
@@ -747,7 +787,7 @@ function loadReceipt(path = receiptPath()) {
   const distributionHashes = receipt.hashes.distribution;
   if (!exactKeys(node, NODE_KEYS) || !exactKeys(bun, BUN_KEYS) || !exactKeys(seeds, SEEDS_KEYS) || !exactKeys(git, GIT_KEYS) || !exactKeys(trusted, TRUSTED_KEYS)
     || node.version !== NODE_VERSION || bun.version !== BUN_VERSION || seeds.package !== SEEDS_PACKAGE || seeds.version !== SEEDS_VERSION || seeds.bin !== SEEDS_BIN
-    || ![node.root, node.executable, bun.root, bun.executable, seeds.root, seeds.packageRoot, seeds.binValue, seeds.entry, git.path, git.hash, git.commit, git.tree, trusted.bunfig, trusted.tsconfig, trusted.gitconfig].every(text)
+    || ![node.root, node.executable, bun.root, bun.executable, seeds.root, seeds.packageRoot, seeds.binValue, seeds.entry, git.path, git.hash, git.commit, git.tree, trusted.bunfig, trusted.tsconfig, trusted.gitconfig, trusted.gitAdapter].every(text)
     || ![distribution.root, distribution.commit, distribution.gitTree, distribution.tree, distribution.miseToml, distribution.miseLock, distribution.launcher, distribution.launcherHash].every(text)
     || ![runtime.node, runtime.nodeHash, runtime.launcherHash].every(text)
     || ![distributionHashes.tree, distributionHashes.gitTree, distributionHashes.miseToml, distributionHashes.miseLock, distributionHashes.commit].every(text)
@@ -764,7 +804,7 @@ function loadReceipt(path = receiptPath()) {
 function checkCurrentReceipt(receipt) {
   const { node, bun, seeds, git, trusted } = receipt.tuple;
   const expected = receipt.hashes;
-  if (![expected.node, expected.nodeExecutable, expected.bun, expected.seeds, expected.packageJson, expected.entry, expected.git, expected.bunfig, expected.tsconfig, expected.gitconfig].every(text)) fail('active tuple receipt is partial or invalid');
+  if (![expected.node, expected.nodeExecutable, expected.bun, expected.seeds, expected.packageJson, expected.entry, expected.git, expected.gitAdapter, expected.bunfig, expected.tsconfig, expected.gitconfig].every(text)) fail('active tuple receipt is partial or invalid');
   const tuple = validateTuple({ node: node.root, bun: bun.root, seeds: seeds.root });
   if (tuple.node !== node.executable || tuple.bun !== bun.executable || tuple.packageRoot !== seeds.packageRoot || tuple.binValue !== seeds.binValue || tuple.entry !== seeds.entry) fail('active tuple receipt does not match exact platform layout');
   const executingNode = realRegularFile(process.execPath, 'executing Node');
@@ -776,9 +816,11 @@ function checkCurrentReceipt(receipt) {
   const bunfig = existingTrustedEmptyFile(trusted.bunfig, 'trusted-bunfig.toml');
   const tsconfig = existingTrustedJsonFile(trusted.tsconfig, 'trusted-tsconfig.json');
   const gitconfig = existingTrustedEmptyFile(trusted.gitconfig, 'trusted-gitconfig');
-  if (bunfig !== trusted.bunfig || tsconfig !== trusted.tsconfig || gitconfig !== trusted.gitconfig
-    || hashFile(bunfig) !== expected.bunfig || hashFile(tsconfig) !== expected.tsconfig || hashFile(gitconfig) !== expected.gitconfig) fail('trusted configuration hash drift detected');
-  return { ...tuple, bunfig, tsconfig, gitconfig, git: git.path };
+  const gitAdapter = existingTrustedAdapter(trusted.gitAdapter, git.path);
+  if (bunfig !== trusted.bunfig || tsconfig !== trusted.tsconfig || gitconfig !== trusted.gitconfig || gitAdapter !== trusted.gitAdapter
+    || hashFile(bunfig) !== expected.bunfig || hashFile(tsconfig) !== expected.tsconfig || hashFile(gitconfig) !== expected.gitconfig
+    || hashFile(gitAdapter) !== expected.gitAdapter) fail('trusted configuration hash drift detected');
+  return { ...tuple, bunfig, tsconfig, gitconfig, gitAdapter };
 }
 
 function grammar(values) {
@@ -793,11 +835,22 @@ function inspect(targetArgument, values) {
   const target = realDirectory(targetArgument, 'Seeds target');
   const tuple = checkCurrentReceipt(loadReceipt());
   const environment = Object.freeze({
-    PATH: dirname(tuple.git),
+    PATH: dirname(tuple.gitAdapter),
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
     GIT_CONFIG_GLOBAL: tuple.gitconfig,
+    GIT_OPTIONAL_LOCKS: '0',
+    GIT_TERMINAL_PROMPT: '0',
   });
-  const child = spawn(tuple.bun, [`--config=${tuple.bunfig}`, '--no-macros', '--no-env-file', '--no-install', tuple.entry, ...args], {
+  const child = spawn(tuple.bun, [
+    `--config=${tuple.bunfig}`,
+    '--no-macros',
+    '--no-env-file',
+    '--no-install',
+    `--tsconfig-override=${tuple.tsconfig}`,
+    tuple.entry,
+    ...args,
+  ], {
     cwd: target,
     env: environment,
     shell: false,
