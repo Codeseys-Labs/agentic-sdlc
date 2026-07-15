@@ -417,6 +417,7 @@ protected_director = __DIRECTOR_CONTRACT__
 contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injection|resolved_(?:provider|model_id)|model_readback|effort_readback|context_readback|provider_readback|host[- ]default|caller[- ]override|requested(?:_model_id|_effort|_context_form)?.{0,80}(?:resolved|readback)|(?:resolved|readback).{0,80}requested(?:_model_id|_effort|_context_form)?)")
 forbidden_seed_launcher = re.compile(r"(?i)(?:Seeds\(|\bsd\s+(?:prime|ready|blocked|create|claim|update|close|sync|disposition)\b)")
 forbidden_seed_grant = re.compile(r"(?i)Research Director.{0,120}\b(?:may|can|must|should)\b.{0,80}\b(?:create|claim|update|close|sync|disposition)\b.{0,80}\bSeeds?\b")
+forbidden_seed_waiver = re.compile(r"(?i)\b(?:exception|waiver|override|bypass|ignore)\b.{0,100}\b(?:Seeds?|SeedProposal|authority|rule|contract)\b|\b(?:Seeds?|SeedProposal|authority|rule|contract)\b.{0,100}\b(?:exception|waiver|override|bypass|ignore)\b")
 errors = []
 files = sorted(agents_dir.glob("*.toml")) if agents_dir.exists() else []
 for path in files:
@@ -452,11 +453,18 @@ for path in files:
     if sandbox is not None and sandbox not in allowed_sandboxes:
         errors.append(f"{label}: unsupported sandbox_mode {sandbox!r}")
     if path.stem == "research_director":
-        director_outside = instructions.replace(protected_director, "", 1)
+        director_count = instructions.count(protected_director)
+        if director_count != 1:
+            errors.append(f"{label}: protected Seeds authority block must occur exactly once")
+            director_outside = instructions
+        else:
+            director_outside = instructions.replace(protected_director, "", 1)
         if forbidden_seed_launcher.search(director_outside):
             errors.append(f"{label}: additive Seeds launcher or changed protected Seeds authority block is forbidden")
         if forbidden_seed_grant.search(director_outside):
             errors.append(f"{label}: affirmative Seeds authority grant is forbidden")
+        if forbidden_seed_waiver.search(director_outside):
+            errors.append(f"{label}: plain-language Seeds waiver is forbidden")
 print(f"Validated {len(files)} agent config(s).")
 for error in errors:
     print("ERROR:", error)
@@ -686,13 +694,16 @@ def core_files(project_name: str) -> dict[str, str]:
             - final synthesis must pass review gates.
             - agent TOML must pass `make validate-agents`; provider-neutral role definitions
               omit static model and effort pins and never dispatch. Before spawn, the conductor
-              supplies a certified `RuntimeAssignment`; `resolution_state` must equal `resolved`,
-              and `resolved_provider`, `resolved_model_id`, `resolved_effort`,
-              `resolved_context_form`, `provider_readback_source`, and
-              `provider_readback_evidence` must all be non-unknown. The selected host or launcher
-              must inject the exact resolved model and effort. If it cannot, or the assignment is
-              requested, inherited, unresolved, or incomplete, stop and return one `SeedProposal`
-              instead of dispatching. Prompt prose does not enforce a Codex model or effort.
+              supplies a certified v1 `RuntimeAssignment`; `resolution_state` must equal `resolved`,
+              `resolved_provider` and `resolved_model_id` need verified model identity, and effective
+              effort/context may be `unavailable` only with their structured unavailable evidence.
+              Request-injection evidence binds canonical requested model/effort/context bytes, adapter
+              ID/version/config digest, and request-byte digest; requested values never become readback.
+              The external harness calls admission immediately before spawn and remains responsible for
+              injection, no-bypass, and spawned-worker identity; this generated scaffold has no host
+              launcher. If the assignment is requested, inherited, unresolved, incomplete, or denied,
+              stop and return one `SeedProposal` instead of dispatching. Prompt prose does not enforce a
+              Codex model or effort.
             """
         ),
         "research/charter.md": clean(

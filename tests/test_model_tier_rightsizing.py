@@ -557,8 +557,8 @@ def _assert_historical_evidence(text: str) -> None:
         "`global.anthropic.claude-sonnet-5`",
     ):
         assert alias in text
-    assert re.search(r"(?is)requested effort.{0,240}resolved effort", text)
-    assert re.search(r"(?is)resolved effort.{0,100}(?:unknown|unavailable|not exposed)", text)
+    assert re.search(r"(?is)requested.{0,240}(?:resolved|effective) effort", text)
+    assert re.search(r"(?is)(?:resolved|effective) effort.{0,100}(?:unknown|unavailable|not exposed)", text)
     assert re.search(r"(?is)\[1m\].{0,240}(?:does not|not).{0,100}(?:1M|context|intelligence)", text)
 
 

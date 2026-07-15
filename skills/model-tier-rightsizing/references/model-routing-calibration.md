@@ -100,20 +100,23 @@ the active session. Do not write bare aliases or provider-qualified aliases in e
 `model` fields; historical rejection examples above are retained solely to prevent that
 regression.
 
-### Requested versus resolved effort
+### Requested versus effective effort
 
-The harness accepted `low`, `medium`, `high`, `xhigh`, and `max`, but resolved effort is
+The harness accepted `low`, `medium`, `high`, `xhigh`, and `max`, but effective effort is
 not exposed in the available transcript readback. A success token that repeats prompt text
-proves neither upstream receipt nor effective reasoning effort. Receipt fields must remain:
+proves neither upstream receipt nor effective reasoning effort. The v1 receipt fields remain:
 
 ```yaml
 requested_effort: low|medium|high|xhigh|max
-resolved_effort: unknown
-resolved_effort_evidence: unavailable_in_transcript
+effort_readback_status: unavailable
+effort_readback_evidence:
+  source_kind: transport_readback
+  status: unavailable
+  schema: runtime-assignment-readback/v1
 ```
 
-Never copy requested effort into resolved effort. Reclassify it only when proxy/upstream
-request or response telemetry independently exposes the resolved value.
+Never copy requested effort into effective readback. Reclassify it only when proxy/upstream
+request or response telemetry independently exposes the effective value.
 
 ### `[1m]` boundaries
 

@@ -82,17 +82,31 @@ alias, or echoed prompt text is not resolution evidence.
 
 `skills/model-tier-rightsizing/scripts/receipt_admission.py` validates one concrete
 `RuntimeAssignment` request receipt against the versioned
-`policy/runtime-assignment-receipt-v1.json`. It admits only the six exact IDs, allowed effort
-and status values, non-empty/non-null evidence fields, unique provider mappings, and the
-cross-field rules above, then emits deterministic admitted/denied JSON with a canonical JSON
-SHA-256 digest. It is stdlib-only.
+`policy/runtime-assignment-receipt-v1.json`. The v1 receipt fields are exactly:
+`schema_version`, `requested_model_id`, `requested_effort`, `requested_context_form`,
+`request_injection_status`, `request_injection_evidence`, `resolution_state`,
+`resolved_provider`, `resolved_model_id`, `model_readback_status`,
+`model_identity_basis`, `model_readback_evidence`, `effort_readback_status`,
+`effort_readback_evidence`, `context_readback_status`, and `context_readback_evidence`.
 
-This is receipt validation only. It does not launch workers, inject or intercept requests,
-prevent bypass, or prove a spawned worker used the receipt. An external harness must call it
-immediately before spawn and correlate the returned digest with its immutable spawn evidence.
-Unsupported native host paths fail closed until a host integration exists; do not replace that
-failure with a host default, adapter class, scheduler, retries, journal, queue, daemon, or
-Evolutionary Core.
+It rejects duplicate JSON members and arbitrary provenance strings. Each evidence field is a
+policy-enumerated structured object with `source_kind`, `status`, and `schema`; request
+injection evidence also binds adapter ID/version/config digest and the SHA-256 of canonical
+bytes for the exact requested model, effort, and context tuple. `verified` means only that
+this internal schema and digest consistency check passed. It never claims external injection,
+readback, or spawn identity occurred. Effective effort and context remain `unavailable` when
+the transport does not expose them; requested values never become readback.
+
+The policy admits only certified requested tuples. Claude base tuples remain eligible; exact
+Claude `[1m]` forms are denied until tuple-specific policy evidence exists. GPT `[1m]` forms
+remain eligible only where calibration supports that tuple. It emits deterministic
+admitted/denied JSON with a canonical JSON SHA-256 digest. It is stdlib-only.
+
+This repository supplies no host launcher. An external harness must call admission immediately
+before spawn, correlate the digest with immutable spawn evidence, and remain responsible for
+no-bypass enforcement, request injection, and spawned-worker identity. Unsupported native host
+paths fail closed until a host integration exists; do not replace that failure with a host
+default, adapter class, scheduler, retries, journal, queue, daemon, or Evolutionary Core.
 
 An executable Workflow call pins both fields on every worker; the second vendor is used
 only when it produces a distinct artifact:
