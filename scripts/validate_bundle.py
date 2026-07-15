@@ -494,7 +494,7 @@ def validate_runtime_receipt_projection(text: str, label: Path | str, result: Va
 def validate_agents(root: Path, result: Validation) -> None:
     for agent in sorted((root / "agents" / "claude").glob("*.md")):
         text = agent.read_text(encoding="utf-8")
-        label = agent.relative_to(root)
+        label = agent.relative_to(root).as_posix()
         try:
             metadata = parse_frontmatter_metadata(text)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -521,7 +521,7 @@ def validate_agents(root: Path, result: Validation) -> None:
             result.error(f"{agent.relative_to(root)}: static model is forbidden")
         if "model_reasoning_effort" in data:
             result.error(f"{agent.relative_to(root)}: static model_reasoning_effort is forbidden")
-        validate_runtime_receipt_projection(agent.read_text(encoding="utf-8"), agent.relative_to(root), result)
+        validate_runtime_receipt_projection(agent.read_text(encoding="utf-8"), agent.relative_to(root).as_posix(), result)
 
 
 def validate_mise(root: Path, result: Validation) -> None:
