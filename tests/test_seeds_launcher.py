@@ -602,9 +602,53 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             )
             self.assertEqual(inspected.returncode, 0, inspected.stderr)
             self.assertEqual(inspected.stdout.strip(), "0.5.14")
+            prime = subprocess.run(
+                [exact_node, LAUNCHER, "inspect", "--target", distribution, "prime"],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(prime.returncode, 0, prime.stderr)
             receipt = json.loads(
                 (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
             )
+            adapter_probe = root / "adapter-probe.ts"
+            adapter_probe.write_text(
+                'const allowed=Bun.spawnSync(["git","rev-parse","--git-dir"]);'
+                'const denied=Bun.spawnSync(["git","status"]);'
+                'if(allowed.exitCode!==0||denied.exitCode===0)process.exit(1);\n',
+                encoding="utf-8",
+            )
+            adapter_environment = {
+                "PATH": str(Path(receipt["tuple"]["trusted"]["gitAdapter"]).parent),
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_SYSTEM": "NUL",
+                "GIT_CONFIG_GLOBAL": receipt["tuple"]["trusted"]["gitconfig"],
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_TERMINAL_PROMPT": "0",
+                "PATHEXT": ".EXE",
+                "SystemRoot": os.environ["SystemRoot"],
+            }
+            adapter_result = subprocess.run(
+                [
+                    receipt["tuple"]["bun"]["executable"],
+                    f'--config={receipt["tuple"]["trusted"]["bunfig"]}',
+                    "--no-macros",
+                    "--no-env-file",
+                    "--no-install",
+                    f'--tsconfig-override={receipt["tuple"]["trusted"]["tsconfig"]}',
+                    adapter_probe,
+                ],
+                cwd=distribution,
+                text=True,
+                capture_output=True,
+                env=adapter_environment,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(adapter_result.returncode, 0, adapter_result.stderr)
             self.assertEqual(receipt["platform"], "win32")
             self.assertTrue(receipt["tuple"]["node"]["executable"].lower().endswith("node.exe"))
             self.assertTrue(receipt["tuple"]["bun"]["executable"].lower().endswith("bun.exe"))
