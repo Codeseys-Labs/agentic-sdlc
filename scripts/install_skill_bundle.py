@@ -1316,6 +1316,42 @@ def add_migrated_entry(
     return key
 
 
+def apply_identity_renames(config: Config, state: dict[str, Any]) -> list[str]:
+    """Physically rename old-slug installed skills per the private alias map."""
+    messages: list[str] = []
+    for old_key, new_key, old_record in plan_identity_renames(state, config):
+        new_name = Path(new_key).name
+        new_source = config.repo_root / "skills" / new_name
+        if not new_source.is_dir():
+            raise InstallerError(f"renamed source is unavailable: {new_source}")
+        old_destination = Path(old_key)
+        if not entry_matches_record(old_destination, old_record):
+            messages.append(f"rename conflict: {old_destination}")
+            continue
+        if config.dry_run:
+            messages.append(f"would rename: {old_destination} -> {Path(new_key)}")
+            continue
+        entry_new = record_entry(old_record, old_key)
+        entry_new = Entry(entry_new.agent, entry_new.kind, new_name, new_source)
+        transactional_rename(
+            entry_new,
+            old_key,
+            new_key,
+            config,
+            state,
+            old_record,
+            new_source_digest=digest(new_source),
+        )
+        messages.append(f"renamed: {old_destination} -> {Path(new_key)}")
+    if marketplace_overlap(config.home):
+        messages.append(
+            "marketplace plugin detected: not migrated automatically; run"
+            " `claude plugin uninstall agentic-sdlc-orchestrator --keep-data`"
+            " then `claude plugin install agentic-sdlc` manually"
+        )
+    return messages
+
+
 def _migrate_v1_state(config: Config) -> Result:
     documents = known_state_documents(config)
     v1_documents = [
@@ -1329,12 +1365,16 @@ def _migrate_v1_state(config: Config) -> Result:
             return Result(0, ("state is already current",))
         normalized = load_state(config.state_path)
         validate_state(config, normalized)
-        if current.get("version") == STATE_VERSION:
+        recover_transactions(config, normalized, read_only=config.dry_run)
+        rename_messages = apply_identity_renames(config, normalized)
+        if current.get("version") == STATE_VERSION and not rename_messages:
             return Result(0, ("state is already current",))
         if config.dry_run:
-            return Result(0, ("would migrate: state schema to v3",))
+            return Result(
+                0, tuple(["would migrate: state schema to v3"] + rename_messages)
+            )
         write_state(config.state_path, normalized, False)
-        return Result(0, ("migrated: state schema to v3",))
+        return Result(0, tuple(["migrated: state schema to v3"] + rename_messages))
 
     current_document = next(
         (document for document, path in documents if path == config.state_path), None
