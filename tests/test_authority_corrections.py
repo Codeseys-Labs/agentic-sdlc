@@ -13,12 +13,12 @@ SURFACES = [
     ROOT / "commands" / "sdlc-init.md",
     ROOT / "commands" / "sdlc-wave.md",
     ROOT / "commands" / "sdlc-mission.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "sdlc-loop.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "seeds-worktrees.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "delegation-planes.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "mission-loop.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "tiered-orchestration.md",
+    ROOT / "skills" / "agentic-sdlc" / "SKILL.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "sdlc-loop.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "seeds-worktrees.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "delegation-planes.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "mission-loop.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "tiered-orchestration.md",
 ]
 
 UNSAFE_AUTHORITY_PATTERNS = (
@@ -86,11 +86,11 @@ class AuthorityCorrectionTests(unittest.TestCase):
         self.assertRegex(self.text, r"(?i)integrator.{0,100}(?:delegated mutation|authorized fan-in)")
 
     def test_conductor_captures_read_only_artifacts_and_owns_seeds(self) -> None:
-        flagship = (ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").read_text()
+        flagship = (ROOT / "skills" / "agentic-sdlc" / "SKILL.md").read_text()
         mission = (
             ROOT
             / "skills"
-            / "agentic-sdlc-orchestrator"
+            / "agentic-sdlc"
             / "references"
             / "mission-loop.md"
         ).read_text()

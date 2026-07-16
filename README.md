@@ -45,7 +45,7 @@ start, or enable cmux or tmux merely to use this bundle.
 
 ## Contents
 
-- `skills/agentic-sdlc-orchestrator/`: the flagship, provider-native orchestration skill
+- `skills/agentic-sdlc/`: the flagship, provider-native orchestration skill
   for any skill-capable CLI agent.
 - `skills/codex-research-os/`: vendored research-team OS — a repo-scaffolding installer
   (`scripts/install_research_os.py`) that bootstraps a 17-role research organization
@@ -126,7 +126,7 @@ start, or enable cmux or tmux merely to use this bundle.
   autonomous backlog-zero mission with concurrent critique and bounded backflow.
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
-  `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to
+  `claude plugin install agentic-sdlc@agentic-sdlc` is an alternative to
   symlinks. Both manifests pass `claude plugins validate --strict`.
 - `scripts/check-agentic-sdlc-prereqs.sh`: native-baseline preflight plus informational
   checks for optional adapters. Missing cmux or tmux never fails it.
@@ -299,7 +299,7 @@ cmux and tmux are never prerequisites.
 The native host path is available only after capability probes and trust checks succeed:
 
 ```text
-Use $agentic-sdlc-orchestrator to frame this task and run a bounded,
+Use $agentic-sdlc to frame this task and run a bounded,
 Seeds-backed worktree wave using the host's native agents.
 ```
 

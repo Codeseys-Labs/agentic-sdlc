@@ -17,13 +17,13 @@ cannot be merged without changing unrelated policy, report the conflict and stop
 claiming wave readiness.
 
 1. **Preflight and snapshot**
-   - Load `agentic-sdlc-orchestrator` and the `repo-toolchain-gates` skill.
+   - Load `agentic-sdlc` and the `repo-toolchain-gates` skill.
    - Resolve the target repository, then record `git status --short`, tracked/untracked
      files, current branch/HEAD, remotes, existing task runner, hooks, CI, instruction
      files, and language/toolchain manifests.
    - Run the maintained prerequisite checker from the reviewed distribution checkout. It defines
      `Seeds(<target>, <args...>)` as the exact, config-independent mise contract in
-     `agentic-sdlc-orchestrator` and verifies version/provenance; use that shorthand for every
+     `agentic-sdlc` and verifies version/provenance; use that shorthand for every
      Seeds operation below. Missing, unpinned, untrusted,
      or ambiguous required capability fails closed; missing optional cmux or tmux
      never triggers implicit installation. `mise` is the only bootstrap prerequisite and the

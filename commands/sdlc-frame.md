@@ -3,9 +3,9 @@ name: sdlc-frame
 description: Frame an agentic SDLC run — define done, read queue/repo state, pick the run shape, set caps
 ---
 
-Run the FRAME phase of the agentic-sdlc-orchestrator loop for: $ARGUMENTS
+Run the FRAME phase of the agentic-sdlc loop for: $ARGUMENTS
 
-1. Load the `agentic-sdlc-orchestrator` skill if not already loaded.
+1. Load the `agentic-sdlc` skill if not already loaded.
 2. State the exact done condition for this run. If $ARGUMENTS is ambiguous, ask one
    clarifying question before proceeding.
 3. Prime state using the exact `Seeds(<target>, <args...>)` shorthand defined by the loaded

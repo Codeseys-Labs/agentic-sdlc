@@ -7,7 +7,7 @@ as the router.
 
 ## What this bundle provides
 
-- `skills/agentic-sdlc-orchestrator/` — the flagship skill: provider-native,
+- `skills/agentic-sdlc/` — the flagship skill: provider-native,
   project-scale agentic SDLC with Seeds, git worktree waves, mission/backlog-zero
   doctrine, tiered orchestration, and evidence-graded research teams. Roles and verdicts
   are advisory submissions; the conductor records evidence, and only an authorized

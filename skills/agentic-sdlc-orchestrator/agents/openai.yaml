@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agentic SDLC Orchestrator"
-  short_description: "Coordinate native multi-agent SDLC, Seeds, and worktrees"
-  default_prompt: "Use $agentic-sdlc-orchestrator to run a provider-native, Seeds-backed implementation loop. Use native delegation by default; use cmux only when already active or explicitly requested."

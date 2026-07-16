@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 ROUTER = ROOT / "skills" / "model-tier-rightsizing" / "SKILL.md"
 CALIBRATION = ROUTER.parent / "references" / "model-routing-calibration.md"
-FLAGSHIP = ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "tiered-orchestration.md"
+FLAGSHIP = ROOT / "skills" / "agentic-sdlc" / "references" / "tiered-orchestration.md"
 
 CONSUMERS = (
     ROOT / "AGENTS.md",
@@ -19,9 +19,9 @@ CONSUMERS = (
     ROOT / "commands" / "sdlc-frame.md",
     ROOT / "commands" / "sdlc-mission.md",
     ROOT / "commands" / "sdlc-wave.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "delegation-planes.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "sdlc-loop.md",
+    ROOT / "skills" / "agentic-sdlc" / "SKILL.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "delegation-planes.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "sdlc-loop.md",
     FLAGSHIP,
 )
 POLICY_SURFACES = CONSUMERS + (ROUTER, CALIBRATION)
@@ -77,7 +77,7 @@ RESEARCH_CONSUMERS = (
     ROOT / "skills" / "codex-research-os" / "SKILL.md",
     ROOT / "skills" / "codex-research-os" / "references" / "operating-model.md",
     ROOT / "skills" / "codex-research-os" / "references" / "agent-roster.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "research-team.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "research-team.md",
     ROOT / "commands" / "sdlc-wave.md",
     FLAGSHIP,
 )
@@ -707,7 +707,7 @@ class ModelTierRightsizingTests(unittest.TestCase):
             ROOT / "README.md",
             ROOT / "commands" / "sdlc-init.md",
             ROOT / "commands" / "sdlc-wave.md",
-            ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "seeds-worktrees.md",
+            ROOT / "skills" / "agentic-sdlc" / "references" / "seeds-worktrees.md",
         )
         for path in guidance:
             with self.subTest(guidance=path):

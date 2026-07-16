@@ -1,5 +1,5 @@
 ---
-name: agentic-sdlc-orchestrator
+name: agentic-sdlc
 description: This skill should be used when the user asks to frame, plan, execute, review, or drive a project-scale agentic SDLC run, including Seeds-backed worktree waves, backlog-zero missions, multi-agent implementation, or concurrent critique. The baseline uses the current host's native agent and subagent capabilities and requires no cmux or tmux. cmux is an optional non-load-bearing view/event layer only when already active or explicitly requested.
 ---
 
@@ -54,10 +54,9 @@ overrides, and unreviewed Seeds debug variables have no execution effect.
 
 ## Repo Location
 
-This skill is maintained in the private repo `baladithyab/agentic-sdlc-orchestrator`.
-Clone location varies per machine (e.g. `~/Documents/DevBox/agentic-sdlc-orchestrator` on
-macOS, `/mnt/e/CS/github/agentic-sdlc-orchestrator` on WSL). If absent:
-`gh repo clone baladithyab/agentic-sdlc-orchestrator`.
+This skill is maintained in a private repository; the clone location varies
+per machine. Locate the checkout by searching for this skill's directory
+(`skills/agentic-sdlc/`) rather than assuming a fixed path or forge name.
 
 When this skill refers to bundled scripts, use the repo copies:
 

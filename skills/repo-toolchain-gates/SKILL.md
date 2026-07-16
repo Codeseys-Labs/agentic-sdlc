@@ -106,7 +106,7 @@ pair with a repo-specific sweep (internal hostnames etc.) which generic rules wo
 - The upstream bundle demonstrates the distinction directly: mise manages the lefthook
   binary, while repository activation is separate. A lefthook binary does nothing
   until hooks are configured and installed.
-- See also (in the flagship `agentic-sdlc-orchestrator` skill): the seeds-worktrees
+- See also (in the flagship `agentic-sdlc` skill): the seeds-worktrees
   reference (config propagation into worktrees), the sdlc-loop reference (where gates sit
   in the loop), and the bundle's validate-bundle.sh (a worked example of a repo-specific
   gate script).
