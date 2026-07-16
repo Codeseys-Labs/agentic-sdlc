@@ -98,7 +98,9 @@ Use this phase order unless the task is clearly smaller:
 5. Act: launch workers in separate worktrees for independent workstreams.
 6. Review: review stable branch/worktree snapshots, not only worker summaries.
 7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs.
-8. Ship: squash/rebase, sync Seeds, open PR or commit according to repo policy.
+8. Ship: squash/rebase, sync Seeds, open PR or commit according to repo policy. Before proposing
+   any commit, PR, or squash text, load `../change-writing/SKILL.md` to author it; this phase still
+   owns the squash/rebase/PR operations and the human still authorizes publication.
 
 Use backflow when review reveals an earlier phase was weak: re-enter Discover, Research, or Plan with a scoped task instead of restarting the whole run.
 
@@ -145,6 +147,8 @@ Read only what is needed:
   native-first capability ladder, bounded backflow, and worker lifecycle at scale.
 - `../model-tier-rightsizing/SKILL.md`: required router before any model dispatch; its
   canonical calibration is the sole generation-specific routing authority.
+- `../change-writing/SKILL.md`: message authoring, output-only — commit, PR, squash, and
+  draft-review text. It never stages, commits, pushes, mutates PRs, merges, or deploys.
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
   alternate VCS substrate is activated by this bundle.

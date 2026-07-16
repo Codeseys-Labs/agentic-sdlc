@@ -12,6 +12,9 @@ Use GitHub's explicit base-branch fields; `gh` has no stack command. Every outwa
 requires operation-specific authorization and fresh readback. Missing governance data,
 unsupported fields, or HTTP 403 is UNKNOWN, never approval.
 
+Author each layer's commit and PR text with `../change-writing/SKILL.md` (output-only); this skill
+keeps sole ownership of base-branch topology, restack leases, and readback.
+
 ## Create and record boundaries
 
 ```sh

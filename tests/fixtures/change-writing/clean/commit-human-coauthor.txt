@@ -1,0 +1,6 @@
+Add retry budget to the upload client
+
+Pair-authored the backoff schedule with Dana after the incident review; the
+budget caps total retry time rather than attempt count.
+
+Co-Authored-By: Dana Okafor <dana.okafor@example.com>

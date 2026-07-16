@@ -1,0 +1,5 @@
+Cache resolved feature flags per request
+
+Flags were re-fetched on every access, adding a network round trip to hot
+paths. Resolve once at request entry and read from the request-scoped cache so
+downstream handlers share a single consistent snapshot.
