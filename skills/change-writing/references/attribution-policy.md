@@ -15,9 +15,15 @@ explicitly requested for this specific artifact:
 - `Generated with ...`, `🤖 Generated with ...`, "Generated with Claude Code", and any
   generated-by footer.
 - Model or provider names used as an authorship or marketing footer, e.g. "Written by Opus 4.8".
-- Agent or provider **badges** — image/shield links whose text names a model, agent, or AI.
+- Model/AI authorship stated **mid-sentence**, not only as a footer — e.g. "This PR was written by
+  an AI assistant". The claim is prohibited wherever it appears in the text, not just on a trailing
+  line.
+- Agent or provider **badges** — markdown image links (`![Built with Claude](...)`) **and** HTML
+  image tags (`<img alt="Made with Claude" src=...>`) whose alt text names a model, agent, or AI.
 
-The robot glyph 🤖 used as a generated-by badge is itself a deny token.
+The robot glyph 🤖 used as a generated-by badge is itself a deny token — both the "🤖 Generated
+with …" footer and a **standalone 🤖 badge line**. A 🤖 mentioned mid-sentence in prose (for
+example when the change itself is about emoji handling) is not attribution and is allowed.
 
 ## Human co-author carve-out
 

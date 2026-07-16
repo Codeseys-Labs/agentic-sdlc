@@ -1,0 +1,5 @@
+Escape the 🤖 glyph in changelog rendering
+
+The changelog renderer dropped multi-byte emoji such as 🤖 mid-sentence,
+truncating the line. Encode them as UTF-8 before width calculation so a 🤖 in
+release prose survives the render intact.

@@ -40,15 +40,27 @@ ATTRIBUTION_DENY = [
     re.compile(r"(?im)^\s*Co-Authored-By:.*<[^>]*noreply@(?:anthropic|openai)\.com[^>]*>"),
     # Generated-with footers, with or without the robot badge glyph.
     re.compile(r"(?im)(?:\U0001F916\s*)?Generated with\b"),
-    # Model/AI authorship footers.
+    # Model/AI authorship anywhere in a line (NOT only as a trailing footer), so an
+    # in-sentence "written by an AI assistant" is caught, not just a footer form.
     re.compile(
-        r"(?im)^\s*(?:Written|Authored|Generated|Created|Produced) by\s+"
-        r"(?:Claude|Codex|GPT|ChatGPT|Opus|Sonnet|Haiku|Gemini|Copilot|an? AI|AI\b)"
+        r"(?i)\b(?:Written|Authored|Generated|Created|Produced) by\s+"
+        r"(?:(?:an?\s+)?(?:AI|artificial intelligence)\b"
+        r"|Claude|Codex|GPT|ChatGPT|Opus|Sonnet|Haiku|Gemini|Copilot)"
     ),
-    # Agent/model marketing badge (image link whose alt text names a model/AI).
+    # Agent/model marketing badge (markdown image whose alt text names a model/AI).
     re.compile(
         r"(?im)!\[[^\]]*(?:Claude|Codex|GPT|Copilot|Gemini|Opus|Sonnet|\bAI\b)[^\]]*\]\([^)]*\)"
     ),
+    # Agent/model marketing badge (HTML <img> whose alt text names a model/AI),
+    # scoped to the alt value so a diagram whose src filename happens to contain a
+    # model name is not flagged.
+    re.compile(
+        r"(?is)<img\b[^>]*\balt\s*=\s*[\"'][^\"']*"
+        r"(?:Claude|Codex|GPT|Copilot|Gemini|Opus|Sonnet|\bAI\b)[^\"']*[\"']"
+    ),
+    # A standalone robot glyph leading a line is a footer/badge — distinct from a
+    # 🤖 emoji mentioned mid-sentence in prose (which does not lead a line).
+    re.compile(r"(?m)^\s*\U0001F916"),
 ]
 
 
