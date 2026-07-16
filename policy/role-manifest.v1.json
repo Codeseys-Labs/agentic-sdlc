@@ -1,0 +1,1005 @@
+{
+  "schema_version": "role-manifest/v1",
+  "generated_from": {
+    "normative_contract_path": "policy/runtime-assignment-normative-contract-v1.json",
+    "normative_contract_sha256": "2901fdc0c2c4d212a9ce3f6a36c6fe5562771ddc881f5e3717466e691ad610b1",
+    "validator_ruleset": "validate_bundle.validate_role_manifest"
+  },
+  "counts": {
+    "delivery_roles": 7,
+    "research_roles": 17,
+    "projection_files": 31
+  },
+  "roles": {
+    "cartographer": {
+      "kind": "delivery",
+      "phase": "discover",
+      "purpose": "Surveys the repository and returns an evidence Map for one wave.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "Map"
+        ]
+      },
+      "projections": {
+        "claude": {
+          "path": "agents/claude/sdlc-cartographer.md",
+          "content_digest": "2a4537f229646756a9cffae3177b8299a0503a08de3a02a0d8e71545050bd208",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        },
+        "codex": {
+          "path": "agents/codex/sdlc-cartographer.toml",
+          "content_digest": "ed7545cdb34b335f92fb59873b8cac387da73367e37ea535ada46c1c836c3613",
+          "sandbox_mode": "read-only",
+          "filesystem_write": false,
+          "submission_contract": "eight-heading"
+        }
+      },
+      "cartography": {
+        "map_kind": "delivery",
+        "persistence": "ephemeral"
+      }
+    },
+    "planner": {
+      "kind": "delivery",
+      "phase": "plan",
+      "purpose": "Shapes evidence into bounded workstreams and seed-shaped proposals.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [
+          "Map",
+          "ResearchBrief"
+        ],
+        "produced": [
+          "SeedProposal"
+        ]
+      },
+      "projections": {
+        "claude": {
+          "path": "agents/claude/sdlc-planner.md",
+          "content_digest": "6f18ca418ed35acef524d9c16406576299109aa5ce1866e18058a9ebb2a4411b",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        },
+        "codex": {
+          "path": "agents/codex/sdlc-planner.toml",
+          "content_digest": "f452307058bffadeb059f1e4fc588520a7c6f19ccf9c288c9c83804d2a662784",
+          "sandbox_mode": "read-only",
+          "filesystem_write": false,
+          "submission_contract": "eight-heading"
+        }
+      }
+    },
+    "researcher": {
+      "kind": "delivery",
+      "phase": "research",
+      "purpose": "Resolves one load-bearing unknown into a decision-ready cited brief.",
+      "delegation_limit": {
+        "wip_cap": 1,
+        "concurrency_hint": "researcher<=2"
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "required",
+        "network": "required"
+      },
+      "artifacts": {
+        "accepted": [
+          "Map"
+        ],
+        "produced": [
+          "ResearchBrief"
+        ]
+      },
+      "projections": {
+        "claude": {
+          "path": "agents/claude/sdlc-researcher.md",
+          "content_digest": "f971579f6106d5efcd20c215f8c3c3bc5a15e8e59054db3c712157e0b3f21182",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        },
+        "codex": {
+          "path": "agents/codex/sdlc-researcher.toml",
+          "content_digest": "53eb907a579f7bf49ef36389c7bf93ef1e09828bc442f0c1dfcf45553415fcbd",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        }
+      }
+    },
+    "implementer": {
+      "kind": "delivery",
+      "phase": "act",
+      "purpose": "Turns one bounded workstream into a code-plus-tests candidate.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [
+          "SeedProposal",
+          "Map"
+        ],
+        "produced": [
+          "Candidate"
+        ]
+      },
+      "projections": {
+        "claude": {
+          "path": "agents/claude/sdlc-implementer.md",
+          "content_digest": "3214f71cf3923b710afd7b1bbe66fd7094acd939d2449fb422ac065174889222",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        },
+        "codex": {
+          "path": "agents/codex/sdlc-implementer.toml",
+          "content_digest": "557a58e47376faa79c49e669d22af1d95dc3772ea45926e3024c1f52b4760b8a",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        }
+      }
+    },
+    "reviewer": {
+      "kind": "delivery",
+      "phase": "review",
+      "purpose": "Reports severity-ordered review findings for one candidate.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [
+          "Candidate"
+        ],
+        "produced": [
+          "ReviewFinding",
+          "SeedProposal"
+        ]
+      },
+      "projections": {
+        "claude": {
+          "path": "agents/claude/sdlc-reviewer.md",
+          "content_digest": "2cc7132a36dd93127096448cf214c8a70ae5d7a9aed3d883df3a5af241ed8359",
+          "filesystem_write": false,
+          "submission_contract": "eight-heading"
+        },
+        "codex": {
+          "path": "agents/codex/sdlc-reviewer.toml",
+          "content_digest": "31a77d96ea5184f2b4a2f87df250872b5c5e50ccd20c2adb8f15a30bfecba015",
+          "sandbox_mode": "read-only",
+          "filesystem_write": false,
+          "submission_contract": "eight-heading"
+        }
+      },
+      "advisory_only": true
+    },
+    "critic": {
+      "kind": "delivery",
+      "phase": "standing-critique",
+      "purpose": "Runs standing adversarial critique and returns classified findings.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [
+          "Candidate",
+          "ReviewFinding"
+        ],
+        "produced": [
+          "ReviewFinding",
+          "SeedProposal"
+        ]
+      },
+      "projections": {
+        "claude": {
+          "path": "agents/claude/sdlc-critic.md",
+          "content_digest": "7ac747f847f72057a927d94d93a25ce23f59609d4641c56b38d30540f4a6203d",
+          "filesystem_write": false,
+          "submission_contract": "eight-heading"
+        },
+        "codex": {
+          "path": "agents/codex/sdlc-critic.toml",
+          "content_digest": "952f2a220d9f8977b418f172023a9e92ed6cbdc4c42a69deb77e9d7efacfdf12",
+          "sandbox_mode": "read-only",
+          "filesystem_write": false,
+          "submission_contract": "eight-heading"
+        }
+      },
+      "advisory_only": true
+    },
+    "integrator": {
+      "kind": "delivery",
+      "phase": "integrate",
+      "purpose": "Executes conductor-authorized fan-in and returns an integration report.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "authorized-executor",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [
+          "Candidate",
+          "ReviewFinding"
+        ],
+        "produced": [
+          "IntegrationReport",
+          "SeedProposal"
+        ]
+      },
+      "projections": {
+        "claude": {
+          "path": "agents/claude/sdlc-integrator.md",
+          "content_digest": "cd2e4d8e9b968824453d072561f3dea24062a06d0241ae15d3a5c3f07328aac9",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        },
+        "codex": {
+          "path": "agents/codex/sdlc-integrator.toml",
+          "content_digest": "e9e91e8c4883a529f7869d3d07772283e8382efa0ce3cc82304f35abd98b7858",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "eight-heading"
+        }
+      }
+    },
+    "ablationist": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Runs ablations and reports load-bearing verdicts; no promotion.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ReviewFinding"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/ablationist.toml",
+          "content_digest": "2cd3e5847069df205fe84087864c7e7163d7cafd783ad93cab9e74a1cfb91989",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "adversarial_reviewer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Attacks claims and records reviews; never fixes.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "frontier",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ReviewFinding"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/adversarial_reviewer.toml",
+          "content_digest": "eb8af719f2f4d4c6075f8a7c108bde8f455b0e6db24390e06b348263fb3cb2ec",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      },
+      "advisory_only": true
+    },
+    "benchmark_engineer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Builds benchmarks and baselines; optimizes evaluation not method.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "Candidate"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/benchmark_engineer.toml",
+          "content_digest": "9459e4e6ce7a7984456f43e6a1fe6760fe552cc520f2edb4cc24d43232afa1a4",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "counterexample_hunter": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Searches for counterexamples; never claims none exist.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ReviewFinding"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/counterexample_hunter.toml",
+          "content_digest": "34eeb82c3345079e6fd30126dfdba46b9f755661addc02f1f384d71d4ccd5255",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "data_engineer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Inventories and validates data; blocks untrustworthy data.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ReviewFinding"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/data_engineer.toml",
+          "content_digest": "c8ab4c3d2df9d872afa0e9dc11fe06b68031a08d6b376abf9fd87e1a8c7b9328",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "experimentalist": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Runs experiments and recommends next steps; no self-approval.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "Candidate"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/experimentalist.toml",
+          "content_digest": "de175fbb3611c128a9927940f7565795e96ce14264fd9f6116ee8d674cd37046",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "formalizer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Formalizes proofs and records gaps; does not silently reshape claims.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ResearchBrief"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/formalizer.toml",
+          "content_digest": "a5d00b2767b35e6501880d312d88b3ffb133908035efe9c0a6e0fbf1863dc599",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "knowledge_librarian": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Curates journal and memory; never changes claim status without evidence.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ResearchBrief"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/knowledge_librarian.toml",
+          "content_digest": "19d9cfb80da1fb52b43f311f8c838f7ca9a5f6b5775ac3b8d51a5224cb8f8472",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "literature_scout": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Maps prior art from primary sources; does not declare novelty.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "required",
+        "network": "required"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ResearchBrief"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/literature_scout.toml",
+          "content_digest": "5d303f05a28d1f65c1fb74649ce8c71a0c2eae5d490eb7bda1caae7146d33a7c",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "novelty_auditor": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Audits novelty against prior art; does not generate hypotheses.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "frontier",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "required",
+        "network": "required"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ReviewFinding"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/novelty_auditor.toml",
+          "content_digest": "510b9e511249ac00607e66a867530dcbc7cc25a63efcee1167a3e7780f14cc6a",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "replication_reviewer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Reviews replications; does not approve own experiments or fix.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ReviewFinding"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/replication_reviewer.toml",
+          "content_digest": "10c549ad2d30fe76837611ee4e5015b6cebf3f646711c67ecf5dd81ab1fe8077",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      },
+      "advisory_only": true
+    },
+    "repo_cartographer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Builds durable research memory of the target repository.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "Map"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/repo_cartographer.toml",
+          "content_digest": "749dceccc3bbd05b201ebf670f434ca2625d90fcc1334f220b8d1c3848772153",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      },
+      "cartography": {
+        "map_kind": "research_memory",
+        "persistence": "durable"
+      }
+    },
+    "research_director": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Coordinates the research team and enforces claim discipline; Seeds-read-only.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "read-only",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "frontier",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "SeedProposal"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/research_director.toml",
+          "content_digest": "92ab46674bf98dd80ef859b1d7ae6604a39bcf72efc3d56ff68e70468a520639",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "safety_reviewer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Blocks risky operations; does not execute them.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ReviewFinding"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/safety_reviewer.toml",
+          "content_digest": "1e385fae9448d436188fc84f010c3cbf6a608622c54bdeef6f14c182b5780fa4",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      },
+      "advisory_only": true
+    },
+    "synthesis_writer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Synthesizes validated claims only; introduces no new claims.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [
+          "ResearchBrief",
+          "ReviewFinding"
+        ],
+        "produced": [
+          "ResearchBrief"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/synthesis_writer.toml",
+          "content_digest": "453cf7e1a1d5ab9d50c51e93a7e6bcec749efd45ea74277ade24bdaa87ce1272",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "systems_engineer": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Provides scripts and tooling; does not change research claims.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "volume",
+        "effort_band_hint": "medium",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "Candidate"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/systems_engineer.toml",
+          "content_digest": "cb562cfc98de514262a995a808ce33813f321ec5b5ef2d4a6af23c33899688ca",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    },
+    "theorist": {
+      "kind": "research",
+      "phase": "research-loop",
+      "purpose": "Proposes ideas and theorem statements; does not self-promote claims.",
+      "delegation_limit": {
+        "wip_cap": 1
+      },
+      "queue_authority": "none",
+      "fan_in_authority": "none",
+      "publication_authority": "none",
+      "model": {
+        "lane_family": "judgment",
+        "effort_band_hint": "high",
+        "context_forms_eligible": [
+          "base"
+        ],
+        "runtime_model_source": "conductor-supplied-RuntimeAssignment"
+      },
+      "capabilities": {
+        "web_access": "none",
+        "network": "none"
+      },
+      "artifacts": {
+        "accepted": [],
+        "produced": [
+          "ResearchBrief"
+        ]
+      },
+      "projections": {
+        "codex": {
+          "path": "agents/codex/research/theorist.toml",
+          "content_digest": "2cab3610fb766d5ef557640fd68150e9825029fc6ee36e402da53a0ef5240b3e",
+          "sandbox_mode": "workspace-write",
+          "filesystem_write": true,
+          "submission_contract": "research-ledger"
+        }
+      }
+    }
+  }
+}

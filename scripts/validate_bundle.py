@@ -62,6 +62,7 @@ TASK_COMMANDS = {
 }
 RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
+ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
 PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
@@ -251,6 +252,46 @@ FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS = (
         r"(?:sufficient|authori[sz](?:e|es|ed)?|grant(?:s|ed)?|permit(?:s|ted)?)\b.{0,80}\b"
         r"(?:push|publish(?:ing|ation)?|merge|deploy(?:ment)?|outward)\b"
     ),
+)
+
+ROLE_MANIFEST_SCHEMA_VERSION = "role-manifest/v1"
+ROLE_MANIFEST_RUNTIME_MODEL_SOURCE = "conductor-supplied-RuntimeAssignment"
+ROLE_MANIFEST_LANE_FAMILIES = frozenset(
+    {"frontier", "judgment", "volume", "mechanical-floor"}
+)
+ROLE_MANIFEST_ARTIFACTS = frozenset(
+    {"Map", "ResearchBrief", "SeedProposal", "Candidate", "ReviewFinding", "IntegrationReport"}
+)
+ROLE_MANIFEST_SUBMISSION_CONTRACTS = frozenset({"eight-heading", "research-ledger"})
+ROLE_MANIFEST_TOP_LEVEL_KEYS = frozenset(
+    {"schema_version", "generated_from", "counts", "roles"}
+)
+ROLE_MANIFEST_ROLE_KEYS = frozenset(
+    {
+        "kind",
+        "phase",
+        "purpose",
+        "delegation_limit",
+        "queue_authority",
+        "fan_in_authority",
+        "publication_authority",
+        "model",
+        "capabilities",
+        "artifacts",
+        "projections",
+        "advisory_only",
+        "cartography",
+    }
+)
+ROLE_MANIFEST_REQUIRED_ROLE_KEYS = ROLE_MANIFEST_ROLE_KEYS - {"advisory_only", "cartography"}
+# The seven delivery role IDs (logical), each carrying claude + codex projections.
+DELIVERY_ROLE_IDS = frozenset(
+    filename[len("sdlc-"):-len(".md")] for filename in CLAUDE_GLOBAL_ROLE_FILENAMES
+)
+# advisory_only=true is mandatory for the protected-reviewer roles and forbidden as an
+# authority-widening escape hatch elsewhere; the anti-bypass check keys off this set.
+ROLE_MANIFEST_ADVISORY_ONLY_ROLES = frozenset(
+    {"reviewer", "critic", "adversarial_reviewer", "replication_reviewer", "safety_reviewer"}
 )
 
 VALIDATOR_WRAPPER = """#!/usr/bin/env bash
@@ -564,6 +605,283 @@ def validate_source_pinned_protected_role_authority(root: Path, result: Validati
             result.error(f"{relative}: source-pinned protected role authority requires the reviewer boundary")
         if REVIEWER_OUTWARD_AUTHORITY_PATTERN.search(instructions):
             result.error(f"{relative}: source-pinned protected role authority forbids outward reviewer authority")
+
+
+ROLE_MANIFEST_WEB_SIGNAL = re.compile(r"(?i)\b(?:live research|prior art)\b")
+
+
+def _role_manifest_web_required(root: Path) -> set[str]:
+    """Derive, from the pinned role files, which logical roles genuinely need web.
+
+    Fail-closed and cross-checked, not asserted (spec §7/§4): a delivery role needs web
+    only if its Claude projection allow-lists WebFetch/WebSearch; a research role needs web
+    only if its pinned prose signals live research / prior-art work. The manifest's
+    web_access field is then required to equal this derived truth.
+    """
+    required: set[str] = set()
+    for filename in CLAUDE_GLOBAL_ROLE_FILENAMES:
+        role_id = filename[len("sdlc-"):-len(".md")]
+        path = root / "agents" / "claude" / filename
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        in_tools = False
+        tools: set[str] = set()
+        for line in text.splitlines():
+            if line.strip() == "tools:":
+                in_tools = True
+                continue
+            if in_tools:
+                match = re.match(r"\s*-\s*(\w+)", line)
+                if match:
+                    tools.add(match.group(1))
+                elif line.strip() == "---":
+                    break
+        if {"WebFetch", "WebSearch"} & tools:
+            required.add(role_id)
+    for role in RESEARCH_ROLE_IDS:
+        path = root / "agents" / "codex" / "research" / f"{role}.toml"
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        if ROLE_MANIFEST_WEB_SIGNAL.search(data.get("developer_instructions", "") or ""):
+            required.add(role)
+    return required
+
+
+def _role_manifest_pinned_digests(normative: dict[str, object]) -> tuple[dict[str, str], dict[str, str]]:
+    """Return (path -> content_digest, path -> sandbox_mode) drawn from the pinned contract.
+
+    Both maps are the SOLE source of truth for manifest cross-checks: the manifest may
+    only reference these bytes, never restate a different authority.
+    """
+    managed = normative["managed_roles"]
+    global_hashes = dict(managed["global"]["manifest_sha256"])
+    research_roles = managed["research"]["roles"]
+    digests = dict(global_hashes)
+    sandboxes: dict[str, str] = {}
+    for spec in research_roles.values():
+        if isinstance(spec, dict) and isinstance(spec.get("path"), str):
+            digests[spec["path"]] = spec.get("manifest_sha256")
+            sandboxes[spec["path"]] = spec.get("sandbox_mode")
+    return digests, sandboxes
+
+
+def validate_role_manifest(root: Path, result: Validation) -> None:
+    """Validate the versioned role-contract manifest against the source-pinned contract.
+
+    The manifest documents orchestration metadata for the 24 logical roles (7 delivery x2
+    projections + 17 research). Every authority-relevant field is either derived-and-
+    cross-checked against the digest-pinned normative contract or inert with respect to
+    runtime authority; the manifest can never widen authority the pinned prose forbids.
+    """
+    manifest_path = root / "policy" / "role-manifest.v1.json"
+    if not manifest_path.is_file():
+        result.error("policy/role-manifest.v1.json: missing versioned role-contract manifest")
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        result.error(f"policy/role-manifest.v1.json: invalid JSON: {exc}")
+        return
+    if not isinstance(manifest, dict):
+        result.error("policy/role-manifest.v1.json: manifest must be a JSON object")
+        return
+
+    # F1 — schema validity: exact top-level key set and schema version.
+    if set(manifest) != ROLE_MANIFEST_TOP_LEVEL_KEYS:
+        result.error("policy/role-manifest.v1.json: top-level keys must be exactly "
+                     f"{sorted(ROLE_MANIFEST_TOP_LEVEL_KEYS)}")
+    if manifest.get("schema_version") != ROLE_MANIFEST_SCHEMA_VERSION:
+        result.error("policy/role-manifest.v1.json: schema_version must be "
+                     f"{ROLE_MANIFEST_SCHEMA_VERSION!r}")
+
+    try:
+        normative = normative_runtime_contract()
+        pinned_digests, pinned_sandboxes = _role_manifest_pinned_digests(normative)
+    except (ValueError, KeyError, TypeError) as exc:
+        result.error(f"policy/role-manifest.v1.json: cannot bind pinned contract: {exc}")
+        return
+    web_required_roles = _role_manifest_web_required(root)
+
+    # F3/Q5 — the manifest is bound to a specific normative contract by digest; a drift
+    # here forces a manifest regen + digest refresh rather than a silent bypass.
+    generated_from = manifest.get("generated_from")
+    if not isinstance(generated_from, dict):
+        result.error("policy/role-manifest.v1.json: generated_from must be an object")
+        generated_from = {}
+    actual_normative_sha = sha256_bytes(NORMATIVE_CONTRACT_PATH.read_bytes())
+    if generated_from.get("normative_contract_sha256") != actual_normative_sha:
+        result.error("policy/role-manifest.v1.json: generated_from.normative_contract_sha256 "
+                     "does not bind the pinned normative contract")
+
+    roles = manifest.get("roles")
+    if not isinstance(roles, dict):
+        result.error("policy/role-manifest.v1.json: roles must be an object")
+        return
+
+    # F2 — roster completeness & counts (mirrors the 14 global + 17 research invariants).
+    expected_role_ids = DELIVERY_ROLE_IDS | RESEARCH_ROLE_IDS
+    if set(roles) != expected_role_ids:
+        result.error("policy/role-manifest.v1.json: roles must be exactly the 7 delivery "
+                     "and 17 Research OS logical roles")
+    counts = manifest.get("counts")
+    if not isinstance(counts, dict) or counts.get("delivery_roles") != 7 \
+            or counts.get("research_roles") != 17 or counts.get("projection_files") != 31:
+        result.error("policy/role-manifest.v1.json: counts must be 7 delivery, 17 research, "
+                     "31 projection files")
+
+    projection_paths: set[str] = set()
+    for role_id in sorted(roles):
+        role = roles[role_id]
+        if not isinstance(role, dict):
+            result.error(f"policy/role-manifest.v1.json: role {role_id} must be an object")
+            continue
+        extra = set(role) - ROLE_MANIFEST_ROLE_KEYS
+        missing = ROLE_MANIFEST_REQUIRED_ROLE_KEYS - set(role)
+        if extra:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} has unknown keys {sorted(extra)}")
+        if missing:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} missing keys {sorted(missing)}")
+
+        kind = role.get("kind")
+        is_delivery = role_id in DELIVERY_ROLE_IDS
+        if kind != ("delivery" if is_delivery else "research"):
+            result.error(f"policy/role-manifest.v1.json: role {role_id} kind mismatch")
+
+        # §3/§4 — publication authority is none for every managed role, always.
+        if role.get("publication_authority") != "none":
+            result.error(f"policy/role-manifest.v1.json: role {role_id} publication_authority must be none")
+
+        # §3.1/§4.2 — fan_in_authority=authorized-executor ONLY for the integrator.
+        fan_in = role.get("fan_in_authority")
+        if role_id == "integrator":
+            if fan_in != "authorized-executor":
+                result.error("policy/role-manifest.v1.json: integrator fan_in_authority must be authorized-executor")
+        elif fan_in != "none":
+            result.error(f"policy/role-manifest.v1.json: role {role_id} fan_in_authority must be none")
+
+        # §3.2/§4.2 — queue_authority is read-only for the research director, none otherwise;
+        # never a mutate value. This is checked against the role id, not the manifest's claim.
+        queue = role.get("queue_authority")
+        allowed_queue = {"read-only", "none"} if role_id == "research_director" else {"none"}
+        if queue not in allowed_queue:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} queue_authority must be "
+                         f"one of {sorted(allowed_queue)}")
+
+        # §3.3-4/§4.2 — advisory_only is mandatory-true for protected reviewers and the
+        # standing critic; asserting advisory_only=false there is the coordinated-repin bypass.
+        advisory = role.get("advisory_only", None)
+        if role_id in ROLE_MANIFEST_ADVISORY_ONLY_ROLES:
+            if advisory is not True:
+                result.error(f"policy/role-manifest.v1.json: role {role_id} must be advisory_only=true")
+        elif advisory is not None and advisory is not False:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} advisory_only must be boolean")
+
+        # §4.3/F5 — model lane is a family hint; the exact model comes from the conductor's
+        # RuntimeAssignment. Reject any resolved exact model ID or wrong runtime source.
+        model = role.get("model")
+        if not isinstance(model, dict):
+            result.error(f"policy/role-manifest.v1.json: role {role_id} model must be an object")
+            model = {}
+        if model.get("lane_family") not in ROLE_MANIFEST_LANE_FAMILIES:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} model.lane_family invalid")
+        if model.get("runtime_model_source") != ROLE_MANIFEST_RUNTIME_MODEL_SOURCE:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} model.runtime_model_source must be "
+                         f"{ROLE_MANIFEST_RUNTIME_MODEL_SOURCE!r}")
+        model_blob = json.dumps(model)
+        for exact_id in EXACT_MODEL_PROVIDER_MAP:
+            if exact_id in model_blob:
+                result.error(f"policy/role-manifest.v1.json: role {role_id} model block leaks exact model id {exact_id}")
+        if "resolved_model_id" in model:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} model must not carry a resolved_model_id")
+        if model.get("context_forms_eligible") != ["base"]:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} model.context_forms_eligible must be ['base']")
+
+        # §2/§2.2 — artifacts reference the six standard names; no new artifact format.
+        artifacts = role.get("artifacts")
+        if not isinstance(artifacts, dict):
+            result.error(f"policy/role-manifest.v1.json: role {role_id} artifacts must be an object")
+            artifacts = {}
+        for slot in ("accepted", "produced"):
+            names = artifacts.get(slot)
+            if not isinstance(names, list) or any(n not in ROLE_MANIFEST_ARTIFACTS for n in names):
+                result.error(f"policy/role-manifest.v1.json: role {role_id} artifacts.{slot} must be "
+                             "standard artifact names")
+
+        # §7/F6 — capabilities are default-closed and cross-checked; web=required implies
+        # network=required. Only researcher (delivery) and the web-consuming research roles
+        # may request web.
+        capabilities = role.get("capabilities")
+        if not isinstance(capabilities, dict):
+            result.error(f"policy/role-manifest.v1.json: role {role_id} capabilities must be an object")
+            capabilities = {}
+        web = capabilities.get("web_access")
+        network = capabilities.get("network")
+        if web not in {"required", "none"}:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} capabilities.web_access invalid")
+        if network not in {"required", "none"}:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} capabilities.network invalid")
+        if web == "required" and network != "required":
+            result.error(f"policy/role-manifest.v1.json: role {role_id} web_access=required implies network=required")
+        # Cross-check web against the pinned role files, not the manifest's own claim:
+        # a role may declare web=required only if its pinned surface genuinely needs it,
+        # and a genuinely web-needing role may not silently drop to none (fail-closed).
+        expected_web = "required" if role_id in web_required_roles else "none"
+        if web != expected_web:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} web_access must be "
+                         f"{expected_web!r} to match its pinned capability surface")
+
+        # §6/F7 — cartography discriminant: delivery cartographer is ephemeral/delivery,
+        # research repo_cartographer is durable/research_memory; present only for map roles.
+        cartography = role.get("cartography")
+        if role_id == "cartographer":
+            if cartography != {"map_kind": "delivery", "persistence": "ephemeral"}:
+                result.error("policy/role-manifest.v1.json: cartographer cartography must be delivery/ephemeral")
+        elif role_id == "repo_cartographer":
+            if cartography != {"map_kind": "research_memory", "persistence": "durable"}:
+                result.error("policy/role-manifest.v1.json: repo_cartographer cartography must be "
+                             "research_memory/durable")
+        elif cartography is not None:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} must not declare cartography")
+
+        # F3/F8 — projections: digest coexistence + sandbox equality + submission-contract tag.
+        projections = role.get("projections")
+        if not isinstance(projections, dict):
+            result.error(f"policy/role-manifest.v1.json: role {role_id} projections must be an object")
+            continue
+        expected_hosts = {"claude", "codex"} if is_delivery else {"codex"}
+        if set(projections) != expected_hosts:
+            result.error(f"policy/role-manifest.v1.json: role {role_id} projections must be {sorted(expected_hosts)}")
+        for host, projection in projections.items():
+            if not isinstance(projection, dict):
+                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} projection must be an object")
+                continue
+            path = projection.get("path")
+            projection_paths.add(path)
+            # F3 — content_digest MUST equal the pinned bytes; a mutated digest is an error,
+            # not a new source of truth. sandbox_mode MUST equal the pinned sandbox_mode.
+            if path not in pinned_digests:
+                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} path {path} not pinned")
+            elif projection.get("content_digest") != pinned_digests[path]:
+                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} content_digest differs "
+                             "from the source-pinned normative contract")
+            if host == "codex" and not is_delivery:
+                if projection.get("sandbox_mode") != pinned_sandboxes.get(path):
+                    result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} sandbox_mode differs "
+                                 "from the source-pinned normative contract")
+            # F8 — submission-contract tag: eight-heading for delivery, research-ledger for research.
+            expected_contract = "eight-heading" if is_delivery else "research-ledger"
+            if projection.get("submission_contract") != expected_contract:
+                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} submission_contract must be "
+                             f"{expected_contract!r}")
+
+    # F2 — the 31 pinned projection files are all referenced exactly once by the manifest.
+    if projection_paths != set(pinned_digests):
+        result.error("policy/role-manifest.v1.json: projections must reference exactly the 31 pinned role files")
 
 
 def validate_managed_role_contract(root: Path, result: Validation) -> None:
@@ -957,6 +1275,7 @@ def validate(root: Path) -> Validation:
     validate_runtime_policy_contract(root, result)
     validate_agents(root, result)
     validate_managed_role_contract(root, result)
+    validate_role_manifest(root, result)
     validate_mise(root, result)
     validate_gate_graph(root, result)
     validate_versions(root, result)
