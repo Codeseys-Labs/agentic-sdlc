@@ -1,0 +1,5 @@
+Add retry budget to the upload client
+
+Caps total retry time rather than attempt count.
+
+Written by Opus 4.8

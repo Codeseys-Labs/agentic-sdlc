@@ -11,6 +11,9 @@ A stack is a chain of small, dependent PRs. Each PR has one logical change and t
 branch immediately below it. Independent changes are parallel PRs, not a stack. Merge and
 restack bottom-up; a child is not ready merely because its parent changed.
 
+Author each layer's commit and PR text with `../change-writing/SKILL.md` (output-only); this skill
+keeps sole ownership of base-branch topology, restack leases, and readback.
+
 ## Safety doctrine
 
 - Save an old boundary for every layer before any operation: branch, local tip, PR number,

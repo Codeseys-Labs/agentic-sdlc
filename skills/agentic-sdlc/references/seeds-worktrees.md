@@ -122,6 +122,8 @@ Before opening a PR:
 - Confirm the conductor's verified, operation-specific policy before any queue synchronization.
 - Confirm the integration branch diff matches the intended Seeds.
 - Include Seeds ids and test evidence in the PR body.
+- Author the squash, commit, and PR text via `../../change-writing/SKILL.md` (output-only); this
+  flow still owns the squash/rebase/PR operations.
 - Confirm explicit operation-specific authorization for PR creation or mutation; gates,
   status, and recommendations do not grant it.
 

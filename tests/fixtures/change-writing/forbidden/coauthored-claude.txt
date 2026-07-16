@@ -1,0 +1,5 @@
+Add request-scoped feature-flag cache
+
+Resolve flags once at request entry and serve reads from a snapshot.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
