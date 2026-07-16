@@ -128,7 +128,6 @@ start, or enable cmux or tmux merely to use this bundle.
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc-orchestrator@agentic-sdlc` is an alternative to
   symlinks. Both manifests pass `claude plugins validate --strict`.
-- `cao-profiles/`: retained one-release CAO compatibility tombstones; use native Frame/Wave/Mission.
 - `scripts/check-agentic-sdlc-prereqs.sh`: native-baseline preflight plus informational
   checks for optional adapters. Missing cmux or tmux never fails it.
 - `scripts/install-skill-bundle.sh`: **one-shot global install for every native agent CLI
@@ -138,7 +137,6 @@ start, or enable cmux or tmux merely to use this bundle.
   the 1024-char Codex description cap (silent-skip trap), broken references, TOML/JSON
   parses, shell `bash -n`, plugin manifest validation, secret/internal-hostname sweep.
 - `scripts/cmux-bus.sh`: optional cmux-only event-bus helper (pub/sub/seq).
-- `scripts/install-cao-kit.sh`: retained CAO compatibility tombstone (exit code 2).
 
 ## Install and run the bundle
 
@@ -296,8 +294,7 @@ command CI mirrors.
 `scripts/install-skill-bundle.sh` remains a compatibility wrapper for existing automation.
 It requires mise, invokes the pinned uv/Python installer, forwards supported arguments, and
 retains positional `status`, `uninstall`, and `self-test` plus legacy `--copy` behavior.
-`INSTALL_CAO=1` is a retired compatibility path and exits 2 before native installation.
-CAO is retired; cmux and tmux are never prerequisites.
+cmux and tmux are never prerequisites.
 
 The native host path is available only after capability probes and trust checks succeed:
 

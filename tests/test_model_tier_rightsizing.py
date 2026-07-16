@@ -130,7 +130,7 @@ ROUTE_MATRICES = {
             "S1 Seeds toolchain retention": "volume",
             "S2 Seeds execution contract": "judgment",
             "Seeds fan-in": "judgment",
-            "Wave 1 CAO deletion": "judgment",
+            "Wave 1 legacy-surface removal": "judgment",
             "Wave 2 state-v3 identity cutover": "judgment",
             "Claude marketplace/plugin plane": "judgment",
             "Local checkout rename gate": "frontier",

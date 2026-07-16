@@ -62,7 +62,6 @@ macOS, `/mnt/e/CS/github/agentic-sdlc-orchestrator` on WSL). If absent:
 When this skill refers to bundled scripts, use the repo copies:
 
 - `<repo>/scripts/check-agentic-sdlc-prereqs.sh`
-- `<repo>/scripts/install-cao-kit.sh` (retained compatibility tombstone)
 
 ## First Moves
 

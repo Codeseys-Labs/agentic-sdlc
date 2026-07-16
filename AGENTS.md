@@ -33,7 +33,6 @@ as the router.
   run the delivery loop (Claude Code slash commands; other hosts invoke the flagship skill
   with the same intents). Global installation and per-repository activation are separate
   lifecycle planes.
-- `cao-profiles/` — retained one-release CAO compatibility tombstones; use native Frame/Wave/Mission.
 
 ## Working on THIS repo
 
@@ -129,8 +128,8 @@ Native Windows runs the current-host task normally. From WSL, all-host tasks run
 then invoke native Windows mise and report the two hosts separately. `hooks:install` installs
 lefthook's validate pre-commit and test/self-test pre-push subsets; hooks are best-effort
 convenience, not release authority. The Bash installer is a mise-backed compatibility wrapper retaining
-positional `status`, `uninstall`, `self-test`, legacy `--copy`, and retired `INSTALL_CAO=1`
-which exits 2 before native installation. For Claude, use either direct install or the marketplace, never both; marketplace
+positional `status`, `uninstall`, `self-test`, and legacy `--copy`.
+For Claude, use either direct install or the marketplace, never both; marketplace
 overlap blocks only Claude. No local status, gate, reviewer label, or conductor choice grants
 authority for push, publication, PR mutation, merge, deployment, credential, or other outward
 effect; each requires explicit operation-specific authorization.

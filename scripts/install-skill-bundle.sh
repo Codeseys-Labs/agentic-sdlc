@@ -4,15 +4,7 @@
 # Legacy forms retained:
 #   install-skill-bundle.sh [--copy] [installer options]
 #   install-skill-bundle.sh status|uninstall|self-test [installer options]
-#   INSTALL_CAO=1 install-skill-bundle.sh [legacy install options]
 set -euo pipefail
-
-retirement_message='CAO has been retired; use native Frame/Wave/Mission instead.'
-
-if [ "${INSTALL_CAO:-0}" = "1" ]; then
-  printf '%s\n' "$retirement_message" >&2
-  exit 2
-fi
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
