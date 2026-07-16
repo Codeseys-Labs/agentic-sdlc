@@ -53,26 +53,52 @@ as the router.
 
 ## Installing this bundle
 
-mise 2026.4.27+ is the managed-tool bootstrap, not the sole readiness prerequisite. It pins
-uv, consumes the checked-in cross-platform `mise.lock`, and uv supplies Python 3.12.11 for
-all authoritative Python entrypoints. Git, a documented Seeds distribution, supported trust
-behavior, and any selected adapter must be present and verified; missing, unpinned, untrusted,
-or ambiguous capability means not Git-ready. Trust is scoped to each absolute config path,
-but persistent `mise trust`, Codex/global config, shell-alias, and credential mutations each
-require explicit operation-specific user approval. Process-scoped `mise --no-config` test
-execution is allowed without persisting trust. Before spawn, the conductor supplies a
-conductor-supplied certified `RuntimeAssignment` with requested model/effort/context values;
-`resolution_state` must be `resolved`. Exact model/effort request injection is mandatory and
-immutable. Requested model selection is recorded as resolved, inherited, or unresolved; it is
-never proof. `resolved_provider` and `resolved_model_id` require verified model identity; an
-independently observed provider/model source may be unavailable only for an unambiguous exact-ID
-mapping backed by immutable request/model evidence. Effective effort/context readback may be
-honestly unavailable, and requested values never become readback. Requested, inherited,
-unresolved, or incomplete assignments stop before dispatch and therefore stop before spawn. The
-selected host or launcher must inject the exact requested model and effort; if it cannot inject
-both, return one SeedProposal, not a dispatch. Prompt prose does not enforce a Codex model or
-effort. Provider-neutral roles contain no static model or effort pin and never recommend
-host-default model selection as policy.
+mise 2026.4.27+ is the only bootstrap prerequisite; it is the managed-tool bootstrap, not the
+sole readiness prerequisite. It pins uv, consumes the checked-in cross-platform `mise.lock`, and
+uv supplies Python 3.12.11 for all authoritative Python entrypoints. Git, a verified Seeds
+distribution, supported trust behavior, repository gates, and any selected adapter remain
+runtime-readiness capabilities, not additional bootstrap prerequisites; missing, unpinned,
+untrusted, or ambiguous capability means not Git-ready. Trust is scoped to each
+absolute config path: every linked worktree must review and trust its own `mise.toml`, and
+`MISE_PARANOID=1` fails closed until that explicit trust step. Persistent `mise trust`,
+Codex/global config, shell-alias, and credential mutations each require explicit
+operation-specific user approval; process-scoped `mise --no-config` test execution is allowed
+without persisting trust. Never make permanent Windows environment/trust/config changes.
+
+To acquire Seeds from an exact clean Git distribution root, run the installed flagship
+`tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.22.3.
+Bootstrap and inspect both reject any other executing Node. Bootstrap rejects nested, staged,
+dirty, untracked, or ignored distribution content, then explicitly invokes reviewed
+`mise --locked install` with isolated HOME, mise config/data/cache, hooks, npmrc files, and fixed
+official registry/npm backend. Ambient npm/mise config cannot select acquisition. It resolves only
+config-free exact roots, validates Node 22.22.3, Bun 1.3.10, and the
+`npm:@os-eco/seeds-cli@0.5.14` package/bin/layout; the released package's string `engines.bun` is
+benign while actual config/macro/preload controls remain forbidden. It then atomically records the
+exact Git commit/tree, tool hashes, and a prior receipt for rollback. Inspect is separate and never
+installs, networks, invokes mise, or repairs: it admits only an active receipt and exact current
+hashes, accepts only `--version`, `prime`, `ready [--format json]`, and
+`blocked [--format json]`, then Node starts the exact absolute Bun/entry with `shell:false`, a
+trusted empty Bun config, and no ambient runtime options. The child environment is an allowlist,
+including a PATH limited to a separately recorded Git directory and portable Git config isolation.
+Target/ambient Bun, Node, npm, mise, and unreviewed Seeds debug controls have no effect. The
+receipt detects ordinary drift, not a same-UID TOCTOU racer. The Seeds lock proves the exact
+version and npm backend, not tarball or transitive dependency integrity. Never accept ambient
+Seeds provenance.
+
+Before spawn, the conductor supplies a certified `RuntimeAssignment` with requested
+model/effort/context values; `resolution_state` must be `resolved`. Exact model/effort request
+injection is mandatory and immutable. The requested model tier and the resolved provider/model
+are separate facts: requested model selection is recorded as resolved, inherited, or unresolved,
+and it is never proof. `resolved_provider` and `resolved_model_id` require verified model
+identity; an independently observed provider/model source may be unavailable only for an
+unambiguous exact-ID mapping backed by immutable request/model evidence, and resolved is recorded
+only after adapter readback. Effective effort/context readback may be honestly unavailable, and
+requested values never become readback. Requested, inherited, unresolved, or incomplete
+assignments stop before dispatch and therefore stop before spawn. The selected host or launcher
+must inject the exact requested model and effort; if it cannot inject both, return one
+SeedProposal, not a dispatch. Prompt prose does not enforce a Codex model or effort.
+Provider-neutral roles contain no static model or effort pin and never recommend host-default
+model selection as policy.
 
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`

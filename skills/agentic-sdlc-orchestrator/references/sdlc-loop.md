@@ -47,10 +47,14 @@ Review:
 
 Reconcile:
 - Run gates from the root and from affected packages as needed.
+- Turn findings into typed `SeedProposal` records for conductor triage. Only the conductor may
+  authorize verified queue mutations under operation-specific policy; worker and reviewer roles
+  never execute create/claim/update/close/sync actions.
 - The conductor alone mutates Seeds after acceptance evidence is verified. An authorized
   integrator alone may perform an already-authorized fan-in; local status, passing gates,
   worker reports, reviewer recommendations, and conductor choices never grant authority.
-- Run `sd sync` when the repo uses Seeds and queue state changed.
+- The conductor runs `Seeds(<target>, sync)` using the exact launcher contract in
+  `references/seeds-worktrees.md` when the verified queue state changed.
 
 Ship:
 - Squash/rebase worktree branches into an integration branch only within the authorized scope.

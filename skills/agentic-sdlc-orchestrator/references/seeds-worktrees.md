@@ -2,18 +2,73 @@
 
 Use this reference when converting the plan into parallel implementation work.
 
-## Seeds Queue
+## Exact Seeds execution contract
 
-Use Seeds as the authoritative dynamic queue for recommendations and acceptance tracking;
-they are not an authorization or execution channel:
+Mise is the only bootstrap prerequisite. The installed flagship skill contains the portable Node
+stdlib tool `tools/seeds-launcher.mjs`; first run its explicit bootstrap mode from a reviewed
+distribution checkout:
 
-```bash
-sd prime
-sd ready --format json
-sd blocked --format json
+```text
+<exact-node-22.22.3-root>/bin/node tools/seeds-launcher.mjs bootstrap --distribution <exact-clean-git-root>
 ```
 
-Create or update Seeds for:
+The launcher itself must be executing as Node `22.22.3`. The distribution must be an exact clean Git
+root: its argument must equal `git rev-parse --show-toplevel`, and `HEAD`, index, tracked
+working tree, untracked files, and ignored files must resolve to one exact clean commit tree; nested paths and any live-tree addition or edit
+fail before acquisition. Bootstrap alone runs `mise --locked install` with the root's reviewed
+`mise.toml` and adjacent `mise.lock` as the only config. It uses private state-owned HOME, mise
+data/cache, and two distinct empty npmrc files; pins the official npm registry and npm backend;
+disables hooks/config environment; and ignores ambient HOME, npmrc/registry variables, and mise
+config/data/cache variables. It then consumes exact roots returned by `mise --no-config where` for
+Node `22.22.3`, Bun `1.3.10`, and `npm:@os-eco/seeds-cli@0.5.14`. It validates the version, platform
+layout, package name/version, separator-contained `sd` bin entry, and package controls. The released
+package's string `engines.bun` compatibility requirement is benign; Bun config, TypeScript config,
+macro, preload, and other actual execution-control forms remain forbidden. It creates a trusted
+owned empty Bun config and hashes the reviewed distribution tree, exact Git commit and tree,
+`mise.toml`, `mise.lock`, every tool tree, package metadata, entry, Git binary, and trusted configs,
+then atomically publishes an active versioned receipt under platform state while retaining the
+preceding receipt for rollback.
+
+The lock and npm backend establish exact version selection but **do not authenticate the npm
+tarball or transitive dependency graph**. The receipt catches ordinary post-bootstrap drift but
+cannot close a same-UID TOCTOU race between its checks and spawn.
+
+Thereafter `Seeds(<target>, <args...>)` means exact Node running:
+
+```text
+seeds-launcher.mjs inspect --target <target> <args...>
+```
+
+`inspect` never installs, calls mise, acquires from a network, discovers ambient tools, repairs a
+receipt, or reads target package controls. The process must itself be exact Node `22.22.3`; it
+validates only the active receipt and current hashes, then permits precisely `--version`, `prime`,
+`ready [--format json]`, and `blocked [--format json]`. Other forms fail before Bun. Exact Node uses `shell:false` solely as
+an argv-safe wrapper for the exact absolute Bun executable and exact entry, with target as cwd.
+Bun uses `--config=<trusted-empty-file>`, `--no-env-file`, and `--no-install`. Its environment is
+an allowlist: `PATH` contains only the separately resolved recorded Git directory, and Git system
+and global config are isolated; all `BUN_*`, `NODE_OPTIONS`, npm/mise override variables, and
+unreviewed Seeds debug variables are absent. This leaves neither target `bunfig`, `.env`, package
+configuration, nor ambient `sd` with execution authority.
+
+POSIX and native Windows wrappers resolve the exact Node root before delegation, establish
+cleanup before setup, preserve the immediate child status, clean up, and return that exact status.
+They make no persistent Windows environment, trust, or config change.
+
+## Seeds Queue
+
+Only the conductor owns Seeds queue mutations. Workers and reviewers inspect queue state through
+`Seeds(<target>, ready --format json)` and emit typed `SeedProposal` records; they never execute
+create/claim/update/close/sync actions. The conductor may apply an operation only after verified,
+operation-specific policy authorizes it. Seeds remain an authoritative dynamic queue for
+recommendations and acceptance tracking, never an authorization channel.
+
+```text
+Seeds(<target>, prime)
+Seeds(<target>, ready --format json)
+Seeds(<target>, blocked --format json)
+```
+
+The conductor creates or updates Seeds for:
 
 - Original requested work.
 - Discovered bugs.
@@ -64,7 +119,7 @@ After worker completion:
 Before opening a PR:
 
 - Run final gates from the integration branch.
-- Run `sd sync` if Seeds changed.
+- Confirm the conductor's verified, operation-specific policy before any queue synchronization.
 - Confirm the integration branch diff matches the intended Seeds.
 - Include Seeds ids and test evidence in the PR body.
 - Confirm explicit operation-specific authorization for PR creation or mutation; gates,

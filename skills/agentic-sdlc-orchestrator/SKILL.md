@@ -21,10 +21,36 @@ default. The full Frame -> Ship loop is available only after required Git, Seeds
 trust, and selected-adapter capabilities are probed and verified. Missing, unpinned,
 untrusted, or ambiguous required capability fails closed. Add cmux only when it is already active and useful for visibility or event messaging. Never
 install, start, or enable cmux or tmux merely to run this skill. Use Seeds as the
-queue of record. Global distribution (`mise` → pinned `uv` → pinned Python installer) is
-separate from project activation: use `/sdlc-init` (or the same intent on non-Claude hosts)
-to establish a tracked Git baseline, Seeds, repository gates, trust, and shared `AGENTS.md`
-guidance before the first Frame/Wave.
+queue of record. Mise is the only bootstrap prerequisite: from a reviewed distribution checkout, run the installed
+flagship tool `seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node
+`22.22.3`. Bootstrap requires an exact clean Git distribution root: it rejects any nested checkout
+path or distribution whose tracked, staged, untracked, or ignored content differs from the exact
+`HEAD` tree. Bootstrap alone runs the
+reviewed `mise --locked install` with only that root `mise.toml`/adjacent lock, fresh private
+mise data/cache/home, fixed official npm registry, distinct empty npmrc files, and hooks/config
+environment disabled; ambient HOME, npmrc/registry, and mise config/data/cache cannot select
+acquisition. It then resolves exact config-free roots and atomically publishes an active tuple
+receipt. It verifies the executing Node and recorded Node are exactly `22.22.3`, Bun `1.3.10`,
+the exact `@os-eco/seeds-cli@0.5.14` package/bin/layout, permits only the real package's benign
+string `engines.bun` compatibility declaration, rejects actual Bun/config/TypeScript/macro/preload
+controls, and records a trusted empty Bun configuration, the exact Git root/commit/tree plus
+`mise.toml`/`mise.lock`, and typed tree/file hashes. It retains the preceding receipt for explicit
+rollback. The receipt establishes an execution integrity boundary against ordinary accidental
+drift, not tarball/transitive authenticity and not a same-UID TOCTOU attacker racing verification
+and execution. npm version/backend and a lock do not authenticate a tarball or its transitives.
+
+After an explicit successful bootstrap, `Seeds(<target>, <args...>)` is implemented by
+`seeds-launcher.mjs inspect --target <target> <args...>` under the exact recorded and currently
+executing Node `22.22.3`.
+`inspect` never installs, invokes mise, networks, discovers replacement tooling, repairs state,
+or accepts ambient provenance. It loads and validates only the active receipt and recorded
+current hashes, accepts only `--version`, `prime`, `ready [--format json]`, and
+`blocked [--format json]`, and rejects every other form before Bun starts. Node has `shell:false`
+and invokes the exact recorded absolute Bun/entry pair with `--config=<trusted-file>`,
+`--no-env-file`, and `--no-install`; the child gets only a short environment allowlist. Its PATH
+is only the separately resolved and recorded Git directory, with portable system/global Git config
+isolation. Target `bunfig`, `.env`, package config, ambient `BUN_*`, `NODE_OPTIONS`, npm/mise
+overrides, and unreviewed Seeds debug variables have no execution effect.
 
 ## Repo Location
 
@@ -41,8 +67,8 @@ When this skill refers to bundled scripts, use the repo copies:
 ## First Moves
 
 1. Prime the project state:
-   - Run `sd prime`.
-   - Inspect `sd ready --format json`, `sd blocked --format json`, and repo docs/ADRs/roadmap.
+   - Run `Seeds(<target>, prime)`.
+   - Inspect `Seeds(<target>, ready --format json)`, `Seeds(<target>, blocked --format json)`, and repo docs/ADRs/roadmap.
    - Check `git status --short` before planning worktrees.
 2. Detect the host-native execution plane first:
    - Inventory direct execution, role agents/subagents, background delegation, and native

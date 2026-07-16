@@ -22,7 +22,7 @@ import yaml
 SECRET_PATTERN = re.compile(
     r"AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA|OPENSSH) PRIVATE KEY|amazon\.com/[a-z]|\.a2z\.com|aws\.dev/"
 )
-TEXT_SUFFIXES = {".md", ".sh", ".ps1", ".toml", ".json", ".yml", ".yaml", ".py"}
+TEXT_SUFFIXES = {".md", ".mjs", ".sh", ".ps1", ".toml", ".json", ".yml", ".yaml", ".py"}
 REQUIRED_TASKS = {
     "bundle:install",
     "bundle:status",
@@ -42,23 +42,11 @@ MIN_MISE_VERSION = "2026.4.27"
 UV_VERSION = "0.11.17"
 PYTHON_VERSION = "3.12.11"
 LEFTHOOK_VERSION = "2.1.10"
-LOCK_PLATFORMS = {"linux-x64", "macos-arm64", "macos-x64", "windows-x64"}
-LOCK_ARTIFACTS = {
-    "uv": {
-        "backend": "aqua:astral-sh/uv",
-        "linux-x64": ("uv-x86_64-unknown-linux-musl.tar.gz", "4231a429d4e0f7c1937d8916658c08a7706cd7872afebeb87203a18c2e0dc28e"),
-        "macos-arm64": ("uv-aarch64-apple-darwin.tar.gz", "2a162f6b90ff3691a2f9cae1622e066a3ce592e110f66670cdcc841324b28226"),
-        "macos-x64": ("uv-x86_64-apple-darwin.tar.gz", "6c66e41eaf4d15abeda58d3f268161b6e3f742d98390341b174a7cfc1b48841d"),
-        "windows-x64": ("uv-x86_64-pc-windows-msvc.zip", "35fc29e03e62f3cda769bc12773f3cb70ce305d0d36c0d8bd0c117dd0b3fcd14"),
-    },
-    "lefthook": {
-        "backend": "aqua:evilmartians/lefthook",
-        "linux-x64": ("lefthook_2.1.10_Linux_x86_64.gz", "0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f"),
-        "macos-arm64": ("lefthook_2.1.10_MacOS_arm64.gz", "1dd4dc7b4c50efb1f9d9122cd6535c793738d6e59751c228d49f768ec9dbb604"),
-        "macos-x64": ("lefthook_2.1.10_MacOS_x86_64.gz", "49d905f28ca46442cb236060058b252da650b5f7b864bd275b61aa46945e8c4a"),
-        "windows-x64": ("lefthook_2.1.10_Windows_x86_64.gz", "beabbce824641ae71229ed11dd8634f47148921cb649d25c90441b737481494a"),
-    },
-}
+NODE_VERSION = "22.22.3"
+BUN_VERSION = "1.3.10"
+SEEDS_VERSION = "0.5.14"
+SEEDS_TOOL = "npm:@os-eco/seeds-cli"
+MISE_LOCK_SHA256 = "d894faadc5dab0b3f2af7ab341ca53dc1925b2ae9245ba03132c74dfe092176d"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -767,11 +755,23 @@ def validate_mise(root: Path, result: Validation) -> None:
 
     if config.get("min_version") != MIN_MISE_VERSION:
         result.error(f"mise.toml must require mise {MIN_MISE_VERSION}")
-    if config.get("settings", {}).get("locked") is not True:
+    settings = config.get("settings", {})
+    if settings.get("locked") is not True:
         result.error("mise.toml must enable locked tool resolution")
-    expected_tools = {"uv": UV_VERSION, "lefthook": LEFTHOOK_VERSION}
+    if settings.get("npm", {}).get("package_manager") != "npm":
+        result.error("mise.toml npm.package_manager must equal npm")
+    expected_tools = {
+        "uv": UV_VERSION,
+        "lefthook": LEFTHOOK_VERSION,
+        "node": NODE_VERSION,
+        "bun": BUN_VERSION,
+        SEEDS_TOOL: {"version": SEEDS_VERSION, "depends": ["node"]},
+    }
     if config.get("tools") != expected_tools:
         result.error(f"mise.toml tools must equal {expected_tools}")
+    seeds = config.get("tools", {}).get(SEEDS_TOOL, {})
+    if seeds.get("depends") != ["node"]:
+        result.error("mise.toml Seeds tool must depend on node")
 
     for name, suffix in TASK_COMMANDS.items():
         task = tasks.get(name, {})
@@ -799,38 +799,39 @@ def validate_mise(root: Path, result: Validation) -> None:
         result.error("mise.lock is required")
         return
     try:
-        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+        lock_bytes = lock_path.read_bytes()
+    except OSError as exc:
+        result.error(f"mise.lock is invalid: {exc}")
+        return
+    if hashlib.sha256(lock_bytes).hexdigest() != MISE_LOCK_SHA256:
+        result.error("mise.lock SHA-256 must equal the canonical generated lock")
+    try:
+        lock = tomllib.loads(lock_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         result.error(f"mise.lock is invalid: {exc}")
         return
     locked_tools = lock.get("tools", {})
-    for name, version in expected_tools.items():
+    expected_versions = {
+        "uv": UV_VERSION,
+        "lefthook": LEFTHOOK_VERSION,
+        "node": NODE_VERSION,
+        "bun": BUN_VERSION,
+        SEEDS_TOOL: SEEDS_VERSION,
+    }
+    if set(locked_tools) != set(expected_versions):
+        result.error(f"mise.lock tools must equal {sorted(expected_versions)}")
+    for name, version in expected_versions.items():
         entries = locked_tools.get(name, [])
         if len(entries) != 1 or entries[0].get("version") != version:
             result.error(f"mise.lock must resolve {name} {version}")
             continue
-        if entries[0].get("backend") != LOCK_ARTIFACTS[name]["backend"]:
-            result.error(f"mise.lock {name} backend must equal {LOCK_ARTIFACTS[name]['backend']}")
-        platforms = {
-            key.removeprefix("platforms."): value
-            for key, value in entries[0].items()
-            if key.startswith("platforms.")
-        }
-        if set(platforms) != LOCK_PLATFORMS:
-            result.error(f"mise.lock {name} platforms must equal {sorted(LOCK_PLATFORMS)}")
-        for platform, record in platforms.items():
-            if platform not in LOCK_ARTIFACTS[name]:
-                continue
-            release = f"https://github.com/{'astral-sh/uv' if name == 'uv' else 'evilmartians/lefthook'}/releases/download/"
-            expected_version = version if name == "uv" else f"v{version}"
-            artifact, checksum = LOCK_ARTIFACTS[name][platform]
-            expected_url = f"{release}{expected_version}/{artifact}"
-            if record.get("url") != expected_url:
-                result.error(f"mise.lock {name} {platform} URL must equal {expected_url}")
-            if record.get("checksum") != f"sha256:{checksum}":
-                result.error(f"mise.lock {name} {platform} checksum must equal the reviewed SHA-256")
-            if record.get("provenance") != "github-attestations":
-                result.error(f"mise.lock {name} {platform} provenance must equal github-attestations")
+        if name != SEEDS_TOOL:
+            continue
+        entry = entries[0]
+        if entry.get("backend") != SEEDS_TOOL:
+            result.error(f"mise.lock {name} backend must equal {SEEDS_TOOL}")
+        if set(entry) != {"version", "backend"}:
+            result.error(f"mise.lock {name} must contain version and backend only")
 
 
 def validate_gate_graph(root: Path, result: Validation) -> None:

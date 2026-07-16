@@ -30,6 +30,11 @@ class RunAllHostsTests(unittest.TestCase):
             launcher,
         )
 
+    def test_windows_launcher_preserves_single_json_argument(self) -> None:
+        launcher = SCRIPT.with_name("run-windows-mise.ps1").read_text(encoding="utf-8")
+        self.assertIn("ConvertFrom-Json unwraps a one-element JSON array", launcher)
+        self.assertIn("$decodedArgs = @($decodedArgs)", launcher)
+
     def test_forwards_arguments_to_both_hosts(self) -> None:
         completed: list[list[str]] = []
 
