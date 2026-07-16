@@ -28,6 +28,9 @@ from typing import Any, Iterator
 STATE_VERSION = 3
 V2_STATE_VERSION = 2
 IDENTITY_VERSION = "stat-v2"
+# Private alias map: the ONLY sanctioned in-code appearance of the retired
+# public slug, consumed exclusively by identity-migration/dedup logic.
+IDENTITY_SKILL_RENAMES = {"agentic-sdlc-orchestrator": "agentic-sdlc"}
 
 
 class LinuxStatxTimestamp(ctypes.Structure):
@@ -509,9 +512,14 @@ def validate_transactions(config: Config, state: dict[str, Any]) -> dict[str, di
         old_record = tx.get("old_record")
         new_record = tx.get("new_record")
         old_owned = tx.get("old_owned")
+        phases = (
+            {"armed", "published", "retired", "cleanup", "abort-cleanup"}
+            if operation == "rename"
+            else {"armed", "cleanup", "abort-cleanup"}
+        )
         basic_valid = (
-            operation in {"create", "replace", "delete"}
-            and phase in {"armed", "cleanup", "abort-cleanup"}
+            operation in {"create", "replace", "delete", "rename"}
+            and phase in phases
             and tx.get("key") == key
             and tx.get("destination") == key
             and destination.is_absolute()
@@ -520,6 +528,30 @@ def validate_transactions(config: Config, state: dict[str, Any]) -> dict[str, di
         )
         if not basic_valid:
             raise InstallerError(f"invalid transaction record for {key}")
+        if operation == "rename":
+            old_key = tx.get("old_key")
+            new_source_digest = tx.get("new_source_digest")
+            rename_valid = (
+                isinstance(old_key, str)
+                and old_key != key
+                and Path(old_key).is_absolute()
+                and Path(old_key).parent == destination.parent
+                and old_owned is True
+                and isinstance(old_record, dict)
+                and record_structure_valid(old_key, old_record)
+                and isinstance(new_record, dict)
+                and record_structure_valid(key, new_record)
+                and old_record["root_identity"] == new_record["root_identity"]
+                and old_record["collection_identity"] == new_record["collection_identity"]
+                and isinstance(new_source_digest, str)
+                and len(new_source_digest) == 64
+                and all(c in "0123456789abcdef" for c in new_source_digest)
+                and artifact_fields_valid(tx, destination, "stage", required=True)
+                and artifact_fields_valid(tx, Path(old_key), "backup", required=True)
+            )
+            if not rename_valid:
+                raise InstallerError(f"invalid transaction record for {key}")
+            continue
         if operation == "create":
             records_valid = (
                 phase in {"armed", "abort-cleanup"}
@@ -1566,6 +1598,59 @@ def resolved_state(
     return candidate
 
 
+def renamed_new_key(old_key: str) -> str:
+    return str(Path(old_key).with_name(IDENTITY_SKILL_RENAMES[Path(old_key).name]))
+
+
+def plan_identity_renames(
+    state: dict[str, Any], config: Config
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """Derive rename targets from the private alias map; pure, writes nothing."""
+    del config
+    planned: list[tuple[str, str, dict[str, Any]]] = []
+    for key, record in sorted(state["entries"].items()):
+        if not isinstance(record, dict) or record.get("kind") != "skill":
+            continue
+        if Path(key).name not in IDENTITY_SKILL_RENAMES:
+            continue
+        planned.append((key, renamed_new_key(key), copy.deepcopy(record)))
+    return planned
+
+
+def rename_transaction_record(
+    old_key: str,
+    new_key: str,
+    *,
+    old_record: dict[str, Any],
+    new_record: dict[str, Any],
+    stage: PrivateArtifact,
+    backup: PrivateArtifact,
+    new_source_digest: str,
+) -> dict[str, Any]:
+    tx = transaction_record(
+        "rename",
+        new_key,
+        old_record=old_record,
+        old_owned=True,
+        new_record=new_record,
+        stage=stage,
+        backup=backup,
+    )
+    tx["old_key"] = old_key
+    tx["new_source_digest"] = new_source_digest
+    return tx
+
+
+def resolved_rename_state(
+    state: dict[str, Any], old_key: str, new_key: str, new_record: dict[str, Any]
+) -> dict[str, Any]:
+    candidate = copy.deepcopy(state)
+    candidate["transactions"].pop(new_key, None)
+    candidate["entries"].pop(old_key, None)
+    candidate["entries"][new_key] = copy.deepcopy(new_record)
+    return candidate
+
+
 def _identity_parts(token: str) -> tuple[int, int]:
     parts = token.split(":")
     return int(parts[1]), int(parts[2])
@@ -1898,6 +1983,40 @@ def classify_recovery(tx: dict[str, Any], config: Config) -> str:
             return "replace-cleanup"
         return "conflict"
 
+    if operation == "rename":
+        assert isinstance(old_record, dict) and isinstance(new_record, dict)
+        assert stage is not None and backup is not None
+        old_destination = Path(tx["old_key"])
+        live_old = destination_status(old_destination, old_record)
+        live_new = destination_status(destination, new_record)
+        staged = artifact_payload_status(stage, new_record)
+        backup_status = artifact_payload_status(
+            backup, old_record, link_origin=old_destination
+        )
+        if phase == "armed":
+            if live_old == "exact" and live_new == "absent" and staged == "exact" and backup_status == "absent":
+                return "rename-advance-publish"
+            if live_old == "exact" and live_new == "exact" and staged == "absent" and backup_status == "absent":
+                return "rename-mark-published"
+            return "conflict"
+        if phase == "published":
+            if live_new == "exact" and live_old == "exact" and staged == "absent" and backup_status == "absent":
+                return "rename-advance-retire"
+            if live_new == "exact" and live_old == "absent" and backup_status == "exact":
+                return "rename-commit"
+            return "conflict"
+        if phase == "retired":
+            if live_new == "exact" and live_old == "absent" and backup_status == "exact":
+                return "rename-commit"
+            return "conflict"
+        if phase == "cleanup":
+            stage_clean = container_status(stage) == "missing" or staged in {"exact", "absent"}
+            backup_clean = container_status(backup) == "missing" or backup_status in {"exact", "absent"}
+            if live_new == "exact" and live_old == "absent" and stage_clean and backup_clean:
+                return "rename-cleanup"
+            return "conflict"
+        return "conflict"
+
     assert operation == "delete" and isinstance(old_record, dict) and backup is not None
     live = destination_status(destination, old_record)
     backup_status = artifact_payload_status(
@@ -2013,6 +2132,63 @@ def execute_recovery(config: Config, state: dict[str, Any], key: str) -> None:
             backup, old_record, link_origin=destination
         )
         persist_state(config, state, resolved_state(state, key, new_record))
+        return
+    if action == "rename-advance-publish":
+        assert stage is not None and isinstance(new_record, dict)
+        source_value = str(new_record.get("source"))
+        try:
+            fresh_source_digest = digest(Path(source_value))
+        except (InstallerError, OSError) as exc:
+            raise RecoveryConflict(f"new source unavailable: {source_value}") from exc
+        if fresh_source_digest != tx.get("new_source_digest"):
+            raise RecoveryConflict(f"new source changed: {source_value}")
+        if artifact_payload_status(stage, new_record) != "exact":
+            raise RecoveryConflict(f"staged candidate changed: {stage.payload}")
+        rename_absent(stage.payload, destination, authority=(tx, config))
+        candidate = copy.deepcopy(state)
+        candidate["transactions"][key]["phase"] = "published"
+        persist_state(config, state, candidate)
+        execute_recovery(config, state, key)
+        return
+    if action == "rename-mark-published":
+        candidate = copy.deepcopy(state)
+        candidate["transactions"][key]["phase"] = "published"
+        persist_state(config, state, candidate)
+        execute_recovery(config, state, key)
+        return
+    if action == "rename-advance-retire":
+        assert backup is not None and isinstance(old_record, dict) and isinstance(new_record, dict)
+        old_destination = Path(tx["old_key"])
+        if destination_status(destination, new_record) != "exact":
+            raise RecoveryConflict(f"new destination changed: {destination}")
+        if destination_status(old_destination, old_record) != "exact":
+            raise RecoveryConflict(f"old destination changed: {old_destination}")
+        rename_absent(old_destination, backup.payload, authority=(tx, config))
+        if artifact_payload_status(
+            backup, old_record, link_origin=old_destination
+        ) != "exact":
+            raise RecoveryConflict(f"backup validation failed: {backup.payload}")
+        candidate = copy.deepcopy(state)
+        candidate["transactions"][key]["phase"] = "retired"
+        persist_state(config, state, candidate)
+        execute_recovery(config, state, key)
+        return
+    if action == "rename-commit":
+        candidate = copy.deepcopy(state)
+        candidate["transactions"][key]["phase"] = "cleanup"
+        persist_state(config, state, candidate)
+        execute_recovery(config, state, key)
+        return
+    if action == "rename-cleanup":
+        assert stage is not None and backup is not None and isinstance(new_record, dict)
+        old_destination = Path(tx["old_key"])
+        if destination_status(destination, new_record) != "exact":
+            raise RecoveryConflict(f"new destination changed: {destination}")
+        cleanup_private_artifact(stage, new_record)
+        cleanup_private_artifact(backup, old_record, link_origin=old_destination)
+        persist_state(
+            config, state, resolved_rename_state(state, tx["old_key"], key, new_record)
+        )
         return
     if action == "delete-abort":
         assert backup is not None and isinstance(old_record, dict)
@@ -2303,6 +2479,72 @@ def transactional_delete(
         if isinstance(exc, InstallerError):
             raise
         raise InstallerError(f"cannot remove {destination}: {exc}") from exc
+
+
+def transactional_rename(
+    entry_new: Entry,
+    old_key: str,
+    new_key: str,
+    config: Config,
+    state: dict[str, Any],
+    old_record: dict[str, Any],
+    *,
+    new_source_digest: str,
+) -> str:
+    """Crash-consistently move ownership from old_key to new_key (create new, retire old)."""
+    old_destination = Path(old_key)
+    destination = Path(new_key)
+    root_token = old_record["root_identity"]
+    collection_token = old_record["collection_identity"]
+    if path_present(destination):
+        raise InstallerError(f"new destination is occupied: {destination}")
+    try:
+        staged = stage_candidate(entry_new, destination, config, root_token, collection_token)
+    except InstallerError as exc:
+        raise InstallerError(f"cannot rename {old_destination}: {exc}") from exc
+    try:
+        backup = reserve_private_artifact(old_destination, "backup")
+    except Exception as exc:
+        recover_durable_after_failure(
+            config, new_key, ((staged.artifact, staged.record, None),)
+        )
+        raise InstallerError(f"cannot rename {old_destination}: {exc}") from exc
+    tx = rename_transaction_record(
+        old_key,
+        new_key,
+        old_record=old_record,
+        new_record=staged.record,
+        stage=staged.artifact,
+        backup=backup,
+        new_source_digest=new_source_digest,
+    )
+    try:
+        if not record_authority_matches(old_key, old_record, config):
+            raise RecoveryConflict(f"root/collection identity changed: {old_destination}")
+        if destination_status(old_destination, old_record) != "exact":
+            raise RecoveryConflict(f"old destination changed: {old_destination}")
+        if artifact_payload_status(staged.artifact, staged.record) != "exact":
+            raise RecoveryConflict(f"staged candidate changed: {staged.artifact.payload}")
+        if path_present(destination):
+            raise RecoveryConflict(f"new destination is occupied: {destination}")
+        candidate = state_with_transaction(state, new_key, tx)
+        candidate["entries"].pop(old_key, None)
+        persist_state(config, state, candidate)
+        execute_recovery(config, state, new_key)
+        return str(staged.record["mode"])
+    except Exception as exc:
+        if not isinstance(exc, DurabilityError):
+            recover_durable_after_failure(
+                config,
+                new_key,
+                (
+                    (staged.artifact, staged.record, None),
+                    (backup, old_record, old_destination),
+                ),
+            )
+        if isinstance(exc, InstallerError):
+            raise
+        raise InstallerError(f"cannot rename {old_destination}: {exc}") from exc
 
 
 def save_owned_entry(

@@ -2101,6 +2101,210 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(result.messages, ("self-test passed",))
             self.assertFalse(config.home.exists())
 
+    def make_identity_repo(self, root: Path) -> None:
+        (root / "skills" / "agentic-sdlc-orchestrator").mkdir(parents=True)
+        (root / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").write_text(
+            "---\nname: agentic-sdlc-orchestrator\n---\n"
+        )
+        (root / "agents" / "claude").mkdir(parents=True)
+        (root / "agents" / "codex").mkdir(parents=True)
+        (root / "commands").mkdir()
+
+    def install_old_slug(
+        self, root: Path, mode: str = "copy"
+    ) -> tuple[installer.Config, str, str, installer.Entry]:
+        """Install the old-slug skill, then rename its repo source to the new slug."""
+        home = root / "home"
+        codex_home = root / "codex"
+        self.make_identity_repo(root)
+        config = installer.Config(root, home, codex_home, mode, False, "claude")
+        result = installer.install(config)
+        self.assertEqual(result.exit_code, 0)
+        old_key = str(home / ".claude" / "skills" / "agentic-sdlc-orchestrator")
+        new_key = str(home / ".claude" / "skills" / "agentic-sdlc")
+        (root / "skills" / "agentic-sdlc-orchestrator").rename(root / "skills" / "agentic-sdlc")
+        entry_new = installer.Entry(
+            "claude", "skill", "agentic-sdlc", root / "skills" / "agentic-sdlc"
+        )
+        return config, old_key, new_key, entry_new
+
+    def arm_rename_transaction(
+        self,
+        config: installer.Config,
+        old_key: str,
+        new_key: str,
+        entry_new: installer.Entry,
+    ) -> tuple[installer.StagedCandidate, installer.PrivateArtifact, dict[str, object]]:
+        """Stage and journal an armed rename transaction, simulating a pre-publish crash."""
+        state = installer.load_state(config.state_path)
+        old_record = state["entries"][old_key]
+        staged = installer.stage_candidate(
+            entry_new,
+            Path(new_key),
+            config,
+            old_record["root_identity"],
+            old_record["collection_identity"],
+        )
+        backup = installer.reserve_private_artifact(Path(old_key), "backup")
+        tx = installer.rename_transaction_record(
+            old_key,
+            new_key,
+            old_record=old_record,
+            new_record=staged.record,
+            stage=staged.artifact,
+            backup=backup,
+            new_source_digest=installer.digest(entry_new.source),
+        )
+        candidate = installer.state_with_transaction(state, new_key, tx)
+        candidate["entries"].pop(old_key, None)
+        installer.write_state(config.state_path, candidate, False)
+        return staged, backup, tx
+
+    def assert_rename_converged(
+        self, config: installer.Config, old_key: str, new_key: str
+    ) -> None:
+        state = installer.load_state(config.state_path)
+        self.assertEqual(state["transactions"], {})
+        self.assertNotIn(old_key, state["entries"])
+        self.assertIn(new_key, state["entries"])
+        self.assertFalse(installer.path_present(Path(old_key)))
+        self.assertTrue(
+            installer.entry_matches_record(Path(new_key), state["entries"][new_key])
+        )
+
+    def test_plan_identity_renames_targets_only_old_slug_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, _ = self.install_old_slug(root)
+            state = installer.load_state(config.state_path)
+            state["entries"]["/other/agents/role.md"] = {"kind": "agent"}
+
+            planned = installer.plan_identity_renames(state, config)
+
+            self.assertEqual(
+                planned, [(old_key, new_key, state["entries"][old_key])]
+            )
+
+    def test_plan_identity_renames_is_pure_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, _, _, _ = self.install_old_slug(root)
+            state = installer.load_state(config.state_path)
+            before = config.state_path.read_bytes()
+
+            installer.plan_identity_renames(state, config)
+
+            self.assertEqual(config.state_path.read_bytes(), before)
+
+    def test_transactional_rename_moves_owned_copy_to_new_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, entry_new = self.install_old_slug(root)
+            state = installer.load_state(config.state_path)
+            old_record = state["entries"][old_key]
+
+            mode = installer.transactional_rename(
+                entry_new,
+                old_key,
+                new_key,
+                config,
+                state,
+                old_record,
+                new_source_digest=installer.digest(entry_new.source),
+            )
+
+            self.assertEqual(mode, "copy")
+            self.assert_rename_converged(config, old_key, new_key)
+
+    def test_transactional_rename_refuses_foreign_new_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, entry_new = self.install_old_slug(root)
+            foreign = Path(new_key)
+            foreign.mkdir()
+            (foreign / "keep.txt").write_text("keep")
+            state = installer.load_state(config.state_path)
+            old_record = state["entries"][old_key]
+
+            with self.assertRaisesRegex(installer.InstallerError, "occupied"):
+                installer.transactional_rename(
+                    entry_new,
+                    old_key,
+                    new_key,
+                    config,
+                    state,
+                    old_record,
+                    new_source_digest=installer.digest(entry_new.source),
+                )
+
+            self.assertEqual((foreign / "keep.txt").read_text(), "keep")
+            durable = installer.load_state(config.state_path)
+            self.assertEqual(durable["transactions"], {})
+            self.assertIn(old_key, durable["entries"])
+            self.assertTrue(
+                installer.entry_matches_record(Path(old_key), durable["entries"][old_key])
+            )
+
+    def test_rename_recovery_from_armed_crash_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, entry_new = self.install_old_slug(root)
+            self.arm_rename_transaction(config, old_key, new_key, entry_new)
+
+            for _ in range(2):
+                state = installer.load_state(config.state_path)
+                installer.validate_state(config, state)
+                messages, partial = installer.recover_transactions(
+                    config, state, read_only=False
+                )
+                self.assertFalse(partial, messages)
+                self.assert_rename_converged(config, old_key, new_key)
+
+    def test_rename_recovery_from_published_crash_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, entry_new = self.install_old_slug(root)
+            staged, _, _ = self.arm_rename_transaction(config, old_key, new_key, entry_new)
+            os.rename(staged.artifact.payload, new_key)
+
+            for _ in range(2):
+                state = installer.load_state(config.state_path)
+                installer.validate_state(config, state)
+                messages, partial = installer.recover_transactions(
+                    config, state, read_only=False
+                )
+                self.assertFalse(partial, messages)
+                self.assert_rename_converged(config, old_key, new_key)
+
+    def test_rename_old_link_witness_never_dereferences_dangling_target(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX symlink fixture")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, _, _ = self.install_old_slug(root, mode="link")
+            state = installer.load_state(config.state_path)
+            old_record = state["entries"][old_key]
+            self.assertTrue(Path(old_key).is_symlink())
+
+            # The cumulative source rename makes the recorded target dangle.
+            self.assertTrue(
+                installer.entry_matches_record(Path(old_key), old_record)
+            )
+
+    def test_rename_transaction_record_is_journal_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, entry_new = self.install_old_slug(root)
+            self.arm_rename_transaction(config, old_key, new_key, entry_new)
+
+            state = installer.load_state(config.state_path)
+            installer.validate_state(config, state)
+
+            mutated = copy.deepcopy(state)
+            mutated["transactions"][new_key]["old_key"] = new_key
+            with self.assertRaisesRegex(installer.InstallerError, "invalid transaction"):
+                installer.validate_transactions(config, mutated)
+
 
 if __name__ == "__main__":
     unittest.main()
