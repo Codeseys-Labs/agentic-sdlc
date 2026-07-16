@@ -25,7 +25,8 @@ import tempfile
 from typing import Any, Iterator
 
 
-STATE_VERSION = 2
+STATE_VERSION = 3
+V2_STATE_VERSION = 2
 IDENTITY_VERSION = "stat-v2"
 
 
@@ -214,22 +215,36 @@ def read_state_document(path: Path) -> dict[str, Any] | None:
     return state
 
 
-def load_state(path: Path) -> dict[str, Any]:
-    """Read v2 installer state. Structural and authority validation follows before use."""
-    state = read_state_document(path)
-    if state is None:
-        return empty_state()
-    if state.get("version") != STATE_VERSION:
+def normalize_document_to_v3(document: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Normalize a structurally valid v2 or v3 state document to v3 shape in memory."""
+    if document.get("version") not in (V2_STATE_VERSION, STATE_VERSION):
         raise InstallerError(f"invalid state {path}")
-    entries = state.get("entries")
-    transactions = state.get("transactions")
+    entries = document.get("entries")
+    transactions = document.get("transactions")
     if not isinstance(entries, dict) or not isinstance(transactions, dict):
         raise InstallerError(f"invalid state {path}")
     if not all(isinstance(key, str) and isinstance(value, dict) for key, value in entries.items()):
         raise InstallerError(f"invalid state {path}")
     if not all(isinstance(key, str) and isinstance(value, dict) for key, value in transactions.items()):
         raise InstallerError(f"invalid state {path}")
-    return state
+    return {"version": STATE_VERSION, "entries": entries, "transactions": transactions}
+
+
+def load_document_state(document: dict[str, Any] | None, path: Path) -> dict[str, Any]:
+    """Normalize an already-read state document to v3, refusing versions newer than v3."""
+    if document is None:
+        return empty_state()
+    version = document.get("version")
+    if isinstance(version, int) and version > STATE_VERSION:
+        raise InstallerError(f"state {path} was written by a newer installer (version {version})")
+    return normalize_document_to_v3(document, path)
+
+
+def load_state(path: Path) -> dict[str, Any]:
+    """Read v2 or v3 installer state, normalized to v3 in memory for reads. Persisting an
+    upgraded v2 document to disk requires install --migrate-state; otherwise disk bytes are
+    left untouched. Structural and authority validation follows before use."""
+    return load_document_state(read_state_document(path), path)
 
 
 def identity_token_valid(value: Any) -> bool:
@@ -1278,14 +1293,24 @@ def _migrate_v1_state(config: Config) -> Result:
         current = next(
             (document for document, path in documents if path == config.state_path), None
         )
-        if current is not None:
-            validate_state(config, load_state(config.state_path))
-        return Result(0, ("state is already current",))
+        if current is None:
+            return Result(0, ("state is already current",))
+        normalized = load_state(config.state_path)
+        validate_state(config, normalized)
+        if current.get("version") == STATE_VERSION:
+            return Result(0, ("state is already current",))
+        if config.dry_run:
+            return Result(0, ("would migrate: state schema to v3",))
+        write_state(config.state_path, normalized, False)
+        return Result(0, ("migrated: state schema to v3",))
 
     current_document = next(
         (document for document, path in documents if path == config.state_path), None
     )
-    if current_document is not None and current_document.get("version") == STATE_VERSION:
+    if current_document is not None and current_document.get("version") in (
+        V2_STATE_VERSION,
+        STATE_VERSION,
+    ):
         migrated = copy.deepcopy(load_state(config.state_path))
         validate_state(config, migrated)
     elif current_document is None or current_document.get("version") == 1:

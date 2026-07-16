@@ -746,7 +746,8 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(migrated.exit_code, 0)
             self.assertFalse(any(message.startswith("installed:") for message in migrated.messages))
             state = installer.load_state(config.state_path)
-            self.assertEqual(state["version"], 2)
+            self.assertEqual(state["version"], 3)
+            self.assertEqual(installer.read_state_document(config.state_path)["version"], 3)
             self.assertIn(str(destination), state["entries"])
             self.assertTrue(state["entries"][str(destination)]["removable"])
             self.assertEqual(installer.uninstall(config).exit_code, 0)
@@ -796,13 +797,162 @@ class InstallSkillBundleTests(unittest.TestCase):
             )
             config.state_path.parent.mkdir(parents=True)
             config.state_path.write_text(
-                json.dumps({"version": 2, "entries": {}, "transactions": {"bad": {}}})
+                json.dumps({"version": 3, "entries": {}, "transactions": {"bad": {}}})
             )
             with mock.patch.object(installer, "digest") as hash_path, self.assertRaisesRegex(
                 installer.InstallerError, "invalid transaction"
             ):
                 installer.status(config)
             hash_path.assert_not_called()
+
+    def test_v1_state_migrates_directly_to_v3_in_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            destination = installer.destination_for(entry, config)
+            destination.parent.mkdir(parents=True)
+            installer.copy_item(entry.source, destination)
+            v1 = {
+                "version": 1,
+                "entries": {
+                    str(destination): {
+                        "agent": entry.agent,
+                        "kind": entry.kind,
+                        "name": entry.name,
+                        "source": str(entry.source.resolve()),
+                        "mode": "copy",
+                        "digest": installer.digest(destination),
+                        "removable": True,
+                    }
+                },
+            }
+            installer.write_state(config.state_path, v1, False)
+
+            migrated = installer.migrate_v1_state(config)
+            state = installer.load_state(config.state_path)
+            on_disk = installer.read_state_document(config.state_path)
+
+            self.assertEqual(migrated.exit_code, 0)
+            self.assertEqual(state["version"], installer.STATE_VERSION)
+            self.assertEqual(on_disk["version"], installer.STATE_VERSION)
+            self.assertIn(str(destination), state["entries"])
+
+    def test_v2_state_is_read_as_v3_without_touching_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            destination = installer.destination_for(entry, config)
+            destination.parent.mkdir(parents=True)
+            installer.copy_item(entry.source, destination)
+            v2 = {
+                "version": 2,
+                "entries": {
+                    str(destination): installer.entry_record(
+                        installer.record_entry(
+                            {
+                                "agent": entry.agent,
+                                "kind": entry.kind,
+                                "name": entry.name,
+                                "source": str(entry.source.resolve()),
+                                "mode": "copy",
+                            },
+                            str(destination),
+                        ),
+                        "copy",
+                        installer.stat_identity(config.home),
+                        installer.stat_identity(destination.parent),
+                        removable=True,
+                        installed_digest=installer.digest(destination),
+                        installed_path=destination,
+                    )
+                },
+                "transactions": {},
+            }
+            installer.write_state(config.state_path, v2, False)
+            before = config.state_path.read_bytes()
+
+            checked = installer.status(config)
+            in_memory = installer.load_state(config.state_path)
+            after = config.state_path.read_bytes()
+
+            self.assertEqual(checked.exit_code, 0)
+            self.assertEqual(in_memory["version"], installer.STATE_VERSION)
+            self.assertEqual(after, before)
+            self.assertEqual(json.loads(after)["version"], 2)
+
+    def test_v2_state_persists_to_v3_only_with_migrate_state_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            destination = installer.destination_for(entry, config)
+            destination.parent.mkdir(parents=True)
+            installer.copy_item(entry.source, destination)
+            v2 = {
+                "version": 2,
+                "entries": {
+                    str(destination): installer.entry_record(
+                        installer.record_entry(
+                            {
+                                "agent": entry.agent,
+                                "kind": entry.kind,
+                                "name": entry.name,
+                                "source": str(entry.source.resolve()),
+                                "mode": "copy",
+                            },
+                            str(destination),
+                        ),
+                        "copy",
+                        installer.stat_identity(config.home),
+                        installer.stat_identity(destination.parent),
+                        removable=True,
+                        installed_digest=installer.digest(destination),
+                        installed_path=destination,
+                    )
+                },
+                "transactions": {},
+            }
+            installer.write_state(config.state_path, v2, False)
+
+            migrated = installer.migrate_v1_state(config)
+            on_disk = installer.read_state_document(config.state_path)
+
+            self.assertEqual(migrated.exit_code, 0)
+            self.assertEqual(on_disk["version"], installer.STATE_VERSION)
+            self.assertIn(str(destination), on_disk["entries"])
+
+    def test_state_newer_than_v3_is_refused_without_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            config.state_path.parent.mkdir(parents=True)
+            v4 = {"version": 4, "entries": {}, "transactions": {}}
+            config.state_path.write_text(json.dumps(v4))
+            before = config.state_path.read_bytes()
+
+            with self.assertRaisesRegex(installer.InstallerError, "newer installer"):
+                installer.status(config)
+
+            self.assertEqual(config.state_path.read_bytes(), before)
+
+            with self.assertRaisesRegex(installer.InstallerError, "newer installer"):
+                installer.migrate_v1_state(config)
+
+            self.assertEqual(config.state_path.read_bytes(), before)
 
     def test_create_state_write_failures_are_exactly_recoverable(self) -> None:
         for fail_after_replace in (False, True):
