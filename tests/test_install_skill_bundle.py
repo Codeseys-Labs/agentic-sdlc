@@ -2291,6 +2291,54 @@ class InstallSkillBundleTests(unittest.TestCase):
                 installer.entry_matches_record(Path(old_key), old_record)
             )
 
+    def test_migrate_state_performs_identity_rename_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, _ = self.install_old_slug(root)
+
+            result = installer.migrate_v1_state(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(
+                any("renamed:" in message for message in result.messages), result.messages
+            )
+            self.assert_rename_converged(config, old_key, new_key)
+
+    def test_migrate_state_dry_run_reports_rename_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, _, _ = self.install_old_slug(root)
+            before = config.state_path.read_bytes()
+            dry = installer.Config(
+                root, root / "home", root / "codex", "copy", True, "claude"
+            )
+
+            result = installer.migrate_v1_state(dry)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(
+                any("would rename:" in message for message in result.messages),
+                result.messages,
+            )
+            self.assertEqual(config.state_path.read_bytes(), before)
+            self.assertTrue(installer.path_present(Path(old_key)))
+
+    def test_migrate_state_reports_marketplace_overlap_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, old_key, new_key, _ = self.install_old_slug(root)
+            plugin_cache = config.home / ".claude" / "plugins" / "cache" / "agentic-sdlc"
+            plugin_cache.mkdir(parents=True)
+
+            result = installer.migrate_v1_state(config)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(
+                any("marketplace plugin detected" in message for message in result.messages),
+                result.messages,
+            )
+            self.assert_rename_converged(config, old_key, new_key)
+
     def test_rename_transaction_record_is_journal_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
