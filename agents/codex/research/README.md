@@ -22,7 +22,7 @@ Roster: research_director, repo_cartographer, literature_scout, novelty_auditor,
 theorist, counterexample_hunter, formalizer, experimentalist, benchmark_engineer,
 data_engineer, systems_engineer, ablationist, replication_reviewer,
 adversarial_reviewer, synthesis_writer, knowledge_librarian, safety_reviewer.
-Principles: `skills/agentic-sdlc-orchestrator/references/research-team.md`. These
+Principles: `skills/agentic-sdlc/references/research-team.md`. These
 provider-neutral role definitions contain no static `model` or `model_reasoning_effort` pin and
 do not dispatch. Before spawn, their conductor supplies a conductor-supplied certified
 `RuntimeAssignment` with a certified exact model ID. Its `resolution_state` must equal

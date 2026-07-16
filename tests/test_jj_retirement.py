@@ -18,9 +18,9 @@ SURFACES = (
     ROOT / "scripts" / "check-agentic-sdlc-prereqs.sh",
     ROOT / "scripts" / "validate-bundle.sh",
     ROOT / "scripts" / "validate_bundle.py",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "jj-vcs.md",
-    ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "seeds-worktrees.md",
+    ROOT / "skills" / "agentic-sdlc" / "SKILL.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "jj-vcs.md",
+    ROOT / "skills" / "agentic-sdlc" / "references" / "seeds-worktrees.md",
     ROOT / "skills" / "repo-toolchain-gates" / "SKILL.md",
     ROOT / "skills" / "stacked-prs" / "SKILL.md",
     ROOT / "skills" / "stacked-prs-gh-cli" / "SKILL.md",
@@ -75,7 +75,7 @@ class JjRetirementTests(unittest.TestCase):
                     self.assertRegex(text, r"(?i)one-release|refus(?:e|al)")
                     self.assertRegex(text, r"(?i)Git worktrees? (?:are|remain) supported")
                     self.assertNotRegex(text, r"(?i)jj\s+(?:git|workspace|bookmark|undo)|\.jj/")
-                elif path.name == "SKILL.md" and path.parent.name == "agentic-sdlc-orchestrator":
+                elif path.name == "SKILL.md" and path.parent.name == "agentic-sdlc":
                     self.assertNotRegex(text, r"(?i)jj\s+(?:git|workspace|bookmark|undo)|\.jj/")
                 else:
                     self.assertNotRegex(text, r"(?i)\bjj\b|jujutsu|\.jj/")

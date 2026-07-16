@@ -1,5 +1,5 @@
 #!/bin/bash
-# Preflight and installed Seeds launcher adapter for the agentic-sdlc-orchestrator kit.
+# Preflight and installed Seeds launcher adapter for the agentic-sdlc kit.
 # Mise remains the sole bootstrap prerequisite. The installed flagship launcher is the only
 # runtime authority: it admits a locked tuple during bootstrap and inspects its receipt later.
 # No ambient node, bun, sd, git, npm, or mise configuration supplies an execution fallback.
@@ -9,7 +9,7 @@ AGENTIC_SDLC_SEEDS_VERSION=0.5.14
 AGENTIC_SDLC_NODE_TOOL=node@22.22.3
 AGENTIC_SDLC_BUN_TOOL=bun@1.3.10
 AGENTIC_SDLC_SEEDS_TOOL="npm:@os-eco/seeds-cli@${AGENTIC_SDLC_SEEDS_VERSION}"
-AGENTIC_SDLC_LAUNCHER="${AGENTIC_SDLC_LAUNCHER:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../skills/agentic-sdlc-orchestrator/tools" && pwd -P)/seeds-launcher.mjs}"
+AGENTIC_SDLC_LAUNCHER="${AGENTIC_SDLC_LAUNCHER:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../skills/agentic-sdlc/tools" && pwd -P)/seeds-launcher.mjs}"
 
 agentic_sdlc_exact_node() (
   child_status=2

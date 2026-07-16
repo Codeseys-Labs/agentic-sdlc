@@ -3,9 +3,9 @@ name: sdlc-wave
 description: Run one Seeds-backed worktree wave — select ready Seeds, spawn workers in worktrees, review, reconcile
 ---
 
-Run ONE implementation wave of the agentic-sdlc-orchestrator loop. Scope: $ARGUMENTS
+Run ONE implementation wave of the agentic-sdlc loop. Scope: $ARGUMENTS
 
-1. Load the `agentic-sdlc-orchestrator` skill (and its `references/seeds-worktrees.md`).
+1. Load the `agentic-sdlc` skill (and its `references/seeds-worktrees.md`).
 2. Select the wave: using the loaded skill's exact Seeds shorthand, pick independent Seeds from
    `Seeds(<target>, ready --format json)` with disjoint
    file ownership (cap 3-5). Broad architecture / CI / shared-contract changes get

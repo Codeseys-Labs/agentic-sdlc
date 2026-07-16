@@ -3,9 +3,9 @@ name: sdlc-mission
 description: Run an autonomous backlog-zero mission — reconstruct state, classify the queue, loop waves with concurrent critique until zero milestone-blocking work or a bound trips
 ---
 
-Run a MISSION with the agentic-sdlc-orchestrator loop. Goal/scope: $ARGUMENTS
+Run a MISSION with the agentic-sdlc loop. Goal/scope: $ARGUMENTS
 
-Load the `agentic-sdlc-orchestrator` skill, then `references/mission-loop.md` and
+Load the `agentic-sdlc` skill, then `references/mission-loop.md` and
 `references/tiered-orchestration.md`. Operate as the conductor:
 
 1. **Reconstruct state** (no shared-context assumptions): repo agent instructions,

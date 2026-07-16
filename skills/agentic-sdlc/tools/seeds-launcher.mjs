@@ -399,7 +399,7 @@ function trustedEmptyFile(directory, name) {
 }
 
 function receiptDirectory() {
-  const path = join(stateBase(), 'agentic-sdlc-orchestrator', 'seeds-runtime', `v${SCHEMA}`);
+  const path = join(stateBase(), 'agentic-sdlc', 'seeds-runtime', `v${SCHEMA}`);
   ensurePrivateDirectory(path);
   return path;
 }
@@ -802,7 +802,7 @@ function exactKeys(value, keys) {
 }
 
 function receiptPath() {
-  return join(stateBase(), 'agentic-sdlc-orchestrator', 'seeds-runtime', `v${SCHEMA}`, 'active.json');
+  return join(stateBase(), 'agentic-sdlc', 'seeds-runtime', `v${SCHEMA}`, 'active.json');
 }
 
 function loadReceipt(path = receiptPath()) {

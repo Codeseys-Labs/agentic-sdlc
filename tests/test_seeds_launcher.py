@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-LAUNCHER = ROOT / "skills" / "agentic-sdlc-orchestrator" / "tools" / "seeds-launcher.mjs"
+LAUNCHER = ROOT / "skills" / "agentic-sdlc" / "tools" / "seeds-launcher.mjs"
 SEEDS_PACKAGE_FIXTURE = ROOT / "tests" / "fixtures" / "seeds-cli-0.5.14" / "package.json"
 HOST_NODE = shutil.which("node")
 HOSTILE_NODE = next(
@@ -178,7 +178,7 @@ class SeedsLauncherTests(unittest.TestCase):
         return self.launcher("bootstrap", "--distribution", str(self.distribution))
 
     def active_receipt_path(self) -> Path:
-        return self.state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json"
+        return self.state / "agentic-sdlc" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json"
 
     def installed_launcher_path(self) -> Path:
         return self.active_receipt_path().parent / "seeds-launcher.mjs"
@@ -652,7 +652,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
             self.assertEqual(inspected.returncode, 0, inspected.stderr)
             self.assertEqual(inspected.stdout.strip(), "0.5.14")
             receipt = json.loads(
-                (state / "agentic-sdlc-orchestrator" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
+                (state / "agentic-sdlc" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
             )
             self.assertTrue(os.path.samefile(receipt["tuple"]["git"]["path"], recorded_git))
             self.assertEqual(receipt["tuple"]["git"]["hash"], sha256(recorded_git.read_bytes()).hexdigest())

@@ -78,6 +78,6 @@ Read `references/operating-model.md` when designing or modifying the OS. Read `r
   and effort; if it cannot inject both, return one `SeedProposal`, not a dispatch. Prompt prose
   does not enforce a Codex model or effort. Reject host-default policy and unverified aliases.
 - The Research Director is Seeds-read-only. It may inspect only through the exact
-  `Seeds(<target>, ...)` launcher contract in `agentic-sdlc-orchestrator`, and it emits exactly
+  `Seeds(<target>, ...)` launcher contract in `agentic-sdlc`, and it emits exactly
   one typed `SeedProposal` for conductor triage; it never creates, claims, updates, closes,
   syncs, or dispositions Seeds.

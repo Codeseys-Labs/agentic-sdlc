@@ -96,8 +96,8 @@ class CaoRemovalContract(unittest.TestCase):
              "cao-named path: scripts/cao-helper.sh"),
             ("cao-profiles/codex-planner.md", "placeholder\n",
              "cao-named path: cao-profiles/codex-planner.md"),
-            ("skills/agentic-sdlc-orchestrator/references/cao-operations.md", "placeholder\n",
-             "cao-named path: skills/agentic-sdlc-orchestrator/references/cao-operations.md"),
+            ("skills/agentic-sdlc/references/cao-operations.md", "placeholder\n",
+             "cao-named path: skills/agentic-sdlc/references/cao-operations.md"),
         )
         for rel_path, content, expected in cases:
             with self.subTest(plant=rel_path):
@@ -115,7 +115,7 @@ class CaoRemovalContract(unittest.TestCase):
         self.assertIn(f"cao-named path: {rel_path}", violations)
 
     def test_denylist_flags_install_kit_reference(self) -> None:
-        rel_path = "skills/agentic-sdlc-orchestrator/SKILL.md"
+        rel_path = "skills/agentic-sdlc/SKILL.md"
         violations = self.plant_and_scan(
             rel_path, append="\n- `<repo>/scripts/install-cao-kit.sh` (retained)\n"
         )

@@ -104,7 +104,7 @@ PYTHON_SUBPROCESS_CALL = frozenset({"run", "call", "check_call", "check_output",
 CANONICAL_CONDUCTOR_PATH = Path("agents/codex/conductor.toml")
 CANONICAL_CONDUCTOR_ROLE = "conductor"
 CANONICAL_RECONCILIATION_PATH = Path(
-    "skills/agentic-sdlc-orchestrator/references/sdlc-loop.md"
+    "skills/agentic-sdlc/references/sdlc-loop.md"
 )
 ACTOR_SCOPED_INIT_PATH = Path("commands/sdlc-init.md")
 
@@ -1225,7 +1225,7 @@ class SeedsDocumentationContractTests(unittest.TestCase):
 
     def test_sdlc_loop_restores_conductor_scoped_sync_reconciliation(self) -> None:
         loop = (
-            ROOT / "skills" / "agentic-sdlc-orchestrator" / "references" / "sdlc-loop.md"
+            ROOT / "skills" / "agentic-sdlc" / "references" / "sdlc-loop.md"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "The conductor runs `Seeds(<target>, sync)` using the exact launcher contract",
@@ -1650,11 +1650,11 @@ class SeedsDocumentationContractTests(unittest.TestCase):
         )
 
     def test_docs_define_locked_receipt_and_process_scoped_contract(self) -> None:
-        skill = (ROOT / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").read_text()
+        skill = (ROOT / "skills" / "agentic-sdlc" / "SKILL.md").read_text()
         reference = (
             ROOT
             / "skills"
-            / "agentic-sdlc-orchestrator"
+            / "agentic-sdlc"
             / "references"
             / "seeds-worktrees.md"
         ).read_text()

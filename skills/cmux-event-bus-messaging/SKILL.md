@@ -89,7 +89,7 @@ Orchestrator fan-in: capture `START_SEQ`; spawn N workers whose command ends wit
 `… > result.out 2>&1; cmux log --source "msg:$TOPIC" "MSGB64:$(printf 'id=%s status=ok file=%s' "$i" "$result" | base64 | tr -d '\n')"`;
 then one subscriber `cmux events --name sidebar.log.appended --after "$START_SEQ" --reconnect`,
 decode, dedupe by id, read each `file` for the payload. Working implementation:
-`scripts/cmux-bus.sh` in the agentic-sdlc-orchestrator bundle (pub/sub/seq helper).
+`scripts/cmux-bus.sh` in the agentic-sdlc bundle (pub/sub/seq helper).
 
 ## Notes
 - Spawn workers with `cmux new-workspace --command "<text>"` — it types into the workspace's

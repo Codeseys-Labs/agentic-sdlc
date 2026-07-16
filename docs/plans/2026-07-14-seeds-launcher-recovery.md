@@ -25,7 +25,7 @@
 ### Task 2: Harden bootstrap and interpreter admission
 
 **Files:**
-- Modify: `skills/agentic-sdlc-orchestrator/tools/seeds-launcher.mjs`
+- Modify: `skills/agentic-sdlc/tools/seeds-launcher.mjs`
 - Test: `tests/test_seeds_launcher.py`
 
 **Steps:**
@@ -53,8 +53,8 @@
 **Files:**
 - Modify: `README.md`
 - Modify: `AGENTS.md`
-- Modify: `skills/agentic-sdlc-orchestrator/SKILL.md`
-- Modify: `skills/agentic-sdlc-orchestrator/references/seeds-worktrees.md`
+- Modify: `skills/agentic-sdlc/SKILL.md`
+- Modify: `skills/agentic-sdlc/references/seeds-worktrees.md`
 - Replace: `docs/plans/2026-07-14-seeds-launcher-recovery.md`
 
 **Steps:**
