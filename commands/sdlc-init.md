@@ -16,6 +16,23 @@ adopt, or surgically merge. Never overwrite an existing `mise.toml`, `lefthook.y
 cannot be merged without changing unrelated policy, report the conflict and stop before
 claiming wave readiness.
 
+**Plan before apply.** Compute the dry-run ActivationPlan first and show it:
+`uv run --python 3.12 python scripts/activation_planner.py plan --target <path> [--profile git]`
+(from the reviewed distribution checkout). The plan writes nothing and records, per item,
+the proposed `create|adopt|merge|refuse|skip` action and whether each choice was `explicit`,
+`defaulted`, or `derived`. The only activatable profile is `git`; any other requested
+substrate profile is refused with a pointer to its retirement reference. Interactive
+selection is offered only when a TTY is present; non-TTY/headless runs take the
+deterministic `git` default.
+Cancellation at the confirmation step performs zero writes. Apply-phase writes go through
+the same helper's contracts (`scripts/activation_planner.py`, with instruction files rendered
+by the marker-aware `scripts/instruction_generator.py`), and every activation ends by writing
+`.agentic-sdlc/activation-receipt.json` — the ActivationReceipt recording baseline inventory,
+Seeds queue proof, the reversible gate fail→pass proof, per-path trust decisions, and
+`wave_ready`. Rerunning against an activated tree must produce an empty `created`/`merged`
+receipt (observed idempotence). Deactivation uses the same helper (`deactivate`, dry-run
+first) and removes only generator-authored marked content.
+
 1. **Preflight and snapshot**
    - Load `agentic-sdlc` and the `repo-toolchain-gates` skill.
    - Resolve the target repository, then record `git status --short`, tracked/untracked
