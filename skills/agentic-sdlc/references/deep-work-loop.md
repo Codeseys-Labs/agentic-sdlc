@@ -61,9 +61,9 @@ operating lanes and defers every exact ID, effort band, and quota fact to that s
 - **Frontier lane** — solo for scale-setters. A frame, plan, authority analysis,
   cross-system invariant, or final stop/go recommendation runs as a single bounded packet,
   never an unbounded fan-out.
-- **Judgment lane** — for un-gated work whose error could pass ordinary gates and silently
-  weaken an artifact. Require explicit acceptance criteria and independent review of an
-  immutable candidate.
+- **Judgment lane** — for un-gated work where a wrong answer can slip past ordinary gates and
+  quietly degrade the result. Apply the judgment-tier bar the model-tier skill owns: explicit
+  acceptance criteria plus an independent immutable-candidate review.
 - **Volume lane** — for gated fan-out where a compiler, test, schema, diff, or evidence check
   makes a wrong answer visible. This is the default for cross-checked parallel work.
 
