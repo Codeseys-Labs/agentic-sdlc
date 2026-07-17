@@ -145,6 +145,11 @@ Read only what is needed:
 - `references/mission-loop.md`: the autonomous backlog-zero doctrine — milestone-blocking classification (8 classes, only ACTIVE_MILESTONE executes), seeds-first no-inline-fixes, WIP caps, priority math, concurrent critique team, honest definition of done. Read for MISSION-shaped assignments ("drive the backlog to zero", "keep going until done").
 - `references/tiered-orchestration.md`: mission integration, canonical routing handoff,
   native-first capability ladder, bounded backflow, and worker lifecycle at scale.
+- `references/deep-work-loop.md`: the bounded seven-phase deep-work loop for ONE workstream
+  (frame → map/research → decide → act → verify → critique → reconcile) — artifacts and
+  SeedProposals only, no second queue, no publication/integration authority, an explicit
+  bounded delegation cap, and single-hop pointers for effort routing and fan-in. Read when a
+  single workstream needs the full loop shape rather than a whole backlog-zero mission.
 - `../model-tier-rightsizing/SKILL.md`: required router before any model dispatch; its
   canonical calibration is the sole generation-specific routing authority.
 - `../change-writing/SKILL.md`: message authoring, output-only — commit, PR, squash, and
