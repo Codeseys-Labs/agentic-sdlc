@@ -5,6 +5,10 @@ tree in the cross-host Agent Skills format, thin per-host manifests, and a symli
 installer. Codex, Gemini CLI, OpenCode, and other AGENTS.md-aware hosts: read this file
 as the router.
 
+## Vision and self-hosting
+
+Read [VISION.md](VISION.md) for the durable product intent. Work on this repository must use the same contracts intended for downstream projects: evidence-led activation, isolated writers, advisory review, one integrator for fan-in, and explicit authorization for outward effects.
+
 ## What this bundle provides
 
 - `skills/agentic-sdlc/` — the flagship skill: provider-native,
