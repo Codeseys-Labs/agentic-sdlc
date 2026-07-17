@@ -130,8 +130,10 @@ Do not force-push or rewrite shared branches without explicit user approval.
 **Dependent Seeds → stacked PRs, not one fat branch.** When Seed B builds on Seed A, land
 them as a stack (A's PR base main, B's base A, merge bottom-up) rather than merging both
 into one mega-branch or blocking B until A merges. Independent Seeds in the same wave land
-as parallel PRs. Mechanics: the `stacked-prs` skill (methodology) and `stacked-prs-gh-cli`
-(raw gh/git, incl. the squash-merge restack gotcha).
+as parallel PRs. For the mechanics — restack cascade, exact leases, deletion checks, the
+squash-merge gotcha — dispatch through the change-flow router
+`references/git-change-flow.md`, which names the one authoritative site per rule; do not
+restate the lease or restack commands here.
 
 ## Config propagation into new worktrees
 
