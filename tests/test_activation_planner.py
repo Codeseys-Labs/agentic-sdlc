@@ -425,6 +425,61 @@ class ActivationPlannerTests(unittest.TestCase):
         )
         self.assertIn("AGENTS.md", result["receipt"]["merged"])
 
+    # --- review findings: falsifiability + fixture safety -------------------
+    def test_raising_gate_never_leaks_fixture_and_blocks_wave_ready(self) -> None:
+        t = self.target("raise-gate")
+
+        def exploding_gate(target: Path) -> bool:
+            if any(target.glob(".agentic-sdlc/gate-fixture.*")):
+                raise RuntimeError("gate crashed on the planted fixture")
+            return True
+
+        result = ap.apply(
+            t, yes=True, now=FIXED_NOW,
+            seeds={"init_ran": True, "ready": 1, "blocked": 0},
+            gate_runner=exploding_gate, manifest=instruction_manifest(),
+        )
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(list(t.glob(".agentic-sdlc/gate-fixture.*")), [])
+        self.assertTrue(result["receipt"]["gate_proof"]["fixture_fail"])
+        self.assertTrue(result["receipt"]["gate_proof"]["clean_pass"])
+        self.assertTrue((t / ".agentic-sdlc" / "activation-receipt.json").is_file())
+
+    def test_always_passing_gate_fails_falsifiability_and_blocks_wave_ready(self) -> None:
+        t = self.target("noop-gate")
+        result = ap.apply(
+            t, yes=True, now=FIXED_NOW,
+            seeds={"init_ran": True, "ready": 1, "blocked": 0},
+            gate_runner=lambda target: True, manifest=instruction_manifest(),
+        )
+        self.assertFalse(result["receipt"]["gate_proof"]["fixture_fail"])
+        self.assertTrue(result["receipt"]["gate_proof"]["clean_pass"])
+        self.assertFalse(result["receipt"]["wave_ready"])
+
+    def test_sibling_refusal_blocks_all_instruction_writes(self) -> None:
+        t = self.target("atomic")
+        (t / "AGENTS.md").write_text(f"{MARKER_START}\nhalf open\n", encoding="utf-8")
+        result = ap.apply(
+            t, yes=True, now=FIXED_NOW,
+            seeds={"init_ran": True, "ready": 1, "blocked": 0},
+            gate_runner=passing_gate, manifest=instruction_manifest(),
+        )
+        self.assertTrue(result["receipt"]["conflicts"])
+        self.assertFalse((t / "CLAUDE.md").exists())
+        self.assertEqual(result["receipt"]["created"], [])
+        self.assertEqual(result["receipt"]["merged"], [])
+
+    def test_deactivate_without_marker_never_edits_merged_files(self) -> None:
+        t = self.target("nomarker")
+        foreign = (
+            "# hand-authored\n\n"
+            f"{MARKER_START}\ncoincidental foreign content\n{MARKER_END}\n"
+        )
+        (t / "AGENTS.md").write_text(foreign, encoding="utf-8")
+        receipt = {"created": [], "merged": ["AGENTS.md"], "adopted": []}
+        ap.deactivate(t, receipt=receipt, dry_run=False)
+        self.assertEqual((t / "AGENTS.md").read_text(encoding="utf-8"), foreign)
+
     # --- CLI --------------------------------------------------------------
     def test_cli_dry_run_plan_writes_nothing(self) -> None:
         t = self.target("cli")

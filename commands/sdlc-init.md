@@ -26,8 +26,10 @@ selection is offered only when a TTY is present; non-TTY/headless runs take the
 deterministic `git` default.
 Cancellation at the confirmation step performs zero writes. Apply-phase writes go through
 the same helper's contracts (`scripts/activation_planner.py`, with instruction files rendered
-by the marker-aware `scripts/instruction_generator.py`), and every activation ends by writing
-`.agentic-sdlc/activation-receipt.json` — the ActivationReceipt recording baseline inventory,
+by the marker-aware `scripts/instruction_generator.py`), and every activation that reaches
+the write phase ends by writing `.agentic-sdlc/activation-receipt.json` (refused, cancelled,
+and stopped runs write nothing at all, including no receipt) — the ActivationReceipt records
+baseline inventory,
 Seeds queue proof, the reversible gate fail→pass proof, per-path trust decisions, and
 `wave_ready`. Rerunning against an activated tree must produce an empty `created`/`merged`
 receipt (observed idempotence). Deactivation uses the same helper (`deactivate`, dry-run
