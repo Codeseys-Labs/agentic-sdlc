@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,9 @@ from scripts import validate_bundle
 ROOT = Path(__file__).parents[1]
 VALIDATOR = Path("scripts/validate_bundle.py")
 MIN_MISE_VERSION = "2026.4.27"
+TOOLCHAIN_GATES_SKILL = ROOT / "skills" / "repo-toolchain-gates" / "SKILL.md"
+LEFTHOOK = ROOT / "lefthook.yml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "validate.yml"
 
 
 class GateGraphTests(unittest.TestCase):
@@ -330,6 +334,79 @@ class GateGraphTests(unittest.TestCase):
             self.assertEqual(trusted.returncode, 0, trusted.stderr)
             after = subprocess.run(["mise", "-C", str(repo), "tasks"], env=env, text=True, capture_output=True, check=False)
             self.assertEqual(after.returncode, 0, after.stderr)
+
+    # --- G2: betterleaks doctrine-vs-wiring reconciliation (spec §G2.3) ---
+
+    def test_betterleaks_wiring_matches_doctrine(self) -> None:
+        """The skill's betterleaks claim must match actual wiring (no phantom gate).
+
+        betterleaks is NOT in the mise registry (only gitleaks is) and mise.toml/mise.lock/
+        lefthook.yml/validate.yml are byte/SHA-frozen by the validator, so a CI-parity [tools]
+        pin (Option A) is conformance-forbidden here. The honest resolution is Option B: the
+        skill marks the secrets scan advisory/opt-in and cites why it is not wired.
+        """
+        skill = TOOLCHAIN_GATES_SKILL.read_text(encoding="utf-8")
+        mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+        lefthook = LEFTHOOK.read_text(encoding="utf-8")
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        wired = any(
+            token in mise or token in lefthook or token in ci
+            for token in ("betterleaks", "gitleaks")
+        )
+        if wired:
+            # Option A: if wired anywhere, it must be pinned in [tools] AND run in CI or hooks.
+            self.assertRegex(mise, r"(?m)^(?:betterleaks|gitleaks)\s*=|\[tools\.\"?(?:betterleaks|gitleaks)")
+            self.assertTrue(
+                "betterleaks" in ci or "gitleaks" in ci
+                or "betterleaks" in lefthook or "gitleaks" in lefthook,
+                "a wired secrets gate must run in CI or a hook",
+            )
+        else:
+            # Option B (this tree): the skill must explicitly mark it advisory/opt-in and
+            # must NOT claim a wired gate that no `mise run check` runs.
+            self.assertRegex(skill, r"(?i)advisory|opt-in|not wired")
+            self.assertNotRegex(
+                skill,
+                r"(?i)betterleaks[^.\n]{0,80}(?:runs on every|is wired into|part of `?mise run check`?)",
+            )
+            # The reason (registry absence / frozen toolchain) is cited, not hand-waved.
+            self.assertRegex(skill, r"(?i)registry|frozen|SHA-?pinned lock|not.{0,20}pinnable")
+
+    def test_check_depends_unchanged_unless_secrets_added(self) -> None:
+        config = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
+        depends = config["tasks"]["check"]["depends"]
+        self.assertIn(
+            depends,
+            (["validate", "test", "self-test"], ["validate", "test", "self-test", "secrets"]),
+            "check depends drifted; if secrets was wired, update validate_bundle + this test together",
+        )
+        # Guard: the frozen validator still requires the base three (spec §G2.2).
+        self.assertEqual(depends[:3], ["validate", "test", "self-test"])
+
+    def test_no_second_task_runner(self) -> None:
+        mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+        lefthook = LEFTHOOK.read_text(encoding="utf-8")
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        # No competing task-runner entrypoint drives gates.
+        forbidden = (
+            re.compile(r"(?m)^\s*run:\s*(?:make|just|task)\s"),
+            re.compile(r"(?m)^\s*run:\s*npm run\s"),
+            re.compile(r"\bmakefile\b", re.I),
+            re.compile(r"\bjustfile\b", re.I),
+        )
+        for pattern in forbidden:
+            with self.subTest(pattern=pattern.pattern):
+                self.assertNotRegex(lefthook, pattern)
+                self.assertNotRegex(ci, pattern)
+        # CI and hooks drive gates only through `mise run ...`.
+        for run_line in re.findall(r"(?m)^\s*run:\s*(.+)$", ci + "\n" + lefthook):
+            stripped = run_line.strip()
+            if stripped.startswith("mise "):
+                continue
+            self.fail(f"non-mise gate entrypoint: {stripped!r}")
+        # mise.toml declares no alternate package manager beyond the pinned npm.
+        self.assertNotRegex(mise, r'(?m)package_manager\s*=\s*"(?:bun|pnpm|yarn)"')
 
 
 if __name__ == "__main__":
