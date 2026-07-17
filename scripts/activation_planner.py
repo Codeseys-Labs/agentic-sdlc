@@ -268,24 +268,43 @@ def apply(
 
     generation = None
     if manifest is not None:
-        generation = gen.generate(manifest, target, apply=True)
+        # Plan first: any per-file conflict refuses the WHOLE instruction apply
+        # (no half-authored instruction surface), reported via the receipt.
+        preview = gen.generate(manifest, target, apply=False)
+        receipt["conflicts"] = preview["conflicts"]
+        if preview["conflicts"]:
+            generation = preview
+        else:
+            generation = gen.generate(manifest, target, apply=True)
         for record in generation["files"]:
+            if generation["mode"] != "apply":
+                continue
             if record["action"] == "create":
                 receipt["created"].append(record["path"])
             elif record["action"] == "merge":
                 receipt["merged"].append(record["path"])
             elif record["action"] == "adopt":
                 receipt["adopted"].append(record["path"])
-        receipt["conflicts"] = generation["conflicts"]
 
     if gate_runner is not None:
         meta = target / ".agentic-sdlc"
         meta.mkdir(exist_ok=True)
         fixture = meta / "gate-fixture.marker"
         fixture.write_text("reversible gate fixture; must never be committed\n", encoding="utf-8")
-        fixture_result = bool(gate_runner(target))
-        fixture.unlink()
-        clean_result = bool(gate_runner(target))
+        try:
+            # A raising gate counts as a failing gate; the fixture must never
+            # survive the proof either way.
+            try:
+                fixture_result = bool(gate_runner(target))
+            except Exception:
+                fixture_result = False
+        finally:
+            if fixture.exists():
+                fixture.unlink()
+        try:
+            clean_result = bool(gate_runner(target))
+        except Exception:
+            clean_result = False
         receipt["gate_proof"] = {
             "fixture_fail": not fixture_result,
             "clean_pass": clean_result,
@@ -339,7 +358,13 @@ def apply(
         )
 
     trust_ok = all(action["approved"] for action in receipt["trust_actions"])
-    gate_ok = receipt["gate_proof"]["clean_pass"] if gate_runner is not None else True
+    # Falsifiability is part of readiness: the gate must have demonstrably
+    # FAILED on the planted fixture and passed clean, not merely passed.
+    gate_ok = (
+        receipt["gate_proof"]["fixture_fail"] and receipt["gate_proof"]["clean_pass"]
+        if gate_runner is not None
+        else True
+    )
     receipt["wave_ready"] = (
         not receipt["stops"]
         and not receipt["conflicts"]
@@ -357,11 +382,25 @@ def apply(
 
 
 def deactivate(target: Path, *, receipt: dict, dry_run: bool) -> dict:
-    """Remove only generator-authored content: created files and marked blocks."""
+    """Remove only generator-authored content: created files and marked blocks.
+
+    A receipt without an explicit marker pair only removes created files; it
+    never guesses markers inside merged/adopted files (guessing could strip
+    coincidental foreign content).
+    """
     target = Path(target)
     marker = receipt.get("marker") or {}
-    start = marker.get("start", "<!-- agentic-sdlc:start -->")
-    end = marker.get("end", "<!-- agentic-sdlc:end -->")
+    start = marker.get("start")
+    end = marker.get("end")
+    if not start or not end:
+        planned = {"created_removed": list(receipt.get("created", [])), "blocks_removed": []}
+        if dry_run:
+            return {"mode": "plan", **planned}
+        for rel in receipt.get("created", []):
+            path = target / rel
+            if path.is_file():
+                path.unlink()
+        return {"mode": "apply", **planned}
 
     planned = {"created_removed": list(receipt.get("created", [])),
                "blocks_removed": list(receipt.get("merged", []) + receipt.get("adopted", []))}
