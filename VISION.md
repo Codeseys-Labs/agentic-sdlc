@@ -11,10 +11,13 @@ flowchart LR
     T --> E[Tests, reviews, and evidence]
     E --> I[One integrator owns fan-in]
     S[Seeds: roadmap and current work] --> W
-    R[ADRs and authoritative source text] --> E
+    ADR[ADRs: decision rationale] --> E
+    R[Authoritative source text\nand contracts] --> E
     M[Mermaid diagrams\nparseable documentation] --> R
     O[Optional transports\ncertification-dependent] -. only after certification .-> W
-    I --> G[Git: integration, receipt, CI, publication]
+    I --> G[Git: integration, receipt, CI,\nsystem of record and evidence authority]
+    G --> P[Publication]
+    U[Explicit user/conductor\nauthorization per operation] --> P
 ```
 
 ## Distribution and activation
@@ -23,9 +26,9 @@ Mise is the only bootstrap prerequisite. A global installation is meant to distr
 
 ## Evidence-led delivery
 
-Substantive workflows decompose work at runtime. Each phase should use the certified model, effort, and context shape appropriate to its decision and verification burden, with identity and routing read back rather than inferred. Independent work may scale into parallel agents when evidence warrants it, but every parallel writer receives its own project-local ignored worktree. Reviews advise; they do not authorize. One integrator owns fan-in.
+Substantive workflows decompose work at runtime. Each phase should use the certified model, effort, and context shape appropriate to its decision and verification burden, with identity and routing read back rather than inferred. Independent work may scale dynamically into parallel agents only within explicit budgets, delegation caps, and WIP limits when evidence warrants it, but every parallel writer receives its own project-local ignored worktree. Reviews advise; they do not authorize. One integrator owns fan-in.
 
-Seeds records the roadmap, milestones, epics, phases, dependencies, and current work; it is not an authorization channel. ADRs preserve why architecture changed as evidence evolved. Mermaid diagrams make technical documentation intuitive and parseable for people and agents, while their readable source text remains authoritative. Git remains the authority for integration, receipts, CI, and publication.
+Seeds records the roadmap, milestones, epics, phases, dependencies, and current work; it is not an authorization channel. ADRs preserve the rationale for architectural decisions as evidence evolves; authoritative source text and contracts define the current requirements and interfaces. Mermaid diagrams make technical documentation intuitive and parseable for people and agents, while their readable source text remains authoritative. Git is the system of record and evidence authority for integration, receipts, CI, and publication, but it does not authorize those effects: user or conductor authorization is explicit and operation-specific, including before publication.
 
 Optional transports, including CLIProxyAPI and claude-code-proxy, remain aspirational until certified for exact model and effort routing, identity readback, credential safety, and recovery. A configuration or a local success is not certification.
 
@@ -33,7 +36,7 @@ Optional transports, including CLIProxyAPI and claude-code-proxy, remain aspirat
 
 Agentic SDLC is self-hosting: it improves this repository through the same contracts it installs in downstream projects. That recursion is a conformance test, not elevated self-modification authority. The system should learn from verified outcomes and evolve its skills, policies, and plans, while preserving uncertainty and the evidence behind changes.
 
-It must never grant itself permission, bypass gates, overwrite foreign or user data, merge its own work, or hide uncertainty. Outward effects require explicit authorization. Reviews remain advisory, and the integrator's fan-in ownership does not create authority to publish, merge, deploy, or mutate external systems.
+It must never grant itself permission, bypass gates, overwrite foreign or user data, merge its own work, or hide uncertainty. Outward effects require explicit user or conductor authorization for each operation. Reviews remain advisory, and the integrator's fan-in ownership does not create authority to publish, merge, deploy, or mutate external systems.
 
 ## Success criteria
 
