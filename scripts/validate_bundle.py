@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -32,6 +33,7 @@ REQUIRED_TASKS = {
     "bundle:install:all-hosts",
     "bundle:status:all-hosts",
     "research-os:install",
+    "mermaid:linux-test",
     "test",
     "self-test",
     "check",
@@ -46,7 +48,17 @@ NODE_VERSION = "22.22.3"
 BUN_VERSION = "1.3.10"
 SEEDS_VERSION = "0.5.14"
 SEEDS_TOOL = "npm:@os-eco/seeds-cli"
-MISE_LOCK_SHA256 = "d894faadc5dab0b3f2af7ab341ca53dc1925b2ae9245ba03132c74dfe092176d"
+MERMAID_NPM_VERSION = "10.8.1"
+MERMAID_PACKAGE_LOCK_SHA256 = "939c3abe521d3e2075cf757f2761fa1d3103daf270be778eae159b45e6e3bb88"
+MERMAID_POLICY_SHA256 = "4df1c81ae47413ebbc96e918f792677a966cd690a9f542518a1f5b1be2cf9514"
+MERMAID_POLICY_PATH = Path(__file__).parents[1] / "policy" / "mermaid-renderer-linux-v1.json"
+MERMAID_PACKAGE_PINS = {
+    "@mermaid-js/mermaid-cli": "11.16.0",
+    "@puppeteer/browsers": "3.0.6",
+    "mermaid": "11.16.0",
+    "puppeteer": "25.3.0",
+}
+MISE_LOCK_SHA256 = "63ea2d1790d3353e8722cf592e2957fdef188a059356981a1f3155256b637930"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -57,6 +69,7 @@ TASK_COMMANDS = {
     "bundle:install:all-hosts": "--script scripts/run_all_hosts.py install",
     "bundle:status:all-hosts": "--script scripts/run_all_hosts.py status",
     "research-os:install": "--script skills/codex-research-os/scripts/install_research_os.py",
+    "mermaid:linux-test": "--with pyyaml==6.0.3 python -m unittest discover -s tests_linux",
     "test": "--with pyyaml==6.0.3 python -m unittest discover -s tests",
     "self-test": "--script scripts/install_skill_bundle.py self-test",
 }
@@ -1057,6 +1070,66 @@ def validate_agents(root: Path, result: Validation) -> None:
         validate_runtime_receipt_projection(agent.read_text(encoding="utf-8"), agent.relative_to(root).as_posix(), result)
 
 
+def validate_mermaid_renderer(root: Path, result: Validation) -> None:
+    """Enforce immutable M0b provenance and the sole Linux test gate."""
+    package_path = root / "package.json"
+    lock_path = root / "package-lock.json"
+    policy_path = root / "policy" / "mermaid-renderer-linux-v1.json"
+    for path, label in ((package_path, "package.json"), (lock_path, "package-lock.json"), (policy_path, "Mermaid renderer policy")):
+        if not path.is_file():
+            result.error(f"{label} is required")
+            return
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        result.error(f"invalid Mermaid renderer artifact: {exc}")
+        return
+    if package.get("private") is not True or package.get("dependencies") != MERMAID_PACKAGE_PINS:
+        result.error("package.json must contain only the exact Mermaid renderer direct pins")
+    if package.get("packageManager") != f"npm@{MERMAID_NPM_VERSION}" or package.get("engines") != {"node": NODE_VERSION}:
+        result.error("package.json must pin the certified npm and Node identities")
+    if lock.get("lockfileVersion") != 3 or lock.get("packages", {}).get("", {}).get("dependencies") != MERMAID_PACKAGE_PINS:
+        result.error("package-lock.json must contain the exact Mermaid direct graph")
+    if sha256_bytes(lock_path.read_bytes()) != MERMAID_PACKAGE_LOCK_SHA256:
+        result.error("package-lock.json SHA-256 must equal the M0b-certified graph")
+    expected_resolutions = {
+        "node_modules/@mermaid-js/mermaid-cli": "11.16.0",
+        "node_modules/@mermaid-js/parser": "1.2.0",
+        "node_modules/@puppeteer/browsers": "3.0.6",
+        "node_modules/mermaid": "11.16.0",
+        "node_modules/puppeteer": "25.3.0",
+    }
+    for path, version in expected_resolutions.items():
+        if lock.get("packages", {}).get(path, {}).get("version") != version:
+            result.error(f"package-lock.json must resolve {path} {version}")
+    if sha256_bytes(policy_path.read_bytes()) != MERMAID_POLICY_SHA256:
+        result.error("Mermaid renderer policy does not match the canonical contract")
+    if policy.get("schema_version") != "mermaid-renderer-linux/v1":
+        result.error("Mermaid renderer policy schema mismatch")
+    browser = policy.get("browser", {})
+    expected_browser = {
+        "build_id": "150.0.7871.24",
+        "executable_sha256": "db4fe5b63d1b56729feb1eeebc82967768e66ef823ba942b2d4e506a34dc4a78",
+        "cache_tree_sha256": "3afbf64662eb240f67e98b7f352532de67e09dc9dabfd5390172c0c630b7ecfa",
+    }
+    if not isinstance(browser, dict) or any(browser.get(key) != value for key, value in expected_browser.items()):
+        result.error("Mermaid renderer browser identity mismatch")
+    required = {
+        "scripts/provision_mermaid_linux.py",
+        "scripts/render_mermaid_linux.py",
+        "scripts/sanitize_mermaid_svg.mjs",
+        "tests/test_mermaid_renderer.py",
+        "tests/test_mermaid_renderer_gate.py",
+        "tests_linux/test_mermaid_renderer_e2e.py",
+        "tests/fixtures/mermaid-renderer/corpus.json",
+    }
+    missing = sorted(path for path in required if not (root / path).is_file())
+    if missing:
+        result.error(f"M0b renderer artifacts missing: {', '.join(missing)}")
+
+
 def validate_mise(root: Path, result: Validation) -> None:
     path = root / "mise.toml"
     if not path.is_file():
@@ -1083,6 +1156,7 @@ def validate_mise(root: Path, result: Validation) -> None:
         "lefthook": LEFTHOOK_VERSION,
         "node": NODE_VERSION,
         "bun": BUN_VERSION,
+        "npm": MERMAID_NPM_VERSION,
         SEEDS_TOOL: {"version": SEEDS_VERSION, "depends": ["node"]},
     }
     if config.get("tools") != expected_tools:
@@ -1106,11 +1180,11 @@ def validate_mise(root: Path, result: Validation) -> None:
             if task.get(field) != expected:
                 result.error(f"mise.toml task {name}.{field} must equal {expected!r}")
     expected_check = {
-        "description": "Run validation, installer tests, and lifecycle self-test",
-        "depends": ["validate", "test", "self-test"],
+        "description": "Run validation, installer tests, Linux Mermaid renderer tests, and lifecycle self-test",
+        "depends": ["validate", "test", "mermaid:linux-test", "self-test"],
     }
     if tasks.get("check") != expected_check:
-        result.error("mise.toml check must contain only its description and exact validate/test/self-test dependencies")
+        result.error("mise.toml check must contain only its description and exact validate/test/mermaid:linux-test/self-test dependencies")
 
     lock_path = root / "mise.lock"
     if not lock_path.is_file():
@@ -1134,6 +1208,7 @@ def validate_mise(root: Path, result: Validation) -> None:
         "lefthook": LEFTHOOK_VERSION,
         "node": NODE_VERSION,
         "bun": BUN_VERSION,
+        "npm": MERMAID_NPM_VERSION,
         SEEDS_TOOL: SEEDS_VERSION,
     }
     if set(locked_tools) != set(expected_versions):
@@ -1143,9 +1218,13 @@ def validate_mise(root: Path, result: Validation) -> None:
         if len(entries) != 1 or entries[0].get("version") != version:
             result.error(f"mise.lock must resolve {name} {version}")
             continue
+        entry = entries[0]
+        if name == "npm":
+            if entry.get("backend") != "npm:npm" or set(entry) != {"version", "backend"}:
+                result.error("mise.lock npm must contain version and npm:npm backend only")
+            continue
         if name != SEEDS_TOOL:
             continue
-        entry = entries[0]
         if entry.get("backend") != SEEDS_TOOL:
             result.error(f"mise.lock {name} backend must equal {SEEDS_TOOL}")
         if set(entry) != {"version", "backend"}:
@@ -1257,15 +1336,19 @@ def validate_manifests(root: Path, result: Validation) -> None:
 
 
 def validate_policy(root: Path, result: Validation) -> None:
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix not in TEXT_SUFFIXES or ".git" in path.parts:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            continue
-        if path.name != "validate_bundle.py" and SECRET_PATTERN.search(text):
-            result.error(f"possible secret or internal hostname found: {path.relative_to(root)}")
+    excluded = {".git", "node_modules", ".mermaid-runtime", "__pycache__"}
+    for directory, directories, filenames in os.walk(root):
+        directories[:] = [name for name in directories if name not in excluded]
+        for filename in filenames:
+            path = Path(directory) / filename
+            if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if path.name != "validate_bundle.py" and SECRET_PATTERN.search(text):
+                result.error(f"possible secret or internal hostname found: {path.relative_to(root)}")
 
 
 def validate(root: Path) -> Validation:
@@ -1276,6 +1359,7 @@ def validate(root: Path) -> Validation:
     validate_agents(root, result)
     validate_managed_role_contract(root, result)
     validate_role_manifest(root, result)
+    validate_mermaid_renderer(root, result)
     validate_mise(root, result)
     validate_gate_graph(root, result)
     validate_versions(root, result)

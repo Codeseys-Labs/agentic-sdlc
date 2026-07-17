@@ -50,7 +50,10 @@ as the router.
   internal hostnames. Host-specific detail belongs in per-host manifests or the
   installer.
 
-## Installing this bundle
+## M0b Linux Mermaid renderer boundary
+
+M0b is a Linux x64-only E5/E6 boundary. Callers may invoke only `scripts/render_mermaid_linux.py <definition> <final-svg>`; direct `mmdc`, raw SVG, Mermaid/Puppeteer configs, profiles, cache paths, and launch flags are forbidden. The wrapper owner-generates all configs, requires `/usr/bin/bwrap` with network denial, and fails closed if provenance or sandbox admission fails. macOS and Windows rendering remain uncertified; native Windows must use the explicit unsupported-platform result rather than claim renderer support.
+
 
 mise 2026.4.27+ is the only bootstrap prerequisite; it is the managed-tool bootstrap, not the
 sole readiness prerequisite. It pins uv, consumes the checked-in cross-platform `mise.lock`, and

@@ -1,0 +1,1 @@
+<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://example.invalid/x.css); .bad { fill: url(data:image/svg+xml,evil) } .ok { fill: url(#gradient) }</style><defs><linearGradient id="gradient"/></defs><rect class="bad" width="1" height="1"/></svg>

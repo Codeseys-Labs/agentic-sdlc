@@ -10,6 +10,7 @@ uv = "0.11.17"
 lefthook = "2.1.10"
 node = "22.22.3"
 bun = "1.3.10"
+npm = "10.8.1"
 
 [tools."npm:@os-eco/seeds-cli"]
 version = "0.5.14"
@@ -60,6 +61,11 @@ description = "Install the repo-scoped Codex Research OS"
 run = "uv run --python 3.12.11 --script skills/codex-research-os/scripts/install_research_os.py"
 run_windows = "uv.exe run --python 3.12.11 --script skills/codex-research-os/scripts/install_research_os.py"
 
+[tasks."mermaid:linux-test"]
+description = "Run bounded Linux Mermaid renderer tests"
+run = "uv run --python 3.12.11 --with pyyaml==6.0.3 python -m unittest discover -s tests_linux"
+run_windows = "uv.exe run --python 3.12.11 --with pyyaml==6.0.3 python -m unittest discover -s tests_linux"
+
 [tasks.test]
 description = "Run the Python installer tests"
 run = "uv run --python 3.12.11 --with pyyaml==6.0.3 python -m unittest discover -s tests"
@@ -71,8 +77,8 @@ run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py self-tes
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
 
 [tasks.check]
-description = "Run validation, installer tests, and lifecycle self-test"
-depends = ["validate", "test", "self-test"]
+description = "Run validation, installer tests, Linux Mermaid renderer tests, and lifecycle self-test"
+depends = ["validate", "test", "mermaid:linux-test", "self-test"]
 
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"

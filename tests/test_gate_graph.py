@@ -25,6 +25,7 @@ class GateGraphTests(unittest.TestCase):
     TOOLCHAIN_MUTATIONS = (
         ("mise.toml", 'node = "22.22.3"', 'node = "22.22.2"', "mise.toml tools must equal"),
         ("mise.toml", 'bun = "1.3.10"', 'bun = "1.3.9"', "mise.toml tools must equal"),
+        ("mise.toml", 'npm = "10.8.1"', 'npm = "10.8.0"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "0.5.14"', 'version = "0.5.13"', "mise.toml tools must equal"),
         ("mise.toml", 'package_manager = "npm"', 'package_manager = "bun"', "npm.package_manager must equal npm"),
         ("mise.toml", 'depends = ["node"]', 'depends = []', "Seeds tool must depend on node"),
@@ -67,13 +68,15 @@ class GateGraphTests(unittest.TestCase):
                 "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
             },
         },
+        "npm": {"version": "10.8.1", "backend": "npm:npm"},
         "npm:@os-eco/seeds-cli": {"version": "0.5.14", "backend": "npm:@os-eco/seeds-cli"},
     }
 
     MUTATIONS = (
-        ("mise.toml", 'depends = ["validate", "test", "self-test"]', 'depends = ["validate", "test"]', "check must contain only"),
-        ("mise.toml", 'depends = ["validate", "test", "self-test"]', 'depends = ["validate", "test", "self-test"]\nrun = "python3 -c \'print(999)\'"', "check must contain only"),
+        ("mise.toml", 'depends = ["validate", "test", "mermaid:linux-test", "self-test"]', 'depends = ["validate", "test", "self-test"]', "check must contain only"),
+        ("mise.toml", 'depends = ["validate", "test", "mermaid:linux-test", "self-test"]', 'depends = ["validate", "test", "mermaid:linux-test", "self-test"]\nrun = "python3 -c \'print(999)\'"', "check must contain only"),
         ("mise.toml", 'run = "uv run --python 3.12.11 --script scripts/validate_bundle.py"', 'run = "python3 scripts/validate_bundle.py"', "task validate.run must equal"),
+        ("mise.toml", '[tasks."mermaid:linux-test"]', '[tasks."mermaid:missing"]', "mise.toml missing task mermaid:linux-test"),
         ("mise.toml", 'min_version = "2026.4.27"', 'min_version = "2025.1.0"', "must require mise 2026.4.27"),
         ("scripts/validate-bundle.sh", 'exec mise -C "$root" exec -- uv run --python 3.12.11', "exec python3", "exec-only pinned mise/uv wrapper"),
         ("scripts/bump-version.sh", 'mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest"', '# mise -C "$repo_root" exec -- uv run --python 3.12.11 python -\npython3 - "$manifest"', "bump-version.sh must use only"),
@@ -88,7 +91,12 @@ class GateGraphTests(unittest.TestCase):
 
     def copied_repo(self, temp: str) -> Path:
         repo = Path(temp) / "repo"
-        shutil.copytree(ROOT, repo, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        shutil.copytree(
+            ROOT,
+            repo,
+            symlinks=True,
+            ignore=shutil.ignore_patterns(".git", "node_modules", ".mermaid-runtime", "__pycache__"),
+        )
         return repo
 
     def run_validator(self, repo: Path) -> subprocess.CompletedProcess[str]:
@@ -168,7 +176,7 @@ class GateGraphTests(unittest.TestCase):
                 self.assertEqual(entries[0].get("version"), expected["version"])
                 self.assertEqual(entries[0].get("backend"), expected["backend"])
                 platform_keys = {key for key in entries[0] if key.startswith("platforms.")}
-                if name == "npm:@os-eco/seeds-cli":
+                if name in {"npm", "npm:@os-eco/seeds-cli"}:
                     self.assertEqual(set(entries[0]), {"version", "backend"})
                 else:
                     expected_platforms = expected["platforms"]
@@ -378,11 +386,11 @@ class GateGraphTests(unittest.TestCase):
         depends = config["tasks"]["check"]["depends"]
         self.assertIn(
             depends,
-            (["validate", "test", "self-test"], ["validate", "test", "self-test", "secrets"]),
+            (["validate", "test", "mermaid:linux-test", "self-test"], ["validate", "test", "mermaid:linux-test", "self-test", "secrets"]),
             "check depends drifted; if secrets was wired, update validate_bundle + this test together",
         )
         # Guard: the frozen validator still requires the base three (spec §G2.2).
-        self.assertEqual(depends[:3], ["validate", "test", "self-test"])
+        self.assertEqual(depends[:4], ["validate", "test", "mermaid:linux-test", "self-test"])
 
     def test_no_second_task_runner(self) -> None:
         mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
