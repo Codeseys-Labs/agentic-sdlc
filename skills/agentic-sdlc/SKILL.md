@@ -62,6 +62,21 @@ When this skill refers to bundled scripts, use the repo copies:
 
 - `<repo>/scripts/check-agentic-sdlc-prereqs.sh`
 
+## Offline activation preview
+
+From an installed copy of this skill, run:
+
+```text
+<installed-skill>/tools/offline-inspect.py --target <path>
+```
+
+The command is deterministic, offline, read-only, and Python-standard-library only. It inspects
+local filesystem structure without subprocesses, providers, credentials, environment discovery,
+network access, repairs, or target writes. Its `READY` / `NOT_READY` result is **preview readiness
+only**: it does not establish Git-wave readiness or authorize activation. The explicit `skip` item
+excludes PRIME apply, workflow overlay, gateway, routing, Seeds, archives, V7, config, and queue
+mutation.
+
 ## First Moves
 
 1. Prime the project state:
