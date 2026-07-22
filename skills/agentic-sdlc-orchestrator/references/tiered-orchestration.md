@@ -6,6 +6,10 @@ orchestration layer runs each piece. Distilled from a proven tiered deep-work-lo
 practice (multi-million-token runs); adapted here for a provider-native baseline with
 optional durability and view adapters.
 
+For concrete Claude Code Dynamic Workflow routing across providers, context windows,
+compaction policies, and fast modes, read
+[`claude-code-multi-model-routing.md`](claude-code-multi-model-routing.md).
+
 ## The multiplier principle (where the frontier model goes)
 
 Agents are not interchangeable, and model tier is a requested semantic, not proof of the

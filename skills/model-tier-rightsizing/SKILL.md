@@ -224,6 +224,9 @@ multi-workflow day (a single 61-agent review burned 9M); Opus's 21.6B is not.
   shared-quota trap), [[bedrock-fable5-data-retention-gate]] (Fable account
   gating), [[bedrock-new-model-503-vs-config-bug]] (day-one capacity vs
   config flapping).
+- For a second scheduling axis — model context footprint — and the boundary
+  between Dynamic Workflows, CLIProxyAPI, and process-wide Claude Code compaction,
+  see the flagship skill's "Claude Code multi-model routing" reference.
 
 ## References
 

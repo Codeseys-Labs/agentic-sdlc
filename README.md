@@ -89,6 +89,9 @@ start, or enable cmux or tmux merely to use this bundle.
   - `references/tiered-orchestration.md` — model-tier assignment, honest provider/model
     resolution, the native-first capability ladder with optional adapters, bounded backflow,
     and worker lifecycle at scale.
+  - `references/claude-code-multi-model-routing.md` — Claude Code Dynamic Workflow model
+    routing, CLIProxyAPI versus LiteLLM, `ccodex` launch envelopes, context/compaction
+    cohorts, authentication and billing boundaries, fast modes, and route qualification.
   - `references/research-team.md` — **evidence-graded research teams** for standing
     research efforts: the evidence ladder (promote slowly, downgrade quickly), role
     separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
