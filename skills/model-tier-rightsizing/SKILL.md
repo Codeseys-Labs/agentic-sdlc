@@ -47,6 +47,10 @@ There is no global provider preference and no requirement to spend tokens on all
 
 ## Required dispatch contract
 
+A model name is not a route; a route is provider+lane+wire-format+auth+region+id+
+thinking-level. Two lanes that happen to serve the same nominal model ID are two separate
+routes and two separate qualification targets — certifying one never certifies the other.
+
 Every delegated call or named-workflow worker consumes one provider-neutral
 `RuntimeAssignment` and must state:
 

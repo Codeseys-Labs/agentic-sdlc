@@ -114,6 +114,59 @@ After worker completion:
 4. Rebase onto the integration branch.
 5. Squash merge or cherry-pick into the integration branch according to repo policy.
 
+## Git hygiene while a wave is active
+
+The rules above cover creating a worktree and handing it to a worker. These four rules
+cover how each worker behaves *inside* its own worktree while the wave is in flight — a
+shared tree, before any fan-in. They are additive to `references/worktree-integration.md`,
+which covers hazards in collecting **finished** work back onto a shared branch; this section
+covers discipline **during** active multi-agent work, before any of that applies.
+
+### Branch before the first edit
+
+Branch from the integration branch (or wave base) before making any change, never after.
+If a worker finds edits already pending on a shared branch, branch first and replay rather
+than continuing to edit the shared branch. Name the branch for the work, not for the worker
+(`wave5/ws-payload`, not an agent identifier).
+
+### One commit per logical step
+
+A commit is one reviewable, one revertible decision. A commit that renames a symbol and
+changes its behavior cannot be reverted without losing one of the two. Write the commit as
+soon as the step is done, while the reason is still known, rather than batching unrelated
+changes together. Put the reason in the message body — the diff already shows the what.
+
+**Never `git add -A` and never `git commit -a` in a tree another agent may also be
+writing.** Both sweep every modified path in the working tree, including a sibling worker's
+in-progress files or fixtures a concurrent gate run planted. Stage the paths you touched, by
+name. `git add -A` is safe only inside a path that is itself gitignored end-to-end (such as a
+colocated `.worktrees/` directory) where nothing else will ever be swept into the commit.
+
+### Worktree isolation, with hardlinked dependency sharing
+
+Any agent that runs a gate — reviewer, critic, or verdict agent, not only an implementer —
+gets its own checkout, never a shared one. A gate writes build output, and plants and
+restores fixtures; two gate runs sharing one working tree can overwrite each other's
+compiled output or fixtures without either run detecting it.
+
+```sh
+git -C <repo> worktree add <repo>/.worktrees/<id> -b <branch> <base>
+cp -al <repo>/node_modules <repo>/.worktrees/<id>/node_modules
+```
+
+`cp -al` hardlinks an installed dependency tree into the new worktree instead of
+reinstalling: it costs directory entries, not bytes, and is fast. Use it only for a
+dependency tree nothing will write into during the wave. If a suite mutates the tree it
+shares (writes caches, rewrites lockfiles, and so on), do a real install for that worktree
+instead and record that you did.
+
+### Stagger the gates
+
+Reading and reasoning parallelize freely across workers. Gate runs — build, test, lint —
+contend for CPU and I/O on one host, and a suite with a hang or timeout detector can fail on
+a loaded host for a reason that is not in the code under test. Run gate invocations one at a
+time, even when the worktrees themselves were created and edited in parallel.
+
 ## PR Flow
 
 Before opening a PR:

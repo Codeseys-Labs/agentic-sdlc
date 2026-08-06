@@ -156,6 +156,120 @@ latency, cost, reliability, quota, provider placement, total-ranking, or product
 claim. Numeric judge scores were discarded because judges mixed scales and sometimes
 penalized a response for not answering other independent lenses.
 
+## Route evidence layer: status ladder, observation state, and required fields
+
+The four-tier blast-radius doctrine in `SKILL.md` governs which semantic lane a task
+belongs to. Underneath it, every individual route needs its own evidence record, because
+"the model is available" is not a fact a single boolean can carry — a route is
+provider+lane+wire-format+auth+region+id+thinking-level, and each field can fail
+independently. Keep three separate concepts on every route record, never collapsed into one:
+
+1. **A deployment/selection status ladder.** One worked account's ladder ran, from weakest
+   to strongest: `blocked` < `quarantined` < `catalog_only` < `direct_text` < `pilot` <
+   `qualified`. Deployment status controls whether a route may be selected at all; it is
+   evaluated before the four-tier semantic doctrine ever applies. Re-derive your own rung
+   set and ordering for your own transport — the load-bearing property is that status is an
+   ordered ladder with selection consequences, not the specific rung names.
+2. **An observation-state taxonomy, scoped to the exact probe tuple.** This field describes
+   only what happened on the one probe actually run — never the whole route, never the whole
+   model. One worked catalog recorded: `catalog_only`, `direct_text`, `http_200_empty_text`,
+   `legacy_access_denied`, `not_yet_captured`, `pilot`, `route_denied`, and
+   `transport_timeout_indeterminate`. An observation state never generalizes past the exact
+   account, region, path, and effort tuple it was captured on.
+3. **A required-field route contract.** A route record is never reducible to a bare model ID.
+   At minimum, carry: the exact route/alias ID, the upstream model ID, surface/lane, wire/API
+   family, region, path, deployment status, observation state, whether the route is required
+   for startup, whether it is selector-eligible, the minimum status a caller may accept it at,
+   the evidence class backing the route claim itself, the evidence class(es) backing any
+   capability claim made about it, and named limitations. Forbid a single
+   model-wide-availability boolean outright: it hides exactly the account/region/path
+   divergence this contract exists to preserve.
+
+Grade every capability claim about a route by how it was obtained, independent of the route's
+own deployment status, using six evidence classes strongest to weakest: `exact-route-live`
+(the exact alias, upstream, region, API family, path, and client build were exercised);
+`exact-model-direct` (the exact upstream was probed directly, but not through the target
+tool-loop); `exact-model-benchmark` (a benchmark row names the exact model, but not
+necessarily this route or harness); `family-transfer-hypothesis` (a related model nominates a
+test only); `vendor-hypothesis` (a vendor claim or model card nominates a test only); and
+`catalog-observation` (the exact ID was listed for a captured account/region; invocation is
+unproved). A class is never upgraded by repetition — a hundred `vendor-hypothesis` citations
+remain `vendor-hypothesis`.
+
+This is a **worked example from one Bedrock/Mantle-lane account**, retained to show the shape
+of a real schema; the rung names, observation-state vocabulary, and field list are not a
+universal standard. Re-derive your own status ladder, observation-state taxonomy, and
+required-field contract for your own transport rather than copying these labels verbatim.
+
+## Three provenance classes and qualification rungs
+
+A routing *decision* (as opposed to a single capability claim, above) draws on three
+provenance classes that must never be merged or averaged into one score:
+
+- **`declared`** — the operator's own stated preference about a route (for example, "prefer
+  this route for scale-setter work"). Hand-authored; never written by automation; can never
+  by itself raise a route's qualification rung.
+- **`mined`** — a benchmark-leaderboard or published-signal view of the wider world. It may
+  *propose* that a routing table be reconsidered. It can never raise a route's qualification
+  rung, and it can never place a route into a scale-setter (frontier) slot.
+- **`observed`** — this account's or host's own measured result from actually invoking the
+  route. The only class that may promote a qualification rung, and the only class usable as
+  evidence toward a scale-setter assignment.
+
+Reading the three together is a **precedence, not an average**: `observed > declared >
+mined`. Averaging would let a published benchmark table outvote a locally measured
+gate-failure rate — exactly backwards, and it is how a benchmark ranking quietly becomes
+production policy through an averaging step nobody meant to authorize.
+
+A route's qualification state advances through exactly three rungs, independent of the
+deployment-status ladder above:
+
+1. **`catalog-only`** — the exact ID appears in a model/route catalog for the account or
+   region. No live call has been made.
+2. **`route-probed`** — one live call was made on the exact route tuple and returned a real
+   response. **A benchmark score is not a live call** and cannot substitute for this rung.
+3. **`role-qualified`** — the route has accumulated a minimum number of accepted,
+   schema-conformant assignments in the specific role being asked of it. Only a
+   measurement/meter process may write this rung; a mined or declared signal may propose
+   movement toward it, never grant it.
+
+A route whose lane has never been probed cannot reach `route-probed`, and therefore can never
+be selectable for real dispatch, regardless of how strong its catalog or mined evidence
+looks. Mining may offer a reordering proposal only among routes already at `route-probed` or
+above — it can never manufacture eligibility for a `catalog-only` route. **A benchmark score
+never fills a scale-setter slot**: only a locally observed, role-qualified route may occupy
+one, per the Frontier-tier doctrine in `SKILL.md`.
+
+## Promotion ladder for a topology or role-substitution change (A0–A6)
+
+Before promoting a change to how models are assigned across roles — adding a new pair
+member, letting one role substitute a different model, or moving from a single controller to
+a parallel or heterogeneous topology — climb this ladder one rung at a time and re-certify at
+each rung rather than jumping straight to the target topology:
+
+| Rung | What is under test |
+|---|---|
+| A0 | Direct-model sanity floor: does the candidate route answer at all |
+| A1 | A matched strong single controller, no topology change yet |
+| A2 | The proposed roles executed serially by that same single controller |
+| A3 | Isolated contexts per role, still serial and homogeneous |
+| A4 | Parallel independent branches, still homogeneous |
+| A5 | One heterogeneous role substitution at a time |
+| A6 | Independent review against an oracle-only control |
+
+For every rung after A1, run two paired arms, never one:
+
+- an **isolation arm** that holds inputs, model, tools, oracle, retries, and total budget
+  fixed, so the rung's own effect is measured in isolation; and
+- a **utility arm** that lets the full topology run normally, charging it for orchestration,
+  integration, recovery, and human-review time it would actually incur.
+
+Promote the least-complex rung whose held-out lower-confidence-bound effect clears a minimum
+useful threshold, or whose quality is non-inferior while cost or latency improves materially.
+A single passing run at any rung is a toy pass, not a promotion — it needs the same
+repeatability and no-authority-regression bar as any other production-band change under
+"Rerun triggers" below.
+
 ## Blast-radius production routing
 
 | Wrong-output consequence | Eligible primary exact IDs | Selection condition | Requested effort | Complement | Required control |
@@ -249,6 +363,23 @@ Use cross-vendor calls for different artifacts, not duplicated votes:
    ReviewFindings, and IntegrationReports remain submissions, never authority grants. The
    conductor alone mutates Seeds; an authorized integrator alone performs fan-in; humans
    authorize every outward action.
+
+## Sort static provider-route tables most-expensive-first
+
+Any static table this bundle or a consumer builds that maps a provider/route family to cost,
+context window, or other billing-relevant fields (a fallback chain, a hand-typed route
+registry, a fabricated-model builder) must sort that family **most-expensive-first**, not by
+launch order, alphabetical order, or "put the flagship at index 0." The reason is a specific
+failure mode observed in a worked implementation: when an unregistered or typo'd model ID is
+still attempted, some model-resolver fallback paths construct a placeholder model that
+inherits cost, context window, and max-token fields from the family's first array entry. If
+that first entry is the cheapest route, a typo silently under-bills and silently inherits the
+smallest context window — the worst possible failure, because it looks like success. If the
+first entry is the most expensive route, the same typo fails expensive and visibly, which is
+a far safer default than failing cheap and invisibly. Order is therefore a pricing and
+safety decision, not cosmetics, and it should carry an inline comment saying so wherever such
+a table is authored, plus a unit test asserting the sort order rather than trusting it to
+stay correct by convention.
 
 ## Fallback and escalation
 

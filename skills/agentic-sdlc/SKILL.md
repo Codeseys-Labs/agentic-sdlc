@@ -170,8 +170,18 @@ Read only what is needed:
 - `../change-writing/SKILL.md`: message authoring, output-only — commit, PR, squash, and
   draft-review text. It never stages, commits, pushes, mutates PRs, merges, or deploys.
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
+- `references/evidence-discipline.md`: whether any advisory submission's claim may be made at all — the five-class evidence vocabulary, the anti-inflation rule (a class is assigned once and never raised later), disposition-row/gap-register discipline, and the receipt-is-not-a-control-when-author-equals-verifier rule.
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
   alternate VCS substrate is activated by this bundle.
+- `references/skill-authoring.md`: admission floor, the four-gate test, the ≥2-of-5
+  promotion test, and retire-by-redirect for deciding whether a candidate earns its own
+  `SKILL.md` versus a section of an existing skill or a `references/*.md` file. Read
+  before adding, revising, or retiring any skill in this bundle.
+- `references/worktree-failclosed-tests.md`: a language-agnostic test-design contract for
+  fail-closed worktree isolation — planted-violation cases (occupied branch, non-git cwd,
+  throwing observer, mid-flight abort, timeout), redaction and start/end pair-completeness
+  assertions, and the two happy-path controls. A future implementer's spec, not evidence
+  that this repo already runs isolated dispatch.
 
 Bundled role agents (installed globally by `scripts/install-skill-bundle.sh`), each in
 Claude (`agents/claude/*.md`) and Codex (`agents/codex/*.toml`) form:
