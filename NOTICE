@@ -1,0 +1,343 @@
+NOTICE — third-party and intra-family material this repository draws on
+=========================================================================
+
+This repository's own code and prose are MIT, Copyright (c) 2026 Baladithya Balamurugan
+(see LICENSE). This file records every donor whose material a file in this repository
+derives from, and — separately — who actually originated the ideas that donor carried.
+
+**This file is a new precedent in this repository.** Before this pass agentic-sdlc shipped
+no root LICENSE and no NOTICE, and `.claude-plugin/plugin.json` declared `"license":
+"UNLICENSED"` — a direct conflict with the MIT provenance headers already carried inside
+`skills/agentic-sdlc/references/skill-authoring.md`, `deep-work-loop.md`, and
+`worktree-failclosed-tests.md`. The precedent this file follows is the sibling repository
+`pi-lab`'s own root NOTICE (same author, MIT, `pi-lab/NOTICE`): a per-donor record with a
+re-resolved commit, the licence grant reproduced where required, an explicit answer to "who
+originated the idea" separate from "whose licence covers the bytes", and a what-is/what-is-not
+derived pair per donor. `pi-lab/NOTICE` itself states plainly that it is establishing a shape
+for the *next* donor to follow rather than an established convention this repository already
+had — this file is that next donor's record, for a disjoint, smaller set of derivations.
+
+--------------------------------------------------------------------------------
+The provenance rule this file applies
+--------------------------------------------------------------------------------
+
+Where a donor names a third party as the origin of an idea, **the provenance is the third
+party, and the donor's licence grant does not launder it.** A permissive licence settles
+whether text may be reused. It says nothing about who thought of the thing. Both questions
+are answered separately below, for every donor, and a derived file's own header repeats the
+answer where a reader of that file will see it. This rule is copied from `pi-lab/NOTICE`
+(same author, MIT), which states it was itself written once for a 2026-07-30 harvest fan-in
+recorded outside that repository, and treats it as durable house doctrine rather than
+reinventing an equivalent.
+
+--------------------------------------------------------------------------------
+The register, stated plainly: intra-family only, so far
+--------------------------------------------------------------------------------
+
+Every derivation this file records below is **intra-family**: the donor is a sibling
+repository under the same author (Baladithya Balamurugan, MIT throughout), and no sentence,
+table, or worked example was carried across in any case — only ideas, re-expressed in this
+repository's own prose and vocabulary. This matters for the provenance question specifically:
+
+  * `pi-lab`'s own `house/loop-design` skill carries a *separate* file,
+    `skills/house/loop-design/references/external-anchors-and-loop-shape.md`, that itself
+    derives from a third party (`affaan-m/ECC`, MIT, whose own footer attributes the
+    underlying ideas further upstream to Norbert Wiener, Anatoli, and Addy Osmani —
+    `pi-lab/NOTICE`'s Donor 1). **That chain does not reach this repository.** The two files
+    in this repository that draw on `pi-lab`'s loop-design material
+    (`skills/agentic-sdlc/references/deep-work-loop.md`) cite only `pi-lab`'s main
+    `house/loop-design/SKILL.md` body, which attributes its own central claim (a loop's stop
+    condition must be externally adjudicated, never self-graded) to Anthropic's own published
+    engineering posts (`vendor-doc` class throughout that section), not to the ECC-mediated
+    Wiener/Anatoli/Osmani chain. Checked directly: `pi-lab/skills/house/loop-design/SKILL.md`
+    itself never names Wiener, Anatoli, or Osmani; only its sibling `references/` file does,
+    and this repository does not cite that sibling file anywhere (`rg -n
+    'Wiener|Anatoli|Osmani|Nygard|MADR|Zdun|Zimmermann' skills/` returns no hits in this
+    repository at the time of this pass).
+  * `pi-lab`'s ADR-authoring skill separately derives from `adr/madr` and `adr/adr.github.io`
+    (`pi-lab/NOTICE`'s Donor 2, crediting Michael Nygard and Zdun et al. upstream). This
+    repository has no ADR-authoring skill or reference file at all (`rg -n
+    'MADR|Nygard' skills/` returns no hits), so that chain also does not reach here.
+
+So the honest statement is: **this repository's donor register is currently intra-family
+only.** No third-party idea has yet traveled through a `pi-lab` intermediary into a file in
+this repository. If that changes — if a future edit here draws on
+`external-anchors-and-loop-shape.md`, the ADR template material, or any other file in
+`pi-lab/NOTICE` whose own provenance is a third party — the upstream credit (Wiener, Anatoli,
+Osmani, Nygard, or the Y-statement authors, as applicable) must be repeated here under the
+`author-claim about a third party` evidence class exactly as `pi-lab/NOTICE` states it, never
+laundered through the intra-family donor's MIT grant. Until then, `pi-lab/NOTICE` is cited
+below only as the **shape precedent** this file follows, not as a source of ideas that
+reached this repository through it.
+
+--------------------------------------------------------------------------------
+Donor 1 — pi-lab, house/skill-authoring-standard and house/lesson-extraction
+--------------------------------------------------------------------------------
+
+Repository   pi-lab (sibling repository in this workspace; same author)
+Pin          skill-authoring-standard: `85081e449998f559a69cf594fc89918230bec827`
+             (`skills/house/skill-authoring-standard/SKILL.md`, blob
+             `c8cd3295c0e0807bf23b4ba4094a038ddfa56d9b`)
+             lesson-extraction: `ef42a176805e4ed0964a0d0c33459d925325e495`
+             (`skills/house/lesson-extraction/SKILL.md`, blob
+             `4e29a8d13cb7b4b2f1aba109abfac71094e5db2f`)
+             Both re-resolved from the local working copy on 2026-08-06; pi-lab has no tag
+             for either file, so these are commit pins on a moving branch, not releases.
+Licence      MIT, Copyright (c) 2026 Baladithya Balamurugan — same author as this
+             repository's own LICENSE. No permission-notice reproduction is required beyond
+             what this repository's own root LICENSE already carries, because the copyright
+             holder is identical; this is recorded as an intra-family donor, not a
+             third-party one, and the licence question and the origin question below are
+             both "the same author" rather than "a permissive grant from someone else."
+Harvested    `skills/agentic-sdlc/references/skill-authoring.md` (this repository), 181
+             lines, blob `266ae898655c386010e70df9db16d17dfd0ef56f`
+
+Who originated the ideas
+-------------------------
+
+The donor's own admission floor (Section 1 of `skill-authoring-standard/SKILL.md`), four-gate
+admission test, retire-by-redirect rule, and the "audit what already loads before adding a
+skill" discipline are pi-lab's own authored judgement calls, not attributed further upstream
+in the donor file's own prose — `skill-authoring-standard/SOURCE.md` records that donors
+(`bigpowers`, `red-skills-dev`, `affaan-m/ECC`) contributed narrower ideas (the verify-line
+taxonomy, provenance-at-the-rule, leg-work splitting, the negative-trigger clause) to specific
+rows of the donor's own file, but **none of those specific donor-attributed rows were taken
+into this repository's `skill-authoring.md`** — checked directly: this repository's file
+carries none of `verify-line`, `provenance-at-the-rule`, `leg-work`, `negative-trigger`, or
+`deprecation-by-redirect` as terms or techniques (a targeted grep for each returns no hits in
+`skill-authoring.md`). What this repository took is the donor's own general shape — the
+four-gate test, the admission-floor structure, retire-by-redirect — which the donor file
+itself does not attribute to `bigpowers`, `red-skills-dev`, or `ECC`.
+
+Evidence class: **primary-claim** (pi-lab's own record of its own skill, read directly from
+the working tree by this author) for the donor content itself, and this repository's
+provenance question resolves to "the same author, restating their own prior work in a new
+repository's vocabulary" rather than a third-party attribution question at all.
+
+What IS derived from this donor, and where
+-------------------------------------------
+
+  `skills/agentic-sdlc/references/skill-authoring.md`
+
+    The admission-floor structure (mechanically-checked rules first, judgement calls after),
+    the four-gate admission test naming selection / proportionality / trigger-existence /
+    always-on-vs-task-shaped, the "audit what is already loaded" discipline as a numbered
+    read-order, and the retire-by-redirect rule with its three obligations. All re-expressed
+    in this repository's own prose against this repository's own mechanical gate
+    (`mise run check`, not pi-lab's `formatSkillsForPrompt`/loader mechanics) — the file's own
+    opening line states the pi-runtime-specific mechanics were "stripped and replaced by this
+    bundle's own mechanical gate." No sentence, table, or worked example from either donor
+    file was carried across.
+
+What is NOT derived, and no file here may reproduce
+------------------------------------------------------
+
+  1. The donor's own further-upstream donor table (`bigpowers`, `red-skills-dev`,
+     `affaan-m/ECC`) and the specific ideas it credits to them (verify-line taxonomy,
+     provenance-at-the-rule, leg-work splitting, negative-trigger clause,
+     deprecation-by-redirect). None of these specific attributed ideas were taken into this
+     repository's file; only the donor's own unattributed general shape was.
+  2. `lesson-extraction`'s destination taxonomy, its routing-into-the-extraction-queue
+     mechanics, and its four-failure-per-destination-class catalogue — this repository has no
+     lesson-routing queue or extraction mechanism, so nothing from that skill's operational
+     content was taken; only the general "route it, don't fold it into agent memory" stance
+     informs this repository's `skill-authoring.md` closing cross-link, itself a restatement
+     rather than a copy.
+  3. Any pi-lab-specific path, seed ID, or lab-local measurement (e.g. the corpus counts in
+     either donor file's frontmatter `metadata`) — `AGENTS.md`'s host-agnostic rule already
+     forbids carrying those into this repository regardless of this file.
+
+--------------------------------------------------------------------------------
+Donor 2 — pi-lab, house/context-budget and house/loop-design
+--------------------------------------------------------------------------------
+
+Repository   pi-lab (sibling repository in this workspace; same author)
+Pin          context-budget: `93354bad968184c15c620b2303d71ae651981b17`
+             (`skills/house/context-budget/SKILL.md`, blob
+             `a8c3d73ad07a7b5fa393c0b00820b68a5feeed28`)
+             loop-design: `f780f5f137c4cbfcb645e5901a67bd35c6c8acf3`
+             (`skills/house/loop-design/SKILL.md`, blob
+             `473ae742f29b7f31543dabc79b1bf08cf86ac278`)
+             Both re-resolved from the local working copy on 2026-08-06; moving-branch pins,
+             not releases.
+Licence      MIT, Copyright (c) 2026 Baladithya Balamurugan — same author as this
+             repository, same reasoning as Donor 1 above.
+Harvested    `skills/agentic-sdlc/references/deep-work-loop.md` (this repository) — two
+             named sections: the three-level context-disclosure discipline, and the
+             externally-adjudicated stop-condition rule.
+
+Who originated the ideas
+-------------------------
+
+- **The three-level disclosure budget** (metadata / instructions / resources, with published
+  per-level token targets) is `context-budget`'s own restatement of Anthropic's own published
+  skill-loading architecture (`vendor-doc` class throughout `context-budget/SKILL.md` §8) —
+  the donor file itself attributes the mechanism to Anthropic, not to a further third party,
+  and cites specific published token budgets it read from Anthropic's own documentation.
+  `deep-work-loop.md`'s three-level restatement in this repository names the same three
+  levels and the same objective (small, curated, load-condition-gated) but does not carry
+  the donor's specific published numbers, its corpus census, or its Anthropic citations —
+  those stay in `context-budget/SKILL.md`, not duplicated here.
+- **The externally-adjudicated, never-self-graded stop condition** is `loop-design`'s central
+  rule, and the donor file's own body attributes that rule to Anthropic's published agent
+  engineering posts (`vendor-doc` class: "Anthropic's goal loop interposes a separate model,"
+  "Anthropic reports that self-evaluation fails," both cited directly in
+  `loop-design/SKILL.md`), corroborated by a primary-artifact reading of an unrelated
+  goal-readiness auditor and a primary-claim citation of a published SDLC handbook — **not**
+  by the ECC-mediated Wiener/Anatoli/Osmani chain, which lives only in `loop-design`'s sibling
+  reference file (`references/external-anchors-and-loop-shape.md`) that this repository does
+  not cite anywhere.
+
+Evidence class: **primary-claim** for the pi-lab donor content (read directly from the
+working tree by this author). The Anthropic vendor-doc citations inside the donor file are
+**not** re-verified or re-classed upward by this repository — `deep-work-loop.md` restates
+the *rule* pi-lab already restated from Anthropic, and does not claim to have independently
+read Anthropic's own posts. Per this repository's own `references/evidence-discipline.md`
+anti-inflation rule, that makes this repository's citation of the Anthropic material
+second-hand at best, and `deep-work-loop.md` should be read as citing pi-lab's restatement,
+not as an independent primary-artifact or vendor-doc read of Anthropic's posts by this
+repository's own authors.
+
+What IS derived from this donor, and where
+-------------------------------------------
+
+  `skills/agentic-sdlc/references/deep-work-loop.md`
+
+    Two ideas, re-expressed in this repository's own prose: the three-level context-spend
+    discipline (metadata always-on, instructions on activation, resources on demand, each
+    with a named load condition rather than a bare pointer), and the rule that a loop's stop
+    condition must be externally supplied and externally adjudicated, never self-graded,
+    with the specific consequence that a written kill criterion needs a named measuring
+    instrument. Both sections name pi-lab as the adaptation source in their own prose
+    ("adapted from pi-lab's context-budget skill" and "adapted from pi-lab's loop-design
+    skill" respectively). No sentence, table, or worked example from either donor file was
+    carried across; the donor's own worked examples (the SKIPped Pi extension, the
+    `measure()` primitive design) do not appear in this repository at all.
+
+What is NOT derived, and no file here may reproduce
+------------------------------------------------------
+
+  1. `context-budget`'s corpus census, its specific published token-budget numbers, and its
+     Anthropic citations by source-key (H1/H2/H3/H4) — those stay attributed to pi-lab's own
+     harvest, not restated as this repository's own measurement.
+  2. `loop-design`'s worked negative example (the SKIPped Pi extension with the
+     `log_experiment`/`run_experiment` defect), its worked positive example (the `measure()`
+     primitive design, explicitly unimplemented even in pi-lab), its control-locus /
+     workflow-versus-agent taxonomy, its parallelism-cost tables, and its
+     decompose-by-context-boundary section — none of that operational content was taken;
+     only the single stop-condition rule was.
+  3. Any content from `loop-design/references/external-anchors-and-loop-shape.md` (the
+     ECC-derived, Wiener/Anatoli/Osmani-attributed file) — not read into this repository at
+     all, and the register statement above applies: no third-party idea travels through this
+     donor entry.
+
+--------------------------------------------------------------------------------
+Donor 3 — pi-dynamic-fractal-workflows, worktree isolation fail-closed test suite
+--------------------------------------------------------------------------------
+
+Repository   pi-dynamic-fractal-workflows (sibling repository in this workspace; a fork of
+             `@quintinshaw/pi-dynamic-workflows` maintained under the same author as this
+             repository)
+Pin          `d8b60c1f57b32ead17304886ad9a9112f4998b4b` (current HEAD as of this pass,
+             re-resolved 2026-08-06), file `tests/worktree-isolation-failclosed.test.ts`,
+             blob `3530864bdd143e4452569e89ebdf1fcebcf8e83b`
+Licence      MIT — `LICENSE` (1127 bytes), dual copyright: "Copyright (c) 2026 QuintinShaw"
+             and "Copyright (c) Michael Livs (original pi-dynamic-workflows)". This licence
+             covers the whole repository as the fork's own convention, including files added
+             entirely within the fork.
+             **Authorship of the specific harvested file is the fork's own, not the
+             upstream base's**: verified directly that
+             `tests/worktree-isolation-failclosed.test.ts` does not exist at the pinned
+             upstream base commit `6d866e16396ca487dfde2591dd4d4e7ab04e9ba1` (`git ls-tree`
+             at that commit lists only `src/worktree.ts` and `tests/worktree.test.ts` under
+             a worktree-related name); the file's earliest commits in the fork's history are
+             authored by `pi-lab spike <spike@local>` and committed by `Baladithya
+             Balamurugan <bbaladithya@gmail.com>` — the same author as this repository. So
+             while the repository's root LICENSE names QuintinShaw/Michael Livs, the specific
+             bytes harvested here were authored by this repository's own author inside the
+             fork, making this an intra-family donor in substance even though the repository
+             LICENSE it ships under names other people (for unrelated files in the same tree).
+Harvested    `skills/agentic-sdlc/references/worktree-failclosed-tests.md` (this repository),
+             227 lines, blob `bdfbe46f5aacae8d0e6aee43fe959d4cbdaf4460`
+
+Who originated the ideas
+-------------------------
+
+The fail-closed test-design shape (plant the exact precondition that produced a historical
+silent-downgrade defect; assert refusal with a stable typed error identity, not "an error
+happened"; assert the agent never ran; assert cleanup left no orphan; pair every planted
+violation with a control case on the other side of the boundary) is this author's own design,
+developed against a measured defect in the fork (`pi-lab-db05`, named in the source file's own
+comments) where a throw on the acquisition path previously let an isolation failure fall
+through to a silent shared-checkout run. Nothing here traces to a further third party; the
+harvested file's own header already states this plainly ("this pattern is ported from a
+TypeScript `node:test` suite in a sibling project's dynamic-workflow engine").
+
+Evidence class: **primary-artifact** — the source `.test.ts` file was read directly by this
+author, at the pin above, from the working tree.
+
+What IS derived from this donor, and where
+-------------------------------------------
+
+  `skills/agentic-sdlc/references/worktree-failclosed-tests.md`
+
+    The test-case *shape* only: the general six-part pattern (throwaway fixture, planted
+    precondition, assert refusal not degradation, assert zero dispatch, assert no orphan,
+    tear down in `finally`), the five-entry failure-mode catalogue (occupied branch, non-git
+    directory, throwing observer, mid-flight abort, timeout), and the two cross-cutting
+    assertion sub-patterns (redaction, pair-completeness). Re-expressed as a **specification
+    for a future implementer**, explicitly not as executable code: the harvested file's own
+    opening paragraph states "nothing here is executable — it is a specification a future
+    implementer turns into real Python tests once this repo has (or adopts) worktree-isolated
+    agent dispatch." No source line, assertion string, or helper function was copied verbatim;
+    the TypeScript `node:test`/`execFileSync`/`mkdtempSync` mechanics were translated to their
+    named Python `unittest`/`subprocess.run`/`tempfile.mkdtemp` analogues in the file's closing
+    "Notes for a future Python-`unittest` implementation" section, which is this repository's
+    own adaptation guidance, not a translation of donor prose.
+
+What is NOT derived, and no file here may reproduce
+------------------------------------------------------
+
+  1. Any donor test file's literal assertion strings, error-message regexes, or helper
+     function bodies (`makeRepo`, `recordingRunner`, `derivedId`) — only their *purpose* is
+     named in this repository's file, never their code.
+  2. The donor's own production implementation (`src/workflow.ts`'s worktree-acquisition
+     policy, `src/worktree.ts`'s slug derivation, `src/errors.ts`'s
+     `WorkflowErrorCode.WORKTREE_ISOLATION_UNAVAILABLE`) — this repository has no
+     worktree-isolated dispatch mechanism today, and the harvested file says so explicitly:
+     "treat each entry below as a test case shape, not as authorization that the described
+     behavior already exists here."
+  3. Any claim that this repository's own test suite currently implements this pattern. It
+     does not: `worktree-failclosed-tests.md` is a specification with zero corresponding
+     Python test file in this repository as of this pass (confirmed: no
+     `tests/test_worktree*.py` or equivalent exists).
+
+--------------------------------------------------------------------------------
+Non-endorsement
+--------------------------------------------------------------------------------
+
+This repository is not affiliated with, endorsed by, or certified by pi-lab,
+pi-dynamic-fractal-workflows, QuintinShaw, Michael Livs, or any other party named in this
+file. Names are used only to identify the donor. No claim of conformance to any donor's own
+conventions is made anywhere in this repository.
+
+--------------------------------------------------------------------------------
+Adding a donor to this file
+--------------------------------------------------------------------------------
+
+  1. Name the repository, the re-resolved commit (not a recorded pin — those go stale by
+     design), and the licence with its byte size where a grant must be reproduced verbatim.
+  2. Reproduce the permission notice verbatim if the licence requires it and the copyright
+     holder differs from this repository's own.
+  3. Answer the origin question separately from the licence question. If the donor attributes
+     an idea upstream (as `pi-lab`'s own `NOTICE` does for its ECC and MADR donors), check
+     whether that specific upstream-attributed material actually reached this repository
+     before repeating the upstream credit — an intra-family donor's own third-party
+     attributions do not automatically travel with a restatement of the donor's unrelated
+     content, and this file's "register" section above records exactly that distinction for
+     the current, intra-family-only state.
+  4. List what IS derived with the destination path, and what is NOT derived with a reason
+     per item. An omission with no reason is invisible.
+  5. Put the same provenance statement in a header inside each derived file, matching the
+     form already used in `skill-authoring.md`, `deep-work-loop.md`, and
+     `worktree-failclosed-tests.md`.

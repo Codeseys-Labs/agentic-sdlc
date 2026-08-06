@@ -127,7 +127,9 @@ start, or enable cmux or tmux merely to use this bundle.
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc@agentic-sdlc` is an alternative to
-  symlinks. Both manifests pass `claude plugins validate --strict`.
+  symlinks. The marketplace manifest passes `claude plugin validate --strict`; the
+  plugin manifest passes non-strict validation (strict flags two deliberate repo
+  files — the root `CLAUDE.md` and the Codex roster README — as plugin warnings).
 - `scripts/check-agentic-sdlc-prereqs.sh`: native-baseline preflight plus informational
   checks for optional adapters. Missing cmux or tmux never fails it.
 - `scripts/install-skill-bundle.sh`: **one-shot global install for every native agent CLI
