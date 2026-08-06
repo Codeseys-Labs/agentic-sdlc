@@ -81,13 +81,19 @@ skip that appears without an environmental reason is a test quietly opting out.
   private with zero releases and zero pushed tags, so `git ls-remote --tags origin` is empty and
   no anonymous fetch path exists. A true install-from-remote test needs the repo public, or a
   release, or credentials — an operator decision, not a technical gap.
-- **Nothing is pushed.** These six commits are local to `release/offline-observer-rc`. Local
-  `main` and remote `main` have diverged (local `main` == remote `9994f46` by tree; remote carries
-  two further commits, `1d2b3ce` and `532e984`, that this branch does not contain — and the 13
-  files "missing" relative to remote `main` are exactly the retired-profile files this branch
-  deliberately removed, whose token the removal contract in `tests/test_cao_removal.py` now
-  forbids anywhere in the shipped tree, including in prose like this).
-  A squash-merge to `main` is therefore not a clean fast-forward and needs an explicit decision.
+- **Divergence resolved 2026-08-06 (this paragraph originally said nothing was pushed).**
+  The lines were reconciled by an audited force-push rather than a merge: remote-only commit
+  `1d2b3ce` proved tree-identical to local ancestor `9432b2c` (so 21 of 22 remote-only commits
+  were already content-contained here), and the one genuinely unique artifact — the 603-line
+  multi-model routing memo from `532e984` — was ported byte-identical to
+  `docs/research/2026-07-22-claude-code-multi-model-routing.md` with a supersession header.
+  The pre-reconcile remote line is preserved on origin under `archive/pre-reconcile-main`
+  (`532e984`) and `archive/pre-reconcile-feat-mise-cross-host-installer` (`e7bcfbc`), so the
+  force-push destroyed nothing. The 13 files "missing" relative to the old remote `main` are
+  exactly the retired-profile files this branch deliberately removed, whose token the removal
+  contract in `tests/test_cao_removal.py` forbids anywhere in the shipped tree, including in
+  prose like this. A push to `main` also triggers CI (`.github/workflows/validate.yml`) on
+  ubuntu/macos/windows runners.
 - **Not a functional test of the agents or skills.** It proves acquisition, gating, installation,
   and lifecycle reporting — not that any orchestration doctrine works.
 
