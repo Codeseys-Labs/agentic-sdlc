@@ -46,7 +46,31 @@ NODE_VERSION = "22.22.3"
 BUN_VERSION = "1.3.10"
 SEEDS_VERSION = "0.5.14"
 SEEDS_TOOL = "npm:@os-eco/seeds-cli"
-MISE_LOCK_SHA256 = "d894faadc5dab0b3f2af7ab341ca53dc1925b2ae9245ba03132c74dfe092176d"
+# Convenience tier. Pinned for identical resolution across hosts; no gate depends on them.
+RIPGREP_VERSION = "15.2.0"
+FD_VERSION = "10.4.2"
+JQ_VERSION = "1.8.2"
+GH_VERSION = "2.97.0"
+BETTERLEAKS_VERSION = "1.7.3"
+BETTERLEAKS_TOOL = "github:betterleaks/betterleaks"
+MERMAID_VERSION = "11.16.0"
+MERMAID_TOOL = "npm:@mermaid-js/mermaid-cli"
+# A pinned backend is part of the contract: it fixes WHERE a tool comes from, so a registry
+# alias cannot be silently repointed at a different upstream.
+EXPECTED_LOCK_BACKENDS = {
+    "uv": "aqua:astral-sh/uv",
+    "lefthook": "aqua:evilmartians/lefthook",
+    "node": "core:node",
+    "bun": "core:bun",
+    "ripgrep": "aqua:BurntSushi/ripgrep",
+    "fd": "aqua:sharkdp/fd",
+    "jq": "aqua:jqlang/jq",
+    "gh": "aqua:cli/cli",
+    SEEDS_TOOL: SEEDS_TOOL,
+    BETTERLEAKS_TOOL: BETTERLEAKS_TOOL,
+    MERMAID_TOOL: MERMAID_TOOL,
+}
+MISE_LOCK_SHA256 = "7490d608d8da5798af30cae1aa4d4ed41d0cac9c298af8da1b3712f036b3ffdd"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -395,6 +419,18 @@ def validate_skills(root: Path, result: Validation) -> None:
             result.error(f"{directory}: missing description")
         elif len(description) > 1024:
             result.error(f"{directory}: description exceeds 1024 characters")
+        # A skill may not pin a model either. Parse semantically rather than matching the raw
+        # frontmatter string: a substring test on `metadata` also hits `name:
+        # model-tier-rightsizing`, and a line-anchored regex still misses the quoted and
+        # \u-escaped key forms that validate_agents already rejects.
+        try:
+            skill_metadata = parse_frontmatter_metadata(text)
+        except ValueError as exc:
+            result.error(f"{directory}: invalid frontmatter: {exc}")
+        else:
+            for forbidden in ("model", "model_reasoning_effort"):
+                if forbidden in skill_metadata:
+                    result.error(f"{directory}: static {forbidden} is forbidden")
         for reference in sorted(set(re.findall(r"\breferences/[A-Za-z0-9._-]+\.md", text))):
             if not (skill.parent / reference).is_file():
                 result.error(f"{directory}: missing {reference}")
@@ -1083,7 +1119,13 @@ def validate_mise(root: Path, result: Validation) -> None:
         "lefthook": LEFTHOOK_VERSION,
         "node": NODE_VERSION,
         "bun": BUN_VERSION,
+        "ripgrep": RIPGREP_VERSION,
+        "fd": FD_VERSION,
+        "jq": JQ_VERSION,
+        "gh": GH_VERSION,
         SEEDS_TOOL: {"version": SEEDS_VERSION, "depends": ["node"]},
+        BETTERLEAKS_TOOL: {"version": BETTERLEAKS_VERSION},
+        MERMAID_TOOL: {"version": MERMAID_VERSION, "depends": ["node"]},
     }
     if config.get("tools") != expected_tools:
         result.error(f"mise.toml tools must equal {expected_tools}")
@@ -1134,7 +1176,13 @@ def validate_mise(root: Path, result: Validation) -> None:
         "lefthook": LEFTHOOK_VERSION,
         "node": NODE_VERSION,
         "bun": BUN_VERSION,
+        "ripgrep": RIPGREP_VERSION,
+        "fd": FD_VERSION,
+        "jq": JQ_VERSION,
+        "gh": GH_VERSION,
         SEEDS_TOOL: SEEDS_VERSION,
+        BETTERLEAKS_TOOL: BETTERLEAKS_VERSION,
+        MERMAID_TOOL: MERMAID_VERSION,
     }
     if set(locked_tools) != set(expected_versions):
         result.error(f"mise.lock tools must equal {sorted(expected_versions)}")
@@ -1143,13 +1191,22 @@ def validate_mise(root: Path, result: Validation) -> None:
         if len(entries) != 1 or entries[0].get("version") != version:
             result.error(f"mise.lock must resolve {name} {version}")
             continue
-        if name != SEEDS_TOOL:
-            continue
         entry = entries[0]
-        if entry.get("backend") != SEEDS_TOOL:
-            result.error(f"mise.lock {name} backend must equal {SEEDS_TOOL}")
-        if set(entry) != {"version", "backend"}:
-            result.error(f"mise.lock {name} must contain version and backend only")
+        expected_backend = EXPECTED_LOCK_BACKENDS.get(name)
+        if expected_backend is not None and entry.get("backend") != expected_backend:
+            result.error(f"mise.lock {name} backend must equal {expected_backend}")
+        # npm-backed pins carry no per-platform record: the npm backend resolves one
+        # package for every platform, so version+backend is the whole integrity surface.
+        if name in {SEEDS_TOOL, MERMAID_TOOL}:
+            if set(entry) != {"version", "backend"}:
+                result.error(f"mise.lock {name} must contain version and backend only")
+            continue
+        platform_keys = {key for key in entry if key.startswith("platforms.")}
+        if not platform_keys:
+            result.error(f"mise.lock {name} must record per-platform checksums")
+        for key in platform_keys:
+            if "checksum" not in entry[key]:
+                result.error(f"mise.lock {name} {key} must record a checksum")
 
 
 def validate_gate_graph(root: Path, result: Validation) -> None:

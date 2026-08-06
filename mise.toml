@@ -3,6 +3,13 @@ min_version = "2026.4.27"
 [settings]
 locked = true
 npm.package_manager = "npm"
+# The github backend otherwise calls the GitHub release API at install time to fetch SLSA
+# provenance and artifact attestations. Unauthenticated that request is rate-limited to
+# failure, which would make GITHUB_TOKEN a second bootstrap prerequisite. The reviewed
+# per-platform checksum in mise.lock is the integrity control instead, exactly as it is for
+# every aqua-backed tool here.
+github.slsa = false
+github.github_attestations = false
 
 [tools]
 # mise is the only managed-tool bootstrap. Runtime readiness is checked separately.
@@ -10,9 +17,27 @@ uv = "0.11.17"
 lefthook = "2.1.10"
 node = "22.22.3"
 bun = "1.3.10"
+# Convenience tier: pinned so every host resolves the same binary, but no gate depends on
+# them. Absence degrades developer experience; it never changes a gate verdict.
+ripgrep = "15.2.0"
+fd = "10.4.2"
+jq = "1.8.2"
+gh = "2.97.0"
 
 [tools."npm:@os-eco/seeds-cli"]
 version = "0.5.14"
+depends = ["node"]
+
+# Not in the mise registry, so the backend is named explicitly. github: locks per-platform
+# checksums and verifies GitHub artifact attestations on install; ubi: is deprecated in
+# mise 2027.1.0 and would lock version+backend only.
+[tools."github:betterleaks/betterleaks"]
+version = "1.7.3"
+
+# npm backend locks version+backend only, with no per-platform checksum, exactly like the
+# Seeds pin above. Rendering is advisory; no gate consumes mmdc.
+[tools."npm:@mermaid-js/mermaid-cli"]
+version = "11.16.0"
 depends = ["node"]
 
 [tasks.validate]

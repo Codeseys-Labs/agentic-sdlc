@@ -30,6 +30,12 @@ EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
         ".pytest_cache",
         ".ruff_cache",
         ".seeds",
+        # A linked worktree checked out beneath the repo is another commit's tree, not this
+        # one's shipped surface. Walking into it also breaks every root-relative exemption
+        # (commands/sdlc-init.md is conductor-owned at the root but not at
+        # .worktrees/<name>/commands/sdlc-init.md), so it reports violations that do not
+        # exist in what this commit actually ships.
+        ".worktrees",
         "__pycache__",
         "archive",
         "archives",

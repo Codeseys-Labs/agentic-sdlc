@@ -33,7 +33,8 @@ mise.toml   [tools]  → pins EVERYTHING: language, uv, linters, lefthook
             [tasks.check]  depends = ["fmt","vet","lint","test",…]   ← THE gate
 lefthook.yml           → pre-commit = fast staged-file subset; pre-push = heavier subset
 betterleaks            → secrets gate: lefthook command + CI step + pre-publish history scan
-                          (advisory/opt-in where the tool is not registry-pinnable — see below)
+                          (pin the version always; wire the invocation only where the repo
+                           has a real secrets surface — see below)
 ```
 
 `mise run check` is the single gate string agents need. The cartographer discovers it; the
@@ -93,29 +94,71 @@ Exit code is the gate: 0 clean, 1 leaks. For a repo with a live secrets surface,
 lefthook pre-push command and a CI step; pair with a repo-specific sweep (internal hostnames etc.)
 which generic rules won't catch.
 
-**Wiring status in THIS bundle: advisory / opt-in, not wired — and honestly so.** `betterleaks`
-is deliberately NOT in `mise.toml`, `lefthook.yml`, or CI here, for two reasons that would
-otherwise let the doctrine claim a gate no `mise run check` runs:
+**Wiring status in THIS bundle: version-pinned, invocation advisory / opt-in.** `betterleaks`
+IS pinned in `[tools]` and locked in `mise.lock`; it is deliberately NOT in `lefthook.yml` or
+CI, and it is NOT a `[tasks.check]` dependency. The two facts are separate and both matter:
 
-1. **Not registry-pinnable.** `betterleaks` is not published in the mise registry (only `gitleaks`
-   is), so it cannot be pinned in `[tools]` for CI-parity the way uv/lefthook/node/bun/seeds-cli
-   are. An unpinned brew/npm install would defeat the whole "same version locally, in CI, and in
-   every worker" premise of this skill.
-2. **The gate graph is conformance-frozen.** `mise.toml`, its SHA-pinned `mise.lock`, `lefthook.yml`,
-   and `validate.yml` are byte/SHA-locked by `tests/test_gate_graph.py` and
-   `scripts/validate_bundle.py` (`validate_mise`, `validate_gate_graph`). Adding a `[tools]` entry
-   or a hook/CI step without regenerating the frozen lock and updating those tests in the same
-   commit is a hard failure, by design.
+1. **Pinnable without the registry (corrected 2026-08-05).** An earlier revision of this skill
+   claimed betterleaks could not be pinned because it is absent from the mise registry. That
+   was wrong: registry membership only supplies a default backend, and a backend can be named
+   explicitly. `[tools."github:betterleaks/betterleaks"]` locks per-platform URLs and SHA-256
+   checksums for all 11 platform keys — the same integrity surface an aqua-backed tool gets,
+   and strictly stronger than the npm-backed pins, which lock version+backend only. Prefer
+   `github:` over `ubi:`: `ubi:` is deprecated for removal in mise 2027.1.0 and locks no
+   per-platform checksum. **Generalize this, don't just note it:** "not in the registry" is
+   never by itself a reason a tool cannot be pinned. Check `mise backends` first.
+2. **Its install must not smuggle in a second bootstrap prerequisite.** The `github:` backend
+   fetches SLSA provenance and artifact attestations from the GitHub release API at install
+   time. Unauthenticated, that request is rate-limited to a hard install failure, which would
+   make `GITHUB_TOKEN` a prerequisite alongside mise — measured, not assumed. This bundle sets
+   `github.slsa = false` and `github.github_attestations = false` in `[settings]` and relies on
+   the reviewed per-platform checksum in `mise.lock` as the integrity control. A repo that
+   already provisions a token everywhere may leave both enabled for defense in depth.
 
-This repo is a skill/installer bundle with **no runtime credentials in-tree**, so a live secrets
-gate on every `check` is the wrong altitude anyway. The advisory posture is: run `betterleaks git .`
-(a full-history scan) as a **pre-publish** step before making the bundle public, not as a wired
-gate. `tests/test_gate_graph.py::test_betterleaks_wiring_matches_doctrine` enforces this: if the
-skill ever claims betterleaks is wired, the tool must actually be pinned in `[tools]` and run in CI
-or a hook; otherwise the skill must carry this advisory language and the cited reason. A repo that
-DOES have a secrets surface and a registry-pinnable scanner should choose Option A — pin it, add a
-`[tasks.secrets]` task, run it in pre-push + CI, and (only if it joins `[tasks.check]`) update the
-`test_gate_graph.py` check-depends assertion in the same commit.
+Pinning the tool is not wiring the gate, and this bundle stops at pinning. This repo is a
+skill/installer bundle with **no runtime credentials in-tree**, so a live secrets scan on every
+`check` is the wrong altitude: the invocation posture is `betterleaks git .` (full history) as a
+**pre-publish** step before the bundle is made public or handed to another machine.
+`tests/test_gate_graph.py::test_betterleaks_wiring_matches_doctrine` enforces the honesty
+constraint in both directions: because the tool now appears in `mise.toml`, the test takes its
+Option A branch and requires a real `[tools]` pin — so the pin cannot be quietly dropped while
+this text still describes one. Adding it to a hook or CI additionally requires regenerating the
+SHA-pinned lock and updating the frozen constants in `scripts/validate_bundle.py` and
+`tests/test_gate_graph.py` in the same commit; joining `[tasks.check]` additionally requires
+updating the check-depends assertion. A pinned scanner is evidence infrastructure — running it
+clean authorizes nothing.
+
+## Pinning a tool that is not in the mise registry
+
+Registry membership supplies a default backend, nothing more. Naming a backend explicitly
+pins anything the backends can reach, so "not in the registry" is never on its own a reason a
+tool stays unpinned. Run `mise backends` and pick by the integrity the backend can prove:
+
+| Backend | Locks | Use when |
+|---|---|---|
+| `aqua:owner/repo` | per-platform URL + SHA-256, `provenance` where upstream attests | the tool is in the registry (this is what the registry usually selects) |
+| `github:owner/repo` | per-platform URL + SHA-256 + release-asset API URL | a GitHub release publishes per-platform archives. Prefer over `ubi:` |
+| `ubi:owner/repo` | version + backend only | never for new pins — deprecated for removal in mise 2027.1.0 |
+| `npm:package` | version + backend only | the tool ships only to npm. Weakest of these; a version pin without a content hash |
+| `http:name` | per-platform URL + checksum you supply | there is no release API at all; you accept manual URL maintenance |
+
+Two rules that outrank convenience:
+
+1. **A pin must not add a bootstrap prerequisite.** Verify the install path on a machine with
+   no credentials in the environment before committing the pin. A backend that reaches an
+   authenticated API during install (see the betterleaks section above) turns a token into a
+   second prerequisite and breaks "mise is the only bootstrap prerequisite."
+2. **Never fabricate a version.** Resolve it from the real distribution (`npm view <pkg>
+   version`, the release API) and record what you resolved. If a tool genuinely cannot be
+   pinned, declare it unpinned **with the stated reason** rather than inventing a number — an
+   unstated omission and a reasoned one look identical in a diff six months later.
+
+A tool may also be deliberately left unpinned on grounds that have nothing to do with
+packaging. As of 2026-08-05 this bundle does not pin `npm:@bitkyc08/opencodex` (resolved
+version 2.10.1, MIT) even though the npm backend would accept it: its purpose here would be
+subscription-credential passthrough to a non-first-party base URL, which the Claude Code
+legal-and-compliance documentation scopes subscription OAuth against, and that question is
+unresolved. Packaging feasibility is not authorization to adopt.
 
 ## Worktree waves: the two propagation facts (verified 2026-07-05)
 

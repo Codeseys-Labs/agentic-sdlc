@@ -70,6 +70,42 @@ class RuntimeContractValidationTests(unittest.TestCase):
                     result.errors,
                 )
 
+    def test_bundle_validator_semantically_rejects_skill_model_and_effort_pins(self) -> None:
+        """A vendored or authored skill must not pin a model either.
+
+        validate_agents already covers agents/. Skills were unchecked, so a third-party
+        SKILL.md carrying `model:` passed silently. The check must parse semantically: the raw
+        frontmatter of the real `model-tier-rightsizing` skill contains the substring "model"
+        in its own `name:`, so a substring test false-positives on a shipped skill, and a
+        line-anchored regex would still miss the quoted and \\u-escaped key forms below.
+        """
+        forms = {
+            "plain": "name: pin-probe\ndescription: test\nmodel: opus\nmodel_reasoning_effort: high",
+            "quoted": 'name: pin-probe\ndescription: test\n"model": "claude-opus-5"',
+            "escaped explicit key": 'name: pin-probe\ndescription: test\n"m\\u006fdel": "claude-opus-5"',
+            "flow map": "{name: pin-probe, description: test, model: claude-opus-5}",
+        }
+        for name, metadata in forms.items():
+            with self.subTest(form=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                skill = root / "skills" / "pin-probe" / "SKILL.md"
+                skill.parent.mkdir(parents=True)
+                skill.write_text(f"---\n{metadata}\n---\n", encoding="utf-8")
+                result = bundle_validator.Validation()
+                bundle_validator.validate_skills(root, result)
+
+                self.assertIn("pin-probe: static model is forbidden", result.errors)
+
+    def test_bundle_validator_accepts_shipped_skill_names_containing_model(self) -> None:
+        """The shipped `model-tier-rightsizing` skill must not trip the pin check."""
+        result = bundle_validator.Validation()
+        bundle_validator.validate_skills(ROOT, result)
+        self.assertEqual(
+            [error for error in result.errors if "static model" in error],
+            [],
+            "a skill whose name merely contains 'model' must not be reported as pinning one",
+        )
+
     def test_bundle_validator_semantically_parses_yaml_without_system_ruby(self) -> None:
         metadata = 'name: sdlc-reviewer\ndescription: test\n"m\\u006fdel": "claude-sonnet-5"'
         with (

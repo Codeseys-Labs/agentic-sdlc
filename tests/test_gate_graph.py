@@ -28,6 +28,22 @@ class GateGraphTests(unittest.TestCase):
         ("mise.toml", 'version = "0.5.14"', 'version = "0.5.13"', "mise.toml tools must equal"),
         ("mise.toml", 'package_manager = "npm"', 'package_manager = "bun"', "npm.package_manager must equal npm"),
         ("mise.toml", 'depends = ["node"]', 'depends = []', "Seeds tool must depend on node"),
+        # Convenience-tier drift must fail exactly like bootstrap-tier drift. These tools are
+        # not gate inputs, but an unpinned version is still an unreviewed binary.
+        ("mise.toml", 'ripgrep = "15.2.0"', 'ripgrep = "14.1.1"', "mise.toml tools must equal"),
+        ("mise.toml", 'fd = "10.4.2"', 'fd = "10.4.1"', "mise.toml tools must equal"),
+        ("mise.toml", 'jq = "1.8.2"', 'jq = "1.8.1"', "mise.toml tools must equal"),
+        ("mise.toml", 'gh = "2.97.0"', 'gh = "2.96.0"', "mise.toml tools must equal"),
+        ("mise.toml", 'version = "1.7.3"', 'version = "1.7.2"', "mise.toml tools must equal"),
+        ("mise.toml", 'version = "11.16.0"', 'version = "11.15.0"', "mise.toml tools must equal"),
+        # The betterleaks backend must stay github: — ubi: is deprecated in mise 2027.1.0 and
+        # locks version+backend only, losing per-platform checksums and attestation.
+        (
+            "mise.toml",
+            '[tools."github:betterleaks/betterleaks"]',
+            '[tools."ubi:betterleaks/betterleaks"]',
+            "mise.toml tools must equal",
+        ),
     )
 
     LOCKED_TOOLCHAIN = {
@@ -67,8 +83,70 @@ class GateGraphTests(unittest.TestCase):
                 "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
             },
         },
+        "ripgrep": {
+            "version": "15.2.0",
+            "backend": "aqua:BurntSushi/ripgrep",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
+        # fd 10.4.2 publishes no x86_64-apple-darwin asset upstream, so mise locks 9 of the
+        # 11 platform keys. Verified against the sharkdp/fd v10.4.2 release asset list.
+        "fd": {
+            "version": "10.4.2",
+            "backend": "aqua:sharkdp/fd",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64",
+                "windows-x64", "windows-x64-baseline",
+            },
+        },
+        "jq": {
+            "version": "1.8.2",
+            "backend": "aqua:jqlang/jq",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
+        "gh": {
+            "version": "2.97.0",
+            "backend": "aqua:cli/cli",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
+        "github:betterleaks/betterleaks": {
+            "version": "1.7.3",
+            "backend": "github:betterleaks/betterleaks",
+            "platforms": {
+                "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
+                "linux-x64-musl", "linux-x64-musl-baseline", "macos-arm64", "macos-x64",
+                "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
+            },
+        },
         "npm:@os-eco/seeds-cli": {"version": "0.5.14", "backend": "npm:@os-eco/seeds-cli"},
+        "npm:@mermaid-js/mermaid-cli": {
+            "version": "11.16.0",
+            "backend": "npm:@mermaid-js/mermaid-cli",
+        },
     }
+    # Per-platform record shape differs by backend, so the expected field set is data, not a
+    # special case buried in the assertion. aqua adds provenance only where the upstream
+    # publishes attestations; github: records an API asset URL alongside the download URL.
+    LOCK_PLATFORM_FIELDS = {
+        "uv": {"checksum", "url", "provenance"},
+        "lefthook": {"checksum", "url", "provenance"},
+        "jq": {"checksum", "url", "provenance"},
+        "gh": {"checksum", "url", "provenance"},
+        "github:betterleaks/betterleaks": {"checksum", "url", "url_api"},
+    }
+    NPM_BACKED_LOCK_TOOLS = {"npm:@os-eco/seeds-cli", "npm:@mermaid-js/mermaid-cli"}
 
     MUTATIONS = (
         ("mise.toml", 'depends = ["validate", "test", "self-test"]', 'depends = ["validate", "test"]', "check must contain only"),
@@ -168,15 +246,13 @@ class GateGraphTests(unittest.TestCase):
                 self.assertEqual(entries[0].get("version"), expected["version"])
                 self.assertEqual(entries[0].get("backend"), expected["backend"])
                 platform_keys = {key for key in entries[0] if key.startswith("platforms.")}
-                if name == "npm:@os-eco/seeds-cli":
+                if name in self.NPM_BACKED_LOCK_TOOLS:
                     self.assertEqual(set(entries[0]), {"version", "backend"})
                 else:
                     expected_platforms = expected["platforms"]
                     self.assertEqual(platform_keys, {f"platforms.{platform}" for platform in expected_platforms})
+                    expected_fields = self.LOCK_PLATFORM_FIELDS.get(name, {"checksum", "url"})
                     for key in platform_keys:
-                        expected_fields = {"checksum", "url"}
-                        if name in {"uv", "lefthook"}:
-                            expected_fields.add("provenance")
                         self.assertEqual(set(entries[0][key]), expected_fields)
 
     def test_generated_toolchain_lock_has_exact_tool_keys(self) -> None:
@@ -340,28 +416,50 @@ class GateGraphTests(unittest.TestCase):
     def test_betterleaks_wiring_matches_doctrine(self) -> None:
         """The skill's betterleaks claim must match actual wiring (no phantom gate).
 
-        betterleaks is NOT in the mise registry (only gitleaks is) and mise.toml/mise.lock/
-        lefthook.yml/validate.yml are byte/SHA-frozen by the validator, so a CI-parity [tools]
-        pin (Option A) is conformance-forbidden here. The honest resolution is Option B: the
-        skill marks the secrets scan advisory/opt-in and cites why it is not wired.
+        This tree takes Option A as of 2026-08-05: betterleaks IS pinned in [tools] via an
+        explicit github: backend and locked with per-platform checksums. Registry absence turned
+        out not to preclude pinning -- naming the backend is enough -- so the earlier Option B
+        rationale ("not registry-pinnable") was factually wrong and has been corrected in the
+        skill. Pinning a version is deliberately NOT the same as wiring an invocation: the scan
+        stays advisory (pre-publish, not a hook/CI/check dependency), so this test asserts the
+        pin exists and does not demand a hook or CI step.
         """
         skill = TOOLCHAIN_GATES_SKILL.read_text(encoding="utf-8")
         mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
         lefthook = LEFTHOOK.read_text(encoding="utf-8")
         ci = CI_WORKFLOW.read_text(encoding="utf-8")
 
-        wired = any(
-            token in mise or token in lefthook or token in ci
-            for token in ("betterleaks", "gitleaks")
+        pinned = re.search(
+            r"(?m)^(?:betterleaks|gitleaks)\s*=|\[tools\.\"[^\"]*(?:betterleaks|gitleaks)[^\"]*\"\]",
+            mise,
         )
-        if wired:
-            # Option A: if wired anywhere, it must be pinned in [tools] AND run in CI or hooks.
-            self.assertRegex(mise, r"(?m)^(?:betterleaks|gitleaks)\s*=|\[tools\.\"?(?:betterleaks|gitleaks)")
-            self.assertTrue(
-                "betterleaks" in ci or "gitleaks" in ci
-                or "betterleaks" in lefthook or "gitleaks" in lefthook,
-                "a wired secrets gate must run in CI or a hook",
+        invoked = any(
+            token in lefthook or token in ci for token in ("betterleaks", "gitleaks")
+        )
+        if pinned:
+            # Option A. A pinned scanner must be locked, not merely named, or "same version
+            # everywhere" is a claim with nothing behind it.
+            lock = tomllib.loads((ROOT / "mise.lock").read_text(encoding="utf-8"))["tools"]
+            scanner_keys = [k for k in lock if "betterleaks" in k or "gitleaks" in k]
+            self.assertEqual(
+                len(scanner_keys), 1, "a pinned secrets scanner must appear exactly once in mise.lock"
             )
+            entry = lock[scanner_keys[0]][0]
+            platform_keys = [k for k in entry if k.startswith("platforms.")]
+            self.assertTrue(platform_keys, "a pinned secrets scanner must lock per-platform records")
+            for key in platform_keys:
+                self.assertIn("checksum", entry[key])
+            # ubi: is deprecated for removal in mise 2027.1.0 and locks no per-platform checksum.
+            self.assertNotIn("ubi:", scanner_keys[0])
+            # The skill must not claim a wired gate that no hook or CI step actually runs.
+            if not invoked:
+                self.assertRegex(skill, r"(?i)advisory|opt-in|not wired|pre-publish")
+                self.assertNotRegex(
+                    skill,
+                    r"(?i)betterleaks[^.\n]{0,80}(?:runs on every|is wired into|part of `?mise run check`?)",
+                )
+        elif invoked:
+            self.fail("a secrets scanner runs in a hook or CI but is not pinned in [tools]")
         else:
             # Option B (this tree): the skill must explicitly mark it advisory/opt-in and
             # must NOT claim a wired gate that no `mise run check` runs.
