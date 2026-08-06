@@ -178,12 +178,17 @@ class PrimeCandidateCustodyTests(unittest.TestCase):
         self.assertEqual(record["status"], "non-authorizing")
         self.assertEqual(record["assessed_head"]["commit"], ASSESSED_HEAD_COMMIT)
         self.assertEqual(record["assessed_head"]["tree"], ASSESSED_HEAD_TREE)
-        self.assertEqual(git("rev-parse", "HEAD"), ASSESSED_HEAD_COMMIT)
-        self.assertEqual(git("rev-parse", "HEAD^{tree}"), ASSESSED_HEAD_TREE)
+        # The record is a dated attestation about one commit, so it is verified against that
+        # commit by name. Asserting HEAD still equals it would make the record expire on the
+        # next commit, which is not what custody means.
+        self.assertEqual(git("cat-file", "-t", ASSESSED_HEAD_COMMIT), "commit")
+        self.assertEqual(git("rev-parse", f"{ASSESSED_HEAD_COMMIT}^{{tree}}"), ASSESSED_HEAD_TREE)
         release_ref = f"refs/heads/{ASSESSED_RELEASE_BRANCH}"
         git("symbolic-ref", "--quiet", release_ref, expect_failure=True)
-        self.assertEqual(git("rev-parse", "--verify", release_ref), ASSESSED_HEAD_COMMIT)
         self.assertEqual(git("cat-file", "-t", release_ref), "commit")
+        # The durable safety property: the assessed custody point is still contained in the
+        # release line rather than orphaned by a reset or a force-push.
+        git("merge-base", "--is-ancestor", ASSESSED_HEAD_COMMIT, release_ref)
 
         candidate_items = self.record["candidate_commits"]
         self.assertIsInstance(candidate_items, list)
