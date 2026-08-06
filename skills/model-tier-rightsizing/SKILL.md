@@ -89,13 +89,30 @@ alias, or echoed prompt text is not resolution evidence.
 `request_injection_status`, `request_injection_evidence`, `resolution_state`,
 `resolved_provider`, `resolved_model_id`, `model_identity_basis`,
 `model_readback_status`, `model_readback_evidence`, `effort_readback_status`,
-`effort_readback_evidence`, `context_readback_status`, and `context_readback_evidence`.
+`effort_readback_evidence`, `effort_effective_divergence`, `context_readback_status`,
+`context_readback_evidence`, and `context_effective_divergence`.
 
 It rejects duplicate JSON members and arbitrary provenance strings. Each evidence object has a
 closed shape: request evidence binds the canonical requested-tuple digest; mapping evidence is
-only the policy reference; verified transport evidence binds observed model/provider, effort, or
-context plus its digest to the top-level receipt. It rejects prompt echoes, caller defaults, and
-copied-request masquerading as readback. `validated` means only that this internal schema and
+only the policy reference; verified model evidence binds the observed provider/model and its
+digest to the resolved pair. Verified effort/context evidence is different in kind: it carries
+the transport's own response bytes, and `readback_bytes_sha256` binds exactly those bytes —
+never a digest recomputed from a requested value, which any holder of the request could write.
+Those bytes must parse as JSON, and `observed_value_pointer` names the exact RFC 6901 location
+the transport reported the value at: a value that merely appears somewhere in the bytes proves
+nothing, because unrelated content can contain it. Freeform transport prose therefore cannot
+bind a value and must be recorded as `unavailable` instead. The observed value must also be in
+the policy's own effort or context vocabulary; an out-of-vocabulary transport report is
+`unavailable`, never verified. `effective_value_state` records whether the value matched or
+diverged from the requested value, and the top-level `effort_effective_divergence` and
+`context_effective_divergence` declare that same fact where a consumer reading only the summary
+fields will see it. A divergent effective effort or context is admissible and recorded as a
+divergence; it is never refused for diverging and never upgraded to agreement, and a receipt
+whose evidence records a divergence its top level omits or contradicts is refused. It rejects
+prompt echoes, caller defaults, and copied-request masquerading as readback, comparing
+request-derived shapes after canonicalization so reformatting does not evade the check — that
+refuses provably request-derived bytes, and cannot by itself authenticate that any other bytes
+came from the transport. `validated` means only that this internal schema and
 digest consistency check passed; `invalid` means it did not. The validator never authenticates
 an issuer or claims external injection, readback, admission, or spawn identity.
 

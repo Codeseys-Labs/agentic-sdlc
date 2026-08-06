@@ -2,7 +2,7 @@
   "schema_version": "role-manifest/v1",
   "generated_from": {
     "normative_contract_path": "policy/runtime-assignment-normative-contract-v1.json",
-    "normative_contract_sha256": "2901fdc0c2c4d212a9ce3f6a36c6fe5562771ddc881f5e3717466e691ad610b1",
+    "normative_contract_sha256": "c5f8dcc34afab21740daae74ea252fded66f1651663abf3672d3f54d7201d201",
     "validator_ruleset": "validate_bundle.validate_role_manifest"
   },
   "counts": {
@@ -42,13 +42,13 @@
       "projections": {
         "claude": {
           "path": "agents/claude/sdlc-cartographer.md",
-          "content_digest": "2a4537f229646756a9cffae3177b8299a0503a08de3a02a0d8e71545050bd208",
+          "content_digest": "dc8c9b922e0468e9fb53941579aaeeef022da6c621cb8cb4b5d96c15e64f566a",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
         },
         "codex": {
           "path": "agents/codex/sdlc-cartographer.toml",
-          "content_digest": "ed7545cdb34b335f92fb59873b8cac387da73367e37ea535ada46c1c836c3613",
+          "content_digest": "72d3a3c148511f3504ba5c4602dee0761d77298b95f19d1a03091bf5f0089c9d",
           "sandbox_mode": "read-only",
           "filesystem_write": false,
           "submission_contract": "eight-heading"
@@ -93,13 +93,13 @@
       "projections": {
         "claude": {
           "path": "agents/claude/sdlc-planner.md",
-          "content_digest": "6f18ca418ed35acef524d9c16406576299109aa5ce1866e18058a9ebb2a4411b",
+          "content_digest": "dbe7338b64369e75df270131ed6f9cee37854addc1d2ed846aab5f71bd230073",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
         },
         "codex": {
           "path": "agents/codex/sdlc-planner.toml",
-          "content_digest": "f452307058bffadeb059f1e4fc588520a7c6f19ccf9c288c9c83804d2a662784",
+          "content_digest": "5d1a3a7edad6a6ed35d0cd1a4c8f4568df04b6db08ae31a6ef82a04b8e536bf7",
           "sandbox_mode": "read-only",
           "filesystem_write": false,
           "submission_contract": "eight-heading"
@@ -140,13 +140,13 @@
       "projections": {
         "claude": {
           "path": "agents/claude/sdlc-researcher.md",
-          "content_digest": "f971579f6106d5efcd20c215f8c3c3bc5a15e8e59054db3c712157e0b3f21182",
+          "content_digest": "a0d148e7cda0a5d127c09493e3741ce4871409d17804324da48b1d209d9abbba",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
         },
         "codex": {
           "path": "agents/codex/sdlc-researcher.toml",
-          "content_digest": "53eb907a579f7bf49ef36389c7bf93ef1e09828bc442f0c1dfcf45553415fcbd",
+          "content_digest": "0b5063e08c86b07eff4ad4a7d3f88673000389acb1f459ae9ef0a985e930fc69",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
@@ -187,13 +187,13 @@
       "projections": {
         "claude": {
           "path": "agents/claude/sdlc-implementer.md",
-          "content_digest": "3214f71cf3923b710afd7b1bbe66fd7094acd939d2449fb422ac065174889222",
+          "content_digest": "87b722261b0e22a36e9de2b13d28e4ed1cd469855fe92fe7134cb04b86bc7d81",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
         },
         "codex": {
           "path": "agents/codex/sdlc-implementer.toml",
-          "content_digest": "557a58e47376faa79c49e669d22af1d95dc3772ea45926e3024c1f52b4760b8a",
+          "content_digest": "887df07455d1bd8001d36ca7fed433fb95f318f6c6e9bdfc10db0d0f676e29a9",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
@@ -234,13 +234,13 @@
       "projections": {
         "claude": {
           "path": "agents/claude/sdlc-reviewer.md",
-          "content_digest": "2cc7132a36dd93127096448cf214c8a70ae5d7a9aed3d883df3a5af241ed8359",
+          "content_digest": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
           "filesystem_write": false,
           "submission_contract": "eight-heading"
         },
         "codex": {
           "path": "agents/codex/sdlc-reviewer.toml",
-          "content_digest": "31a77d96ea5184f2b4a2f87df250872b5c5e50ccd20c2adb8f15a30bfecba015",
+          "content_digest": "816f52d896821f4d5964e0d9fc8dd412b01e27800733613ace496eeec61dd003",
           "sandbox_mode": "read-only",
           "filesystem_write": false,
           "submission_contract": "eight-heading"
@@ -283,13 +283,13 @@
       "projections": {
         "claude": {
           "path": "agents/claude/sdlc-critic.md",
-          "content_digest": "7ac747f847f72057a927d94d93a25ce23f59609d4641c56b38d30540f4a6203d",
+          "content_digest": "3a8fddc0f4a0e23320bce4948cc8e87b1b874f1392aff1f3f8469bb1494c3911",
           "filesystem_write": false,
           "submission_contract": "eight-heading"
         },
         "codex": {
           "path": "agents/codex/sdlc-critic.toml",
-          "content_digest": "952f2a220d9f8977b418f172023a9e92ed6cbdc4c42a69deb77e9d7efacfdf12",
+          "content_digest": "85cb8c86810ab75434f0631843ed8a1d2b2970543543d5443b79243933580c20",
           "sandbox_mode": "read-only",
           "filesystem_write": false,
           "submission_contract": "eight-heading"
@@ -332,13 +332,13 @@
       "projections": {
         "claude": {
           "path": "agents/claude/sdlc-integrator.md",
-          "content_digest": "cd2e4d8e9b968824453d072561f3dea24062a06d0241ae15d3a5c3f07328aac9",
+          "content_digest": "f27f1ee7257657c0483a9d63b00de03321b9370219a098216c7e10a97576aed0",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
         },
         "codex": {
           "path": "agents/codex/sdlc-integrator.toml",
-          "content_digest": "e9e91e8c4883a529f7869d3d07772283e8382efa0ce3cc82304f35abd98b7858",
+          "content_digest": "fa7027592b9b75853f731c99683bc80ae3e3045e729eac94971f8fd459e7e099",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "eight-heading"
@@ -376,7 +376,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/ablationist.toml",
-          "content_digest": "2cd3e5847069df205fe84087864c7e7163d7cafd783ad93cab9e74a1cfb91989",
+          "content_digest": "b9bf6ec379aec50bcd15d0ba78f2869f71e147eb243fe85856fd86605a5477f9",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -414,7 +414,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/adversarial_reviewer.toml",
-          "content_digest": "eb8af719f2f4d4c6075f8a7c108bde8f455b0e6db24390e06b348263fb3cb2ec",
+          "content_digest": "f452a51a61cd043181443722077af7e41bfef8b558630c76b5003e52db43c0df",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -453,7 +453,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/benchmark_engineer.toml",
-          "content_digest": "9459e4e6ce7a7984456f43e6a1fe6760fe552cc520f2edb4cc24d43232afa1a4",
+          "content_digest": "e6e553e7a83e02106bb89fff1f6c25f336d7763f953b254ae080df589b2ac550",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -491,7 +491,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/counterexample_hunter.toml",
-          "content_digest": "34eeb82c3345079e6fd30126dfdba46b9f755661addc02f1f384d71d4ccd5255",
+          "content_digest": "3d5d636de76844a1549349ac7f3349f63a8da85dbb4718e3e269776730bb460b",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -529,7 +529,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/data_engineer.toml",
-          "content_digest": "c8ab4c3d2df9d872afa0e9dc11fe06b68031a08d6b376abf9fd87e1a8c7b9328",
+          "content_digest": "25e9df3e509fa82b266fa4084d141b71d05db58326bf6549b3e3715deafc8ceb",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -567,7 +567,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/experimentalist.toml",
-          "content_digest": "de175fbb3611c128a9927940f7565795e96ce14264fd9f6116ee8d674cd37046",
+          "content_digest": "eb0ff04c7154d1e1dfa811ba0baeaba213ef79dd13968c1c3c9930fb29266654",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -605,7 +605,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/formalizer.toml",
-          "content_digest": "a5d00b2767b35e6501880d312d88b3ffb133908035efe9c0a6e0fbf1863dc599",
+          "content_digest": "1625f49f4c0b1dc5a1e27a47dddd5dd627a77bc5a8e91d5ee01f20100402fee3",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -643,7 +643,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/knowledge_librarian.toml",
-          "content_digest": "19d9cfb80da1fb52b43f311f8c838f7ca9a5f6b5775ac3b8d51a5224cb8f8472",
+          "content_digest": "fc00d34e268daa50fb99011596a18a26724ac6aaca10076a4263ca7b9e6e6e3b",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -681,7 +681,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/literature_scout.toml",
-          "content_digest": "5d303f05a28d1f65c1fb74649ce8c71a0c2eae5d490eb7bda1caae7146d33a7c",
+          "content_digest": "5720b9bd70b2b0eccaecd0c7979d68f7d2a516e494d872d0644a9b9cb5e461ae",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -719,7 +719,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/novelty_auditor.toml",
-          "content_digest": "510b9e511249ac00607e66a867530dcbc7cc25a63efcee1167a3e7780f14cc6a",
+          "content_digest": "38ed2aab9f5b3c24d3ef23e60cc67aeaedf164bfc34a5045557a7851d93183d1",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -757,7 +757,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/replication_reviewer.toml",
-          "content_digest": "10c549ad2d30fe76837611ee4e5015b6cebf3f646711c67ecf5dd81ab1fe8077",
+          "content_digest": "81d4038144782721c2df34d604df9af86d1a7e00628c9cb8f94c19610bf695c9",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -796,7 +796,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/repo_cartographer.toml",
-          "content_digest": "749dceccc3bbd05b201ebf670f434ca2625d90fcc1334f220b8d1c3848772153",
+          "content_digest": "9b25f0ef272a95beb0462b4e6d96e276fc328f2d493a803d9ee1701c41edfeaf",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -838,7 +838,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/research_director.toml",
-          "content_digest": "92ab46674bf98dd80ef859b1d7ae6604a39bcf72efc3d56ff68e70468a520639",
+          "content_digest": "585f4f76d3e09d74e1eb5dbe3a6555fe9026bdeba9cd1b1c8e8945c784b08d5f",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -876,7 +876,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/safety_reviewer.toml",
-          "content_digest": "1e385fae9448d436188fc84f010c3cbf6a608622c54bdeef6f14c182b5780fa4",
+          "content_digest": "afe1a80ec71ebb03d62b438d188e8ebbd0670c6460e824dd418048a11165c5a3",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -918,7 +918,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/synthesis_writer.toml",
-          "content_digest": "453cf7e1a1d5ab9d50c51e93a7e6bcec749efd45ea74277ade24bdaa87ce1272",
+          "content_digest": "7ccb408a893b67b1b2feb1fc7eff8e6b0e3dfa6dd359f87eebd9579f07b7a667",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -956,7 +956,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/systems_engineer.toml",
-          "content_digest": "cb562cfc98de514262a995a808ce33813f321ec5b5ef2d4a6af23c33899688ca",
+          "content_digest": "32cfd1a9aa9a645293bc008ea87d59e1022c9cc80ef017203b65b47c3f629bc9",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"
@@ -994,7 +994,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/theorist.toml",
-          "content_digest": "2cab3610fb766d5ef557640fd68150e9825029fc6ee36e402da53a0ef5240b3e",
+          "content_digest": "0d985195c830acc6341114364f644da8916fe8ad0cf4fd24ab6db8ef00df2fa4",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"

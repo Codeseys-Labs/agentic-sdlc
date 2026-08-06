@@ -1,0 +1,6 @@
+# Pinned scanner config: extends the default ruleset and nothing else.
+# The explicit --config flag has highest precedence, so a drop-in
+# .gitleaks.toml/.betterleaks.toml or a GITLEAKS_CONFIG* environment
+# variable cannot silently replace the ruleset the gate runs.
+[extend]
+useDefault = true

@@ -102,8 +102,10 @@ model_readback_status: verified
 model_readback_evidence: <closed structured evidence with a cross-field assignment binding to resolved provider, model, requested effort, and requested context>
 effort_readback_status: verified|unavailable
 effort_readback_evidence: <closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and effective effort when verified>
+effort_effective_divergence: matches_requested|diverges_from_requested|unavailable
 context_readback_status: verified|unavailable
 context_readback_evidence: <closed structured evidence with a cross-field assignment binding to the same resolved provider/model/effort/context tuple and effective context when verified>
+context_effective_divergence: matches_requested|diverges_from_requested|unavailable
 ```
 
 The receipt is validated only for canonical internal consistency; it does not authenticate an issuer

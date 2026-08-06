@@ -33,18 +33,20 @@ RUNTIME_FIELDS = (
     "model_readback_evidence",
     "effort_readback_status",
     "effort_readback_evidence",
+    "effort_effective_divergence",
     "context_readback_status",
     "context_readback_evidence",
+    "context_effective_divergence",
 )
 ONE_MILLION_CONTEXT_SEMANTICS = "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance."
 VALIDATION_ONLY_SEMANTICS = "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
 SEEDS_READ_ONLY_SEMANTICS = "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor."
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
-RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "6ea5d0acaf63497963ee7087874ae20fdb735c0ae0afad8405b4de1c919a32bd"
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "9354550eeeef56875735201c7db273d5d65a9ad13cec2e0f1ae4787bdc1ba1fc"
 SOURCE_PINNED_REVIEWER_INSTRUCTIONS_SHA256 = {
-    "adversarial_reviewer": "182d6721f2b1205970f2097016a249af1dacd0de63538b6407a35841e58edf2b",
-    "replication_reviewer": "ce6268492086142cfad616d36c7a7e13473cd24e009d35547acc2aa2bb8f9764",
-    "safety_reviewer": "c94b8a9e44ce7db080934c69c856c3ec5b1c5aaefde7f79f93b924845fbf2a71",
+    "adversarial_reviewer": "72c99c20fb4c96df000a0bd4cf3e06a665fba444fd2d3bd292e542805cd111fe",
+    "replication_reviewer": "81e0c077a3a88e6ba21f74cee539120266a323f2f5362b7783a3089e272335de",
+    "safety_reviewer": "dedc346315dd9cac63ed9d85576e6db6c6e4a85f0de9a53b7465c8452d962b5d",
 }
 RESEARCH_ROLE_IDS = frozenset(
     {
@@ -75,7 +77,7 @@ SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
-CANONICAL_RUNTIME_CONTRACT_SHA256 = "e1872645df2e036770491fab44c122336c2fcf3e3765b10485d04bac06f23314"
+CANONICAL_RUNTIME_CONTRACT_SHA256 = "9399a0d9ebed19cefd020ac190ac772641e804e9f8a1632fb2b01059c94ba420"
 EXACT_MODEL_PROVIDER_MAP = {
     "claude-fable-5": "anthropic",
     "claude-opus-4-8": "anthropic",

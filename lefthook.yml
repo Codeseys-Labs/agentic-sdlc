@@ -9,3 +9,5 @@ pre-push:
       run: mise run test
     self-test:
       run: mise run self-test
+    secrets:
+      run: mise run secrets

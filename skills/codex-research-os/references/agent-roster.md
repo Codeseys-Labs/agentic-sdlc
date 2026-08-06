@@ -36,10 +36,10 @@ chooses inside the appropriate exact six-model pair, and supplies a conductor-su
 - `request_injection_status` and `request_injection_evidence`
 - `resolution_state`, `resolved_provider`, `resolved_model_id`, and `model_identity_basis`
 - `model_readback_status` and `model_readback_evidence`
-- `effort_readback_status` and `effort_readback_evidence`
-- `context_readback_status` and `context_readback_evidence`
+- `effort_readback_status`, `effort_readback_evidence`, and `effort_effective_divergence`
+- `context_readback_status`, `context_readback_evidence`, and `context_effective_divergence`
 
-This is the exact 16-field canonical receipt shape; it has no `*_source` projections. Its
+This is the exact 18-field canonical receipt shape; it has no `*_source` projections. Its
 closed evidence binds embedded model/provider/effort/context values and digests to receipt
 fields. Validation proves only canonical internal consistency; the external authenticated
 harness alone admits and spawns. `resolution_state` must be `resolved`. Exact model/effort

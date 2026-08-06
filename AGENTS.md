@@ -38,7 +38,12 @@ as the router.
 
 - Run `mise run check` before any commit — it is the authoritative repository gate. It uses
   mise-managed uv/Python to validate name==dirname, the Codex 1024-char description cap,
-  broken references, TOML/JSON parses, shell syntax, manifests, and secrets. A passing gate
+  broken references, TOML/JSON parses, shell syntax, manifests, and secret-shaped strings in
+  tracked text, then runs the installer tests, the lifecycle self-test, and the pinned
+  working-tree secrets scan (`mise run secrets` = `betterleaks dir .` with `--config` pinned at
+  the tracked extend-only `.config/betterleaks.toml`, so a drop-in config or `GITLEAKS_CONFIG*`
+  variable cannot silently replace the ruleset). Full git-history
+  scanning stays a separate, explicitly consented pre-publish step. A passing gate
   is evidence only; it does not authorize an outward effect.
 - Run `./scripts/install-skill-bundle.sh self-test` after installer changes.
 - Version bumps: `./scripts/bump-version.sh <version>` updates every manifest in one
@@ -102,7 +107,7 @@ model selection as policy.
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`
 - `bundle:install:all-hosts`, `bundle:status:all-hosts`
-- `research-os:install`, `test`, `self-test`, `check`, `hooks:install`, `setup`
+- `research-os:install`, `test`, `self-test`, `secrets`, `check`, `hooks:install`, `setup`
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim
@@ -126,7 +131,7 @@ entries are preserved, while unchanged owned copies may refresh.
 
 Native Windows runs the current-host task normally. From WSL, all-host tasks run WSL first,
 then invoke native Windows mise and report the two hosts separately. `hooks:install` installs
-lefthook's validate pre-commit and test/self-test pre-push subsets; hooks are best-effort
+lefthook's validate pre-commit and test/self-test/secrets pre-push subsets; hooks are best-effort
 convenience, not release authority. The Bash installer is a mise-backed compatibility wrapper retaining
 positional `status`, `uninstall`, `self-test`, and legacy `--copy`.
 For Claude, use either direct install or the marketplace, never both; marketplace

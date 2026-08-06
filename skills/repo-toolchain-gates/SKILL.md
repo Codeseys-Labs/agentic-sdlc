@@ -11,8 +11,8 @@ description: |
   mise [tools], {staged_files}/stage_fixed, worktree hook sharing vs per-path mise trust,
   betterleaks git-history scans, self-hashing gate receipts, and the negative-fixture idiom.
 author: Claude Code
-version: 1.1.0
-date: 2026-07-16
+version: 1.2.0
+date: 2026-08-06
 ---
 
 # Repo Toolchain + Gates (mise · lefthook · betterleaks)
@@ -32,20 +32,22 @@ mise.toml   [tools]  → pins EVERYTHING: language, uv, linters, lefthook
             [tasks]  → fmt / vet / lint / test / … and ONE aggregate:
             [tasks.check]  depends = ["fmt","vet","lint","test",…]   ← THE gate
 lefthook.yml           → pre-commit = fast staged-file subset; pre-push = heavier subset
-betterleaks            → secrets gate: lefthook command + CI step + pre-publish history scan
-                          (pin the version always; wire the invocation only where the repo
-                           has a real secrets surface — see below)
+betterleaks            → secrets gate: a [tasks.secrets] working-tree scan inside check +
+                          a lefthook pre-push command; the full-history scan stays a separate
+                          consent-requiring pre-publish step (pin the version always — see below)
 ```
 
 `mise run check` is the single gate string agents need. The cartographer discovers it; the
 implementer runs it before reporting done; the integrator re-runs it on the integration
-branch; CI runs the same tasks. Hooks are a *subset* of check (fast, staged-files-only) —
-never the other way around.
+branch; CI runs the same tasks. Hooks never run anything that is not a `check` leaf — never the
+other way around.
 
 **This bundle's own gate graph is the worked example, and it is conformance-frozen.**
-`mise.toml`'s `[tasks.check]` depends on exactly `["validate","test","self-test"]`; lefthook
-runs `validate` (pre-commit) and `test`+`self-test` (pre-push), a strict subset of `check`; CI
-(`.github/workflows/validate.yml`) runs exactly `mise run check` on three OSes with SHA-pinned
+`mise.toml`'s `[tasks.check]` depends on exactly `["validate","test","self-test","secrets"]`;
+lefthook's pre-commit runs `validate` alone (the fast subset) and pre-push runs
+`test`+`self-test`+`secrets`, so the two hooks together cover exactly those four leaves and
+neither hook exceeds `check`; CI (`.github/workflows/validate.yml`) runs exactly `mise run check`
+on three OSes with SHA-pinned
 `actions/checkout` + `jdx/mise-action`. All three are the SAME graph. The enforcing test is the
 contract: `tests/test_gate_graph.py` fails any `[tasks.check]` drift (`test_all_hollowing_mutations_fail`),
 any tool-pin drift (`test_toolchain_config_mutations_fail`), any lefthook-superset or unpinned-CI
@@ -81,12 +83,13 @@ graph only by updating that test in the same commit.
 - Bypass exists (`--no-verify`, `LEFTHOOK=0`) — hooks are a guardrail for humans and
   workers, not a security boundary. CI re-runs the same gates.
 
-## betterleaks: the secrets gate (advisory here — doctrine-vs-wiring reconciliation)
+## betterleaks: the secrets gate (wired here — working tree, not history)
 
 gitleaks-compatible fork (drop-in: same rules format, same flags) with live-credential
 `--validation` and faster scans. Two modes:
 
-- `betterleaks dir .` — working tree (lefthook pre-push / CI step).
+- `betterleaks dir . --config <tracked-config>` — working tree (lefthook pre-push / CI step).
+  Never wire the bare form; see the `--config` paragraph below.
 - `betterleaks git .` — FULL git history. Run before making any repo public or handing a
   bundle to another machine; HEAD-only scans miss secrets deleted in later commits.
 
@@ -94,9 +97,41 @@ Exit code is the gate: 0 clean, 1 leaks. For a repo with a live secrets surface,
 lefthook pre-push command and a CI step; pair with a repo-specific sweep (internal hostnames etc.)
 which generic rules won't catch.
 
-**Wiring status in THIS bundle: version-pinned, invocation advisory / opt-in.** `betterleaks`
-IS pinned in `[tools]` and locked in `mise.lock`; it is deliberately NOT in `lefthook.yml` or
-CI, and it is NOT a `[tasks.check]` dependency. The two facts are separate and both matter:
+**Wiring status in THIS bundle: version-pinned, locked, and wired as a `check` leaf.**
+`betterleaks` is wired into `mise run check`: `[tasks.secrets]` runs the working-tree scan
+(`betterleaks dir . --config .config/betterleaks.toml`) and `[tasks.check]` depends on
+`["validate","test","self-test","secrets"]`, so the scan runs wherever `mise run check` runs —
+including CI, which invokes exactly that one command. `lefthook.yml` carries the same scan as a
+**pre-push** command; pre-commit stays the fast `validate`-only subset, because a full-tree scan
+is not a staged-file check.
+
+**Always pass `--config` explicitly.** A bare `betterleaks dir .` auto-loads a drop-in
+`.gitleaks.toml`/`.betterleaks.toml` from the working directory and honors
+`GITLEAKS_CONFIG*`/`BETTERLEAKS_CONFIG*`, so an untracked, gitignorable file containing
+`[extend]` `useDefault = false` replaces the entire ruleset and the gate keeps exiting 0 — the
+worst kind of failure, because every pinned fixture stays green while nothing is being scanned.
+The explicit flag has highest precedence and defeats both routes, so `[tasks.secrets]` points it
+at the tracked, extend-only `.config/betterleaks.toml`. Pinning the flag alone would only move
+the hazard into that file, so `scripts/validate_bundle.py` (`validate_secrets_config`) parses it
+and requires exactly `[extend]` `useDefault = true` and nothing else: a neutering edit to the
+pinned config fails `mise run validate`.
+
+What is scanned and what is not is a deliberate boundary:
+
+- **Scanned automatically: the working tree** (`betterleaks dir . --config …`). That is the surface
+  a commit or push can newly expose, and it is cheap enough to sit in the default gate.
+- **NOT scanned automatically: git history** (`betterleaks git .`). History scanning is a
+  separate, consent-requiring **pre-publish** step — run it deliberately before a repo is made
+  public or handed to another machine, because rewriting or acting on a historical finding is an
+  outward-effect decision, not something a commit hook should trigger. No task, hook, or CI step
+  in this bundle invokes the history verb; `test_betterleaks_is_pinned_locked_and_wired` asserts
+  that no executed task/hook/CI command string does.
+- **A clean scan is evidence, not authorization.** Exit 0 means the pinned scanner's rules found
+  nothing in the working tree at that moment. It does not certify the absence of secrets (rules
+  are heuristics, history is out of scope), and it grants no authority to push, publish, tag, or
+  hand the bundle anywhere — each of those still needs explicit operation-specific authorization.
+
+Two facts about the pin itself remain separate from the wiring, and both still matter:
 
 1. **Pinnable without the registry (corrected 2026-08-05).** An earlier revision of this skill
    claimed betterleaks could not be pinned because it is absent from the mise registry. That
@@ -115,18 +150,21 @@ CI, and it is NOT a `[tasks.check]` dependency. The two facts are separate and b
    the reviewed per-platform checksum in `mise.lock` as the integrity control. A repo that
    already provisions a token everywhere may leave both enabled for defense in depth.
 
-Pinning the tool is not wiring the gate, and this bundle stops at pinning. This repo is a
-skill/installer bundle with **no runtime credentials in-tree**, so a live secrets scan on every
-`check` is the wrong altitude: the invocation posture is `betterleaks git .` (full history) as a
-**pre-publish** step before the bundle is made public or handed to another machine.
-`tests/test_gate_graph.py::test_betterleaks_wiring_matches_doctrine` enforces the honesty
-constraint in both directions: because the tool now appears in `mise.toml`, the test takes its
-Option A branch and requires a real `[tools]` pin — so the pin cannot be quietly dropped while
-this text still describes one. Adding it to a hook or CI additionally requires regenerating the
-SHA-pinned lock and updating the frozen constants in `scripts/validate_bundle.py` and
-`tests/test_gate_graph.py` in the same commit; joining `[tasks.check]` additionally requires
-updating the check-depends assertion. A pinned scanner is evidence infrastructure — running it
-clean authorizes nothing.
+Pinning a tool and wiring its invocation are still two separate decisions; this bundle now does
+both, and the earlier revision that stopped at pinning said so plainly rather than claiming a gate
+it did not run. Keep them coupled in the enforcing tests:
+`tests/test_gate_graph.py::test_betterleaks_is_pinned_locked_and_wired` requires the `[tools]`
+pin, the per-platform lock records, the `[tasks.secrets]` working-tree verb, `secrets` in
+`[tasks.check]`'s `depends`, and the pre-push hook command — so neither half can be quietly
+dropped while this text describes both. `test_removing_secrets_from_check_is_caught` is the
+mutation negative: hollowing `depends` back to the base three fails the validator. The `MUTATIONS`
+table adds the two neutering routes: stripping `--config` from either `run` field, and flipping
+`useDefault` to `false` inside the pinned config. Any change to
+the graph updates `scripts/validate_bundle.py` (`REQUIRED_TASKS`, `SECRETS_COMMAND`,
+`SECRETS_CONFIG_PATH`, `validate_secrets_config`, the frozen
+`check` table, the frozen `lefthook.yml` bytes) and those tests in the same commit; changing the
+tool version additionally requires regenerating the SHA-pinned lock. A pinned, wired scanner is
+evidence infrastructure — running it clean authorizes nothing.
 
 ## Pinning a tool that is not in the mise registry
 
@@ -184,7 +222,18 @@ unresolved. Packaging feasibility is not authorization to adopt.
 - `mise run check` exits non-zero on a planted lint error (prove the gate falsifiable the
   day it ships).
 - `git commit` in a worktree fires pre-commit (plant a staged `.py` with a lint error).
-- `betterleaks git .` exits 1 on a planted AWS key in a test commit (then drop the commit).
+- `mise run secrets` exits 0 on a clean tree and 1 on a planted canary credential in an
+  untracked, non-ignored scratch file (then delete the file) — that pair proves the wired scan
+  falsifiable. Both halves verified on this tree 2026-08-06. Use `access_key = "AKIA<16 random
+  A-Z0-9>"` and generate the tail fresh; the `aws_access_key_id` spelling is allowlisted upstream
+  and reports clean, so it silently proves nothing (see the caveat under negative-fixture testing).
+- With the canary still planted, add a drop-in `.gitleaks.toml` containing `[extend]`
+  `useDefault = false` and confirm `mise run secrets` STILL exits 1, then confirm a bare
+  `betterleaks dir .` in the same tree exits 0. That contrast — not the pinned run alone — is what
+  proves `--config` defeats the neutering route rather than the hazard being absent. Verified both
+  ways on this tree 2026-08-06, for the drop-in file and for `GITLEAKS_CONFIG`.
+- `betterleaks git .` exits 1 on a planted AWS key in a test commit (then drop the commit). Run
+  the history verb deliberately, by hand, as the pre-publish step; nothing invokes it for you.
 
 ## Negative-fixture gate testing (the falsifiability doctrine)
 
@@ -199,10 +248,22 @@ path fires:
 - `mise.lock` tamper fails — `assert_lock_mutation_fails`, `test_lock_mutation_fails_through_cli`.
 - description-bypass variants fail — `test_folded_description_variants_cannot_bypass_validation`.
 - worktree-untrusted mise fails then trust fixes — `test_paranoid_mode_requires_per_path_trust`.
+- unwiring the secrets leaf fails — `test_removing_secrets_from_check_is_caught`, plus the
+  `MUTATIONS` rows that swap the working-tree verb for the history verb or for `true`.
+- neutering the secrets leaf without unwiring it fails — the `MUTATIONS` rows that strip
+  `--config` from `run`/`run_windows` and that flip `useDefault` to `false` in the pinned config.
 
 Fixture rules (match the existing `tests/` posture): offline, synthetic, non-secret, and
 self-cleaning (`tempfile.TemporaryDirectory`, drop the commit). A secrets fixture uses a documented
 **test-pattern/canary** token, never a real credential, and is never used as production evidence.
+**Verified caveat (2026-08-06): a randomized tail is necessary but NOT sufficient — the surrounding
+keyword decides whether the rule fires at all.** Measured on betterleaks 1.7.3 with the same
+freshly-random `AKIA…` tail in the same file: `access_key = "AKIA<tail>"` and `AWS_KEY = "AKIA<tail>"`
+exit 1, while `aws_access_key_id = "AKIA<tail>"`, the bare token alone, and the unquoted form all
+report clean. The documentation-shaped keyword is allowlisted upstream, so the most natural-looking
+canary is exactly the one that proves nothing. File extension and base32-vs-full-alphanumeric tails
+made no difference. **Always confirm the fixture fails before trusting any green case**, and pair a
+neutering probe with it — a scan that cannot be shown to fail is not evidence.
 Reuse the existing helpers (`copied_repo`, `run_validator`, `assert_lock_mutation_fails`,
 `isolated_mise_env`) — do not fork a parallel harness.
 

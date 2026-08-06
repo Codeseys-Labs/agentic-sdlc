@@ -34,6 +34,7 @@ REQUIRED_TASKS = {
     "research-os:install",
     "test",
     "self-test",
+    "secrets",
     "check",
     "hooks:install",
     "setup",
@@ -84,6 +85,15 @@ TASK_COMMANDS = {
     "test": "--with pyyaml==6.0.3 python -m unittest discover -s tests",
     "self-test": "--script scripts/install_skill_bundle.py self-test",
 }
+# The secrets task runs the pinned scanner binary directly, not through uv, so it is pinned
+# on its own. `dir` scans the working tree; the full-history verb (`git`) is deliberately not
+# wired here — history scanning is a consent-requiring pre-publish step, not a commit gate.
+# `--config` is part of the pin, not a convenience: without it the scanner auto-loads a drop-in
+# .gitleaks.toml/.betterleaks.toml from cwd or a GITLEAKS_CONFIG*/BETTERLEAKS_CONFIG* variable,
+# so an untracked `[extend] useDefault = false` file silently replaces the ruleset. mise resolves
+# the pinned binary on PATH identically on both platforms, so run_windows is the same string.
+SECRETS_CONFIG_PATH = ".config/betterleaks.toml"
+SECRETS_COMMAND = f"betterleaks dir . --config {SECRETS_CONFIG_PATH}"
 RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
@@ -167,15 +177,15 @@ SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
-RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "6ea5d0acaf63497963ee7087874ae20fdb735c0ae0afad8405b4de1c919a32bd"
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "9354550eeeef56875735201c7db273d5d65a9ad13cec2e0f1ae4787bdc1ba1fc"
 SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256 = {
-    "agents/claude/sdlc-reviewer.md": "2cc7132a36dd93127096448cf214c8a70ae5d7a9aed3d883df3a5af241ed8359",
-    "agents/codex/sdlc-reviewer.toml": "31a77d96ea5184f2b4a2f87df250872b5c5e50ccd20c2adb8f15a30bfecba015",
-    "agents/codex/research/adversarial_reviewer.toml": "eb8af719f2f4d4c6075f8a7c108bde8f455b0e6db24390e06b348263fb3cb2ec",
-    "agents/codex/research/replication_reviewer.toml": "10c549ad2d30fe76837611ee4e5015b6cebf3f646711c67ecf5dd81ab1fe8077",
-    "agents/codex/research/safety_reviewer.toml": "1e385fae9448d436188fc84f010c3cbf6a608622c54bdeef6f14c182b5780fa4",
+    "agents/claude/sdlc-reviewer.md": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
+    "agents/codex/sdlc-reviewer.toml": "816f52d896821f4d5964e0d9fc8dd412b01e27800733613ace496eeec61dd003",
+    "agents/codex/research/adversarial_reviewer.toml": "f452a51a61cd043181443722077af7e41bfef8b558630c76b5003e52db43c0df",
+    "agents/codex/research/replication_reviewer.toml": "81d4038144782721c2df34d604df9af86d1a7e00628c9cb8f94c19610bf695c9",
+    "agents/codex/research/safety_reviewer.toml": "afe1a80ec71ebb03d62b438d188e8ebbd0670c6460e824dd418048a11165c5a3",
 }
-CANONICAL_RUNTIME_CONTRACT_SHA256 = "e1872645df2e036770491fab44c122336c2fcf3e3765b10485d04bac06f23314"
+CANONICAL_RUNTIME_CONTRACT_SHA256 = "9399a0d9ebed19cefd020ac190ac772641e804e9f8a1632fb2b01059c94ba420"
 EXACT_MODEL_PROVIDER_MAP = {
     "claude-fable-5": "anthropic",
     "claude-opus-4-8": "anthropic",
@@ -1009,11 +1019,11 @@ def runtime_receipt_fields() -> tuple[str, ...]:
         raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
     if (
         not isinstance(fields, list)
-        or len(fields) != 16
+        or len(fields) != 18
         or not all(isinstance(field, str) and field for field in fields)
         or len(set(fields)) != len(fields)
     ):
-        raise ValueError("runtime receipt policy must define exactly 16 unique non-empty canonical fields")
+        raise ValueError("runtime receipt policy must define exactly 18 unique non-empty canonical fields")
     return tuple(fields)
 
 
@@ -1043,7 +1053,7 @@ def validate_runtime_receipt_projection(text: str, label: Path | str, result: Va
     if missing:
         result.error(f"{label}: runtime receipt projection missing {', '.join(missing)}")
     if projected != required:
-        result.error(f"{label}: runtime receipt projection must equal the exact policy-derived 16-field block")
+        result.error(f"{label}: runtime receipt projection must equal the exact policy-derived 18-field block")
     try:
         contract = runtime_receipt_contract()
     except ValueError as exc:
@@ -1091,6 +1101,31 @@ def validate_agents(root: Path, result: Validation) -> None:
         if "model_reasoning_effort" in data:
             result.error(f"{agent.relative_to(root)}: static model_reasoning_effort is forbidden")
         validate_runtime_receipt_projection(agent.read_text(encoding="utf-8"), agent.relative_to(root).as_posix(), result)
+
+
+def validate_secrets_config(root: Path, result: Validation) -> None:
+    """Pin the config the secrets task points `--config` at.
+
+    Pinning the flag only moves the hazard: an edit to this file could set
+    `useDefault = false`, or add an allowlist wide enough to match everything, and the gate
+    would run green against no rules. The pin is therefore the whole document — exactly one
+    `[extend]` table enabling the default ruleset, nothing else — parsed rather than
+    byte-compared so the file's explanatory comments stay editable.
+    """
+    path = root / SECRETS_CONFIG_PATH
+    if not path.is_file():
+        result.error(f"{SECRETS_CONFIG_PATH} is required: the secrets task pins --config at it")
+        return
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        result.error(f"{SECRETS_CONFIG_PATH} is invalid: {exc}")
+        return
+    if config != {"extend": {"useDefault": True}}:
+        result.error(
+            f"{SECRETS_CONFIG_PATH} must contain only [extend] useDefault = true, "
+            "so the pinned scan cannot be neutered through its own config"
+        )
 
 
 def validate_mise(root: Path, result: Validation) -> None:
@@ -1147,12 +1182,20 @@ def validate_mise(root: Path, result: Validation) -> None:
             expected = f"{executable} run --python {PYTHON_VERSION} {command_suffix}"
             if task.get(field) != expected:
                 result.error(f"mise.toml task {name}.{field} must equal {expected!r}")
+    expected_secrets = {
+        "description": "Scan the working tree for secrets with the pinned scanner",
+        "run": SECRETS_COMMAND,
+        "run_windows": SECRETS_COMMAND,
+    }
+    if tasks.get("secrets") != expected_secrets:
+        result.error(f"mise.toml secrets must contain only its description and the exact working-tree scan {SECRETS_COMMAND!r}")
+    validate_secrets_config(root, result)
     expected_check = {
-        "description": "Run validation, installer tests, and lifecycle self-test",
-        "depends": ["validate", "test", "self-test"],
+        "description": "Run validation, installer tests, lifecycle self-test, and the secrets scan",
+        "depends": ["validate", "test", "self-test", "secrets"],
     }
     if tasks.get("check") != expected_check:
-        result.error("mise.toml check must contain only its description and exact validate/test/self-test dependencies")
+        result.error("mise.toml check must contain only its description and exact validate/test/self-test/secrets dependencies")
 
     lock_path = root / "mise.lock"
     if not lock_path.is_file():
@@ -1237,6 +1280,8 @@ pre-push:
       run: mise run test
     self-test:
       run: mise run self-test
+    secrets:
+      run: mise run secrets
 """
     if not hooks.is_file() or hooks.read_text(encoding="utf-8") != expected_hooks:
         result.error("lefthook.yml must contain the documented best-effort gate subsets")

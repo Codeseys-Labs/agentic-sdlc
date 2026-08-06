@@ -95,9 +95,21 @@ description = "Verify installer lifecycle safety in a throwaway home"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
 
+[tasks.secrets]
+description = "Scan the working tree for secrets with the pinned scanner"
+# Working tree only. The full-history verb (`betterleaks git .`) is deliberately NOT wired:
+# scanning history is a separate, consent-requiring pre-publish step, not a commit gate.
+# --config is explicit because the scanner otherwise auto-loads a drop-in .gitleaks.toml or
+# .betterleaks.toml from cwd and honors GITLEAKS_CONFIG*/BETTERLEAKS_CONFIG*, so an untracked
+# `[extend] useDefault = false` file would silently replace the ruleset and neuter the scan
+# while every pinned fixture stayed green; the flag has highest precedence and defeats both.
+# Exit code is the whole result: 0 clean, 1 findings. A clean scan is evidence, not authority.
+run = "betterleaks dir . --config .config/betterleaks.toml"
+run_windows = "betterleaks dir . --config .config/betterleaks.toml"
+
 [tasks.check]
-description = "Run validation, installer tests, and lifecycle self-test"
-depends = ["validate", "test", "self-test"]
+description = "Run validation, installer tests, lifecycle self-test, and the secrets scan"
+depends = ["validate", "test", "self-test", "secrets"]
 
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"

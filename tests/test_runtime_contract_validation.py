@@ -38,6 +38,13 @@ receipt_admission = load_module("receipt_admission_under_test", RECEIPT_ADMISSIO
 RECEIPT_POLICY = receipt_admission.parse_no_duplicate_members(
     receipt_admission.POLICY_PATH.read_text(encoding="utf-8")
 )
+# The canonical requested tuple of `valid_receipt`, byte-for-byte. Anyone holding the request
+# can write these bytes, so they must never be admitted as a transport readback response.
+REQUEST_TUPLE_BYTES = json.dumps(
+    {"context_form": "base", "effort": "high", "model_id": "gpt-5.6-terra"},
+    sort_keys=True,
+    separators=(",", ":"),
+)
 
 
 class RuntimeContractValidationTests(unittest.TestCase):
@@ -625,7 +632,7 @@ class RuntimeContractValidationTests(unittest.TestCase):
             bundle_validator.validate_agents(root, result)
 
         self.assertIn(
-            "agents/codex/sdlc-reviewer.toml: runtime receipt projection must equal the exact policy-derived 16-field block",
+            "agents/codex/sdlc-reviewer.toml: runtime receipt projection must equal the exact policy-derived 18-field block",
             result.errors,
         )
 
@@ -1002,6 +1009,45 @@ class RuntimeContractValidationTests(unittest.TestCase):
             context_readback_status="unavailable",
         )
 
+    def transport_response(self, field: str, value: str, turn: str) -> str:
+        """One transport response body: it carries the effective value plus transport-only bytes."""
+        return json.dumps(
+            {"effective": {field: value}, "turn_id": turn},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def response_pointer(self, field: str) -> str:
+        """Where `transport_response` puts the effective value, as an RFC 6901 pointer."""
+        return f"/effective/{field}"
+
+    def verified_readback_receipt(
+        self,
+        *,
+        observed_effort: str = "high",
+        observed_context_form: str = "base",
+    ) -> dict[str, object]:
+        return receipt_admission.construct_receipt(
+            policy=RECEIPT_POLICY,
+            requested_model_id="gpt-5.6-terra",
+            requested_effort="high",
+            requested_context_form="base",
+            adapter_id="workflow",
+            adapter_version="1.0.0",
+            adapter_config={"provider": "openai", "transport": "workflow"},
+            model_identity_basis="unambiguous_exact_id_mapping",
+            effort_readback_status="verified",
+            observed_effort=observed_effort,
+            effort_readback_response_bytes=self.transport_response("effort", observed_effort, "t-9"),
+            effort_observed_value_pointer=self.response_pointer("effort"),
+            context_readback_status="verified",
+            observed_context_form=observed_context_form,
+            context_readback_response_bytes=self.transport_response(
+                "context_form", observed_context_form, "t-9"
+            ),
+            context_observed_value_pointer=self.response_pointer("context_form"),
+        )
+
     def admit_receipt(self, receipt: dict[str, object] | str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(RECEIPT_ADMISSION)],
@@ -1038,8 +1084,12 @@ class RuntimeContractValidationTests(unittest.TestCase):
             observed_model_id="gpt-5.6-terra",
             effort_readback_status="verified",
             observed_effort="high",
+            effort_readback_response_bytes=self.transport_response("effort", "high", "t-1"),
+            effort_observed_value_pointer=self.response_pointer("effort"),
             context_readback_status="verified",
             observed_context_form="base",
+            context_readback_response_bytes=self.transport_response("context_form", "base", "t-1"),
+            context_observed_value_pointer=self.response_pointer("context_form"),
         )
         second = receipt_admission.construct_receipt(
             policy=RECEIPT_POLICY,
@@ -1054,8 +1104,12 @@ class RuntimeContractValidationTests(unittest.TestCase):
             observed_model_id="gpt-5.6-terra",
             effort_readback_status="verified",
             observed_effort="high",
+            effort_readback_response_bytes=self.transport_response("effort", "high", "t-2"),
+            effort_observed_value_pointer=self.response_pointer("effort"),
             context_readback_status="verified",
             observed_context_form="[1m]",
+            context_readback_response_bytes=self.transport_response("context_form", "[1m]", "t-2"),
+            context_observed_value_pointer=self.response_pointer("context_form"),
         )
         digests = {
             first[field]["assignment_binding_sha256"]
@@ -1155,16 +1209,32 @@ class RuntimeContractValidationTests(unittest.TestCase):
                     "model_id": "gpt-5.6-terra",
                 }
             },
+            # Shape-complete, digest-correct, pointer-resolvable, and still refused: the
+            # "response" body is nothing but the request tuple, so it carries no readback. The
+            # digest field is readback_bytes_sha256 on purpose — a misspelling would make this a
+            # shape rejection instead of the copy rejection it is meant to prove.
             "copied effort readback": {
                 "effort_readback_status": "verified",
+                "effort_effective_divergence": "matches_requested",
                 "effort_readback_evidence": {
                     "source_kind": "transport_readback",
                     "status": "verified",
                     "schema": "runtime-assignment-readback/v1",
                     "observed_effort": "high",
-                    "request_bytes_sha256": hashlib.sha256(
+                    "response_bytes": REQUEST_TUPLE_BYTES,
+                    "observed_value_pointer": "/effort",
+                    "readback_bytes_sha256": hashlib.sha256(
+                        REQUEST_TUPLE_BYTES.encode("utf-8")
+                    ).hexdigest(),
+                    "effective_value_state": "matches_requested",
+                    "assignment_binding_sha256": hashlib.sha256(
                         json.dumps(
-                            {"context_form": "base", "effort": "high", "model_id": "gpt-5.6-terra"},
+                            {
+                                "context_form": "base",
+                                "effort": "high",
+                                "model_id": "gpt-5.6-terra",
+                                "provider": "openai",
+                            },
                             sort_keys=True,
                             separators=(",", ":"),
                         ).encode("utf-8")
@@ -1179,6 +1249,12 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 result = self.admit_receipt(receipt)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(json.loads(result.stdout)["status"], "invalid")
+        echoed = self.valid_receipt()
+        echoed.update(mutations["copied effort readback"])
+        self.assertIn(
+            "effort readback response bytes are a request echo, not a transport readback",
+            json.loads(self.admit_receipt(echoed).stdout)["errors"],
+        )
 
     def test_receipt_admission_rejects_uncertified_claude_context_tuple(self) -> None:
         receipt = self.valid_receipt()
@@ -1202,6 +1278,297 @@ class RuntimeContractValidationTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requested model/effort/context tuple is not certified", json.loads(result.stdout)["errors"])
+
+    def test_verified_readback_requires_transport_response_bytes_not_a_request_echo(self) -> None:
+        with self.assertRaises(ValueError) as raised:
+            receipt_admission.construct_receipt(
+                policy=RECEIPT_POLICY,
+                requested_model_id="gpt-5.6-terra",
+                requested_effort="high",
+                requested_context_form="base",
+                adapter_id="workflow",
+                adapter_version="1.0.0",
+                adapter_config={"provider": "openai", "transport": "workflow"},
+                model_identity_basis="unambiguous_exact_id_mapping",
+                effort_readback_status="verified",
+                observed_effort="high",
+                context_readback_status="unavailable",
+            )
+        self.assertIn("transport response bytes", str(raised.exception))
+
+        echo = self.verified_readback_receipt()
+        echo["effort_readback_evidence"] = {
+            **echo["effort_readback_evidence"],
+            "response_bytes": "high",
+            "readback_bytes_sha256": hashlib.sha256(b"high").hexdigest(),
+        }
+        result = self.admit_receipt(echo)
+        self.assertNotEqual(result.returncode, 0)
+        denied = json.loads(result.stdout)
+        self.assertEqual(denied["status"], "invalid")
+        self.assertIn(
+            "effort readback response bytes are a request echo, not a transport readback",
+            denied["errors"],
+        )
+
+        unbound = self.verified_readback_receipt()
+        unbound["context_readback_evidence"] = {
+            **unbound["context_readback_evidence"],
+            "readback_bytes_sha256": hashlib.sha256(
+                json.dumps({"context_form": "base"}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+        }
+        recomputed = self.admit_receipt(unbound)
+        self.assertNotEqual(recomputed.returncode, 0)
+        self.assertIn(
+            "context readback evidence digest does not bind the transport response bytes",
+            json.loads(recomputed.stdout)["errors"],
+        )
+
+    def test_honest_divergent_readback_is_admitted_and_recorded_as_divergence(self) -> None:
+        receipt = self.verified_readback_receipt(observed_effort="medium")
+
+        self.assertEqual(receipt_admission.receipt_errors(receipt, RECEIPT_POLICY), [])
+        self.assertEqual(receipt["requested_effort"], "high")
+        self.assertEqual(receipt["effort_readback_evidence"]["observed_effort"], "medium")
+        self.assertEqual(
+            receipt["effort_readback_evidence"]["effective_value_state"], "diverges_from_requested"
+        )
+        self.assertEqual(
+            receipt["context_readback_evidence"]["effective_value_state"], "matches_requested"
+        )
+        # The divergence is also visible without opening the evidence object.
+        self.assertEqual(receipt["effort_effective_divergence"], "diverges_from_requested")
+        self.assertEqual(receipt["context_effective_divergence"], "matches_requested")
+        self.assertEqual(self.valid_receipt()["effort_effective_divergence"], "unavailable")
+        result = self.admit_receipt(receipt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "validated")
+
+        agreeing = self.verified_readback_receipt(observed_effort="high")
+        self.assertNotEqual(
+            receipt["effort_readback_evidence"]["readback_bytes_sha256"],
+            agreeing["effort_readback_evidence"]["readback_bytes_sha256"],
+        )
+
+        upgraded = json.loads(json.dumps(receipt))
+        upgraded["effort_readback_evidence"]["effective_value_state"] = "matches_requested"
+        denied = self.admit_receipt(upgraded)
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn(
+            "effort readback evidence effective_value_state does not record the observed "
+            "effort against the requested effort",
+            json.loads(denied.stdout)["errors"],
+        )
+
+    def rebound_effort_readback(
+        self,
+        response_bytes: str,
+        *,
+        observed_effort: str = "high",
+        pointer: str = "/effective/effort",
+        effective_value_state: str | None = None,
+        divergence: str | None = None,
+    ) -> dict[str, object]:
+        """A verified-effort receipt whose response bytes are swapped for `response_bytes`.
+
+        The digest is recomputed over the substituted bytes, so every refusal these fixtures
+        provoke is a refusal of the bytes' *meaning*, never of a stale digest.
+        """
+        receipt = self.verified_readback_receipt()
+        evidence = dict(receipt["effort_readback_evidence"])
+        evidence["response_bytes"] = response_bytes
+        evidence["readback_bytes_sha256"] = hashlib.sha256(response_bytes.encode("utf-8")).hexdigest()
+        evidence["observed_effort"] = observed_effort
+        evidence["observed_value_pointer"] = pointer
+        if effective_value_state is not None:
+            evidence["effective_value_state"] = effective_value_state
+        receipt["effort_readback_evidence"] = evidence
+        if divergence is not None:
+            receipt["effort_effective_divergence"] = divergence
+        return receipt
+
+    def test_readback_value_binds_a_resolved_pointer_not_a_substring_of_the_bytes(self) -> None:
+        """A value that merely appears somewhere in the bytes is not a readback of it.
+
+        The verified exploit: this body's key `highlights` contains the text `high`, so a
+        substring test bound observed_effort="high" while the transport in fact reported `low`.
+        The requested value would have been laundered into verified readback.
+        """
+        laundering_body = '{"effective":{"effort":"low"},"highlights":["a"],"turn_id":"t7"}'
+        self.assertIn("high", laundering_body)
+        self.assertEqual(json.loads(laundering_body)["effective"]["effort"], "low")
+
+        for name, pointer in {
+            "pointer at the substring": "/highlights/0",
+            "pointer at the real location": "/effective/effort",
+        }.items():
+            with self.subTest(laundering=name):
+                receipt = self.rebound_effort_readback(laundering_body, pointer=pointer)
+                errors = receipt_admission.receipt_errors(receipt, RECEIPT_POLICY)
+                self.assertIn(
+                    "effort readback evidence observed_effort does not equal the value the "
+                    "transport reported at observed_value_pointer",
+                    errors,
+                )
+
+        for name, pointer in {
+            "unresolvable member": "/effective/absent",
+            "unresolvable index": "/highlights/9",
+            "pointer through a scalar": "/turn_id/0",
+            "relative pointer": "effective/effort",
+        }.items():
+            with self.subTest(unresolvable=pointer):
+                receipt = self.rebound_effort_readback(laundering_body, pointer=pointer)
+                self.assertIn(
+                    "effort readback evidence observed_value_pointer does not resolve in the "
+                    "transport response",
+                    receipt_admission.receipt_errors(receipt, RECEIPT_POLICY),
+                )
+
+        non_string = self.rebound_effort_readback(
+            '{"effective":{"effort":["high"]},"turn_id":"t7"}', pointer="/effective"
+        )
+        self.assertIn(
+            "effort readback evidence observed_value_pointer resolves to a non-string value",
+            receipt_admission.receipt_errors(non_string, RECEIPT_POLICY),
+        )
+
+    def test_freeform_transport_text_cannot_bind_a_value_and_must_be_unavailable(self) -> None:
+        """A readback here is a structured adapter response; prose cannot bind a value."""
+        prose = self.rebound_effort_readback("the effective effort for this turn was high")
+        self.assertIn(
+            "effort readback evidence response_bytes must parse as JSON; freeform transport "
+            "text cannot bind an effective effort and must be recorded as status unavailable",
+            receipt_admission.receipt_errors(prose, RECEIPT_POLICY),
+        )
+
+    def test_request_echo_is_refused_after_canonicalization_not_by_exact_bytes(self) -> None:
+        """Reformatting a request echo does not turn it into a transport readback.
+
+        Each body below escaped the exact-string denylist while the substring binding still
+        accepted it, so a bare restatement of the request validated as verified readback.
+        """
+        escapes = {
+            "quoted bare value": '"high"',
+            "trailing space": "high ",
+            "trailing newline": "high\n",
+            "indented object": json.dumps({"effort": "high"}, indent=1),
+            "non-sorted key order": '{"model_id":"gpt-5.6-terra","effort":"high","context_form":"base"}',
+            "reordered assignment binding": (
+                '{"provider":"openai","model_id":"gpt-5.6-terra","effort":"high","context_form":"base"}'
+            ),
+            "canonical requested tuple": REQUEST_TUPLE_BYTES,
+        }
+        for name, body in escapes.items():
+            with self.subTest(escape=name):
+                receipt = self.rebound_effort_readback(body, pointer="")
+                self.assertIn(
+                    "effort readback response bytes are a request echo, not a transport readback",
+                    receipt_admission.receipt_errors(receipt, RECEIPT_POLICY),
+                )
+
+    def test_out_of_vocabulary_transport_report_cannot_be_a_verified_readback(self) -> None:
+        """A transport naming an effort this contract does not define is not speaking it.
+
+        Verified escape: observed_effort was only checked non-empty, so "banana-turbo"
+        validated as a verified divergent readback.
+        """
+        self.assertNotIn("banana-turbo", RECEIPT_POLICY["allowed_efforts"])
+        receipt = self.rebound_effort_readback(
+            self.transport_response("effort", "banana-turbo", "t-7"),
+            observed_effort="banana-turbo",
+            effective_value_state="diverges_from_requested",
+            divergence="diverges_from_requested",
+        )
+        self.assertIn(
+            "effort readback evidence observed_effort is outside the contract effort "
+            "vocabulary; an out-of-vocabulary transport report must be recorded as status "
+            "unavailable",
+            receipt_admission.receipt_errors(receipt, RECEIPT_POLICY),
+        )
+
+        out_of_vocabulary_context = self.verified_readback_receipt()
+        evidence = dict(out_of_vocabulary_context["context_readback_evidence"])
+        body = self.transport_response("context_form", "[2m]", "t-7")
+        evidence.update(
+            observed_context_form="[2m]",
+            response_bytes=body,
+            readback_bytes_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            effective_value_state="diverges_from_requested",
+        )
+        out_of_vocabulary_context["context_readback_evidence"] = evidence
+        out_of_vocabulary_context["context_effective_divergence"] = "diverges_from_requested"
+        self.assertIn(
+            "context readback evidence observed_context_form is outside the contract context "
+            "vocabulary; an out-of-vocabulary transport report must be recorded as status "
+            "unavailable",
+            receipt_admission.receipt_errors(out_of_vocabulary_context, RECEIPT_POLICY),
+        )
+
+        # The construction path refuses the same value, so a receipt like this cannot be built.
+        with self.assertRaisesRegex(ValueError, "outside the contract vocabulary"):
+            receipt_admission.construct_receipt(
+                policy=RECEIPT_POLICY,
+                requested_model_id="gpt-5.6-terra",
+                requested_effort="high",
+                requested_context_form="base",
+                adapter_id="workflow",
+                adapter_version="1.0.0",
+                adapter_config={"provider": "openai", "transport": "workflow"},
+                model_identity_basis="unambiguous_exact_id_mapping",
+                effort_readback_status="verified",
+                observed_effort="banana-turbo",
+                effort_readback_response_bytes=self.transport_response("effort", "banana-turbo", "t-7"),
+                effort_observed_value_pointer=self.response_pointer("effort"),
+                context_readback_status="unavailable",
+            )
+
+    def test_recorded_divergence_must_be_declared_at_the_receipt_top_level(self) -> None:
+        """Divergence buried in an evidence object is invisible to a consumer, so it is refused."""
+        divergent = self.rebound_effort_readback(
+            self.transport_response("effort", "medium", "t-7"),
+            observed_effort="medium",
+            effective_value_state="diverges_from_requested",
+        )
+        self.assertEqual(divergent["effort_effective_divergence"], "matches_requested")
+        self.assertIn(
+            "effort_effective_divergence does not declare the divergence the effort readback "
+            "evidence records",
+            receipt_admission.receipt_errors(divergent, RECEIPT_POLICY),
+        )
+
+        for name, value in {
+            "silent unavailable": "unavailable",
+            "contradicting agreement": "matches_requested",
+        }.items():
+            with self.subTest(top_level=name):
+                receipt = self.rebound_effort_readback(
+                    self.transport_response("effort", "medium", "t-7"),
+                    observed_effort="medium",
+                    effective_value_state="diverges_from_requested",
+                    divergence=value,
+                )
+                self.assertTrue(
+                    any(
+                        "effort_effective_divergence does not declare" in error
+                        for error in receipt_admission.receipt_errors(receipt, RECEIPT_POLICY)
+                    )
+                )
+
+        unavailable_claiming_divergence = self.valid_receipt()
+        unavailable_claiming_divergence["effort_effective_divergence"] = "diverges_from_requested"
+        self.assertIn(
+            "effort_effective_divergence must equal unavailable when the effort readback is unavailable",
+            receipt_admission.receipt_errors(unavailable_claiming_divergence, RECEIPT_POLICY),
+        )
+
+        out_of_vocabulary_state = self.valid_receipt()
+        out_of_vocabulary_state["context_effective_divergence"] = "probably_fine"
+        self.assertIn(
+            "context_effective_divergence is not an allowed divergence state",
+            receipt_admission.receipt_errors(out_of_vocabulary_state, RECEIPT_POLICY),
+        )
 
     def test_receipt_admission_denies_unsafe_evidence_mutants(self) -> None:
         mutations = {

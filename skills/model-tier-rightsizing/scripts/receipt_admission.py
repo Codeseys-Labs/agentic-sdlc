@@ -37,6 +37,33 @@ READBACK_EVIDENCE_FIELDS = (
     "effort_readback_evidence",
     "context_readback_evidence",
 )
+READBACK_VALUE_KEYS = {
+    "effort": "observed_effort",
+    "context": "observed_context_form",
+}
+# A transport that reports an effective value outside the contract's own vocabulary is not
+# speaking this contract's language. Such a report is recorded as an unavailable readback; it
+# never becomes a verified one.
+READBACK_VALUE_VOCABULARIES = {
+    "effort": "allowed_efforts",
+    "context": "allowed_context_forms",
+}
+# A verified effort/context readback either agreed with the requested value or diverged from
+# it. Both are admissible; the state is recomputed here from the evidence, so a divergence
+# cannot be recorded as agreement. Divergence is the only shape in which readback carries
+# information a holder of the request could not have written by itself.
+EFFECTIVE_VALUE_STATES = ("matches_requested", "diverges_from_requested")
+# Divergence is also declared at the top level, so a consumer reading only the receipt's
+# summary fields cannot miss that a verified readback reported something other than what was
+# requested. Without a verified readback the divergence fact is simply unavailable.
+DIVERGENCE_UNAVAILABLE = "unavailable"
+EFFECTIVE_DIVERGENCE_STATES = (*EFFECTIVE_VALUE_STATES, DIVERGENCE_UNAVAILABLE)
+EFFECTIVE_DIVERGENCE_FIELDS = {
+    "effort": "effort_effective_divergence",
+    "context": "context_effective_divergence",
+}
+UNRESOLVED = object()
+UNPARSEABLE = object()
 
 
 def canonical_json(value: Any) -> str:
@@ -45,6 +72,10 @@ def canonical_json(value: Any) -> str:
 
 def sha256_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def parse_no_duplicate_members(raw: str) -> Any:
@@ -108,13 +139,103 @@ def typed_evidence(
     return evidence
 
 
-def readback_binding(receipt: dict[str, Any]) -> dict[str, Any]:
+def assignment_binding(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Identify the one assignment every evidence object must belong to.
+
+    This is deliberately request-derived: it names *which* assignment the evidence was
+    captured for, so evidence cannot be transplanted between receipts. It is never a
+    readback claim, and no readback digest may be recomputed from it.
+    """
     return {
         "context_form": receipt["requested_context_form"],
         "effort": receipt["requested_effort"],
         "model_id": receipt["resolved_model_id"],
         "provider": receipt["resolved_provider"],
     }
+
+
+def parse_response_body(response_bytes: str) -> Any:
+    """Parse a transport response body, or report that it is not structured at all.
+
+    A readback in this contract is a *structured* adapter response. Freeform text cannot bind
+    a value to a position, so it cannot be a verified readback: an honest transport that only
+    emits prose must record its readback as status `unavailable` instead.
+    """
+    try:
+        return parse_no_duplicate_members(response_bytes)
+    except (ValueError, json.JSONDecodeError):
+        return UNPARSEABLE
+
+
+def resolve_json_pointer(document: Any, pointer: str) -> Any:
+    """Resolve one RFC 6901 JSON pointer against a parsed response body.
+
+    Returns UNRESOLVED for any pointer that does not name an existing location. Only an exact
+    resolved location can bind a value: a value found *somewhere* in the bytes proves nothing,
+    because a substring can be manufactured by unrelated content (a `highlights` key contains
+    the text `high`).
+    """
+    if pointer == "":
+        return document
+    if not pointer.startswith("/"):
+        return UNRESOLVED
+    current = document
+    for raw_token in pointer.split("/")[1:]:
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict):
+            if token not in current:
+                return UNRESOLVED
+            current = current[token]
+        elif isinstance(current, list):
+            if not token.isdigit() or (len(token) > 1 and token.startswith("0")):
+                return UNRESOLVED
+            index = int(token)
+            if index >= len(current):
+                return UNRESOLVED
+            current = current[index]
+        else:
+            return UNRESOLVED
+    return current
+
+
+def request_echo_forms(receipt: dict[str, Any], requested_value: str) -> tuple[set[str], list[Any]]:
+    """The request-derived shapes a holder of the request alone could have written.
+
+    Returned as canonical strings plus the parsed shapes themselves, so an echo is refused on
+    its *content* rather than its formatting: whitespace, indentation, quoting, and key order
+    are all normalized away before comparison.
+
+    This refuses provably request-derived shapes. It cannot authenticate that any other bytes
+    came from the transport — only the external authenticated harness can do that. Bytes
+    outside these shapes are recorded, never vouched for.
+    """
+    requested_effort = receipt["requested_effort"]
+    requested_context_form = receipt["requested_context_form"]
+    shapes: list[Any] = [
+        requested_value,
+        assignment_binding(receipt),
+        {
+            "context_form": requested_context_form,
+            "effort": requested_effort,
+            "model_id": receipt["requested_model_id"],
+        },
+        {"effort": requested_effort},
+        {"context_form": requested_context_form},
+    ]
+    return {canonical_json(shape) for shape in shapes}, shapes
+
+
+def is_request_echo(receipt: dict[str, Any], requested_value: str, response_bytes: str, parsed: Any) -> bool:
+    canonical_forms, shapes = request_echo_forms(receipt, requested_value)
+    # The bare requested value is an echo whether or not it is quoted as JSON, so it is
+    # compared as raw text as well as in canonical form.
+    if response_bytes.strip() in canonical_forms | {requested_value}:
+        return True
+    if parsed is UNPARSEABLE:
+        return False
+    # Compare canonical-to-canonical: the entire parsed body being one request-derived shape
+    # is an echo no matter how it was serialized.
+    return canonical_json(parsed) in canonical_forms or any(parsed == shape for shape in shapes)
 
 
 def construct_receipt(
@@ -133,6 +254,10 @@ def construct_receipt(
     observed_model_id: str | None = None,
     observed_effort: str | None = None,
     observed_context_form: str | None = None,
+    effort_readback_response_bytes: str | None = None,
+    context_readback_response_bytes: str | None = None,
+    effort_observed_value_pointer: str | None = None,
+    context_observed_value_pointer: str | None = None,
 ) -> dict[str, Any]:
     provider = policy["allowed_exact_model_ids"].get(requested_model_id)
     if provider is None:
@@ -166,10 +291,12 @@ def construct_receipt(
         "model_readback_evidence": {},
         "effort_readback_status": effort_readback_status,
         "effort_readback_evidence": {},
+        "effort_effective_divergence": DIVERGENCE_UNAVAILABLE,
         "context_readback_status": context_readback_status,
         "context_readback_evidence": {},
+        "context_effective_divergence": DIVERGENCE_UNAVAILABLE,
     }
-    binding_digest = sha256_json(readback_binding(receipt))
+    binding_digest = sha256_json(assignment_binding(receipt))
 
     if model_identity_basis == "unambiguous_exact_id_mapping":
         receipt["model_readback_evidence"] = {
@@ -196,9 +323,15 @@ def construct_receipt(
     else:
         raise ValueError("model_identity_basis is unsupported")
 
-    for name, status, observed_key, observed_value in (
-        ("effort", effort_readback_status, "observed_effort", observed_effort),
-        ("context", context_readback_status, "observed_context_form", observed_context_form),
+    for name, status, observed_value, response_bytes, pointer in (
+        ("effort", effort_readback_status, observed_effort, effort_readback_response_bytes, effort_observed_value_pointer),
+        (
+            "context",
+            context_readback_status,
+            observed_context_form,
+            context_readback_response_bytes,
+            context_observed_value_pointer,
+        ),
     ):
         evidence = {
             "source_kind": "transport_readback",
@@ -207,10 +340,31 @@ def construct_receipt(
             "assignment_binding_sha256": binding_digest,
         }
         if status == "verified":
-            evidence[observed_key] = observed_value
-            observed_binding = {"effort": observed_value} if name == "effort" else {"context_form": observed_value}
-            evidence["readback_bytes_sha256"] = sha256_json(observed_binding)
-            evidence["assignment_binding_sha256"] = binding_digest
+            if not is_nonempty_string(response_bytes):
+                raise ValueError(
+                    f"verified {name} readback requires the transport response bytes; "
+                    "a requested value is not readback"
+                )
+            if not isinstance(pointer, str):
+                raise ValueError(
+                    f"verified {name} readback requires observed_value_pointer naming where the "
+                    "transport reported the effective value"
+                )
+            vocabulary = policy[READBACK_VALUE_VOCABULARIES[name]]
+            if observed_value not in vocabulary:
+                raise ValueError(
+                    f"verified {name} readback observed value is outside the contract vocabulary; "
+                    "record it as an unavailable readback instead"
+                )
+            requested_value = requested_effort if name == "effort" else requested_context_form
+            evidence[READBACK_VALUE_KEYS[name]] = observed_value
+            evidence["response_bytes"] = response_bytes
+            evidence["observed_value_pointer"] = pointer
+            evidence["readback_bytes_sha256"] = sha256_text(response_bytes)
+            evidence["effective_value_state"] = (
+                "matches_requested" if observed_value == requested_value else "diverges_from_requested"
+            )
+            receipt[EFFECTIVE_DIVERGENCE_FIELDS[name]] = evidence["effective_value_state"]
         elif status != "unavailable":
             raise ValueError(f"{name}_readback_status must be verified or unavailable")
         receipt[f"{name}_readback_evidence"] = evidence
@@ -316,7 +470,9 @@ def model_evidence_errors(receipt: dict[str, Any], policy: dict[str, Any], error
 
 def readback_evidence_errors(name: str, receipt: dict[str, Any], policy: dict[str, Any], errors: list[str]) -> None:
     status = receipt[f"{name}_readback_status"]
-    value_key = "observed_effort" if name == "effort" else "observed_context_form"
+    value_key = READBACK_VALUE_KEYS[name]
+    divergence_field = EFFECTIVE_DIVERGENCE_FIELDS[name]
+    declared_divergence = receipt[divergence_field]
     if status == "unavailable":
         required = {"source_kind", "status", "schema", "assignment_binding_sha256"}
         evidence = typed_evidence(
@@ -327,6 +483,11 @@ def readback_evidence_errors(name: str, receipt: dict[str, Any], policy: dict[st
         )
         if evidence is not None and evidence["status"] != "unavailable":
             errors.append(f"{name} unavailable readback evidence must be unavailable")
+        if declared_divergence != DIVERGENCE_UNAVAILABLE:
+            errors.append(
+                f"{divergence_field} must equal {DIVERGENCE_UNAVAILABLE} when the {name} readback "
+                "is unavailable"
+            )
         return
     if status != "verified":
         errors.append(f"{name}_readback_status must be verified or unavailable")
@@ -337,7 +498,10 @@ def readback_evidence_errors(name: str, receipt: dict[str, Any], policy: dict[st
         "status",
         "schema",
         value_key,
+        "response_bytes",
+        "observed_value_pointer",
         "readback_bytes_sha256",
+        "effective_value_state",
         "assignment_binding_sha256",
     }
     evidence = typed_evidence(
@@ -352,18 +516,91 @@ def readback_evidence_errors(name: str, receipt: dict[str, Any], policy: dict[st
         errors.append(f"{name} verified readback evidence must be verified")
     if not is_nonempty_string(evidence[value_key]):
         errors.append(f"{name} readback evidence {value_key} must be a non-empty string")
+    if not is_nonempty_string(evidence["response_bytes"]):
+        errors.append(f"{name} readback evidence response_bytes must be a non-empty string")
+    if not isinstance(evidence["observed_value_pointer"], str):
+        errors.append(f"{name} readback evidence observed_value_pointer must be a JSON pointer string")
     if not is_sha256(evidence["readback_bytes_sha256"]):
         errors.append(f"{name} readback evidence readback_bytes_sha256 must be a lowercase SHA-256 digest")
-    top_level = receipt["requested_effort"] if name == "effort" else receipt["requested_context_form"]
-    if evidence[value_key] != top_level:
-        errors.append(f"{name} readback evidence does not bind the top-level {name} value")
-    expected = {"effort": top_level} if name == "effort" else {"context_form": top_level}
-    if evidence["readback_bytes_sha256"] != sha256_json(expected):
-        errors.append(f"{name} readback evidence digest does not bind the top-level {name} value")
+    if (
+        not is_nonempty_string(evidence[value_key])
+        or not is_nonempty_string(evidence["response_bytes"])
+        or not isinstance(evidence["observed_value_pointer"], str)
+    ):
+        return
+
+    # The digest binds the transport's own response bytes. It is never recomputed from a
+    # requested value, so it cannot be produced by a holder of the request alone.
+    if is_sha256(evidence["readback_bytes_sha256"]) and evidence["readback_bytes_sha256"] != sha256_text(
+        evidence["response_bytes"]
+    ):
+        errors.append(f"{name} readback evidence digest does not bind the transport response bytes")
+
+    # The observed value binds to an exact position in the parsed response, never to a
+    # substring of the raw bytes: `{"highlights": [...]}` contains the text `high` without the
+    # transport ever having reported `high` as the effective value.
+    parsed = parse_response_body(evidence["response_bytes"])
+    if parsed is UNPARSEABLE:
+        errors.append(
+            f"{name} readback evidence response_bytes must parse as JSON; freeform transport "
+            f"text cannot bind an effective {name} and must be recorded as status unavailable"
+        )
+    else:
+        resolved = resolve_json_pointer(parsed, evidence["observed_value_pointer"])
+        if resolved is UNRESOLVED:
+            errors.append(
+                f"{name} readback evidence observed_value_pointer does not resolve in the "
+                "transport response"
+            )
+        elif not isinstance(resolved, str):
+            errors.append(
+                f"{name} readback evidence observed_value_pointer resolves to a non-string value"
+            )
+        elif resolved != evidence[value_key]:
+            errors.append(
+                f"{name} readback evidence {value_key} does not equal the value the transport "
+                "reported at observed_value_pointer"
+            )
+
+    requested_value = receipt["requested_effort"] if name == "effort" else receipt["requested_context_form"]
+    if is_request_echo(receipt, requested_value, evidence["response_bytes"], parsed):
+        errors.append(f"{name} readback response bytes are a request echo, not a transport readback")
+
+    # A transport reporting a value this contract does not define is not speaking the
+    # contract's language, so its report cannot be a verified readback of it.
+    if evidence[value_key] not in policy[READBACK_VALUE_VOCABULARIES[name]]:
+        errors.append(
+            f"{name} readback evidence {value_key} is outside the contract {name} vocabulary; "
+            "an out-of-vocabulary transport report must be recorded as status unavailable"
+        )
+
+    # A divergent effective value is admissible: it is recorded, never refused, and never
+    # upgraded to agreement. Agreement is the weaker record, so it may not be claimed for a
+    # value that in fact diverged.
+    observed_state = (
+        "matches_requested" if evidence[value_key] == requested_value else "diverges_from_requested"
+    )
+    if evidence["effective_value_state"] not in EFFECTIVE_VALUE_STATES:
+        errors.append(f"{name} readback evidence effective_value_state is not an allowed state")
+    elif evidence["effective_value_state"] != observed_state:
+        errors.append(
+            f"{name} readback evidence effective_value_state does not record the observed "
+            f"{name} against the requested {name}"
+        )
+    # Divergence recorded only inside the evidence object is invisible to a consumer reading
+    # the receipt's summary fields, so the top level must declare the same fact.
+    if declared_divergence != observed_state:
+        errors.append(
+            f"{divergence_field} does not declare the divergence the {name} readback evidence "
+            "records"
+        )
 
 
 def cross_field_readback_errors(receipt: dict[str, Any], errors: list[str]) -> None:
-    expected_digest = sha256_json(readback_binding(receipt))
+    # This digest is request-derived on purpose: it identifies the assignment the evidence
+    # was captured for and refuses transplants between receipts. It is not a readback claim,
+    # so a divergent effective effort or context still binds to the same assignment.
+    expected_digest = sha256_json(assignment_binding(receipt))
     for field in READBACK_EVIDENCE_FIELDS:
         evidence = receipt[field]
         if not isinstance(evidence, dict) or "assignment_binding_sha256" not in evidence:
@@ -423,6 +660,9 @@ def receipt_errors(receipt: Any, policy: dict[str, Any]) -> list[str]:
         errors.append("model_readback_status must equal verified")
     if receipt["resolved_model_id"] != receipt["requested_model_id"]:
         errors.append("resolved_model_id must match the immutable injected exact model ID")
+    for field in EFFECTIVE_DIVERGENCE_FIELDS.values():
+        if receipt[field] not in EFFECTIVE_DIVERGENCE_STATES:
+            errors.append(f"{field} is not an allowed divergence state")
 
     expected_provider = model_map.get(receipt["requested_model_id"])
     if expected_provider and receipt["resolved_provider"] != expected_provider:

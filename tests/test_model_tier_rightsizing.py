@@ -41,8 +41,10 @@ RUNTIME_ASSIGNMENT_FIELDS = (
     "model_readback_evidence",
     "effort_readback_status",
     "effort_readback_evidence",
+    "effort_effective_divergence",
     "context_readback_status",
     "context_readback_evidence",
+    "context_effective_divergence",
 )
 
 GLOBAL_RUNTIME_ASSIGNMENT_FIELDS = RUNTIME_ASSIGNMENT_FIELDS

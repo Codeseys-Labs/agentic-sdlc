@@ -91,7 +91,9 @@ record — it is not an authenticated approval, and no planner output authorizes
      and `betterleaks`; create fmt/lint/test tasks that match the repository, one aggregate
      `check`, and a `setup` task. Never add speculative tools.
    - Git substrate: merge a marked Agentic SDLC block into `lefthook.yml`; pre-commit is the
-     fast staged-file subset, pre-push includes tests and `betterleaks dir .`. Preserve all
+     fast staged-file subset, pre-push includes tests and the working-tree secrets scan
+     (`betterleaks dir .` with `--config` pinned at a tracked extend-only config, never the bare
+     form — a drop-in config or `GITLEAKS_CONFIG*` variable otherwise replaces the ruleset). Preserve all
      foreign hooks. `setup` installs lefthook.
    - Wire the secrets gate into `mise run check` and CI. Run `betterleaks git .` only after
      explicit consent when history scanning is appropriate (public release/migration), and
