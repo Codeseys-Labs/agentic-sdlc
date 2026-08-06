@@ -16,24 +16,29 @@ adopt, or surgically merge. Never overwrite an existing `mise.toml`, `lefthook.y
 cannot be merged without changing unrelated policy, report the conflict and stop before
 claiming wave readiness.
 
-**Plan before apply.** Compute the dry-run ActivationPlan first and show it:
-`uv run --python 3.12 python scripts/activation_planner.py plan --target <path> [--profile git]`
-(from the reviewed distribution checkout). The plan writes nothing and records, per item,
-the proposed `create|adopt|merge|refuse|skip` action and whether each choice was `explicit`,
-`defaulted`, or `derived`. The only activatable profile is `git`; any other requested
-substrate profile is refused with a pointer to its retirement reference. Interactive
-selection is offered only when a TTY is present; non-TTY/headless runs take the
-deterministic `git` default.
-Cancellation at the confirmation step performs zero writes. Apply-phase writes go through
-the same helper's contracts (`scripts/activation_planner.py`, with instruction files rendered
-by the marker-aware `scripts/instruction_generator.py`), and every activation that reaches
-the write phase ends by writing `.agentic-sdlc/activation-receipt.json` (refused, cancelled,
-and stopped runs write nothing at all, including no receipt) — the ActivationReceipt records
-baseline inventory,
-Seeds queue proof, the reversible gate fail→pass proof, per-path trust decisions, and
-`wave_ready`. Rerunning against an activated tree must produce an empty `created`/`merged`
-receipt (observed idempotence). Deactivation uses the same helper (`deactivate`, dry-run
-first) and removes only generator-authored marked content.
+**Plan before apply.** The canonical planner is
+`skills/agentic-sdlc/tools/activation-planner.py`; `scripts/activation_planner.py` is a
+compatibility loader that delegates to it. Read `--help` before invoking: the verb set and
+required arguments are narrower than this runbook once described, and a stale invocation dies in
+argument parsing rather than doing anything.
+
+Verified surface (2026-08-06): `plan`, `apply`, `status`, `recover`. `plan` requires
+`--target`, `--manifest`, and `--entry` — it plans **one** named entry from a reviewed manifest,
+not a whole-repository profile. There is **no `--profile` flag and no `deactivate` verb**; the
+module's own help states it "deliberately supports no greenfield, readiness, Seeds, trust, Git,
+or multi-file activation behavior," and it is Linux-only and single-entry by construction. Treat
+any broader activation — substrate profile selection, Seeds proof, trust decisions, `wave_ready`
+— as **not implemented**: it must be performed and evidenced by the conductor as reviewed manual
+steps, and must not be claimed as a planner guarantee.
+
+The plan writes nothing and records, per item, the proposed `create|adopt|merge|refuse|skip`
+action and whether each choice was `explicit`, `defaulted`, or `derived`. Cancellation at the
+confirmation step performs zero writes. Apply-phase writes go through the same tool's contracts,
+with instruction files rendered by the marker-aware `instruction-generator.py`, and a run that
+reaches the write phase records a receipt; refused, cancelled, and stopped runs write nothing at
+all, including no receipt. Rerunning against an activated tree must produce an empty
+`created`/`merged` result (observed idempotence). A procedural grant is a same-user, single-use
+record — it is not an authenticated approval, and no planner output authorizes an outward effect.
 
 1. **Preflight and snapshot**
    - Load `agentic-sdlc` and the `repo-toolchain-gates` skill.
