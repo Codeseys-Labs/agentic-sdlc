@@ -12,6 +12,10 @@ Run ONE implementation wave of the agentic-sdlc loop. Scope: $ARGUMENTS
    their own serial wave.
 3. Create one worktree per write-capable worker:
    `git worktree add ../<repo>-wt-<seed-id> -b work/<seed-id>-<slug>`
+   Verify the target path does not exist before running this: git creates the `-b` branch
+   before checking the path, so a refusal on an occupied path strands an orphan branch
+   (executable proof: `tests/test_worktree_failclosed.py`). If that happens, delete the
+   stranded branch (`git branch -d work/<seed-id>-<slug>`) before retrying.
    Persistent `mise trust` and `~/.codex/config.toml` mutation are separate operations:
    obtain explicit operation-specific user approval for each exact worktree path before
    applying either after reviewing its checked-in config. Without that approval, use only a

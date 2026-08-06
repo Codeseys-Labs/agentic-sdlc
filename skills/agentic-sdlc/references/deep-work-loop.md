@@ -220,3 +220,10 @@ A verdict may recommend one scoped re-entry to an earlier phase; the conductor d
 whether to re-enter, preserves prior artifacts, and respects the global pass ceiling and
 per-phase re-entry budgets defined in `references/tiered-orchestration.md`. A ceiling hit
 without completion is an honest stop with resume hints, not a silent failure.
+
+`skills/agentic-sdlc/tools/pass-budget.py` is the executable form of this bounded-backflow
+doctrine: a conductor-owned ledger, not a host enforcement mechanism, that charges a phase
+and the global counter together, persists the charge before the caller can act on the answer,
+and returns a named refusal once a ceiling (global 6; frame 1; discover 2; research 2; plan 2;
+act 3) is exhausted. The refusal is advice the conductor must choose to obey — the tool cannot
+itself stop a delegation the conductor makes anyway.
