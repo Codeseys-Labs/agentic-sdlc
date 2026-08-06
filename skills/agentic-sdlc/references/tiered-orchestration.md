@@ -32,6 +32,13 @@ transport-certified exact form for context-heavy work, and never infer intellige
 context capacity, compaction, or effort compliance from its request or base-ID readback. A
 recommendation, gate, or route never authorizes an outward action.
 
+Context footprint is a second scheduling axis alongside model tier: a route's admitted
+context, compaction behavior, and inheritance across fresh-versus-forked agents constrain
+which work an assignment can carry, independent of intelligence tier. The dated design
+notes docs/research/2026-07-22-claude-code-multi-model-routing.md and
+docs/research/2026-08-05-gateway-selection-memo.md in this repository record that
+material; they are not installed with this skill and authorize no route.
+
 ## Mission integration
 
 Keep scale-setting work singular: a frame, plan, authority analysis, cross-system invariant,

@@ -6,6 +6,14 @@ All three deep-read reports were adversarially verified against cloned source; w
 
 ---
 
+**Prior design reference.** `2026-07-22-claude-code-multi-model-routing.md` (ported
+from the pre-divergence remote line) is the earlier design memo for the same
+surface. Its launcher/profile (`ccodex`) design, route-registry schema,
+context-class/compaction material, Dynamic Workflow inheritance rules, and
+qualification checklist stand. Its gateway choice (CLIProxyAPI-first) and its
+"experimental, operator-approvable" framing of subscription-OAuth-through-a-proxy
+are superseded by this memo's verdict and the ToS addendum below.
+
 ## 1. Requirements-fit matrix
 
 | Requirement | opencodex (`lidge-jun/opencodex`) | CLIProxyAPI (`router-for-me/CLIProxyAPI`) | claude-code-proxy (`fuergaosi233` / `1rgs`) |

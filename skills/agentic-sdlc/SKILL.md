@@ -21,7 +21,11 @@ default. The full Frame -> Ship loop is available only after required Git, Seeds
 trust, and selected-adapter capabilities are probed and verified. Missing, unpinned,
 untrusted, or ambiguous required capability fails closed. Add cmux only when it is already active and useful for visibility or event messaging. Never
 install, start, or enable cmux or tmux merely to run this skill. Use Seeds as the
-queue of record. Mise is the only bootstrap prerequisite: from a reviewed distribution checkout, run the installed
+queue of record. Global bundle distribution is a separate lifecycle plane from
+per-project activation: activate a repository through the `/sdlc-init` runbook (or the
+same intent on a non-Claude host) — reviewed tracked Git baseline, Seeds, pinned gates,
+trust, and shared AGENTS.md guidance — before the first Frame or Wave.
+Mise is the only bootstrap prerequisite: from a reviewed distribution checkout, run the installed
 flagship tool `seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node
 `22.22.3`. Bootstrap requires an exact clean Git distribution root: it rejects any nested checkout
 path or distribution whose tracked, staged, untracked, or ignored content differs from the exact
