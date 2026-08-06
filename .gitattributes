@@ -1,0 +1,4 @@
+# Seeds JSONL uses union merge for transport only; semantic correctness still requires `sd doctor` and graph validation.
+.seeds/issues.jsonl merge=union
+.seeds/templates.jsonl merge=union
+.seeds/plans.jsonl merge=union
