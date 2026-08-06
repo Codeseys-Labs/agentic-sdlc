@@ -66,6 +66,34 @@ Use for existing code, papers, benchmarks, or dossiers:
 8. Run replication and adversarial review.
 9. Update ledgers and next action.
 
+## HyperResearch Doctrine
+
+Live external research is a cost. Run it only when external evidence is load-bearing for
+the decision at hand; otherwise reason from the repository, existing ledgers, and prior
+notes. When a run is warranted, return a versioned research record with sources (each with
+its version, date, or URL), claims, counterevidence, uncertainty, decision-impact, and the
+single cheapest next-action. Sources and claims are versioned so a later run distinguishes
+fresh evidence from stale echoes. Durable follow-on work becomes exactly one typed
+`SeedProposal` for conductor triage; the research OS proposes durable work and never mutates
+any queue.
+
+## Ownership and Reinstall
+
+The installer records a generator-owned manifest at `.codex/research-os-manifest.json`
+listing every file it owns and that file's content digest. On reinstall it:
+
+- creates missing files and leaves the tree byte-identical on a no-op rerun;
+- refuses to overwrite a foreign file at a generated path, with or without `--force`, and
+  never adopts it into ownership;
+- refuses to overwrite an owned file a user has edited unless `--force` is given, in which
+  case it re-copies that owned file back to canonical without broadening ownership;
+- backs each replaced file up in the same directory and recovers it if the write fails;
+- converges after an interrupted install by reconciling the recorded inventory; and
+- cleans up a template it no longer emits only when that file is still unmodified.
+
+Preview any run with `--dry-run`, which reports exactly what apply would do and writes
+nothing.
+
 ## Review Gates
 
 Treat `make review-gates` as the minimum final-synthesis guard. It should flag:

@@ -2,13 +2,21 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import copy
+import ctypes
 import datetime as dt
 import hashlib
 import json
+import os
+import platform
 import re
+import secrets
 import stat
+import tempfile
 import textwrap
 from pathlib import Path
+from typing import Any, Iterator
 
 
 COMMON_AGENT_RULES = """
@@ -739,7 +747,7 @@ print(f"Validated {len(files)} agent config(s).")
 for error in errors:
     print("ERROR:", error)
 raise SystemExit(1 if errors else 0)
-'''.replace("__RUNTIME_FIELDS__", repr(set(RECEIPT_POLICY["canonical_receipt_fields"]))).replace(
+'''.replace("__RUNTIME_FIELDS__", repr(tuple(RECEIPT_POLICY["canonical_receipt_fields"]))).replace(
     "__MANAGED_ROLE_CONTRACTS__",
     repr({
         role: {
@@ -1112,24 +1120,1730 @@ def build_files(project_name: str) -> dict[str, str]:
     return files
 
 
-def write_file(root: Path, rel: str, content: str, *, force: bool, dry_run: bool) -> str:
-    path = root / rel
-    existed = path.exists()
-    if existed and not force:
-        return "exists"
-    if not dry_run:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        if rel.startswith("scripts/") and rel.endswith(".py"):
-            path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return "updated" if existed else "created"
+# Generator-owned lifecycle. External state is the sole ownership authority; the
+# target-local manifest is only an atomically published view of exact active records.
+MANIFEST_REL = ".codex/research-os-manifest.json"
+MANIFEST_SCHEMA = "research-os-ownership-manifest/v1"
+STATE_VERSION = 1
+IDENTITY_VERSION = "stat-v2"
+_STATE_NAMESPACE = "agentic-sdlc-research-os"
+_MANIFEST_TRANSACTION_KEY = "@manifest"
+_PRIVATE_PREFIX = ".research-os-"
+
+
+class ResearchOSError(RuntimeError):
+    """An unsafe or ambiguous lifecycle state that must fail closed."""
+
+
+class RecoveryConflict(ResearchOSError):
+    """An interrupted transaction no longer has one exact safe interpretation."""
+
+
+class _LinuxStatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("tv_sec", ctypes.c_int64),
+        ("tv_nsec", ctypes.c_uint32),
+        ("__reserved", ctypes.c_int32),
+    ]
+
+
+class _LinuxStatx(ctypes.Structure):
+    _fields_ = [
+        ("stx_mask", ctypes.c_uint32),
+        ("stx_blksize", ctypes.c_uint32),
+        ("stx_attributes", ctypes.c_uint64),
+        ("stx_nlink", ctypes.c_uint32),
+        ("stx_uid", ctypes.c_uint32),
+        ("stx_gid", ctypes.c_uint32),
+        ("stx_mode", ctypes.c_uint16),
+        ("__spare0", ctypes.c_uint16),
+        ("stx_ino", ctypes.c_uint64),
+        ("stx_size", ctypes.c_uint64),
+        ("stx_blocks", ctypes.c_uint64),
+        ("stx_attributes_mask", ctypes.c_uint64),
+        ("stx_atime", _LinuxStatxTimestamp),
+        ("stx_btime", _LinuxStatxTimestamp),
+        ("stx_ctime", _LinuxStatxTimestamp),
+        ("stx_mtime", _LinuxStatxTimestamp),
+        ("stx_rdev_major", ctypes.c_uint32),
+        ("stx_rdev_minor", ctypes.c_uint32),
+        ("stx_dev_major", ctypes.c_uint32),
+        ("stx_dev_minor", ctypes.c_uint32),
+        ("stx_mnt_id", ctypes.c_uint64),
+        ("stx_dio_mem_align", ctypes.c_uint32),
+        ("stx_dio_offset_align", ctypes.c_uint32),
+        ("__spare3", ctypes.c_uint64 * 12),
+    ]
+
+
+class _WindowsFileId128(ctypes.Structure):
+    _fields_ = [("identifier", ctypes.c_ubyte * 16)]
+
+
+class _WindowsFileIdInformation(ctypes.Structure):
+    _fields_ = [
+        ("volume_serial", ctypes.c_uint64),
+        ("file_id", _WindowsFileId128),
+    ]
+
+
+class ObservedLeaf:
+    __slots__ = ("state", "identity", "digest", "mode", "ancestors")
+
+    def __init__(
+        self,
+        state: str,
+        identity: str | None = None,
+        digest: str | None = None,
+        mode: int | None = None,
+        ancestors: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        self.state = state
+        self.identity = identity
+        self.digest = digest
+        self.mode = mode
+        self.ancestors = ancestors
+
+
+class PrivateArtifact:
+    __slots__ = ("container", "payload", "witness", "identity")
+
+    def __init__(self, container: Path, payload: Path, witness: Path, identity: str) -> None:
+        self.container = container
+        self.payload = payload
+        self.witness = witness
+        self.identity = identity
+
+
+class StagedFile:
+    __slots__ = ("artifact", "record")
+
+    def __init__(self, artifact: PrivateArtifact, record: dict[str, Any]) -> None:
+        self.artifact = artifact
+        self.record = record
+
+
+def content_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _bytes_digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def path_digest(path: Path) -> str | None:
+    try:
+        return _bytes_digest(path.read_bytes())
+    except OSError:
+        return None
+
+
+def _is_executable_rel(rel: str) -> bool:
+    return rel.startswith("scripts/") and rel.endswith(".py")
+
+
+def _normalise_relative_path(rel: str, *, allow_manifest: bool = False) -> tuple[str, ...]:
+    if not isinstance(rel, str) or not rel or "\x00" in rel or "\\" in rel:
+        raise ValueError(f"invalid generated path: {rel!r}")
+    if rel.startswith("/") or re.match(r"^[A-Za-z]:", rel):
+        raise ValueError(f"generated path must be relative: {rel!r}")
+    parts = rel.split("/")
+    if any(part in ("", ".", "..") for part in parts) or "/".join(parts) != rel:
+        raise ValueError(f"invalid generated path: {rel!r}")
+    if rel == MANIFEST_REL and not allow_manifest:
+        raise ValueError("generated paths must not include the manifest")
+    return tuple(parts)
+
+
+def _validated_files(files: dict[str, str]) -> dict[str, tuple[str, ...]]:
+    if not isinstance(files, dict):
+        raise ValueError("generated files must be a dictionary")
+    normalised: dict[str, tuple[str, ...]] = {}
+    for rel, content in files.items():
+        if not isinstance(content, str):
+            raise ValueError(f"generated content must be text: {rel!r}")
+        normalised[rel] = _normalise_relative_path(rel)
+    return normalised
+
+
+def _platform_system() -> str:
+    return platform.system()
+
+
+def _identity_token_valid(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = value.split(":")
+    return bool(
+        len(parts) == 4
+        and parts[0] == IDENTITY_VERSION
+        and all(part.isdigit() for part in parts[1:3])
+        and parts[3].replace(".", "", 1).isdigit()
+    )
+
+
+def _linux_statx(path: bytes, *, descriptor: int = -100, flags: int = 0) -> _LinuxStatx | None:
+    statx = getattr(ctypes.CDLL(None, use_errno=True), "statx", None)
+    if statx is None:
+        return None
+    statx.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_uint,
+        ctypes.POINTER(_LinuxStatx),
+    ]
+    statx.restype = ctypes.c_int
+    metadata = _LinuxStatx()
+    statx_btime = 0x00000800
+    if statx(descriptor, path, flags, statx_btime, ctypes.byref(metadata)) != 0:
+        return None
+    if not metadata.stx_mask & statx_btime:
+        return None
+    return metadata
+
+
+def _windows_file_identity(path: Path, *, follow_symlinks: bool = True) -> tuple[int, int, int] | None:
+    if os.name != "nt":
+        return None
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandleEx
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    handle = create_file(
+        str(path),
+        0x00000080,
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        0x02000000 | (0 if follow_symlinks else 0x00200000),
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        return None
+    try:
+        information = _WindowsFileIdInformation()
+        if not get_information(handle, 18, ctypes.byref(information), ctypes.sizeof(information)):
+            return None
+        file_id = int.from_bytes(bytes(information.file_id.identifier), "little")
+        return information.volume_serial, file_id, 0
+    finally:
+        close_handle(handle)
+
+
+def _path_identity(path: Path, *, follow_symlinks: bool = True) -> str:
+    if _platform_system() == "Windows":
+        identity = _windows_file_identity(path, follow_symlinks=follow_symlinks)
+        if identity is not None:
+            volume, file_index, creation = identity
+            return f"{IDENTITY_VERSION}:{volume}:{file_index}:{creation}"
+    metadata = os.stat(path, follow_symlinks=follow_symlinks)
+    generation: str | None = None
+    if _platform_system() == "Darwin":
+        birth_ns = getattr(metadata, "st_birthtime_ns", None)
+        birth = getattr(metadata, "st_birthtime", None)
+        generation = str(birth_ns if birth_ns is not None else birth) if birth is not None or birth_ns is not None else None
+    elif _platform_system() == "Windows":
+        generation = str(metadata.st_ctime_ns)
+    elif _platform_system() == "Linux":
+        result = _linux_statx(
+            os.fsencode(path),
+            flags=0 if follow_symlinks else 0x00000100,
+        )
+        if result is not None:
+            generation = f"{result.stx_btime.tv_sec}.{result.stx_btime.tv_nsec}"
+    if generation is None:
+        raise ResearchOSError(f"filesystem does not expose stable object identity for {path}")
+    return f"{IDENTITY_VERSION}:{metadata.st_dev}:{metadata.st_ino}:{generation}"
+
+
+def _fd_identity(fd: int) -> str:
+    metadata = os.fstat(fd)
+    generation: str | None = None
+    if _platform_system() == "Darwin":
+        birth_ns = getattr(metadata, "st_birthtime_ns", None)
+        birth = getattr(metadata, "st_birthtime", None)
+        generation = str(birth_ns if birth_ns is not None else birth) if birth is not None or birth_ns is not None else None
+    elif _platform_system() == "Linux":
+        result = _linux_statx(b"", descriptor=fd, flags=0x00001000)
+        if result is not None:
+            generation = f"{result.stx_btime.tv_sec}.{result.stx_btime.tv_nsec}"
+    if generation is None:
+        raise ResearchOSError("filesystem does not expose stable descriptor identity")
+    return f"{IDENTITY_VERSION}:{metadata.st_dev}:{metadata.st_ino}:{generation}"
+
+
+def _identity_matches(path: Path, expected: Any, *, follow_symlinks: bool = True) -> bool:
+    if not _identity_token_valid(expected):
+        return False
+    try:
+        return _path_identity(path, follow_symlinks=follow_symlinks) == expected
+    except (OSError, ResearchOSError):
+        return False
+
+
+def _physical_target(root: Path) -> str:
+    try:
+        return os.path.normcase(str(root.resolve(strict=True)))
+    except OSError as exc:
+        raise ResearchOSError(f"cannot resolve target root {root}: {exc}") from exc
+
+
+def _state_root() -> Path:
+    if _platform_system() == "Windows":
+        value = os.environ.get("LOCALAPPDATA")
+        return Path(value) if value else Path.home() / "AppData" / "Local"
+    value = os.environ.get("XDG_STATE_HOME")
+    return Path(value) if value else Path.home() / ".local" / "state"
+
+
+def _state_path(root: Path) -> Path:
+    key = hashlib.sha256(os.fsencode(_physical_target(root))).hexdigest()
+    return _state_root() / _STATE_NAMESPACE / key / "state.json"
+
+
+def _safe_open_flags(*, write: bool = False) -> int:
+    flags = os.O_WRONLY if write else os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    return flags
+
+
+def _open_root(root: Path) -> int | None:
+    if os.name == "nt":
+        metadata = os.lstat(root)
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_file_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+            raise ResearchOSError("target root is not a safe directory")
+        return None
+    required = ("O_DIRECTORY", "O_NOFOLLOW")
+    if any(not hasattr(os, name) for name in required):
+        raise ResearchOSError("safe no-follow directory primitives are unavailable")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise ResearchOSError("target root is not a directory")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _open_parent(root_fd: int, parts: tuple[str, ...], *, create: bool) -> tuple[int | None, tuple[tuple[str, str], ...]]:
+    current_fd = os.dup(root_fd)
+    ancestors: list[tuple[str, str]] = []
+    current_parts: list[str] = []
+    try:
+        for component in parts[:-1]:
+            current_parts.append(component)
+            try:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=current_fd,
+                )
+            except FileNotFoundError:
+                if not create:
+                    os.close(current_fd)
+                    return None, tuple(ancestors)
+                try:
+                    os.mkdir(component, 0o700, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=current_fd,
+                )
+            if not stat.S_ISDIR(os.fstat(next_fd).st_mode):
+                os.close(next_fd)
+                raise ResearchOSError(f"unsafe generated ancestor: {'/'.join(current_parts)}")
+            ancestors.append(("/".join(current_parts), _fd_identity(next_fd)))
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd, tuple(ancestors)
+    except BaseException:
+        try:
+            os.close(current_fd)
+        except OSError:
+            pass
+        raise
+
+
+def _windows_parent(root: Path, parts: tuple[str, ...], *, create: bool) -> tuple[Path | None, tuple[tuple[str, str], ...]]:
+    current = root
+    ancestors: list[tuple[str, str]] = []
+    current_parts: list[str] = []
+    for component in parts[:-1]:
+        current_parts.append(component)
+        current = current / component
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            if not create:
+                return None, tuple(ancestors)
+            try:
+                current.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            metadata = os.lstat(current)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_file_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            raise ResearchOSError(f"unsafe generated ancestor: {'/'.join(current_parts)}")
+        ancestors.append(("/".join(current_parts), _path_identity(current, follow_symlinks=False)))
+    return current, tuple(ancestors)
+
+
+def _read_fd_bytes(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = os.read(fd, 65536)
+        except BlockingIOError as exc:
+            raise ResearchOSError("generated leaf cannot be read without blocking") from exc
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _inspect_leaf(root: Path, root_fd: int | None, parts: tuple[str, ...]) -> ObservedLeaf:
+    if root_fd is None:
+        parent, ancestors = _windows_parent(root, parts, create=False)
+        if parent is None:
+            return ObservedLeaf("missing", ancestors=ancestors)
+        path = parent / parts[-1]
+        try:
+            metadata = os.lstat(path)
+        except FileNotFoundError:
+            return ObservedLeaf("missing", ancestors=ancestors)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_file_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            return ObservedLeaf("non-regular", ancestors=ancestors)
+        identity = _path_identity(path, follow_symlinks=False)
+        try:
+            fd = os.open(path, _safe_open_flags())
+        except (OSError, PermissionError):
+            return ObservedLeaf("regular-unreadable", identity=identity, mode=stat.S_IMODE(metadata.st_mode), ancestors=ancestors)
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode):
+                return ObservedLeaf("non-regular", ancestors=ancestors)
+            data = _read_fd_bytes(fd)
+            if not _identity_matches(path, identity, follow_symlinks=False):
+                return ObservedLeaf("unsafe-ancestor", ancestors=ancestors)
+            return ObservedLeaf("regular-readable", identity, _bytes_digest(data), stat.S_IMODE(opened.st_mode), ancestors)
+        finally:
+            os.close(fd)
+
+    parent_fd, ancestors = _open_parent(root_fd, parts, create=False)
+    if parent_fd is None:
+        return ObservedLeaf("missing", ancestors=ancestors)
+    try:
+        try:
+            leaf_fd = os.open(parts[-1], _safe_open_flags(), dir_fd=parent_fd)
+        except FileNotFoundError:
+            return ObservedLeaf("missing", ancestors=ancestors)
+        except OSError as exc:
+            try:
+                metadata = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return ObservedLeaf("missing", ancestors=ancestors)
+            if not stat.S_ISREG(metadata.st_mode):
+                return ObservedLeaf("non-regular", ancestors=ancestors)
+            try:
+                identity = _path_identity(root.joinpath(*parts), follow_symlinks=False)
+            except (OSError, ResearchOSError):
+                identity = None
+            return ObservedLeaf("regular-unreadable", identity=identity, mode=stat.S_IMODE(metadata.st_mode), ancestors=ancestors)
+        try:
+            metadata = os.fstat(leaf_fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                return ObservedLeaf("non-regular", ancestors=ancestors)
+            identity = _fd_identity(leaf_fd)
+            data = _read_fd_bytes(leaf_fd)
+            current = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+                return ObservedLeaf("unsafe-ancestor", ancestors=ancestors)
+            return ObservedLeaf("regular-readable", identity, _bytes_digest(data), stat.S_IMODE(metadata.st_mode), ancestors)
+        finally:
+            os.close(leaf_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _ensure_parent(root: Path, root_fd: int | None, parts: tuple[str, ...]) -> tuple[Path, str, tuple[tuple[str, str], ...]]:
+    if root_fd is None:
+        parent, ancestors = _windows_parent(root, parts, create=True)
+        assert parent is not None
+        return parent, _path_identity(parent, follow_symlinks=False), ancestors
+    parent_fd, ancestors = _open_parent(root_fd, parts, create=True)
+    assert parent_fd is not None
+    try:
+        parent = root.joinpath(*parts[:-1]) if parts[:-1] else root
+        return parent, _fd_identity(parent_fd), ancestors
+    finally:
+        os.close(parent_fd)
+
+
+def _ancestor_records(ancestors: tuple[tuple[str, str], ...]) -> list[dict[str, str]]:
+    return [{"path": path, "identity": identity} for path, identity in ancestors]
+
+
+def _record_from_observation(observed: ObservedLeaf) -> dict[str, Any]:
+    if observed.state != "regular-readable" or observed.identity is None or observed.digest is None or observed.mode is None:
+        raise ResearchOSError("cannot record a non-exact generated leaf")
+    return {
+        "destination_identity": observed.identity,
+        "destination_type": "file",
+        "digest": observed.digest,
+        "mode": observed.mode,
+        "ancestors": _ancestor_records(observed.ancestors),
+    }
+
+
+def _record_structure_valid(record: Any) -> bool:
+    if not isinstance(record, dict) or set(record) != {
+        "destination_identity",
+        "destination_type",
+        "digest",
+        "mode",
+        "ancestors",
+    }:
+        return False
+    ancestors = record.get("ancestors")
+    return bool(
+        _identity_token_valid(record.get("destination_identity"))
+        and record.get("destination_type") == "file"
+        and isinstance(record.get("digest"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", record["digest"])
+        and isinstance(record.get("mode"), int)
+        and 0 <= record["mode"] <= 0o7777
+        and isinstance(ancestors, list)
+        and all(
+            isinstance(item, dict)
+            and set(item) == {"path", "identity"}
+            and isinstance(item["path"], str)
+            and _identity_token_valid(item["identity"])
+            for item in ancestors
+        )
+    )
+
+
+def _authority_matches(observed: ObservedLeaf, record: dict[str, Any]) -> bool:
+    return bool(
+        observed.state == "regular-readable"
+        and observed.identity == record["destination_identity"]
+        and _ancestor_records(observed.ancestors) == record["ancestors"]
+    )
+
+
+def _exact_matches(observed: ObservedLeaf, record: dict[str, Any]) -> bool:
+    mode_matches = _platform_system() == "Windows" or observed.mode == record["mode"]
+    return _authority_matches(observed, record) and observed.digest == record["digest"] and mode_matches
+
+
+def _empty_state(root: Path, root_identity: str) -> dict[str, Any]:
+    return {
+        "version": STATE_VERSION,
+        "target": {"path": _physical_target(root), "identity": root_identity},
+        "entries": {},
+        "manifest": None,
+        "transactions": {},
+        "conflicts": {},
+    }
+
+
+def _artifact_state(artifact: PrivateArtifact) -> dict[str, str]:
+    return {
+        "container": str(artifact.container),
+        "payload": str(artifact.payload),
+        "witness": str(artifact.witness),
+        "identity": artifact.identity,
+    }
+
+
+def _artifact_state_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {"container", "payload", "witness", "identity"}:
+        return False
+    try:
+        container = Path(value["container"])
+        payload = Path(value["payload"])
+        witness = Path(value["witness"])
+    except TypeError:
+        return False
+    return bool(
+        container.is_absolute()
+        and container.name.startswith(_PRIVATE_PREFIX)
+        and payload == container / "payload"
+        and witness == container / "witness"
+        and _identity_token_valid(value.get("identity"))
+    )
+
+
+def _transaction_valid(key: str, tx: Any) -> bool:
+    if not isinstance(tx, dict) or set(tx) != {
+        "operation",
+        "phase",
+        "rel",
+        "authority_record",
+        "old_record",
+        "new_record",
+        "stage",
+        "backup",
+    }:
+        return False
+    operation = tx.get("operation")
+    if operation not in {"create", "replace", "delete"} or tx.get("phase") not in {"armed", "committed"} or tx.get("rel") != key:
+        return False
+    if key != _MANIFEST_TRANSACTION_KEY:
+        try:
+            _normalise_relative_path(key)
+        except ValueError:
+            return False
+    for field in ("authority_record", "old_record", "new_record"):
+        if tx[field] is not None and not _record_structure_valid(tx[field]):
+            return False
+    if operation == "create":
+        return bool(
+            tx["authority_record"] is None
+            and tx["old_record"] is None
+            and tx["new_record"] is not None
+            and _artifact_state_valid(tx["stage"])
+            and tx["backup"] is None
+        )
+    if operation == "replace":
+        return bool(
+            tx["authority_record"] is not None
+            and tx["old_record"] is not None
+            and tx["new_record"] is not None
+            and _artifact_state_valid(tx["stage"])
+            and _artifact_state_valid(tx["backup"])
+        )
+    return bool(
+        tx["authority_record"] is not None
+        and tx["old_record"] is not None
+        and tx["new_record"] is None
+        and tx["stage"] is None
+        and _artifact_state_valid(tx["backup"])
+    )
+
+
+def _validate_state(state: Any, root: Path, root_identity: str) -> dict[str, Any]:
+    if not isinstance(state, dict) or set(state) != {
+        "version",
+        "target",
+        "entries",
+        "manifest",
+        "transactions",
+        "conflicts",
+    }:
+        raise ResearchOSError("invalid Research OS ownership state")
+    version = state.get("version")
+    if isinstance(version, int) and version > STATE_VERSION:
+        raise ResearchOSError(f"Research OS state was written by a newer installer (version {version})")
+    target = state.get("target")
+    if (
+        version != STATE_VERSION
+        or not isinstance(target, dict)
+        or set(target) != {"path", "identity"}
+        or target.get("path") != _physical_target(root)
+        or target.get("identity") != root_identity
+    ):
+        raise ResearchOSError("Research OS target identity changed or state is invalid")
+    entries = state.get("entries")
+    transactions = state.get("transactions")
+    conflicts = state.get("conflicts")
+    if not isinstance(entries, dict) or not isinstance(transactions, dict) or not isinstance(conflicts, dict):
+        raise ResearchOSError("invalid Research OS ownership state")
+    for rel, record in entries.items():
+        try:
+            _normalise_relative_path(rel)
+        except (TypeError, ValueError) as exc:
+            raise ResearchOSError(f"invalid Research OS ownership record: {rel!r}") from exc
+        if not _record_structure_valid(record):
+            raise ResearchOSError(f"invalid Research OS ownership record: {rel}")
+    if state["manifest"] is not None and not _record_structure_valid(state["manifest"]):
+        raise ResearchOSError("invalid Research OS manifest ownership record")
+    if any(not isinstance(key, str) or not _transaction_valid(key, tx) for key, tx in transactions.items()):
+        raise ResearchOSError("invalid Research OS transaction record")
+    for key, conflict in conflicts.items():
+        if (
+            not isinstance(key, str)
+            or not isinstance(conflict, dict)
+            or set(conflict) != {"action", "reason"}
+            or not all(isinstance(value, str) for value in conflict.values())
+        ):
+            raise ResearchOSError("invalid Research OS conflict record")
+    return state
+
+
+def _load_state(path: Path, root: Path, root_identity: str) -> tuple[dict[str, Any], bool]:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return _empty_state(root, root_identity), False
+    except OSError as exc:
+        raise ResearchOSError(f"cannot inspect Research OS state {path}: {exc}") from exc
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise ResearchOSError(f"Research OS state is not a regular file: {path}")
+    try:
+        descriptor = os.open(path, _safe_open_flags())
+    except OSError as exc:
+        raise ResearchOSError(f"cannot read Research OS state {path}: {exc}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ResearchOSError(f"Research OS state is not a regular file: {path}")
+        data = _read_fd_bytes(descriptor)
+        current = os.lstat(path)
+        if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            raise ResearchOSError(f"Research OS state changed while reading: {path}")
+    except OSError as exc:
+        raise ResearchOSError(f"cannot read Research OS state {path}: {exc}") from exc
+    finally:
+        os.close(descriptor)
+    try:
+        state = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ResearchOSError(f"cannot read Research OS state {path}: {exc}") from exc
+    return _validate_state(state, root, root_identity), True
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_state(path: Path, state: dict[str, Any], root: Path, root_identity: str) -> None:
+    _validate_state(state, root, root_identity)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary = tempfile.mkstemp(prefix=".state-", dir=path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write((json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _persist_candidate(path: Path, state: dict[str, Any], candidate: dict[str, Any], root: Path, root_identity: str) -> None:
+    _write_state(path, candidate, root, root_identity)
+    state.clear()
+    state.update(candidate)
+
+
+@contextmanager
+def _state_lock(state_path: Path) -> Iterator[None]:
+    state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock_path = state_path.with_name("installer.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")
+                    os.fsync(fd)
+                    os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise ResearchOSError("another Research OS install is active") from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ResearchOSError("another Research OS install is active") from exc
+        yield
+    finally:
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _open_verified_directory(path: Path, expected_identity: str | None) -> int:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        if expected_identity is not None and _fd_identity(descriptor) != expected_identity:
+            raise RecoveryConflict(f"directory identity changed: {path}")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _windows_rename_noreplace(source: Path, destination: Path, source_parent_identity: str | None, destination_parent_identity: str | None) -> None:
+    if os.name != "nt":
+        os.rename(source, destination)
+        return
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+    set_information.restype = wintypes.BOOL
+    invalid = wintypes.HANDLE(-1).value
+    share_all = 0x00000001 | 0x00000002 | 0x00000004
+
+    def open_handle(path: Path, access: int, share: int = share_all) -> int:
+        handle = create_file(str(path), access, share, None, 3, 0x02000000 | 0x00200000, None)
+        if handle == invalid:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return handle
+
+    source_handle = open_handle(source, 0x00010000 | 0x00000080)
+    destination_parent_handle = open_handle(destination.parent, 0x00000080, 0x00000001 | 0x00000002)
+    try:
+        if source_parent_identity is not None and not _identity_matches(source.parent, source_parent_identity, follow_symlinks=False):
+            raise RecoveryConflict(f"directory identity changed: {source.parent}")
+        if destination_parent_identity is not None and not _identity_matches(destination.parent, destination_parent_identity, follow_symlinks=False):
+            raise RecoveryConflict(f"directory identity changed: {destination.parent}")
+        destination_name = str(destination)
+        destination_bytes = destination_name.encode("utf-16-le")
+
+        class FileRenameInfoEx(ctypes.Structure):
+            _fields_ = [
+                ("Flags", wintypes.DWORD),
+                ("RootDirectory", wintypes.HANDLE),
+                ("FileNameLength", wintypes.DWORD),
+                ("FileName", wintypes.WCHAR * (len(destination_name) + 1)),
+            ]
+
+        information = FileRenameInfoEx(0, None, len(destination_bytes), destination_name)
+        information_size = FileRenameInfoEx.FileName.offset + len(destination_bytes) + 2
+        if not set_information(source_handle, 22, ctypes.byref(information), information_size):
+            error = ctypes.get_last_error()
+            if error in {80, 183}:
+                raise FileExistsError(error, os.strerror(error), str(destination))
+            raise ctypes.WinError(error)
+    finally:
+        close_handle(destination_parent_handle)
+        close_handle(source_handle)
+
+
+def _rename_noreplace(
+    source: Path,
+    destination: Path,
+    *,
+    source_parent_identity: str | None = None,
+    destination_parent_identity: str | None = None,
+) -> None:
+    system = _platform_system()
+    if system == "Windows":
+        _windows_rename_noreplace(source, destination, source_parent_identity, destination_parent_identity)
+        return
+    source_fd = _open_verified_directory(source.parent, source_parent_identity)
+    destination_fd = _open_verified_directory(destination.parent, destination_parent_identity)
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if system == "Darwin":
+            rename = getattr(libc, "renameatx_np", None)
+            if rename is None:
+                raise ResearchOSError("atomic no-replace rename is unavailable")
+            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            rename.restype = ctypes.c_int
+            result = rename(source_fd, os.fsencode(source.name), destination_fd, os.fsencode(destination.name), 0x00000004)
+        elif system == "Linux":
+            rename = getattr(libc, "renameat2", None)
+            if rename is None:
+                raise ResearchOSError("atomic no-replace rename requires glibc 2.28 or newer")
+            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            rename.restype = ctypes.c_int
+            result = rename(source_fd, os.fsencode(source.name), destination_fd, os.fsencode(destination.name), 1)
+        else:
+            raise ResearchOSError("atomic no-replace rename is unavailable")
+        if result != 0:
+            error = ctypes.get_errno()
+            if error == getattr(os, "EEXIST", 17):
+                raise FileExistsError(error, os.strerror(error), str(destination))
+            raise OSError(error, os.strerror(error), str(destination))
+        os.fsync(source_fd)
+        if destination_fd != source_fd:
+            os.fsync(destination_fd)
+    finally:
+        os.close(destination_fd)
+        os.close(source_fd)
+
+
+def _reserve_artifact(parent: Path, role: str) -> PrivateArtifact:
+    for _ in range(32):
+        container = parent / f"{_PRIVATE_PREFIX}{role}-{secrets.token_hex(16)}"
+        try:
+            container.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        identity = _path_identity(container, follow_symlinks=False)
+        _fsync_directory(parent)
+        return PrivateArtifact(container, container / "payload", container / "witness", identity)
+    raise ResearchOSError(f"cannot reserve private {role} artifact in {parent}")
+
+
+def _artifact_from_state(value: dict[str, str]) -> PrivateArtifact:
+    return PrivateArtifact(Path(value["container"]), Path(value["payload"]), Path(value["witness"]), value["identity"])
+
+
+def _link_fd(fd: int, directory_fd: int, name: str) -> None:
+    linkat = getattr(ctypes.CDLL(None, use_errno=True), "linkat", None)
+    if linkat is None:
+        raise ResearchOSError("exact-descriptor staged publication is unavailable")
+    linkat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    linkat.restype = ctypes.c_int
+    if linkat(fd, b"", directory_fd, os.fsencode(name), 0x00001000) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), name)
+
+
+def _inspect_absolute(path: Path) -> ObservedLeaf:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return ObservedLeaf("missing")
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        return ObservedLeaf("non-regular")
+    try:
+        fd = os.open(path, _safe_open_flags())
+    except OSError:
+        return ObservedLeaf("regular-unreadable")
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            return ObservedLeaf("non-regular")
+        identity = _fd_identity(fd) if os.name != "nt" else _path_identity(path, follow_symlinks=False)
+        data = _read_fd_bytes(fd)
+        if not _identity_matches(path, identity, follow_symlinks=False):
+            return ObservedLeaf("unsafe-ancestor")
+        return ObservedLeaf("regular-readable", identity, _bytes_digest(data), stat.S_IMODE(opened.st_mode))
+    finally:
+        os.close(fd)
+
+
+def _artifact_container_exact(artifact: PrivateArtifact) -> bool:
+    return _identity_matches(artifact.container, artifact.identity, follow_symlinks=False)
+
+
+def _artifact_links(artifact: PrivateArtifact, record: dict[str, Any]) -> tuple[ObservedLeaf, ObservedLeaf]:
+    return _inspect_absolute(artifact.payload), _inspect_absolute(artifact.witness)
+
+
+def _stage_exact(stage: StagedFile) -> bool:
+    if not _artifact_container_exact(stage.artifact):
+        return False
+    payload, witness = _artifact_links(stage.artifact, stage.record)
+    expected = {**stage.record, "ancestors": []}
+    return _exact_matches(payload, expected) and _exact_matches(witness, expected)
+
+
+def _stage_published(stage: StagedFile) -> bool:
+    if not _artifact_container_exact(stage.artifact):
+        return False
+    payload, witness = _artifact_links(stage.artifact, stage.record)
+    expected = {**stage.record, "ancestors": []}
+    return payload.state == "missing" and _exact_matches(witness, expected)
+
+
+def _backup_exact(artifact: PrivateArtifact, record: dict[str, Any]) -> bool:
+    if not _artifact_container_exact(artifact):
+        return False
+    payload, witness = _artifact_links(artifact, record)
+    expected = {**record, "ancestors": []}
+    return _exact_matches(payload, expected) and _exact_matches(witness, expected)
+
+
+def _artifact_empty(artifact: PrivateArtifact) -> bool:
+    if not artifact.container.exists():
+        return True
+    if not _artifact_container_exact(artifact):
+        return False
+    try:
+        return not any(artifact.container.iterdir())
+    except OSError:
+        return False
+
+
+def _cleanup_artifact_windows(
+    artifact: PrivateArtifact,
+    observations: dict[Path, ObservedLeaf],
+    record: dict[str, Any],
+) -> None:
+    for child, observed in observations.items():
+        quarantine = artifact.container / f"retired-{child.name}-{secrets.token_hex(16)}"
+        try:
+            _rename_noreplace(
+                child,
+                quarantine,
+                source_parent_identity=artifact.identity,
+                destination_parent_identity=artifact.identity,
+            )
+        except BaseException as exc:
+            raise RecoveryConflict(f"private payload changed during cleanup: {child}") from exc
+        moved = _inspect_absolute(quarantine)
+        expected = {**record, "ancestors": []}
+        if not _exact_matches(moved, expected):
+            raise RecoveryConflict(f"private payload changed during cleanup: {child}")
+        try:
+            quarantine.unlink()
+        except OSError as exc:
+            raise RecoveryConflict(f"cannot retire private payload: {quarantine}") from exc
+    try:
+        artifact.container.rmdir()
+    except OSError as exc:
+        raise RecoveryConflict(f"private container is not empty: {artifact.container}") from exc
+
+
+def _cleanup_artifact(artifact: PrivateArtifact, record: dict[str, Any] | None) -> None:
+    if not artifact.container.exists():
+        return
+    if not _artifact_container_exact(artifact):
+        raise RecoveryConflict(f"private container identity changed: {artifact.container}")
+    children = list(artifact.container.iterdir())
+    if any(child.name not in {"payload", "witness"} for child in children):
+        raise RecoveryConflict(f"foreign content in private container: {artifact.container}")
+    observations = {child: _inspect_absolute(child) for child in children}
+    if record is None and children:
+        raise RecoveryConflict(f"unexpected private payload: {artifact.container}")
+    if record is not None:
+        expected = {**record, "ancestors": []}
+        if any(not _exact_matches(observed, expected) for observed in observations.values()):
+            raise RecoveryConflict(f"private payload changed: {artifact.container}")
+    assert record is not None
+    if _platform_system() == "Windows":
+        _cleanup_artifact_windows(artifact, observations, record)
+        return
+    container_fd = _open_verified_directory(artifact.container, artifact.identity)
+    quarantine: list[str] = []
+    try:
+        for child in children:
+            observed = observations[child]
+            quarantine_name = f"retired-{child.name}-{secrets.token_hex(16)}"
+            try:
+                _rename_noreplace(
+                    child,
+                    artifact.container / quarantine_name,
+                    source_parent_identity=artifact.identity,
+                    destination_parent_identity=artifact.identity,
+                )
+            except BaseException as exc:
+                raise RecoveryConflict(f"private payload changed during cleanup: {child}") from exc
+            moved = _inspect_absolute(artifact.container / quarantine_name)
+            expected = {**record, "ancestors": []} if record is not None else None
+            if expected is None or not _exact_matches(moved, expected):
+                raise RecoveryConflict(f"private payload changed during cleanup: {child}")
+            quarantine.append(quarantine_name)
+        os.fsync(container_fd)
+        for name in quarantine:
+            os.unlink(name, dir_fd=container_fd)
+        os.fsync(container_fd)
+    finally:
+        os.close(container_fd)
+    artifact.container.rmdir()
+    _fsync_directory(artifact.container.parent)
+
+
+def _set_staged_mode(file_fd: int, path: Path, mode: int) -> None:
+    if _platform_system() == "Windows":
+        os.chmod(path, mode)
+    else:
+        os.fchmod(file_fd, mode)
+
+
+def _stage_file(parent: Path, data: bytes, mode: int, ancestors: tuple[tuple[str, str], ...]) -> StagedFile:
+    artifact = _reserve_artifact(parent, "stage")
+    container_fd: int | None = None
+    file_fd: int | None = None
+    named = False
+    try:
+        if os.name != "nt":
+            container_fd = os.open(artifact.container, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                file_fd = os.open(".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0), mode, dir_fd=container_fd)
+            except (AttributeError, OSError):
+                file_fd = os.open("payload", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=container_fd)
+                named = True
+        else:
+            file_fd = os.open(artifact.payload, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), mode)
+            named = True
+        written = 0
+        while written < len(data):
+            count = os.write(file_fd, data[written:])
+            if count <= 0:
+                raise OSError("short write staging generated file")
+            written += count
+        _set_staged_mode(file_fd, artifact.payload, mode)
+        os.fsync(file_fd)
+        identity = _fd_identity(file_fd) if os.name != "nt" else _path_identity(artifact.payload, follow_symlinks=False)
+        if not named:
+            assert container_fd is not None
+            _link_fd(file_fd, container_fd, "payload")
+        if os.name == "nt":
+            os.link(artifact.payload, artifact.witness)
+        else:
+            assert container_fd is not None
+            os.link("payload", "witness", src_dir_fd=container_fd, dst_dir_fd=container_fd, follow_symlinks=False)
+        if container_fd is not None:
+            os.fsync(container_fd)
+        record = {
+            "destination_identity": identity,
+            "destination_type": "file",
+            "digest": _bytes_digest(data),
+            "mode": mode,
+            "ancestors": _ancestor_records(ancestors),
+        }
+        stage = StagedFile(artifact, record)
+        if not _stage_exact(stage):
+            raise RecoveryConflict(f"staged payload changed: {artifact.container}")
+        return stage
+    except BaseException:
+        if file_fd is not None:
+            os.close(file_fd)
+            file_fd = None
+        if container_fd is not None:
+            os.close(container_fd)
+            container_fd = None
+        try:
+            children = list(artifact.container.iterdir()) if _artifact_container_exact(artifact) else []
+            for child in children:
+                child.unlink()
+            if _artifact_container_exact(artifact):
+                artifact.container.rmdir()
+                _fsync_directory(parent)
+        except OSError:
+            pass
+        raise
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if container_fd is not None:
+            os.close(container_fd)
+
+
+def _publish_staged_file(stage: StagedFile, destination: Path, new_record: dict[str, Any], destination_parent_identity: str) -> None:
+    if not _stage_exact(stage) or stage.record != new_record:
+        raise RecoveryConflict(f"staged payload changed: {stage.artifact.payload}")
+    if _inspect_absolute(destination).state != "missing":
+        raise RecoveryConflict(f"publish destination is no longer absent: {destination}")
+    try:
+        _rename_noreplace(
+            stage.artifact.payload,
+            destination,
+            source_parent_identity=stage.artifact.identity,
+            destination_parent_identity=destination_parent_identity,
+        )
+    except FileExistsError as exc:
+        raise RecoveryConflict(f"publish destination is no longer absent: {destination}") from exc
+    observed = _inspect_absolute(destination)
+    expected = {**new_record, "ancestors": []}
+    if not _exact_matches(observed, expected) or not _stage_published(stage):
+        raise RecoveryConflict(f"published destination changed: {destination}")
+
+
+def _move_exact_to_backup(
+    destination: Path,
+    expected_record: dict[str, Any],
+    backup: PrivateArtifact,
+    destination_parent_identity: str,
+) -> None:
+    if not _artifact_empty(backup):
+        raise RecoveryConflict(f"backup is not empty: {backup.container}")
+    exact_fd: int | None = None
+    try:
+        if os.name != "nt":
+            exact_fd = os.open(destination, _safe_open_flags())
+            opened = os.fstat(exact_fd)
+            opened_identity = _fd_identity(exact_fd)
+            opened_digest = _bytes_digest(_read_fd_bytes(exact_fd))
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened_identity != expected_record["destination_identity"]
+                or opened_digest != expected_record["digest"]
+                or stat.S_IMODE(opened.st_mode) != expected_record["mode"]
+            ):
+                raise RecoveryConflict(f"destination changed before retirement: {destination}")
+        try:
+            _rename_noreplace(
+                destination,
+                backup.payload,
+                source_parent_identity=destination_parent_identity,
+                destination_parent_identity=backup.identity,
+            )
+        except FileExistsError as exc:
+            raise RecoveryConflict(f"backup destination changed: {backup.payload}") from exc
+        moved = _inspect_absolute(backup.payload)
+        expected_private = {**expected_record, "ancestors": []}
+        if not _exact_matches(moved, expected_private):
+            if exact_fd is not None:
+                backup_fd = _open_verified_directory(backup.container, backup.identity)
+                try:
+                    _link_fd(exact_fd, backup_fd, "witness")
+                    os.fsync(backup_fd)
+                finally:
+                    os.close(backup_fd)
+            if _inspect_absolute(destination).state == "missing":
+                try:
+                    _rename_noreplace(
+                        backup.payload,
+                        destination,
+                        source_parent_identity=backup.identity,
+                        destination_parent_identity=destination_parent_identity,
+                    )
+                except BaseException:
+                    pass
+            raise RecoveryConflict(f"destination identity changed during retirement: {destination}")
+        try:
+            os.link(backup.payload, backup.witness, follow_symlinks=False)
+        except BaseException:
+            if _inspect_absolute(destination).state == "missing":
+                _rename_noreplace(
+                    backup.payload,
+                    destination,
+                    source_parent_identity=backup.identity,
+                    destination_parent_identity=destination_parent_identity,
+                )
+            raise
+        if not _backup_exact(backup, expected_record):
+            raise RecoveryConflict(f"backup changed: {backup.container}")
+    finally:
+        if exact_fd is not None:
+            os.close(exact_fd)
+
+
+def _transaction(
+    operation: str,
+    rel: str,
+    *,
+    authority_record: dict[str, Any] | None,
+    old_record: dict[str, Any] | None,
+    new_record: dict[str, Any] | None,
+    stage: PrivateArtifact | None,
+    backup: PrivateArtifact | None,
+) -> dict[str, Any]:
+    return {
+        "operation": operation,
+        "phase": "armed",
+        "rel": rel,
+        "authority_record": copy.deepcopy(authority_record),
+        "old_record": copy.deepcopy(old_record),
+        "new_record": copy.deepcopy(new_record),
+        "stage": _artifact_state(stage) if stage else None,
+        "backup": _artifact_state(backup) if backup else None,
+    }
+
+
+def _transaction_destination(root: Path, key: str) -> tuple[str, tuple[str, ...], Path]:
+    rel = MANIFEST_REL if key == _MANIFEST_TRANSACTION_KEY else key
+    parts = _normalise_relative_path(rel, allow_manifest=key == _MANIFEST_TRANSACTION_KEY)
+    return rel, parts, root.joinpath(*parts)
+
+
+def _set_active(candidate: dict[str, Any], key: str, record: dict[str, Any] | None) -> None:
+    if key == _MANIFEST_TRANSACTION_KEY:
+        candidate["manifest"] = copy.deepcopy(record)
+    elif record is None:
+        candidate["entries"].pop(key, None)
+    else:
+        candidate["entries"][key] = copy.deepcopy(record)
+
+
+def _commit_transaction(
+    state_path: Path,
+    state: dict[str, Any],
+    key: str,
+    active_record: dict[str, Any] | None,
+    root: Path,
+    root_identity: str,
+) -> None:
+    candidate = copy.deepcopy(state)
+    candidate["transactions"][key]["phase"] = "committed"
+    _set_active(candidate, key, active_record)
+    _persist_candidate(state_path, state, candidate, root, root_identity)
+
+
+def _finish_transaction(
+    state_path: Path,
+    state: dict[str, Any],
+    key: str,
+    root: Path,
+    root_identity: str,
+) -> None:
+    candidate = copy.deepcopy(state)
+    candidate["transactions"].pop(key, None)
+    _persist_candidate(state_path, state, candidate, root, root_identity)
+
+
+def _execute_create(
+    root: Path,
+    root_fd: int | None,
+    state_path: Path,
+    state: dict[str, Any],
+    root_identity: str,
+    key: str,
+    data: bytes,
+    mode: int,
+) -> dict[str, Any]:
+    _, parts, destination = _transaction_destination(root, key)
+    parent, parent_identity, ancestors = _ensure_parent(root, root_fd, parts)
+    if _inspect_leaf(root, root_fd, parts).state != "missing":
+        raise RecoveryConflict(f"create destination appeared: {destination}")
+    stage = _stage_file(parent, data, mode, ancestors)
+    tx = _transaction("create", key, authority_record=None, old_record=None, new_record=stage.record, stage=stage.artifact, backup=None)
+    candidate = copy.deepcopy(state)
+    candidate["transactions"][key] = tx
+    try:
+        _persist_candidate(state_path, state, candidate, root, root_identity)
+    except BaseException:
+        _cleanup_artifact(stage.artifact, stage.record)
+        raise
+    _publish_staged_file(stage, destination, stage.record, parent_identity)
+    _commit_transaction(state_path, state, key, stage.record, root, root_identity)
+    _cleanup_artifact(stage.artifact, stage.record)
+    _finish_transaction(state_path, state, key, root, root_identity)
+    return stage.record
+
+
+def _execute_replace(
+    root: Path,
+    root_fd: int | None,
+    state_path: Path,
+    state: dict[str, Any],
+    root_identity: str,
+    key: str,
+    authority_record: dict[str, Any],
+    data: bytes,
+    mode: int,
+) -> dict[str, Any]:
+    _, parts, destination = _transaction_destination(root, key)
+    observed = _inspect_leaf(root, root_fd, parts)
+    if not _authority_matches(observed, authority_record):
+        raise RecoveryConflict(f"owned destination identity changed: {destination}")
+    old_record = _record_from_observation(observed)
+    parent = destination.parent
+    parent_identity = root_identity if not parts[:-1] else observed.ancestors[-1][1]
+    stage = _stage_file(parent, data, mode, observed.ancestors)
+    backup = _reserve_artifact(parent, "backup")
+    tx = _transaction("replace", key, authority_record=authority_record, old_record=old_record, new_record=stage.record, stage=stage.artifact, backup=backup)
+    candidate = copy.deepcopy(state)
+    candidate["transactions"][key] = tx
+    try:
+        _persist_candidate(state_path, state, candidate, root, root_identity)
+    except BaseException:
+        _cleanup_artifact(stage.artifact, stage.record)
+        _cleanup_artifact(backup, None)
+        raise
+    _move_exact_to_backup(destination, old_record, backup, parent_identity)
+    _publish_staged_file(stage, destination, stage.record, parent_identity)
+    _commit_transaction(state_path, state, key, stage.record, root, root_identity)
+    _cleanup_artifact(stage.artifact, stage.record)
+    _cleanup_artifact(backup, old_record)
+    _finish_transaction(state_path, state, key, root, root_identity)
+    return stage.record
+
+
+def _execute_delete(
+    root: Path,
+    root_fd: int | None,
+    state_path: Path,
+    state: dict[str, Any],
+    root_identity: str,
+    key: str,
+    authority_record: dict[str, Any],
+) -> None:
+    _, parts, destination = _transaction_destination(root, key)
+    observed = _inspect_leaf(root, root_fd, parts)
+    if not _exact_matches(observed, authority_record):
+        raise RecoveryConflict(f"owned destination changed before removal: {destination}")
+    old_record = _record_from_observation(observed)
+    parent_identity = root_identity if not parts[:-1] else observed.ancestors[-1][1]
+    backup = _reserve_artifact(destination.parent, "backup")
+    tx = _transaction("delete", key, authority_record=authority_record, old_record=old_record, new_record=None, stage=None, backup=backup)
+    candidate = copy.deepcopy(state)
+    candidate["transactions"][key] = tx
+    try:
+        _persist_candidate(state_path, state, candidate, root, root_identity)
+    except BaseException:
+        _cleanup_artifact(backup, None)
+        raise
+    _move_exact_to_backup(destination, old_record, backup, parent_identity)
+    _commit_transaction(state_path, state, key, None, root, root_identity)
+    _cleanup_artifact(backup, old_record)
+    _finish_transaction(state_path, state, key, root, root_identity)
+
+
+def _transaction_artifacts(tx: dict[str, Any]) -> tuple[StagedFile | None, PrivateArtifact | None]:
+    stage = None
+    if tx["stage"] is not None:
+        artifact = _artifact_from_state(tx["stage"])
+        assert tx["new_record"] is not None
+        stage = StagedFile(artifact, tx["new_record"])
+    backup = _artifact_from_state(tx["backup"]) if tx["backup"] is not None else None
+    return stage, backup
+
+
+def _validate_transaction_artifact_location(root: Path, key: str, tx: dict[str, Any]) -> None:
+    _, _, destination = _transaction_destination(root, key)
+    for field in ("stage", "backup"):
+        value = tx[field]
+        if value is None:
+            continue
+        artifact = _artifact_from_state(value)
+        if artifact.container.parent != destination.parent:
+            raise RecoveryConflict(f"transaction artifact escaped destination parent: {artifact.container}")
+
+
+def _recover_one(
+    root: Path,
+    root_fd: int | None,
+    state_path: Path,
+    state: dict[str, Any],
+    root_identity: str,
+    key: str,
+) -> None:
+    tx = state["transactions"][key]
+    _validate_transaction_artifact_location(root, key, tx)
+    _, parts, destination = _transaction_destination(root, key)
+    live = _inspect_leaf(root, root_fd, parts)
+    stage, backup = _transaction_artifacts(tx)
+    operation = tx["operation"]
+    old_record = tx["old_record"]
+    new_record = tx["new_record"]
+
+    if tx["phase"] == "committed":
+        active = state["manifest"] if key == _MANIFEST_TRANSACTION_KEY else state["entries"].get(key)
+        if active is None:
+            if live.state != "missing":
+                raise RecoveryConflict(f"committed delete destination changed: {destination}")
+        elif not _exact_matches(live, active):
+            raise RecoveryConflict(f"committed destination changed: {destination}")
+        if stage is not None:
+            if not (_stage_published(stage) or _artifact_empty(stage.artifact)):
+                raise RecoveryConflict(f"committed stage changed: {stage.artifact.container}")
+            _cleanup_artifact(stage.artifact, stage.record)
+        if backup is not None:
+            assert old_record is not None
+            if not (_backup_exact(backup, old_record) or _artifact_empty(backup)):
+                raise RecoveryConflict(f"committed backup changed: {backup.container}")
+            _cleanup_artifact(backup, old_record)
+        _finish_transaction(state_path, state, key, root, root_identity)
+        return
+
+    if operation == "create":
+        assert stage is not None and new_record is not None
+        if _exact_matches(live, new_record) and _stage_published(stage):
+            _commit_transaction(state_path, state, key, new_record, root, root_identity)
+            _recover_one(root, root_fd, state_path, state, root_identity, key)
+            return
+        if live.state == "missing" and _stage_exact(stage):
+            _cleanup_artifact(stage.artifact, stage.record)
+            _finish_transaction(state_path, state, key, root, root_identity)
+            return
+        raise RecoveryConflict(f"interrupted create conflict: {destination}")
+
+    assert old_record is not None and backup is not None
+    if operation == "replace":
+        assert stage is not None and new_record is not None
+        if _exact_matches(live, new_record) and _stage_published(stage) and _backup_exact(backup, old_record):
+            _commit_transaction(state_path, state, key, new_record, root, root_identity)
+            _recover_one(root, root_fd, state_path, state, root_identity, key)
+            return
+        if live.state == "missing" and _stage_exact(stage) and _backup_exact(backup, old_record):
+            parent_identity = root_identity if not parts[:-1] else old_record["ancestors"][-1]["identity"]
+            _rename_noreplace(backup.payload, destination, source_parent_identity=backup.identity, destination_parent_identity=parent_identity)
+            try:
+                backup.witness.unlink()
+            except FileNotFoundError:
+                pass
+            _cleanup_artifact(stage.artifact, stage.record)
+            _cleanup_artifact(backup, None)
+            _finish_transaction(state_path, state, key, root, root_identity)
+            return
+        authority = tx["authority_record"]
+        if authority is not None and _authority_matches(live, authority) and _stage_exact(stage) and _artifact_empty(backup):
+            _cleanup_artifact(stage.artifact, stage.record)
+            _cleanup_artifact(backup, None)
+            _finish_transaction(state_path, state, key, root, root_identity)
+            return
+        raise RecoveryConflict(f"interrupted replace conflict: {destination}")
+
+    if live.state == "missing" and _backup_exact(backup, old_record):
+        _commit_transaction(state_path, state, key, None, root, root_identity)
+        _recover_one(root, root_fd, state_path, state, root_identity, key)
+        return
+    authority = tx["authority_record"]
+    if authority is not None and _exact_matches(live, authority) and _artifact_empty(backup):
+        _cleanup_artifact(backup, None)
+        _finish_transaction(state_path, state, key, root, root_identity)
+        return
+    raise RecoveryConflict(f"interrupted delete conflict: {destination}")
+
+
+def _recover_transactions(
+    root: Path,
+    root_fd: int | None,
+    state_path: Path,
+    state: dict[str, Any],
+    root_identity: str,
+    *,
+    read_only: bool,
+) -> None:
+    if read_only and state["transactions"]:
+        for key, tx in state["transactions"].items():
+            _validate_transaction_artifact_location(root, key, tx)
+        return
+    for key in sorted(list(state["transactions"])):
+        _recover_one(root, root_fd, state_path, state, root_identity, key)
+
+
+def _plan_install(
+    root: Path,
+    root_fd: int | None,
+    files: dict[str, str],
+    normalised: dict[str, tuple[str, ...]],
+    state: dict[str, Any],
+    *,
+    force: bool,
+) -> dict[str, str]:
+    actions: dict[str, str] = {}
+    for rel in sorted(files):
+        observed = _inspect_leaf(root, root_fd, normalised[rel])
+        record = state["entries"].get(rel)
+        canonical = content_digest(files[rel])
+        if record is None:
+            actions[rel] = "created" if observed.state == "missing" else "skipped-foreign"
+            continue
+        if observed.state != "regular-readable" or not _authority_matches(observed, record):
+            actions[rel] = "skipped-foreign"
+        elif observed.digest != record["digest"]:
+            actions[rel] = "restored" if force else "skipped-modified"
+        elif observed.mode != record["mode"] and _platform_system() != "Windows":
+            actions[rel] = "skipped-modified"
+        elif observed.digest == canonical:
+            actions[rel] = "unchanged"
+        else:
+            actions[rel] = "updated"
+    for rel, record in sorted(state["entries"].items()):
+        if rel in files:
+            continue
+        observed = _inspect_leaf(root, root_fd, _normalise_relative_path(rel))
+        actions[rel] = "removed" if _exact_matches(observed, record) else "skipped-remove-modified"
+    return actions
+
+
+def _preflight_manifest(root: Path, root_fd: int | None, state: dict[str, Any]) -> None:
+    parts = _normalise_relative_path(MANIFEST_REL, allow_manifest=True)
+    observed = _inspect_leaf(root, root_fd, parts)
+    record = state["manifest"]
+    if record is None:
+        if observed.state != "missing":
+            raise ResearchOSError("pre-existing Research OS manifest is foreign")
+        return
+    if not _exact_matches(observed, record):
+        raise ResearchOSError("Research OS manifest identity or content changed")
+
+
+def _active_records(root: Path, root_fd: int | None, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    active: dict[str, dict[str, Any]] = {}
+    for rel, record in sorted(state["entries"].items()):
+        if rel in state["conflicts"]:
+            continue
+        observed = _inspect_leaf(root, root_fd, _normalise_relative_path(rel))
+        if not _exact_matches(observed, record):
+            raise RecoveryConflict(f"owned leaf changed before manifest publication: {rel}")
+        active[rel] = record
+    return active
+
+
+def _manifest_bytes(root: Path, root_identity: str, active: dict[str, dict[str, Any]]) -> bytes:
+    payload = {
+        "schema_version": MANIFEST_SCHEMA,
+        "state": "complete",
+        "target": {
+            "path_sha256": hashlib.sha256(os.fsencode(_physical_target(root))).hexdigest(),
+            "identity": root_identity,
+        },
+        "files": {rel: record["digest"] for rel, record in sorted(active.items())},
+    }
+    return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _publish_manifest(
+    root: Path,
+    root_fd: int | None,
+    state_path: Path,
+    state: dict[str, Any],
+    root_identity: str,
+) -> None:
+    active = _active_records(root, root_fd, state)
+    if not active and state["manifest"] is None:
+        return
+    data = _manifest_bytes(root, root_identity, active)
+    parts = _normalise_relative_path(MANIFEST_REL, allow_manifest=True)
+    observed = _inspect_leaf(root, root_fd, parts)
+    record = state["manifest"]
+    if record is None:
+        if observed.state != "missing":
+            raise RecoveryConflict("foreign manifest appeared before publication")
+        _execute_create(root, root_fd, state_path, state, root_identity, _MANIFEST_TRANSACTION_KEY, data, 0o600)
+    else:
+        if not _exact_matches(observed, record):
+            raise RecoveryConflict("owned manifest changed before publication")
+        if observed.digest != _bytes_digest(data):
+            _execute_replace(root, root_fd, state_path, state, root_identity, _MANIFEST_TRANSACTION_KEY, record, data, 0o600)
+    active_after = _active_records(root, root_fd, state)
+    manifest_observed = _inspect_leaf(root, root_fd, parts)
+    if not _exact_matches(manifest_observed, state["manifest"]):
+        raise RecoveryConflict("manifest changed after publication")
+    if _manifest_bytes(root, root_identity, active_after) != data:
+        raise RecoveryConflict("owned tree changed during manifest publication")
+
+
+def _record_conflicts(state: dict[str, Any], actions: dict[str, str]) -> bool:
+    changed = False
+    conflict_actions = {"skipped-foreign", "skipped-modified", "skipped-remove-modified"}
+    for rel, action in actions.items():
+        if action in conflict_actions and rel in state["entries"]:
+            value = {"action": action, "reason": "ownership identity, content, mode, or readability did not match"}
+            if state["conflicts"].get(rel) != value:
+                state["conflicts"][rel] = value
+                changed = True
+        elif action not in conflict_actions and rel in state["conflicts"]:
+            state["conflicts"].pop(rel)
+            changed = True
+    return changed
+
+
+def _apply_locked(
+    root: Path,
+    files: dict[str, str],
+    normalised: dict[str, tuple[str, ...]],
+    *,
+    force: bool,
+    dry_run: bool,
+) -> dict[str, str]:
+    root_fd = _open_root(root)
+    try:
+        root_identity = _path_identity(root)
+        if root_fd is not None and _fd_identity(root_fd) != root_identity:
+            raise ResearchOSError("target root changed while opening")
+        state_path = _state_path(root)
+        state, state_exists = _load_state(state_path, root, root_identity)
+        _recover_transactions(root, root_fd, state_path, state, root_identity, read_only=dry_run)
+        if state["transactions"]:
+            if not dry_run:
+                raise RecoveryConflict("interrupted Research OS transaction remains unresolved")
+            return _plan_install(root, root_fd, files, normalised, state, force=force)
+        _preflight_manifest(root, root_fd, state)
+        actions = _plan_install(root, root_fd, files, normalised, state, force=force)
+        if dry_run:
+            return actions
+
+        for rel in sorted(files):
+            action = actions[rel]
+            data = files[rel].encode("utf-8")
+            mode = 0o700 if _is_executable_rel(rel) else 0o600
+            if action == "created":
+                _execute_create(root, root_fd, state_path, state, root_identity, rel, data, mode)
+                state_exists = True
+            elif action in {"updated", "restored"}:
+                record = state["entries"][rel]
+                _execute_replace(root, root_fd, state_path, state, root_identity, rel, record, data, mode)
+        for rel in sorted(set(state["entries"]) - set(files)):
+            if actions[rel] == "removed":
+                _execute_delete(root, root_fd, state_path, state, root_identity, rel, state["entries"][rel])
+
+        conflicts_changed = _record_conflicts(state, actions)
+        if conflicts_changed and (state_exists or state["entries"] or state["manifest"] is not None):
+            _write_state(state_path, state, root, root_identity)
+            state_exists = True
+        _publish_manifest(root, root_fd, state_path, state, root_identity)
+        return actions
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def apply_install(
+    root: Path,
+    *,
+    files: dict[str, str],
+    force: bool = False,
+    dry_run: bool = False,
+) -> dict[str, str]:
+    root = Path(root)
+    normalised = _validated_files(files)
+    if dry_run:
+        return _apply_locked(root, files, normalised, force=force, dry_run=True)
+    state_path = _state_path(root)
+    with _state_lock(state_path):
+        return _apply_locked(root, files, normalised, force=force, dry_run=False)
+
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Install a Codex-native research OS scaffold into a repository.")
     parser.add_argument("--target", default=".", help="Target repository root.")
     parser.add_argument("--project-name", default=None, help="Human-readable project name.")
-    parser.add_argument("--force", action="store_true", help="Overwrite existing generated files.")
+    parser.add_argument("--force", action="store_true", help="Re-copy owned but modified files back to canonical.")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing.")
     args = parser.parse_args()
 
@@ -1137,20 +2851,25 @@ def main() -> int:
     project_name = args.project_name or root.name
     files = build_files(project_name)
 
-    counts = {"created": 0, "updated": 0, "exists": 0}
-    for rel, content in sorted(files.items()):
-        state = write_file(root, rel, content, force=args.force, dry_run=args.dry_run)
-        counts[state] += 1
-        print(f"{state:7} {rel}")
+    actions = apply_install(root, files=files, force=args.force, dry_run=args.dry_run)
+
+    counts: dict[str, int] = {}
+    for rel in sorted(actions):
+        state = actions[rel]
+        counts[state] = counts.get(state, 0) + 1
+        print(f"{state:>22} {rel}")
 
     print("\nResearch OS setup summary")
     print(json.dumps(counts, indent=2, sort_keys=True))
+    if args.dry_run:
+        print("\n(dry run: no files written)")
     print("\nNext:")
     print("  make status")
     print("  make validate-claims")
     print("  make validate-experiments")
     print("  make review-gates")
-    return 0
+    partial_actions = {"skipped-foreign", "skipped-modified", "skipped-remove-modified"}
+    return 1 if any(action in partial_actions for action in actions.values()) else 0
 
 
 if __name__ == "__main__":

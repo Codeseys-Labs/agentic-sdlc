@@ -81,3 +81,21 @@ Read `references/operating-model.md` when designing or modifying the OS. Read `r
   `Seeds(<target>, ...)` launcher contract in `agentic-sdlc`, and it emits exactly
   one typed `SeedProposal` for conductor triage; it never creates, claims, updates, closes,
   syncs, or dispositions Seeds.
+
+## HyperResearch Doctrine
+
+A research run is a cost, so run live external research only when
+external evidence is load-bearing for the decision at hand; otherwise reason from the
+repository, existing ledgers, and prior notes. When a run is warranted, return a versioned
+research record carrying, at minimum:
+
+- sources: each cited item with its version, date, or URL so it can be re-fetched;
+- claims: what the evidence supports, written into `research/claims/claims.yaml`;
+- counterevidence: findings that weaken or contradict the claims;
+- uncertainty: what remains unknown and how it could be resolved;
+- decision-impact: how the evidence changes (or fails to change) the pending decision;
+- next-action: the single cheapest decisive follow-up.
+
+Work that outlives the session becomes exactly one typed `SeedProposal` for conductor
+triage; the research OS proposes durable work and never mutates any queue. Sources and
+claims are versioned so a later run can tell fresh evidence from stale echoes.
