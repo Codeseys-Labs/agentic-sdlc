@@ -7,6 +7,10 @@
       "jq": ".version"
     },
     {
+      "file": "plugin/.claude-plugin/plugin.json",
+      "jq": ".version"
+    },
+    {
       "file": ".codex-plugin/plugin.json",
       "jq": ".version"
     },
