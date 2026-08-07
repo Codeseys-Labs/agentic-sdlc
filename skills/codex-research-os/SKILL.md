@@ -58,6 +58,18 @@ Role boundaries matter:
 
 Read `references/operating-model.md` when designing or modifying the OS. Read `references/agent-roster.md` when updating roles or agent prompts.
 
+Two refinement references describe designed-not-built changes to the generated layer. Read them
+when redesigning the claim gate or when running a bounded self-improving loop; both state
+explicitly which parts ship today and which do not:
+
+- `references/claim-obligations.md` — the shipped review gate substring-matches free text the
+  claim's own author writes, so an author's honest caveats satisfy it. Typed obligations that
+  resolve against independent review records replace that check, with revision matching so
+  editing a reviewed claim auto-demotes it.
+- `references/bounded-lab-loop.md` — the three-owner split (human-owned program, digest-frozen
+  harness, probe workspace), the two-plane autonomy boundary, the exploration reserve and stall
+  rule that fix pure metric ratcheting, and the seven invariants.
+
 ## Required Invariants
 
 - No meaningful untracked claims: use `research/claims/claims.yaml`.

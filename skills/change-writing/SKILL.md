@@ -67,3 +67,8 @@ Read only what is needed:
 - `references/draft-review.md`: audit checklist for an existing message.
 - `references/evidence-order.md`: the six-step evidence ladder and the omit-or-placeholder rule.
 - `references/attribution-policy.md`: the single normative attribution block (default-deny list).
+- `references/conventional-commits.md`: the Conventional Commits grammar, type selection,
+  breaking-change marking, and spec-versus-linter divergences — read only when that format is
+  the repository's own convention or the declared fallback, never as a mandate.
+- `references/technical-writing-clarity.md`: countable sentence-mechanics rules for prose a
+  reader must act on. Tightens wording only; never changes a claim's evidence class.
