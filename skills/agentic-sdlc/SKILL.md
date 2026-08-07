@@ -56,6 +56,22 @@ is only the separately resolved and recorded Git directory, with portable system
 isolation. Target `bunfig`, `.env`, package config, ambient `BUN_*`, `NODE_OPTIONS`, npm/mise
 overrides, and unreviewed Seeds debug variables have no execution effect.
 
+The conductor's durable queue write is `seeds-launcher.mjs record --target <target>
+--queue-writer conductor --expect-queue <sha256> <verb> ...`, which admits exactly two queue
+verbs and nothing else — no removal, pruning, closing, claiming, or syncing form is accepted.
+It reuses the whole `inspect` admission (same active receipt, same current-hash checks, same
+exact absolute Bun/entry pair, same environment allowlist) and adds a compare-and-swap plus a
+readback. The caller must name the exact queue digest it classified against; a queue that moved
+is refused with both digests named. After the write the launcher re-reads the queue and verifies
+the post-state is the prestate plus exactly the requested delta, refusing while naming any
+divergence — an unrequested field, a rewritten or reordered neighbouring record, an added or
+removed queue file, or a plan transition outside the owning plan's status and timestamp. A
+prestate the queue writer would silently rewrite (malformed, duplicated, or non-canonical
+records) is refused before the writer starts. The explicit `--queue-writer conductor`
+acknowledgement keeps the seam from becoming generally writable. The queue's own lock stays the
+queue writer's; the seam adds none. A verified record is the conductor's own evidence and
+authorizes no push, PR, merge, deployment, or other outward effect.
+
 ## Repo Location
 
 This skill is maintained in a private repository; the clone location varies
@@ -186,6 +202,10 @@ Read only what is needed:
   throwing observer, mid-flight abort, timeout), redaction and start/end pair-completeness
   assertions, and the two happy-path controls. A future implementer's spec, not evidence
   that this repo already runs isolated dispatch.
+- `references/mermaid-authoring.md`: authoring Mermaid diagrams for ADRs, design docs, and
+  review artifacts — perspective scoping, the leaf-or-group depth rule, mandatory edge labels,
+  node caps, and the execution-verified parse traps (including the ones that exit 0 and draw
+  the wrong diagram). Authoring only; rendering belongs to the pinned rendering pipeline.
 
 Bundled role agents (installed globally by `scripts/install-skill-bundle.sh`), each in
 Claude (`agents/claude/*.md`) and Codex (`agents/codex/*.toml`) form:

@@ -45,6 +45,20 @@ classified + recorded. Workers and the critique team submit recommendations and 
 mutate Seeds directly. The conductor is the sole queue writer. A finding that exists only
 in an uncaptured response is lost work.
 
+The conductor's durable write goes through the launcher's `record` mode, which admits
+exactly two queue verbs and no others. It inherits every `inspect` admission — the same
+active receipt, the same exact hashes, the same exact Bun entry, the same allowlisted child
+environment — and adds two conditions. First, compare-and-swap: the conductor names the
+exact queue sha256 it classified against, and a queue that moved since then is refused with
+both digests named rather than silently overwriting a concurrent write. Second, readback:
+after the write the launcher re-reads the queue and verifies the observed post-state equals
+the prestate plus exactly the requested delta — nothing else added, removed, reordered, or
+edited — and refuses while naming what diverged. The seam also requires the sole-writer
+acknowledgement `--queue-writer conductor`, so a role agent reaching for it casually is
+refused rather than quietly promoted. The underlying queue's own lock stays the queue
+writer's; this seam adds none. A verified record is the conductor's own evidence and still
+authorizes no push, PR, merge, deployment, or other outward effect.
+
 ## WIP caps (bound the fan-out)
 
 | Track | Cap |

@@ -6,6 +6,15 @@
  * previously admitted receipt only; it neither discovers, installs, repairs, nor
  * acquires anything. The receipt protects against accidental drift, not a concurrent
  * same-UID attacker between checks and exec.
+ *
+ * Record is the conductor's queue write. It inherits every inspect admission — same
+ * active receipt, same exact hashes, same exact Bun/entry, same allowlisted child
+ * environment — and adds a compare-and-swap plus a post-write readback: the caller must
+ * name the exact queue digest it decided against, and the observed post-state must equal
+ * the pre-state plus exactly the requested delta or the launcher refuses and names what
+ * diverged. The underlying queue lock is the writer's own; this seam adds none. A
+ * verified record is the conductor's own durable evidence and authorizes no outward
+ * effect.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -54,7 +63,19 @@ const BUN_KEYS = new Set(['root', 'executable', 'version']);
 const SEEDS_KEYS = new Set(['root', 'packageRoot', 'package', 'version', 'bin', 'binValue', 'entry']);
 const GIT_KEYS = new Set(['path', 'hash', 'commit', 'tree']);
 const TRUSTED_KEYS = new Set(['bunfig', 'tsconfig', 'gitconfig', 'gitAdapter']);
-const HELP = 'usage: seeds-launcher.mjs bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json])';
+const SEEDS_DIRECTORY = '.seeds';
+const SEEDS_CONFIG_FILE = 'config.yaml';
+const SEEDS_ISSUES_FILE = 'issues.jsonl';
+const SEEDS_PLANS_FILE = 'plans.jsonl';
+// The mission doctrine's sole queue writer, named explicitly so a role agent reaching for
+// this seam casually is refused rather than quietly promoted.
+const QUEUE_WRITER = 'conductor';
+const VALID_ISSUE_TYPES = new Set(['task', 'bug', 'feature', 'epic']);
+const VALID_ISSUE_STATUSES = new Set(['open', 'in_progress', 'closed']);
+const PLAN_STATUSES = new Set(['draft', 'approved', 'active', 'done']);
+const CREATE_FLAGS = new Set(['--title', '--type', '--priority', '--description', '--labels']);
+const UPDATE_FLAGS = new Set(['--status', '--title', '--description', '--priority', '--set-labels', '--add-label', '--remove-label']);
+const HELP = 'usage: seeds-launcher.mjs bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json]) | record --target <repository> --queue-writer conductor --expect-queue <sha256> (create --title <text> [--type <type>] [--priority <0-4>] [--description <text>] [--labels <list>] | update <id> <recorded-field>...)';
 
 class LauncherError extends Error {}
 
@@ -874,30 +895,9 @@ function inspect(targetArgument, values) {
   const args = grammar(values); // Parse every allowed form before inspecting any executable.
   const target = realDirectory(targetArgument, 'Seeds target');
   const tuple = checkCurrentReceipt(loadReceipt());
-  const environment = Object.freeze({
-    PATH: dirname(tuple.gitAdapter),
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
-    GIT_CONFIG_GLOBAL: tuple.gitconfig,
-    GIT_OPTIONAL_LOCKS: '0',
-    GIT_TERMINAL_PROMPT: '0',
-    ...(process.platform === 'win32' ? {
-      NoDefaultCurrentDirectoryInExePath: '1',
-      PATHEXT: '.EXE',
-      SystemRoot: resolve(process.env.SystemRoot || 'C:\\Windows'),
-    } : {}),
-  });
-  const child = spawn(tuple.bun, [
-    `--config=${tuple.bunfig}`,
-    '--no-macros',
-    '--no-env-file',
-    '--no-install',
-    `--tsconfig-override=${tuple.tsconfig}`,
-    tuple.entry,
-    ...args,
-  ], {
+  const child = spawn(tuple.bun, seedsArguments(tuple, args), {
     cwd: target,
-    env: environment,
+    env: seedsEnvironment(tuple),
     shell: false,
     stdio: 'inherit',
     windowsHide: true,
@@ -912,9 +912,347 @@ function inspect(targetArgument, values) {
   });
 }
 
+function seedsEnvironment(tuple) {
+  return Object.freeze({
+    PATH: dirname(tuple.gitAdapter),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_GLOBAL: tuple.gitconfig,
+    GIT_OPTIONAL_LOCKS: '0',
+    GIT_TERMINAL_PROMPT: '0',
+    ...(process.platform === 'win32' ? {
+      NoDefaultCurrentDirectoryInExePath: '1',
+      PATHEXT: '.EXE',
+      SystemRoot: resolve(process.env.SystemRoot || 'C:\\Windows'),
+    } : {}),
+  });
+}
+
+function seedsArguments(tuple, args) {
+  return [
+    `--config=${tuple.bunfig}`,
+    '--no-macros',
+    '--no-env-file',
+    '--no-install',
+    `--tsconfig-override=${tuple.tsconfig}`,
+    tuple.entry,
+    ...args,
+  ];
+}
+
+function isoTimestamp(value, label) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) || Number.isNaN(Date.parse(value))) {
+    fail(`queue readback ${label} is not an exact timestamp`);
+  }
+  return value;
+}
+
+function recordFlags(values, allowed, label) {
+  const flags = new Map();
+  for (let index = 0; index < values.length; index += 2) {
+    const flag = values[index];
+    const value = values[index + 1];
+    if (!allowed.has(flag)) fail(`Seeds record ${label} does not admit ${flag}`);
+    if (flags.has(flag)) fail(`Seeds record ${label} does not admit a repeated ${flag}`);
+    if (value === undefined || value.startsWith('--')) fail(`Seeds record ${label} requires an exact value for ${flag}`);
+    if (value.includes('\0')) fail(`Seeds record ${label} rejects a NUL in ${flag}`);
+    flags.set(flag, value);
+  }
+  return flags;
+}
+
+function recordGrammar(values) {
+  const verb = values[0];
+  if (verb === 'create') {
+    const flags = recordFlags(values.slice(1), CREATE_FLAGS, 'create');
+    if (!flags.has('--title')) fail('a recorded queue creation requires --title');
+    // Every requested value is judged here, before the queue writer starts.
+    requestedTitle(flags);
+    requestedType(flags);
+    requestedPriority(flags, 2);
+    return { verb, id: null, flags };
+  }
+  if (verb === 'update') {
+    const id = values[1];
+    if (!id || id.startsWith('--')) fail('a recorded queue amendment requires an exact issue id');
+    const flags = recordFlags(values.slice(2), UPDATE_FLAGS, 'update');
+    if (flags.size === 0) fail('a recorded queue amendment requires at least one recorded field');
+    requestedTitle(flags);
+    requestedStatus(flags);
+    requestedPriority(flags, undefined);
+    return { verb, id, flags };
+  }
+  fail(`Seeds record admits only the conductor queue verbs create and update, never ${verb || 'an empty verb'}`);
+}
+
+function requestedType(flags) {
+  const value = flags.get('--type') ?? 'task';
+  if (!VALID_ISSUE_TYPES.has(value)) fail(`Seeds record does not admit the issue type ${value}`);
+  return value;
+}
+
+function requestedPriority(flags, fallback) {
+  const value = flags.get('--priority');
+  if (value === undefined) return fallback;
+  if (!/^[0-4]$/.test(value)) fail('Seeds record admits only an exact priority 0-4');
+  return Number(value);
+}
+
+function requestedStatus(flags) {
+  const value = flags.get('--status');
+  if (value === undefined) return undefined;
+  if (!VALID_ISSUE_STATUSES.has(value)) fail(`Seeds record does not admit the issue status ${value}`);
+  return value;
+}
+
+function requestedLabels(value) {
+  const labels = value.split(',').map((label) => label.trim().toLowerCase()).filter(Boolean);
+  return labels.length > 0 ? labels : undefined;
+}
+
+function requestedTitle(flags) {
+  const value = flags.get('--title');
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) fail('Seeds record admits only a non-empty title');
+  return trimmed;
+}
+
+function seedsDirectory(target) {
+  const marker = join(target, '.git');
+  if (existsSync(marker) && !lstatSync(marker).isDirectory()) {
+    fail('Seeds record refuses a linked worktree or submodule target: its queue write redirects to another root, and the conductor records at the queue-owning root');
+  }
+  const directory = realDirectory(join(target, SEEDS_DIRECTORY), 'target Seeds directory');
+  rawRegularFile(join(directory, SEEDS_CONFIG_FILE), 'target Seeds configuration');
+  return directory;
+}
+
+function queueFile(directory, name, label) {
+  const bytes = readFileSync(rawRegularFile(join(directory, name), label));
+  return { bytes, digest: hashBytes(bytes) };
+}
+
+function queueSurface(directory) {
+  const surface = new Map();
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (/\.lock$|\.lock\.stale\.|\.tmp\./.test(entry.name)) continue;
+    const path = join(directory, entry.name);
+    const node = lstatSync(path);
+    if (node.isDirectory()) fail(`unsupported directory inside the Seeds queue: ${entry.name}`);
+    if (!node.isFile()) fail(`unsupported filesystem node inside the Seeds queue: ${entry.name}`);
+    surface.set(entry.name, hashBytes(readFileSync(path)));
+  }
+  return surface;
+}
+
+function queueRecords(bytes, label) {
+  if (bytes.length > 0 && !bytes.subarray(bytes.length - 1).equals(Buffer.from('\n'))) {
+    fail(`${label} is not newline-terminated, so an exact readback is unavailable`);
+  }
+  const content = bytes.toString('utf8');
+  const lines = content.length === 0 ? [] : content.slice(0, -1).split('\n');
+  const records = [];
+  const seen = new Set();
+  for (const line of lines) {
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      fail(`${label} holds a line the queue writer would silently drop, so an exact readback is unavailable`);
+    }
+    if (!object(parsed) || !text(parsed.id)) fail(`${label} holds a record without an exact id`);
+    if (JSON.stringify(parsed) !== line) fail(`${label} is not canonically serialized, so an exact readback is unavailable`);
+    if (seen.has(parsed.id)) fail(`${label} holds the duplicate id ${parsed.id}, which the queue writer would collapse`);
+    seen.add(parsed.id);
+    records.push({ line, parsed });
+  }
+  return records;
+}
+
+function expectedCreatedRecord(id, flags, createdAt, updatedAt) {
+  const expected = {
+    id,
+    title: requestedTitle(flags),
+    status: 'open',
+    type: requestedType(flags),
+    priority: requestedPriority(flags, 2),
+    createdAt,
+    updatedAt,
+  };
+  const description = flags.get('--description');
+  if (description !== undefined) expected.description = description;
+  const labels = flags.has('--labels') ? requestedLabels(flags.get('--labels')) : undefined;
+  if (labels !== undefined) expected.labels = labels;
+  return expected;
+}
+
+function expectedUpdatedRecord(previous, flags, updatedAt) {
+  const expected = { ...previous, updatedAt };
+  const status = requestedStatus(flags);
+  if (status !== undefined) {
+    expected.status = status;
+    if (status !== 'closed') {
+      delete expected.closedAt;
+      delete expected.closeReason;
+    }
+  }
+  const title = requestedTitle(flags);
+  if (title !== undefined) expected.title = title;
+  const description = flags.get('--description');
+  if (description !== undefined) expected.description = description;
+  const priority = requestedPriority(flags, undefined);
+  if (priority !== undefined) expected.priority = priority;
+  // The queue writer applies set-labels, then add-label, then remove-label, each against
+  // the labels the earlier steps already produced.
+  let labels;
+  let labelled = false;
+  if (flags.has('--set-labels')) {
+    labels = requestedLabels(flags.get('--set-labels'));
+    labelled = true;
+  }
+  if (flags.has('--add-label')) {
+    const base = (labelled ? labels : previous.labels) ?? [];
+    const merged = [...new Set([...base, ...(requestedLabels(flags.get('--add-label')) ?? [])])];
+    labels = merged.length > 0 ? merged : undefined;
+    labelled = true;
+  }
+  if (flags.has('--remove-label')) {
+    const removed = new Set(flags.get('--remove-label').split(',').map((label) => label.trim().toLowerCase()));
+    const remaining = ((labelled ? labels : previous.labels) ?? []).filter((label) => !removed.has(label));
+    labels = remaining.length > 0 ? remaining : undefined;
+    labelled = true;
+  }
+  if (labelled) {
+    if (labels === undefined) delete expected.labels;
+    else expected.labels = labels;
+  }
+  return expected;
+}
+
+function childReport(completed, verb) {
+  let report;
+  try {
+    report = JSON.parse(completed.stdout || '');
+  } catch {
+    fail('queue writer did not emit an exact JSON record');
+  }
+  if (!object(report) || report.success !== true || report.command !== verb) fail('queue writer did not report the exact requested queue write');
+  return report;
+}
+
+function assertUnchangedQueue(before, after, label) {
+  for (const [name, digest] of before) {
+    if (!after.has(name)) fail(`${label}: the queue writer removed ${name}`);
+    if (after.get(name) !== digest && name !== SEEDS_ISSUES_FILE && name !== SEEDS_PLANS_FILE) fail(`${label}: the queue writer changed ${name}`);
+  }
+  for (const name of after.keys()) {
+    if (!before.has(name)) fail(`${label}: the queue writer added ${name}`);
+  }
+}
+
+function assertBoundedPlanCascade(directory, plansBefore, before, after, id, statusRequested) {
+  if (before.get(SEEDS_PLANS_FILE) === after.get(SEEDS_PLANS_FILE)) return;
+  if (!statusRequested) fail('queue readback divergence: the queue writer changed plans.jsonl without a recorded status change');
+  const previous = queueRecords(plansBefore, 'the Seeds plan queue prestate');
+  const current = queueRecords(readFileSync(join(directory, SEEDS_PLANS_FILE)), 'the Seeds plan queue readback');
+  if (previous.length !== current.length) fail('queue readback divergence: the plan cascade changed the plan count');
+  for (let index = 0; index < previous.length; index += 1) {
+    if (previous[index].line === current[index].line) continue;
+    const plan = previous[index].parsed;
+    const observed = current[index].parsed;
+    if (!Array.isArray(plan.children) || !plan.children.includes(id)) {
+      fail(`queue readback divergence: the plan cascade changed plan ${plan.id}, which does not own ${id}`);
+    }
+    // A bounded cascade is verified, not re-derived: only status and updatedAt may move.
+    const sealed = { ...plan, status: observed.status, updatedAt: isoTimestamp(observed.updatedAt, `plan ${plan.id} timestamp`) };
+    if (!PLAN_STATUSES.has(observed.status) || JSON.stringify(sealed) !== current[index].line) {
+      fail(`queue readback divergence: the plan cascade changed more than plan ${plan.id} status and timestamp`);
+    }
+  }
+}
+
+function record(targetArgument, expected, values) {
+  const request = recordGrammar(values); // Parse the whole admitted form before touching the queue.
+  if (!/^[0-9a-f]{64}$/.test(expected)) fail('Seeds record requires the exact sha256 the conductor decided against in --expect-queue');
+  const target = realDirectory(targetArgument, 'Seeds target');
+  const tuple = checkCurrentReceipt(loadReceipt());
+  const directory = seedsDirectory(target);
+  const surfaceBefore = queueSurface(directory);
+  const plansBefore = queueFile(directory, SEEDS_PLANS_FILE, 'target Seeds plan queue').bytes;
+  const queue = queueFile(directory, SEEDS_ISSUES_FILE, 'target Seeds queue');
+  if (queue.digest !== expected) {
+    fail(`Seeds record compare-and-swap refused: the queue is ${queue.digest}, not the ${expected} the conductor decided against`);
+  }
+  const before = queueRecords(queue.bytes, 'the Seeds queue prestate');
+  const index = request.verb === 'update' ? before.findIndex((entry) => entry.parsed.id === request.id) : -1;
+  if (request.verb === 'update' && index === -1) fail(`recorded queue amendment refused: ${request.id} is absent from the queue prestate`);
+  const args = [request.verb, ...(request.id === null ? [] : [request.id])];
+  for (const [flag, value] of request.flags) args.push(flag, value);
+  args.push('--json');
+  const completed = spawnSync(tuple.bun, seedsArguments(tuple, args), {
+    cwd: target,
+    encoding: 'utf8',
+    env: seedsEnvironment(tuple),
+    shell: false,
+    stdio: ['ignore', 'pipe', 'inherit'],
+    windowsHide: true,
+  });
+  const after = queueFile(directory, SEEDS_ISSUES_FILE, 'target Seeds queue');
+  if (completed.error || completed.status !== 0) {
+    if (after.digest !== queue.digest) fail(`Seeds record effect is unknown: the queue writer failed yet moved the queue to ${after.digest}`);
+    fail(`Seeds record refused: the queue writer failed and left the queue at ${queue.digest}`);
+  }
+  const report = childReport(completed, request.verb);
+  const observed = queueRecords(after.bytes, 'the Seeds queue readback');
+  if (request.verb === 'create') {
+    if (observed.length !== before.length + 1) fail(`queue readback divergence: create recorded ${observed.length - before.length} records, not exactly one`);
+    for (let position = 0; position < before.length; position += 1) {
+      if (observed[position].line !== before[position].line) fail(`queue readback divergence: create rewrote the existing record ${before[position].parsed.id}`);
+    }
+    const appended = observed[observed.length - 1];
+    if (!text(report.id) || appended.parsed.id !== report.id) fail('queue readback divergence: the appended record is not the record the queue writer reported');
+    if (before.some((entry) => entry.parsed.id === report.id)) fail(`queue readback divergence: create reused the existing id ${report.id}`);
+    const createdAt = isoTimestamp(appended.parsed.createdAt, 'createdAt');
+    const updatedAt = isoTimestamp(appended.parsed.updatedAt, 'updatedAt');
+    if (createdAt !== updatedAt) fail('queue readback divergence: a created record must carry one exact timestamp');
+    if (JSON.stringify(expectedCreatedRecord(report.id, request.flags, createdAt, updatedAt)) !== appended.line) {
+      fail('queue readback divergence: the recorded fields are not exactly the requested fields');
+    }
+  } else {
+    if (observed.length !== before.length) fail('queue readback divergence: update changed the queue record count');
+    for (let position = 0; position < before.length; position += 1) {
+      if (position === index || observed[position].line === before[position].line) continue;
+      fail(`queue readback divergence: update rewrote the untouched record ${before[position].parsed.id}`);
+    }
+    const changed = observed[index];
+    if (changed.parsed.id !== request.id) fail(`queue readback divergence: update moved ${request.id} within the queue`);
+    if (!object(report.issue) || report.issue.id !== request.id) fail('queue readback divergence: the queue writer reported a different record');
+    const updatedAt = isoTimestamp(changed.parsed.updatedAt, 'updatedAt');
+    if (Date.parse(updatedAt) < Date.parse(isoTimestamp(before[index].parsed.updatedAt, 'prestate updatedAt'))) {
+      fail('queue readback divergence: update moved the record timestamp backwards');
+    }
+    if (JSON.stringify(expectedUpdatedRecord(before[index].parsed, request.flags, updatedAt)) !== changed.line) {
+      fail('queue readback divergence: the recorded fields are not exactly the requested fields');
+    }
+  }
+  const surfaceAfter = queueSurface(directory);
+  assertUnchangedQueue(surfaceBefore, surfaceAfter, 'queue readback divergence');
+  assertBoundedPlanCascade(directory, plansBefore, surfaceBefore, surfaceAfter, request.id, request.flags.has('--status'));
+  const recorded = request.verb === 'create' ? report.id : request.id;
+  process.stdout.write(`recorded conductor queue write: ${request.verb} ${recorded}\nqueue sha256 ${queue.digest} -> ${after.digest}\nverified by compare-and-swap and exact readback; this record is the conductor's evidence and authorizes no outward effect\n`);
+}
+
 function parse(argv) {
   if (argv[0] === 'bootstrap' && argv.length === 3 && argv[1] === '--distribution') return { mode: 'bootstrap', distribution: argv[2] };
   if (argv[0] === 'inspect' && argv.length >= 4 && argv[1] === '--target') return { mode: 'inspect', target: argv[2], args: argv.slice(3) };
+  if (argv[0] === 'record') {
+    if (argv.length < 9 || argv[1] !== '--target' || argv[3] !== '--queue-writer' || argv[5] !== '--expect-queue') fail(HELP);
+    if (argv[4] !== QUEUE_WRITER) {
+      fail(`Seeds record admits only the sole queue writer: pass --queue-writer ${QUEUE_WRITER}, never ${argv[4]}`);
+    }
+    return { mode: 'record', target: argv[2], expected: argv[6], args: argv.slice(7) };
+  }
   fail(HELP);
 }
 
@@ -922,6 +1260,7 @@ try {
   exactLauncherNode();
   const command = parse(process.argv.slice(2));
   if (command.mode === 'bootstrap') bootstrap(command.distribution);
+  else if (command.mode === 'record') record(command.target, command.expected, command.args);
   else inspect(command.target, command.args);
 } catch (error) {
   process.stderr.write(`${error instanceof LauncherError ? error.message : `launcher failure: ${error.message}`}\n`);

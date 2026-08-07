@@ -38,8 +38,10 @@ NODE = str(EXACT_NODE) if EXACT_NODE.is_file() else HOST_NODE
 RECEIPT_SCHEMA = 2
 
 
-@unittest.skipIf(NODE is None or os.name == "nt", "exact Node and POSIX fixture executables are required")
-class SeedsLauncherTests(unittest.TestCase):
+class LauncherFixture:
+    """The hermetic tool layout, fake mise, and hostile ambient environment every launcher
+    suite runs against."""
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -62,6 +64,9 @@ class SeedsLauncherTests(unittest.TestCase):
         self.bun_log = self.root / "bun.log"
         self.bun_behavior = self.root / "bun-behavior"
         self.bun_behavior.write_text("0", encoding="utf-8")
+        # A stand-in queue writer the record fixtures install to model exact and divergent
+        # queue effects; absent, the fake Bun keeps its original inspect behavior.
+        self.queue_writer = self.root / "queue-writer"
         self.node_root = self.root / "installs" / "node" / "22.22.3"
         self.bun_root = self.root / "installs" / "bun" / "1.3.10"
         self.seeds_root = self.root / "installs" / "npm-os-eco-seeds-cli" / "0.5.14"
@@ -112,6 +117,7 @@ class SeedsLauncherTests(unittest.TestCase):
             "case \" $* \" in *\" --no-macros \"*) ;; *) exit 98 ;; esac\n"
             "case \" $* \" in *\" --tsconfig-override=\"*) ;; *) exit 97 ;; esac\n"
             f"{environment_command} | {sort_command} >> {self._quote(str(self.bun_log))}\n"
+            f"if [ -x {self._quote(str(self.queue_writer))} ]; then {self._quote(str(self.queue_writer))} \"$@\"; exit $?; fi\n"
             f"if [ \"$({cat_command} {self._quote(str(self.bun_behavior))})\" = TERM ]; then kill -TERM $$; fi\n"
             f"exit \"$({cat_command} {self._quote(str(self.bun_behavior))})\"\n",
         )
@@ -198,6 +204,9 @@ class SeedsLauncherTests(unittest.TestCase):
             check=False,
         )
 
+
+@unittest.skipIf(NODE is None or os.name == "nt", "exact Node and POSIX fixture executables are required")
+class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
     def test_bootstrap_is_locked_validates_exact_tuple_and_publishes_active_prior_receipts(self) -> None:
         first = self.bootstrap()
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -448,8 +457,10 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertNotEqual(drift.returncode, 0)
         self.assertFalse(self.bun_log.exists())
         self.assertEqual(self.bootstrap().returncode, 0)
+        # `create` is a record verb, never an inspect verb: the read-only path stays read-only.
         grammar = self.launcher("inspect", "--target", str(self.target), "create", "no")
         self.assertNotEqual(grammar.returncode, 0)
+        self.assertIn("accepts only --version, prime", grammar.stderr)
         self.assertFalse(self.bun_log.exists())
 
     def test_inspect_binds_executing_node_to_recorded_exact_binary_and_hash(self) -> None:
@@ -538,6 +549,572 @@ class SeedsLauncherTests(unittest.TestCase):
         self.assertIn("'--no-config' 'where' 'node@22.22.3'", windows)
         self.assertIn("finally", windows)
         self.assertIn("$childStatus = $LASTEXITCODE", windows)
+
+
+@unittest.skipIf(NODE is None or os.name == "nt", "exact Node and POSIX fixture executables are required")
+class SeedsRecordTests(LauncherFixture, unittest.TestCase):
+    """The conductor-only queue-write seam: same receipt admission as inspect, plus
+    compare-and-swap against the exact queue the conductor decided against and an exact
+    post-write readback."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.queue = self.root / "queue target"
+        self.seeds = self.queue / ".seeds"
+        self.seeds.mkdir(parents=True)
+        (self.seeds / "config.yaml").write_text("project: fixture\nversion: '1'\n", encoding="utf-8")
+        (self.seeds / ".gitignore").write_text("*.lock\n", encoding="utf-8")
+        self.issues = self.seeds / "issues.jsonl"
+        self.plans = self.seeds / "plans.jsonl"
+        self.write_records(self.issues, [])
+        self.write_records(self.plans, [])
+        self.assertEqual(self.bootstrap().returncode, 0)
+
+    @staticmethod
+    def canonical(record: dict[str, object]) -> str:
+        """Serialize exactly as the queue writer's JSON.stringify does."""
+        return json.dumps(record, separators=(",", ":"), ensure_ascii=False)
+
+    def write_records(self, path: Path, records: list[dict[str, object]]) -> None:
+        path.write_text("".join(f"{self.canonical(record)}\n" for record in records), encoding="utf-8")
+
+    def read_records(self, path: Path) -> list[dict[str, object]]:
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+    def digest(self, path: Path | None = None) -> str:
+        return sha256((path or self.issues).read_bytes()).hexdigest()
+
+    def seed(self, identifier: str, **overrides: object) -> dict[str, object]:
+        record = {
+            "id": identifier,
+            "title": f"finding {identifier}",
+            "status": "open",
+            "type": "task",
+            "priority": 2,
+            "createdAt": "2026-08-01T00:00:00.000Z",
+            "updatedAt": "2026-08-01T00:00:00.000Z",
+        }
+        record.update(overrides)
+        return record
+
+    def install_queue_writer(self, body: str) -> None:
+        """Install a stand-in queue writer; `python3` receives the record argv after `--`."""
+        python = shutil.which("python3")
+        if not python:
+            self.skipTest("python3 is required for the queue-writer fixture")
+        script = self.root / "queue-writer.py"
+        script.write_text(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            f"issues = Path({str(self.issues)!r})\n"
+            f"plans = Path({str(self.plans)!r})\n"
+            "def canonical(record):\n"
+            "    return json.dumps(record, separators=(',', ':'), ensure_ascii=False)\n"
+            "def load(path):\n"
+            "    return [json.loads(line) for line in path.read_text().splitlines() if line]\n"
+            "def store(path, records):\n"
+            "    path.write_text(''.join(canonical(record) + '\\n' for record in records))\n"
+            # The launcher hands Bun its own flags, then the entry path, then the record argv.
+            "argv = sys.argv[1:]\n"
+            "argv = argv[next(i for i, value in enumerate(argv) if value.endswith('index.ts')) + 1:]\n"
+            "argv = [value for value in argv if value != '--json']\n"
+            + body,
+            encoding="utf-8",
+        )
+        self._write_executable(
+            self.queue_writer,
+            f"#!/bin/sh\nexec {self._quote(python)} {self._quote(str(script))} \"$@\"\n",
+        )
+
+    def install_exact_queue_writer(self) -> None:
+        """Model the real writer: create appends, update rewrites in place."""
+        self.install_queue_writer(
+            "verb = argv[0]\n"
+            "flags = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+            "now = '2026-08-02T00:00:00.000Z'\n"
+            "if verb == 'create':\n"
+            "    records = load(issues)\n"
+            "    record = {'id': 'fixture-0001', 'title': flags['--title'].strip(), 'status': 'open',\n"
+            "              'type': flags.get('--type', 'task'), 'priority': int(flags.get('--priority', '2')),\n"
+            "              'createdAt': now, 'updatedAt': now}\n"
+            "    if '--description' in flags: record['description'] = flags['--description']\n"
+            "    if '--labels' in flags:\n"
+            "        labels = [label.strip().lower() for label in flags['--labels'].split(',') if label.strip()]\n"
+            "        if labels: record['labels'] = labels\n"
+            "    records.append(record)\n"
+            "    store(issues, records)\n"
+            "    print(json.dumps({'success': True, 'command': 'create', 'id': record['id']}))\n"
+            "else:\n"
+            "    identifier = argv[1]\n"
+            "    flags = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+            "    records = load(issues)\n"
+            "    index = next(i for i, record in enumerate(records) if record['id'] == identifier)\n"
+            "    record = dict(records[index])\n"
+            "    record['updatedAt'] = now\n"
+            "    if '--status' in flags:\n"
+            "        record['status'] = flags['--status']\n"
+            "        if record['status'] != 'closed':\n"
+            "            record.pop('closedAt', None); record.pop('closeReason', None)\n"
+            "    if '--title' in flags: record['title'] = flags['--title'].strip()\n"
+            "    if '--description' in flags: record['description'] = flags['--description']\n"
+            "    if '--priority' in flags: record['priority'] = int(flags['--priority'])\n"
+            "    labels = record.get('labels', [])\n"
+            "    if '--set-labels' in flags:\n"
+            "        labels = [label.strip().lower() for label in flags['--set-labels'].split(',') if label.strip()]\n"
+            "    if '--add-label' in flags:\n"
+            "        for label in flags['--add-label'].split(','):\n"
+            "            if label.strip() and label.strip().lower() not in labels: labels.append(label.strip().lower())\n"
+            "    if '--remove-label' in flags:\n"
+            "        removed = {label.strip().lower() for label in flags['--remove-label'].split(',')}\n"
+            "        labels = [label for label in labels if label not in removed]\n"
+            "    if {'--set-labels', '--add-label', '--remove-label'} & set(flags):\n"
+            "        record['labels'] = labels\n"
+            "        if not labels: record.pop('labels', None)\n"
+            "    records[index] = record\n"
+            "    store(issues, records)\n"
+            "    print(json.dumps({'success': True, 'command': 'update', 'issue': record}))\n"
+        )
+
+    def record(self, *args: str, writer: str = "conductor", expect: str | None = None) -> subprocess.CompletedProcess[str]:
+        # Each invocation starts from a clean log so "never reached the queue writer" is exact.
+        self.bun_log.unlink(missing_ok=True)
+        return self.launcher(
+            "record",
+            "--target",
+            str(self.queue),
+            "--queue-writer",
+            writer,
+            "--expect-queue",
+            expect if expect is not None else self.digest(),
+            *args,
+        )
+
+    def test_lawful_create_records_exactly_the_requested_fields(self) -> None:
+        self.install_exact_queue_writer()
+        existing = self.seed("fixture-0000")
+        self.write_records(self.issues, [existing])
+        before = self.digest()
+        result = self.record(
+            "create",
+            "--title",
+            "  gate excludes the secrets leaf  ",
+            "--type",
+            "bug",
+            "--priority",
+            "1",
+            "--description",
+            "Evidence: the check task omits it.",
+            "--labels",
+            " Class-Blocked-CI ,found-by-critic,",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("recorded conductor queue write: create fixture-0001", result.stdout)
+        self.assertIn(f"queue sha256 {before} -> {self.digest()}", result.stdout)
+        self.assertIn("authorizes no outward effect", result.stdout)
+        records = self.read_records(self.issues)
+        self.assertEqual(records[0], existing, "an unrelated record must survive byte-identically")
+        self.assertEqual(
+            records[1],
+            {
+                "id": "fixture-0001",
+                "title": "gate excludes the secrets leaf",
+                "status": "open",
+                "type": "bug",
+                "priority": 1,
+                "createdAt": "2026-08-02T00:00:00.000Z",
+                "updatedAt": "2026-08-02T00:00:00.000Z",
+                "description": "Evidence: the check task omits it.",
+                "labels": ["class-blocked-ci", "found-by-critic"],
+            },
+        )
+
+    def test_lawful_update_records_exactly_the_requested_label_algebra(self) -> None:
+        self.install_exact_queue_writer()
+        untouched = self.seed("fixture-0000")
+        target = self.seed("fixture-0001", labels=["stale", "keep"], closedAt="2026-08-01T00:00:00.000Z", closeReason="done")
+        target["status"] = "closed"
+        self.write_records(self.issues, [untouched, target])
+        result = self.record(
+            "update",
+            "fixture-0001",
+            "--status",
+            "in_progress",
+            "--set-labels",
+            "base",
+            "--add-label",
+            "Wave-1,base",
+            "--remove-label",
+            "base",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = self.read_records(self.issues)
+        self.assertEqual(records[0], untouched)
+        self.assertEqual(records[1]["status"], "in_progress")
+        self.assertEqual(records[1]["labels"], ["wave-1"])
+        self.assertNotIn("closedAt", records[1], "reopening must drop stale close metadata")
+        self.assertNotIn("closeReason", records[1])
+
+    def test_record_requires_the_explicit_sole_queue_writer_acknowledgement(self) -> None:
+        self.install_exact_queue_writer()
+        self.write_records(self.issues, [self.seed("fixture-0000")])
+        pristine = self.issues.read_bytes()
+        for argv in (
+            ("record", "--target", str(self.queue), "create", "--title", "casual"),
+            ("record", "--target", str(self.queue), "--expect-queue", self.digest(), "create", "--title", "casual"),
+            ("record", "--target", str(self.queue), "--queue-writer", "conductor", "create", "--title", "casual"),
+        ):
+            with self.subTest(argv=argv):
+                refused = self.launcher(*argv)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("usage:", refused.stderr)
+                self.assertEqual(self.issues.read_bytes(), pristine)
+        for writer in ("worker", "reviewer", "critic", "integrator", "Conductor", ""):
+            with self.subTest(writer=writer):
+                refused = self.record("create", "--title", "casual", writer=writer)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("admits only the sole queue writer", refused.stderr)
+                self.assertEqual(self.issues.read_bytes(), pristine)
+
+    def test_record_admits_only_create_and_update(self) -> None:
+        self.install_exact_queue_writer()
+        self.write_records(self.issues, [self.seed("fixture-0000")])
+        pristine = self.issues.read_bytes()
+        for verb in ("delete", "prune", "close", "claim", "sync", "init", "disposition", "archive", "ready", "prime", ""):
+            with self.subTest(verb=verb):
+                refused = self.record(verb, "fixture-0000")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("only the conductor queue verbs create and update", refused.stderr)
+                self.assertEqual(self.issues.read_bytes(), pristine)
+
+    def test_record_refuses_compare_and_swap_drift(self) -> None:
+        self.install_exact_queue_writer()
+        self.write_records(self.issues, [self.seed("fixture-0000")])
+        stale = self.digest()
+        # A concurrent writer lands between the conductor's decision and its queue write.
+        self.write_records(self.issues, [self.seed("fixture-0000"), self.seed("fixture-0002")])
+        current = self.issues.read_bytes()
+        refused = self.record("create", "--title", "raced", expect=stale)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("compare-and-swap refused", refused.stderr)
+        self.assertIn(stale, refused.stderr)
+        self.assertIn(self.digest(), refused.stderr)
+        self.assertEqual(self.issues.read_bytes(), current, "a refused compare-and-swap must not write")
+        for expected in ("", "not-a-digest", "abc", stale.upper(), f"{stale}0"):
+            with self.subTest(expected=expected):
+                malformed = self.record("create", "--title", "raced", expect=expected)
+                self.assertNotEqual(malformed.returncode, 0)
+                self.assertIn("exact sha256", malformed.stderr)
+                self.assertEqual(self.issues.read_bytes(), current)
+
+    def test_record_refuses_readback_mismatch_against_the_requested_fields(self) -> None:
+        divergences = {
+            "wrong title": "record['title'] = 'a different finding'\n",
+            "wrong type": "record['type'] = 'epic'\n",
+            "wrong priority": "record['priority'] = 4\n",
+            "dropped description": "record.pop('description', None)\n",
+            "extra field": "record['assignee'] = 'somebody'\n",
+            "wrong status": "record['status'] = 'closed'\n",
+            "unrequested label": "record['labels'] = ['smuggled']\n",
+            "split timestamps": "record['updatedAt'] = '2026-08-03T00:00:00.000Z'\n",
+            "reported other id": "reported = 'fixture-9999'\n",
+        }
+        for name, divergence in divergences.items():
+            with self.subTest(divergence=name):
+                self.install_queue_writer(
+                    "flags = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+                    "now = '2026-08-02T00:00:00.000Z'\n"
+                    "record = {'id': 'fixture-0001', 'title': flags['--title'].strip(), 'status': 'open',\n"
+                    "          'type': flags.get('--type', 'task'), 'priority': int(flags.get('--priority', '2')),\n"
+                    "          'createdAt': now, 'updatedAt': now}\n"
+                    "if '--description' in flags: record['description'] = flags['--description']\n"
+                    "reported = record['id']\n"
+                    + divergence
+                    + "store(issues, load(issues) + [record])\n"
+                    "print(json.dumps({'success': True, 'command': 'create', 'id': reported}))\n"
+                )
+                self.write_records(self.issues, [self.seed("fixture-0000")])
+                refused = self.record("create", "--title", "a finding", "--description", "evidence")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("queue readback divergence", refused.stderr)
+
+    def test_record_refuses_a_writer_that_touches_records_outside_the_requested_delta(self) -> None:
+        collateral = {
+            "rewrote a neighbour": "records[0]['title'] = 'silently edited'\n",
+            "dropped a neighbour": "del records[0]\n",
+            "appended a second record": "records.append({**record, 'id': 'fixture-0002'})\n",
+            "reordered the queue": "records.reverse()\n",
+        }
+        for name, mutation in collateral.items():
+            with self.subTest(collateral=name):
+                self.install_queue_writer(
+                    "flags = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+                    "now = '2026-08-02T00:00:00.000Z'\n"
+                    "record = {'id': 'fixture-0001', 'title': flags['--title'].strip(), 'status': 'open',\n"
+                    "          'type': 'task', 'priority': 2, 'createdAt': now, 'updatedAt': now}\n"
+                    "records = load(issues) + [record]\n"
+                    + mutation
+                    + "store(issues, records)\n"
+                    "print(json.dumps({'success': True, 'command': 'create', 'id': record['id']}))\n"
+                )
+                self.write_records(self.issues, [self.seed("fixture-0000")])
+                refused = self.record("create", "--title", "a finding")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("divergence", refused.stderr)
+
+    def test_record_bounds_the_plan_cascade_to_the_owning_plan(self) -> None:
+        plan = {
+            "id": "plan-0001",
+            "title": "wave one",
+            "status": "approved",
+            "children": ["fixture-0001"],
+            "createdAt": "2026-08-01T00:00:00.000Z",
+            "updatedAt": "2026-08-01T00:00:00.000Z",
+        }
+        unrelated = {**plan, "id": "plan-0002", "children": ["fixture-9999"]}
+        cascades = {
+            "owning plan status and timestamp": ("plans[0].update(status='active', updatedAt=now)\n", 0),
+            "plan that owns nothing here": ("plans[1].update(status='active', updatedAt=now)\n", 2),
+            "plan children rewritten": ("plans[0].update(status='active', updatedAt=now, children=['fixture-0001', 'smuggled'])\n", 2),
+            "plan title rewritten": ("plans[0].update(status='active', updatedAt=now, title='renamed')\n", 2),
+            "plan invented": ("plans.append({**plans[0], 'id': 'plan-0003'})\n", 2),
+            "plan status not a status": ("plans[0].update(status='smuggled', updatedAt=now)\n", 2),
+        }
+        for name, (mutation, expected_code) in cascades.items():
+            with self.subTest(cascade=name):
+                self.install_queue_writer(
+                    "identifier = argv[1]\n"
+                    "now = '2026-08-02T00:00:00.000Z'\n"
+                    "flags = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+                    "records = load(issues)\n"
+                    "index = next(i for i, record in enumerate(records) if record['id'] == identifier)\n"
+                    "records[index] = {**records[index], 'status': flags['--status'], 'updatedAt': now}\n"
+                    "store(issues, records)\n"
+                    "plans_records = load(plans)\n"
+                    + mutation.replace("plans[", "plans_records[").replace("plans.append", "plans_records.append")
+                    + "store(plans, plans_records)\n"
+                    "print(json.dumps({'success': True, 'command': 'update', 'issue': records[index]}))\n"
+                )
+                self.write_records(self.issues, [self.seed("fixture-0001")])
+                self.write_records(self.plans, [plan, unrelated])
+                result = self.record("update", "fixture-0001", "--status", "in_progress")
+                self.assertEqual(result.returncode, expected_code, result.stderr or result.stdout)
+                if expected_code:
+                    self.assertIn("plan cascade", result.stderr)
+
+    def test_record_refuses_a_plan_write_without_a_recorded_status_change(self) -> None:
+        self.install_queue_writer(
+            "identifier = argv[1]\n"
+            "now = '2026-08-02T00:00:00.000Z'\n"
+            "flags = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+            "records = load(issues)\n"
+            "index = next(i for i, record in enumerate(records) if record['id'] == identifier)\n"
+            "records[index] = {**records[index], 'title': flags['--title'], 'updatedAt': now}\n"
+            "store(issues, records)\n"
+            "store(plans, [{**load(plans)[0], 'status': 'active'}])\n"
+            "print(json.dumps({'success': True, 'command': 'update', 'issue': records[index]}))\n"
+        )
+        self.write_records(self.issues, [self.seed("fixture-0001")])
+        self.write_records(
+            self.plans,
+            [{"id": "plan-0001", "title": "wave one", "status": "approved", "children": ["fixture-0001"],
+              "createdAt": "2026-08-01T00:00:00.000Z", "updatedAt": "2026-08-01T00:00:00.000Z"}],
+        )
+        refused = self.record("update", "fixture-0001", "--title", "renamed")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("without a recorded status change", refused.stderr)
+
+    def test_record_refuses_a_writer_that_adds_or_removes_queue_files(self) -> None:
+        for name, mutation in {
+            "invented a queue file": "(issues.parent / 'smuggled.jsonl').write_text('{}\\n')\n",
+            "removed a queue file": "(issues.parent / 'templates.jsonl').unlink()\n",
+            "rewrote the config": "(issues.parent / 'config.yaml').write_text('project: hijacked\\n')\n",
+        }.items():
+            with self.subTest(surface=name):
+                (self.seeds / "templates.jsonl").write_text("", encoding="utf-8")
+                self.install_queue_writer(
+                    "now = '2026-08-02T00:00:00.000Z'\n"
+                    "flags = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+                    "record = {'id': 'fixture-0001', 'title': flags['--title'], 'status': 'open', 'type': 'task',\n"
+                    "          'priority': 2, 'createdAt': now, 'updatedAt': now}\n"
+                    "store(issues, load(issues) + [record])\n"
+                    + mutation
+                    + "print(json.dumps({'success': True, 'command': 'create', 'id': record['id']}))\n"
+                )
+                self.write_records(self.issues, [])
+                refused = self.record("create", "--title", "a finding")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("divergence", refused.stderr)
+
+    def test_record_refuses_a_prestate_the_queue_writer_would_silently_rewrite(self) -> None:
+        record = self.canonical(self.seed("fixture-0000"))
+        for name, content in {
+            "malformed line": f"{record}\n{{not json\n",
+            "duplicate id": f"{record}\n{record}\n",
+            "non-canonical serialization": json.dumps(self.seed("fixture-0000"), indent=None) + "\n",
+            "missing trailing newline": record,
+            "record without an id": '{"title":"anonymous"}\n',
+        }.items():
+            with self.subTest(prestate=name):
+                self.install_exact_queue_writer()
+                self.issues.write_text(content, encoding="utf-8")
+                pristine = self.issues.read_bytes()
+                refused = self.record("create", "--title", "a finding")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertFalse(self.bun_log.exists(), "the prestate is judged before the queue writer starts")
+                self.assertEqual(self.issues.read_bytes(), pristine)
+
+    def test_record_reports_an_unknown_effect_when_a_failed_writer_moved_the_queue(self) -> None:
+        self.install_queue_writer(
+            "store(issues, load(issues) + [{'id': 'fixture-0001', 'title': 'partial', 'status': 'open',\n"
+            "  'type': 'task', 'priority': 2, 'createdAt': '2026-08-02T00:00:00.000Z',\n"
+            "  'updatedAt': '2026-08-02T00:00:00.000Z'}])\n"
+            "sys.exit(1)\n"
+        )
+        self.write_records(self.issues, [])
+        refused = self.record("create", "--title", "a finding")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("effect is unknown", refused.stderr)
+
+    def test_record_refuses_a_failed_writer_that_left_the_queue_intact(self) -> None:
+        self.install_queue_writer("sys.exit(3)\n")
+        self.write_records(self.issues, [self.seed("fixture-0000")])
+        pristine = self.issues.read_bytes()
+        refused = self.record("create", "--title", "a finding")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("the queue writer failed and left the queue", refused.stderr)
+        self.assertEqual(self.issues.read_bytes(), pristine)
+
+    def test_record_refuses_a_writer_that_does_not_report_the_exact_queue_write(self) -> None:
+        for name, report in {
+            "no json": "print('created something')\n",
+            "not successful": "print(json.dumps({'success': False, 'command': 'create', 'id': 'fixture-0001'}))\n",
+            "another command": "print(json.dumps({'success': True, 'command': 'close', 'id': 'fixture-0001'}))\n",
+            "no id": "print(json.dumps({'success': True, 'command': 'create'}))\n",
+        }.items():
+            with self.subTest(report=name):
+                self.install_queue_writer(
+                    "now = '2026-08-02T00:00:00.000Z'\n"
+                    "flags = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1, 2) if argv[i].startswith('--')}\n"
+                    "store(issues, load(issues) + [{'id': 'fixture-0001', 'title': flags['--title'],\n"
+                    "  'status': 'open', 'type': 'task', 'priority': 2, 'createdAt': now, 'updatedAt': now}])\n"
+                    + report
+                )
+                self.write_records(self.issues, [])
+                refused = self.record("create", "--title", "a finding")
+                self.assertNotEqual(refused.returncode, 0)
+
+    def test_record_rejects_malformed_requests_before_the_queue_writer_starts(self) -> None:
+        self.install_exact_queue_writer()
+        self.write_records(self.issues, [self.seed("fixture-0001")])
+        pristine = self.issues.read_bytes()
+        for name, args in {
+            "create without a title": ("create", "--type", "bug"),
+            "create with an empty title": ("create", "--title", "   "),
+            "create with an unadmitted flag": ("create", "--title", "x", "--assignee", "somebody"),
+            "create with a repeated flag": ("create", "--title", "x", "--title", "y"),
+            "create with a valueless flag": ("create", "--title"),
+            "create with a flag-shaped value": ("create", "--title", "--labels"),
+            "create with an unknown type": ("create", "--title", "x", "--type", "chore"),
+            "create with an out-of-range priority": ("create", "--title", "x", "--priority", "5"),
+            "create with a P-shorthand priority": ("create", "--title", "x", "--priority", "P1"),
+            "update without an id": ("update", "--status", "closed"),
+            "update with no recorded field": ("update", "fixture-0001"),
+            "update of an absent id": ("update", "fixture-9999", "--status", "closed"),
+            "update with an unknown status": ("update", "fixture-0001", "--status", "archived"),
+            "update with an unadmitted flag": ("update", "fixture-0001", "--clear-extensions", "yes"),
+        }.items():
+            with self.subTest(request=name):
+                refused = self.record(*args)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertFalse(self.bun_log.exists(), f"{name} must be refused before the queue writer starts")
+                self.assertEqual(self.issues.read_bytes(), pristine)
+
+    def test_record_inherits_every_inspect_receipt_admission(self) -> None:
+        self.install_exact_queue_writer()
+        self.write_records(self.issues, [])
+        expected = self.digest()
+
+        active = self.active_receipt_path()
+        pristine_receipt = active.read_bytes()
+        active.write_text(f'{{"schema":{RECEIPT_SCHEMA}}}\n', encoding="utf-8")
+        partial = self.record("create", "--title", "a finding", expect=expected)
+        self.assertNotEqual(partial.returncode, 0)
+        self.assertIn("partial or invalid", partial.stderr)
+        self.assertFalse(self.bun_log.exists())
+
+        active.unlink()
+        missing = self.record("create", "--title", "a finding", expect=expected)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertFalse(self.bun_log.exists())
+
+        active.write_bytes(pristine_receipt)
+        entry = self.seeds_root / "lib" / "node_modules" / "@os-eco" / "seeds-cli" / "src" / "index.ts"
+        entry.write_text("drifted\n", encoding="utf-8")
+        drift = self.record("create", "--title", "a finding", expect=expected)
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertIn("drift", drift.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertEqual(self.read_records(self.issues), [])
+
+    def test_record_runs_the_exact_bun_entry_with_the_inspect_environment_allowlist(self) -> None:
+        self.install_exact_queue_writer()
+        self.write_records(self.issues, [])
+        before = self.calls.read_text(encoding="utf-8")
+        result = self.record("create", "--title", "a finding", "--type", "bug")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls.read_text(encoding="utf-8"), before, "record must never invoke mise")
+        contents = self.bun_log.read_text(encoding="utf-8")
+        self.assertIn("--config=", contents)
+        self.assertIn("--tsconfig-override=", contents)
+        self.assertIn("--no-macros", contents)
+        self.assertIn("--no-env-file --no-install", contents)
+        self.assertIn("create --title a finding --type bug --json", contents)
+        self.assertIn(f"PWD={self.queue}", contents)
+        self.assertIn("GIT_CONFIG_NOSYSTEM=1", contents)
+        for hostile in ("BUN_OPTIONS=", "BUN_INSPECT_PRELOAD=", "NODE_OPTIONS=", "NPM_CONFIG_REGISTRY=", "MISE_DATA_DIR=", "SEEDS_DEBUG="):
+            self.assertNotIn(hostile, contents)
+
+    def test_record_refuses_a_target_without_an_admissible_queue(self) -> None:
+        self.install_exact_queue_writer()
+        absent = self.record("create", "--title", "a finding", expect=self.digest())
+        self.assertEqual(absent.returncode, 0, absent.stderr)
+
+        for name, mutation in {
+            "no seeds directory": lambda: shutil.rmtree(self.seeds),
+            "no config": lambda: (self.seeds / "config.yaml").unlink(),
+            "no queue file": lambda: self.issues.unlink(),
+            "queue is a symlink": lambda: (self.issues.unlink(), os.symlink(self.root / "elsewhere.jsonl", self.issues)),
+            "queue is a directory": lambda: (self.issues.unlink(), self.issues.mkdir()),
+            "seeds directory is a symlink": lambda: (shutil.rmtree(self.seeds), os.symlink(self.root, self.seeds)),
+        }.items():
+            with self.subTest(target=name):
+                self.tearDown()
+                self.setUp()
+                self.install_exact_queue_writer()
+                (self.root / "elsewhere.jsonl").write_text("", encoding="utf-8")
+                mutation()
+                refused = self.record("create", "--title", "a finding", expect=sha256(b"").hexdigest())
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertFalse(self.bun_log.exists())
+
+    def test_record_refuses_a_linked_worktree_whose_queue_write_redirects(self) -> None:
+        self.install_exact_queue_writer()
+        (self.queue / ".git").write_text(f"gitdir: {self.root / 'main.git' / 'worktrees' / 'wt'}\n", encoding="utf-8")
+        refused = self.record("create", "--title", "a finding")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("linked worktree", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertEqual(self.read_records(self.issues), [])
+
+    def test_record_ignores_the_queue_writers_own_lock_and_temporary_files(self) -> None:
+        self.install_exact_queue_writer()
+        self.write_records(self.issues, [])
+        (self.seeds / "issues.jsonl.lock").write_text("", encoding="utf-8")
+        (self.seeds / "issues.jsonl.lock.stale.abcd").write_text("", encoding="utf-8")
+        (self.seeds / "issues.jsonl.tmp.abcd").write_text("", encoding="utf-8")
+        result = self.record("create", "--title", "a finding")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.read_records(self.issues)), 1)
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows launcher fixture")
