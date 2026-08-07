@@ -37,6 +37,7 @@ class GateGraphTests(unittest.TestCase):
         ("mise.toml", 'gh = "2.97.0"', 'gh = "2.96.0"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "1.7.3"', 'version = "1.7.2"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "11.16.0"', 'version = "11.15.0"', "mise.toml tools must equal"),
+        ("mise.toml", 'version = "2.10.2"', 'version = "2.10.1"', "mise.toml tools must equal"),
         # The betterleaks backend must stay github: — ubi: is deprecated in mise 2027.1.0 and
         # locks version+backend only, losing per-platform checksums and attestation.
         (
@@ -136,6 +137,10 @@ class GateGraphTests(unittest.TestCase):
             "version": "11.16.0",
             "backend": "npm:@mermaid-js/mermaid-cli",
         },
+        "npm:@bitkyc08/opencodex": {
+            "version": "2.10.2",
+            "backend": "npm:@bitkyc08/opencodex",
+        },
     }
     # Per-platform record shape differs by backend, so the expected field set is data, not a
     # special case buried in the assertion. aqua adds provenance only where the upstream
@@ -147,7 +152,11 @@ class GateGraphTests(unittest.TestCase):
         "gh": {"checksum", "url", "provenance"},
         "github:betterleaks/betterleaks": {"checksum", "url", "url_api"},
     }
-    NPM_BACKED_LOCK_TOOLS = {"npm:@os-eco/seeds-cli", "npm:@mermaid-js/mermaid-cli"}
+    NPM_BACKED_LOCK_TOOLS = {
+        "npm:@os-eco/seeds-cli",
+        "npm:@mermaid-js/mermaid-cli",
+        "npm:@bitkyc08/opencodex",
+    }
 
     MUTATIONS = (
         ("mise.toml", 'depends = ["validate", "test", "self-test", "secrets"]', 'depends = ["validate", "test"]', "check must contain only"),

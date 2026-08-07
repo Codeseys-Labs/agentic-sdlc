@@ -191,12 +191,46 @@ Two rules that outrank convenience:
    pinned, declare it unpinned **with the stated reason** rather than inventing a number — an
    unstated omission and a reasoned one look identical in a diff six months later.
 
-A tool may also be deliberately left unpinned on grounds that have nothing to do with
-packaging. As of 2026-08-05 this bundle does not pin `npm:@bitkyc08/opencodex` (resolved
-version 2.10.1, MIT) even though the npm backend would accept it: its purpose here would be
-subscription-credential passthrough to a non-first-party base URL, which the Claude Code
-legal-and-compliance documentation scopes subscription OAuth against, and that question is
-unresolved. Packaging feasibility is not authorization to adopt.
+**A pin and the permission to use a tool a particular way are separate decisions — and the
+separation survives the pin.** As of 2026-08-06 this bundle DOES pin
+`npm:@bitkyc08/opencodex` (version 2.10.2, MIT, npm backend, `depends = ["node"]`), by
+explicit operator decision recorded in `docs/adr/0005`. An earlier revision of this skill
+left it unpinned while the subscription-passthrough question was open; `docs/adr/0003`
+closed that question, so the packaging decision was made on its own merits — like the two
+npm pins above, the npm backend locks version+backend only, and the npm registry needs no
+credential, so the pin adds no second bootstrap prerequisite.
+
+What did NOT change is the boundary, and it is worth being precise about where it now
+lives: it is **usage-level, not packaging-level**. `docs/adr/0003` permits routing to
+**non-Anthropic** models through each provider's own credential (API key, Codex OAuth) and
+prohibits routing Claude **subscription** OAuth through any third-party process — the
+mechanism works, the authorization does not. The prohibition is enforced in code, in
+`scripts/opencodex-claude.sh`, because the upstream tool's own default does the opposite:
+its `ocx claude` auth resolver treats a readable (or unreadable) subscription credential as
+`subscription` mode and forwards the operator's OAuth to the proxy. The wrapper therefore
+isolates `CLAUDE_CONFIG_DIR`, scrubs every `ANTHROPIC*`/`CLAUDE*` variable from the child
+environment, and refuses with exit 3 when a subscription credential would still be
+reachable. **Generalize this:** when a pinned tool's safe usage is narrower than its default
+behavior, the narrowing belongs in an executable wrapper — prose in a skill file cannot
+refuse anything. Packaging feasibility was never authorization to adopt, and the pin is
+likewise not authorization for the prohibited use.
+
+**Wrapping a tool that supervises a daemon: delegate the supervision, re-probe the health.**
+The same launcher owns the gateway lifecycle (`launch` ensures-then-execs, `restart` =
+stop+ensure), and it delegates every mechanism to the tool's own verbs rather than growing a
+second supervisor: opencodex already does spawn, pidfile, port discovery, and an
+**identity-checked** `/healthz` probe that requires the body to identify as opencodex, so a
+foreign server answering on the port is not accepted. Its `ocx start` also refuses a second
+instance natively, which is why the wrapper adds no competing pidfile — two concurrent
+launches leave the pid unchanged. **What must NOT be delegated is the verdict.** Two verified
+fail-open paths make an inherited exit code a lie: `ocx ensure` exits 0 *without starting
+anything* when `codexAutoStart` is disabled, and `ocx status` exits 0 with the proxy down —
+only `ocx health` returns nonzero. So the wrapper re-probes `ocx health` after every
+supervision step and treats that alone as truth, then fails closed with a named reason
+rather than launching against a dead or half-up daemon. The rule to carry: **a supervisor
+you wrap can be trusted with the mechanism and never with the verdict** — find which single
+verb's exit code actually reflects a probe, and prove the fail-closed path by binding the
+port with a foreign listener instead of assuming the check works.
 
 ## Worktree waves: the two propagation facts (verified 2026-07-05)
 

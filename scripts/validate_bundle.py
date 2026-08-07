@@ -56,6 +56,12 @@ BETTERLEAKS_VERSION = "1.7.3"
 BETTERLEAKS_TOOL = "github:betterleaks/betterleaks"
 MERMAID_VERSION = "11.16.0"
 MERMAID_TOOL = "npm:@mermaid-js/mermaid-cli"
+# Installed by default per docs/adr/0005. The packaging pin is convenience tier like the two
+# npm pins above; the boundary that matters is usage-level and lives in the launcher script,
+# not here (docs/adr/0003: non-Anthropic routing only, never subscription OAuth).
+OPENCODEX_VERSION = "2.10.2"
+OPENCODEX_TOOL = "npm:@bitkyc08/opencodex"
+NPM_BACKED_TOOLS = frozenset({SEEDS_TOOL, MERMAID_TOOL, OPENCODEX_TOOL})
 # A pinned backend is part of the contract: it fixes WHERE a tool comes from, so a registry
 # alias cannot be silently repointed at a different upstream.
 EXPECTED_LOCK_BACKENDS = {
@@ -70,8 +76,9 @@ EXPECTED_LOCK_BACKENDS = {
     SEEDS_TOOL: SEEDS_TOOL,
     BETTERLEAKS_TOOL: BETTERLEAKS_TOOL,
     MERMAID_TOOL: MERMAID_TOOL,
+    OPENCODEX_TOOL: OPENCODEX_TOOL,
 }
-MISE_LOCK_SHA256 = "7490d608d8da5798af30cae1aa4d4ed41d0cac9c298af8da1b3712f036b3ffdd"
+MISE_LOCK_SHA256 = "f6d1e7e4004bcf2d46eeda7c8e44507caae06d024677464a86985b9d5bb98019"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -1161,6 +1168,7 @@ def validate_mise(root: Path, result: Validation) -> None:
         SEEDS_TOOL: {"version": SEEDS_VERSION, "depends": ["node"]},
         BETTERLEAKS_TOOL: {"version": BETTERLEAKS_VERSION},
         MERMAID_TOOL: {"version": MERMAID_VERSION, "depends": ["node"]},
+        OPENCODEX_TOOL: {"version": OPENCODEX_VERSION, "depends": ["node"]},
     }
     if config.get("tools") != expected_tools:
         result.error(f"mise.toml tools must equal {expected_tools}")
@@ -1226,6 +1234,7 @@ def validate_mise(root: Path, result: Validation) -> None:
         SEEDS_TOOL: SEEDS_VERSION,
         BETTERLEAKS_TOOL: BETTERLEAKS_VERSION,
         MERMAID_TOOL: MERMAID_VERSION,
+        OPENCODEX_TOOL: OPENCODEX_VERSION,
     }
     if set(locked_tools) != set(expected_versions):
         result.error(f"mise.lock tools must equal {sorted(expected_versions)}")
@@ -1240,7 +1249,7 @@ def validate_mise(root: Path, result: Validation) -> None:
             result.error(f"mise.lock {name} backend must equal {expected_backend}")
         # npm-backed pins carry no per-platform record: the npm backend resolves one
         # package for every platform, so version+backend is the whole integrity surface.
-        if name in {SEEDS_TOOL, MERMAID_TOOL}:
+        if name in NPM_BACKED_TOOLS:
             if set(entry) != {"version", "backend"}:
                 result.error(f"mise.lock {name} must contain version and backend only")
             continue

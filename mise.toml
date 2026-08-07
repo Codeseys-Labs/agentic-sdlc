@@ -40,6 +40,15 @@ version = "1.7.3"
 version = "11.16.0"
 depends = ["node"]
 
+# Installed by default as of 2026-08-06 by explicit operator decision (docs/adr/0005). The
+# boundary is usage-level, not packaging-level: per docs/adr/0003 this gateway may route to
+# NON-Anthropic models through each provider's own credential (API key, Codex OAuth), and
+# Claude subscription OAuth is never routed through it. scripts/opencodex-claude.sh enforces
+# that in code. npm backend locks version+backend only, exactly like the two pins above.
+[tools."npm:@bitkyc08/opencodex"]
+version = "2.10.2"
+depends = ["node"]
+
 [tasks.validate]
 description = "Run the portable bundle validator"
 run = "uv run --python 3.12.11 --script scripts/validate_bundle.py"
@@ -110,6 +119,22 @@ run_windows = "betterleaks dir . --config .config/betterleaks.toml"
 [tasks.check]
 description = "Run validation, installer tests, lifecycle self-test, and the secrets scan"
 depends = ["validate", "test", "self-test", "secrets"]
+
+[tasks."ocx:launch"]
+description = "Launch a second Claude Code process through the opencodex gateway"
+run = "scripts/opencodex-claude.sh launch"
+
+[tasks."ocx:status"]
+description = "Report opencodex gateway reachability and configured providers"
+run = "scripts/opencodex-claude.sh status"
+
+[tasks."ocx:restart"]
+description = "Stop the opencodex gateway cleanly and ensure it is healthy again"
+run = "scripts/opencodex-claude.sh restart"
+
+[tasks."ocx:configure"]
+description = "Configure opencodex providers through their own login flows"
+run = "scripts/opencodex-claude.sh configure"
 
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"
