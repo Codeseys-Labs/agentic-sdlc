@@ -17,10 +17,11 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
-from typing import Iterator
+from typing import Any, Iterator
 
 
-STATE_VERSION = 1
+STATE_VERSION = 2
+LEGACY_STATE_VERSION = 1
 COMMANDS = ("agentic-sdlc-statusline", "ocx-launch", "ocx-ultracode")
 
 
@@ -114,50 +115,115 @@ def desired_files(config: Config) -> dict[str, bytes]:
 
 
 def empty_state() -> dict[str, object]:
-    return {"version": STATE_VERSION, "entries": {}}
+    return {"version": STATE_VERSION, "entries": {}, "pending": None}
 
 
-def load_state(path: Path) -> dict[str, object]:
+def valid_record(record: Any, key: str) -> bool:
+    return (
+        isinstance(record, dict)
+        and set(record) == {"path", "digest", "removable"}
+        and record.get("path") == key
+        and isinstance(record.get("digest"), str)
+        and len(record["digest"]) == 64
+        and record.get("removable") in {"true", "false"}
+    )
+
+
+def validate_pending(config: Config, state: dict[str, object]) -> None:
+    pending = state.get("pending")
+    if pending is None:
+        return
+    if not isinstance(pending, dict) or pending.get("operation") not in {"install", "refresh", "uninstall"}:
+        raise OperatorToolsError(f"invalid operator-tools pending operation: {config.state_path}")
+    key = pending.get("path")
+    if not isinstance(key, str) or Path(key).parent != config.bin_dir or Path(key).name not in COMMANDS:
+        raise OperatorToolsError(f"invalid operator-tools pending path: {key}")
+    before, after = pending.get("before"), pending.get("after")
+    if before is not None and not valid_record(before, key):
+        raise OperatorToolsError(f"invalid operator-tools pending before record: {key}")
+    if after is not None and not valid_record(after, key):
+        raise OperatorToolsError(f"invalid operator-tools pending after record: {key}")
+    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
+    operation = pending["operation"]
+    valid = (
+        operation == "install" and before is None and after is not None and key not in entries
+    ) or (
+        operation == "refresh" and before is not None and after is not None
+        and entries.get(key) == before and before["digest"] != after["digest"]
+        and before["removable"] == after["removable"]
+    ) or (
+        operation == "uninstall" and before is not None and after is None and entries.get(key) == before
+    )
+    if not valid:
+        raise OperatorToolsError(f"invalid operator-tools pending transition: {key}")
+
+
+def load_state(path: Path, config: Config | None = None) -> dict[str, object]:
     if not path.exists():
         return empty_state()
+    if path.is_symlink():
+        raise OperatorToolsError(f"operator-tools state must not be a link: {path}")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise OperatorToolsError(f"cannot read operator-tools state {path}: {exc}") from exc
-    if value.get("version") != STATE_VERSION or not isinstance(value.get("entries"), dict):
+    if value.get("version") == LEGACY_STATE_VERSION and isinstance(value.get("entries"), dict):
+        value = {"version": STATE_VERSION, "entries": value["entries"], "pending": None}
+    if value.get("version") != STATE_VERSION or not isinstance(value.get("entries"), dict) or "pending" not in value:
         raise OperatorToolsError(f"invalid operator-tools state: {path}")
     for key, record in value["entries"].items():
-        if (
-            not isinstance(key, str)
-            or Path(key).name not in COMMANDS
-            or not isinstance(record, dict)
-            or record.get("digest") is None
-            or record.get("path") != key
-        ):
+        if not isinstance(key, str) or Path(key).name not in COMMANDS or not valid_record(record, key):
             raise OperatorToolsError(f"invalid operator-tools ownership record: {key}")
+    if config is not None:
+        validate_pending(config, value)
     return value
 
 
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def durable_mkdir(path: Path, mode: int = 0o700) -> None:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        directory.mkdir(mode=mode)
+        sync_directory(directory)
+        sync_directory(directory.parent)
+
+
 def atomic_write(path: Path, content: bytes, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(path.parent)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
             handle.write(content)
             handle.flush()
-            os.fsync(handle.fileno())
+            if sys.platform == "darwin":
+                import fcntl
+                fcntl.fcntl(handle.fileno(), fcntl.F_FULLFSYNC)
+            else:
+                os.fsync(handle.fileno())
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        sync_directory(path.parent)
     finally:
         try:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+def durable_unlink(path: Path) -> None:
+    path.unlink()
+    sync_directory(path.parent)
 
 
 def write_state(config: Config, state: dict[str, object]) -> None:
@@ -172,7 +238,7 @@ def lifecycle_lock(config: Config) -> Iterator[None]:
     if config.dry_run:
         yield
         return
-    config.lock_path.parent.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(config.lock_path.parent)
     descriptor = os.open(config.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         import fcntl
@@ -182,23 +248,98 @@ def lifecycle_lock(config: Config) -> Iterator[None]:
         os.close(descriptor)
 
 
+def live_matches(path: Path, record: dict[str, str]) -> bool:
+    return path.is_file() and not path.is_symlink() and digest_file(path) == record["digest"]
+
+
+def recover_pending(config: Config, state: dict[str, object], *, read_only: bool) -> str | None:
+    pending = state.get("pending")
+    if pending is None:
+        return None
+    assert isinstance(pending, dict)
+    path = Path(pending["path"])
+    operation = pending["operation"]
+    before = pending.get("before")
+    after = pending.get("after")
+    if path.parent.exists():
+        sync_directory(path.parent)
+    outcome: str | None = None
+    if operation == "install":
+        if not path.exists() and not path.is_symlink():
+            outcome = "abort"
+        elif isinstance(after, dict) and live_matches(path, after):
+            outcome = "commit"
+    elif operation == "refresh":
+        if isinstance(before, dict) and live_matches(path, before):
+            outcome = "abort"
+        elif isinstance(after, dict) and live_matches(path, after):
+            outcome = "commit"
+    elif operation == "uninstall":
+        if isinstance(before, dict) and live_matches(path, before):
+            outcome = "abort"
+        elif not path.exists() and not path.is_symlink():
+            outcome = "commit"
+    if outcome is None:
+        raise OperatorToolsError(f"interrupted operator-tools {operation} conflicts with current file: {path}")
+    if read_only:
+        return f"would recover {outcome}: {path}"
+    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
+    key = str(path)
+    if outcome == "commit":
+        if operation in {"install", "refresh"}:
+            entries[key] = after  # type: ignore[assignment]
+        else:
+            entries.pop(key, None)
+    state["pending"] = None
+    write_state(config, state)
+    return f"recovered {outcome}: {path}"
+
+
 def exact_owned_statusline(config: Config) -> Path:
     path = config.bin_dir / "agentic-sdlc-statusline"
-    state = load_state(config.state_path)
+    state = load_state(config.state_path, config)
+    if state.get("pending") is not None:
+        raise OperatorToolsError("the operator-tools lifecycle has an interrupted pending operation")
     record = state["entries"].get(str(path))  # type: ignore[index]
-    if not isinstance(record, dict) or not path.is_file() or path.is_symlink():
+    if not isinstance(record, dict) or not live_matches(path, record):
         raise OperatorToolsError("the packaged statusline is not an installed owned operator tool")
-    if digest_file(path) != record.get("digest"):
-        raise OperatorToolsError("the installed statusline differs from its ownership receipt")
     return path
+
+
+def arm(config: Config, state: dict[str, object], operation: str, path: Path, before: Any, after: Any) -> None:
+    state["pending"] = {
+        "operation": operation,
+        "path": str(path),
+        "before": before,
+        "after": after,
+    }
+    write_state(config, state)
+
+
+def commit_pending(config: Config, state: dict[str, object]) -> None:
+    pending = state["pending"]
+    assert isinstance(pending, dict)
+    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
+    key = pending["path"]
+    if pending["operation"] in {"install", "refresh"}:
+        entries[key] = pending["after"]
+    else:
+        entries.pop(key, None)
+    state["pending"] = None
+    write_state(config, state)
 
 
 def _install(config: Config) -> tuple[int, list[str]]:
     validate_bin_dir(config)
     desired = desired_files(config)
-    state = load_state(config.state_path)
-    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
+    state = load_state(config.state_path, config)
     messages: list[str] = []
+    if state.get("pending") is not None:
+        if config.dry_run:
+            messages.append(recover_pending(config, state, read_only=True) or "")
+            return 1, messages
+        messages.append(recover_pending(config, state, read_only=False) or "")
+    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
     partial = False
     for name, content in desired.items():
         path = config.bin_dir / name
@@ -224,15 +365,19 @@ def _install(config: Config) -> tuple[int, list[str]]:
                 messages.append(f"ok: {path}"); continue
             if config.dry_run:
                 messages.append(f"would refresh: {path}"); continue
+            after = {"path": key, "digest": wanted, "removable": record["removable"]}
+            arm(config, state, "refresh", path, record, after)
             atomic_write(path, content, 0o755)
-            entries[key] = {"path": key, "digest": wanted, "removable": record.get("removable", "true")}
-            write_state(config, state); messages.append(f"refreshed: {path}"); continue
+            commit_pending(config, state)
+            messages.append(f"refreshed: {path}"); continue
         if config.dry_run:
             messages.append(f"would install: {path}"); continue
-        config.bin_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(config.bin_dir)
+        after = {"path": key, "digest": wanted, "removable": "true"}
+        arm(config, state, "install", path, None, after)
         atomic_write(path, content, 0o755)
-        entries[key] = {"path": key, "digest": wanted, "removable": "true"}
-        write_state(config, state); messages.append(f"installed: {path}")
+        commit_pending(config, state)
+        messages.append(f"installed: {path}")
     return (1 if partial else 0), messages
 
 
@@ -243,18 +388,22 @@ def install(config: Config) -> tuple[int, list[str]]:
 
 def status(config: Config) -> tuple[int, list[str]]:
     validate_bin_dir(config)
-    state = load_state(config.state_path)
-    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
+    state = load_state(config.state_path, config)
     messages: list[str] = []
     partial = False
+    if state.get("pending") is not None:
+        try:
+            messages.append(recover_pending(config, state, read_only=True) or "")
+        except OperatorToolsError as exc:
+            messages.append(str(exc))
+        partial = True
+    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
     for name in COMMANDS:
         path = config.bin_dir / name
         record = entries.get(str(path))
         if record is None:
             partial = True; messages.append(f"unmanaged: {path}")
-        elif not path.is_file() or path.is_symlink():
-            partial = True; messages.append(f"absent/conflict: {path}")
-        elif digest_file(path) != record.get("digest"):
+        elif not live_matches(path, record):
             partial = True; messages.append(f"conflict: {path}")
         else:
             messages.append(f"ok: {path}")
@@ -263,9 +412,14 @@ def status(config: Config) -> tuple[int, list[str]]:
 
 def _uninstall(config: Config) -> tuple[int, list[str]]:
     validate_bin_dir(config)
-    state = load_state(config.state_path)
-    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
+    state = load_state(config.state_path, config)
     messages: list[str] = []
+    if state.get("pending") is not None:
+        if config.dry_run:
+            messages.append(recover_pending(config, state, read_only=True) or "")
+            return 1, messages
+        messages.append(recover_pending(config, state, read_only=False) or "")
+    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
     partial = False
     for name in COMMANDS:
         path = config.bin_dir / name; key = str(path); record = entries.get(key)
@@ -275,13 +429,16 @@ def _uninstall(config: Config) -> tuple[int, list[str]]:
             if not config.dry_run:
                 entries.pop(key); write_state(config, state)
             messages.append(f"absent: {path}"); continue
-        if path.is_symlink() or not path.is_file() or digest_file(path) != record.get("digest"):
+        if not live_matches(path, record):
             partial = True; messages.append(f"conflict: {path}"); continue
         if record.get("removable") == "false":
             messages.append(f"kept: {path} (adopted pre-existing entry)"); continue
         if config.dry_run:
             messages.append(f"would remove: {path}"); continue
-        path.unlink(); entries.pop(key); write_state(config, state); messages.append(f"removed: {path}")
+        arm(config, state, "uninstall", path, record, None)
+        durable_unlink(path)
+        commit_pending(config, state)
+        messages.append(f"removed: {path}")
     return (1 if partial else 0), messages
 
 

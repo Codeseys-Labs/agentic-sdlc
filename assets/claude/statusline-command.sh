@@ -17,13 +17,17 @@ jqr() { jq -r "$1 // empty" <<<"$input" 2>/dev/null || true; }
 jqn() { local value; value="$(jqr "$1")"; [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] && printf '%s' "$value" || printf '0'; }
 integer() { jq -nr --arg value "$1" '($value | tonumber? // 0) | floor' 2>/dev/null || printf '0'; }
 rounded() { jq -nr --arg value "$1" '($value | tonumber? // 0) | round' 2>/dev/null || printf '0'; }
+# Dynamic text is terminal data, not formatting. Drop control bytes and backslashes before the
+# final ANSI-decorated printf so input cannot introduce escape sequences through `%b`.
+safe_text() { LC_ALL=C tr -d '\000-\037\177\\' <<<"$1" | tr -d '\n\r'; }
 
 project_dir="$(jqr '.workspace.project_dir // .workspace.current_dir // .cwd')"
+project_dir="$(safe_text "$project_dir")"
 [ -n "$project_dir" ] || project_dir="${PWD:-.}"
 cwd="$project_dir"
 case "$cwd" in "$HOME"*) cwd="~${cwd#"$HOME"}" ;; esac
-host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')"
-model="$(jqr '.model.id')"; effort="$(jqr '.effort.level')"
+host="$(safe_text "$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')")"
+model="$(safe_text "$(jqr '.model.id')")"; effort="$(safe_text "$(jqr '.effort.level')")"
 total_input="$(jqn '.context_window.total_input_tokens')"
 total_output="$(jqn '.context_window.total_output_tokens')"
 used_pct="$(jqr '.context_window.used_percentage')"
@@ -33,8 +37,8 @@ cache_creation="$(jqn '.context_window.current_usage.cache_creation_input_tokens
 cache_read="$(jqn '.context_window.current_usage.cache_read_input_tokens')"
 cost_usd="$(jqr '.cost.total_cost_usd')"; duration_ms="$(jqr '.cost.total_duration_ms')"
 rl_5h="$(jqr '.rate_limits.five_hour.used_percentage')"; rl_7d="$(jqr '.rate_limits.seven_day.used_percentage')"
-pr_number="$(jqr '.pr.number')"; pr_review="$(jqr '.pr.review_state')"
-output_style="$(jqr '.output_style.name')"; transcript_path="$(jqr '.transcript_path')"
+pr_number="$(safe_text "$(jqr '.pr.number')")"; pr_review="$(safe_text "$(jqr '.pr.review_state')")"
+output_style="$(safe_text "$(jqr '.output_style.name')")"; transcript_path="$(jqr '.transcript_path')"
 
 format_tokens() {
   jq -nr --arg value "$1" '
@@ -68,6 +72,7 @@ branch=''
 if command -v git >/dev/null 2>&1 && git -C "$project_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   branch="$(git -C "$project_dir" --no-optional-locks branch --show-current 2>/dev/null || true)"
   [ -n "$branch" ] || branch="$(git -C "$project_dir" rev-parse --short HEAD 2>/dev/null || true)"
+  branch="$(safe_text "$branch")"
 fi
 
 location="${dim}${host}${reset}:${cyan}${cwd}${reset}"

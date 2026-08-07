@@ -87,6 +87,20 @@ class ClaudeStatuslineTests(unittest.TestCase):
         self.assertEqual(result.stdout, "claude\n")
         self.assertEqual(result.stderr, "")
 
+    def test_terminal_control_text_is_sanitized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            payload = {
+                "cwd": temp,
+                "model": {"id": "model\\033[31m]0;owned"},
+                "output_style": {"name": "style\\n[2J"},
+            }
+            result = self.render(payload, cwd=Path(temp))
+
+        self.assertNotIn("\\033", result.stdout)
+        self.assertNotIn("\x1b]0;owned", result.stdout)
+        self.assertNotIn("\x1b[2J", result.stdout)
+        self.assertEqual(result.stderr, "")
+
     def test_subagent_cost_cache_stays_below_xdg_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

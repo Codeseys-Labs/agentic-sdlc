@@ -256,12 +256,29 @@ scrub_anthropic_env() {
 assert_isolated_dir_has_no_subscription() {
   local credentials="$isolated_config_dir/.credentials.json"
   local claude_json="$isolated_config_dir/../.claude.json"
-  if [ -f "$credentials" ] && grep -q 'claudeAiOauth' "$credentials" 2>/dev/null; then
-    refuse "the isolated config dir carries a Claude subscription OAuth credential ($credentials)"
-  fi
-  if [ -f "$claude_json" ] && grep -q 'oauthAccount' "$claude_json" 2>/dev/null; then
-    refuse "a subscription OAuth account is reachable next to the isolated config dir ($claude_json)"
-  fi
+  local path key
+  for path in "$credentials" "$claude_json"; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    [ -f "$path" ] && [ ! -L "$path" ] && [ -r "$path" ] \
+      || refuse "a Claude credential source is linked, unreadable, or not a regular file ($path)"
+  done
+  for path in "$credentials" "$claude_json"; do
+    [ -f "$path" ] || continue
+    key=claudeAiOauth
+    [ "$path" = "$claude_json" ] && key=oauthAccount
+    grep -q "$key" "$path" 2>/dev/null \
+      && refuse "the isolated Claude state carries a subscription OAuth marker ($path)"
+  done
+}
+
+assert_proxy_marker_mode() {
+  local mode
+  mode="$(ocx config get claudeCode.authMode 2>/dev/null | tr -d '[:space:]' || true)"
+  case "$mode" in
+    ""|auto|proxy) return 0 ;;
+    subscription) refuse "opencodex claudeCode.authMode is explicitly subscription; set it to proxy before using this split plane" ;;
+    *) refuse "opencodex claudeCode.authMode is unreadable or unrecognized ($mode)" ;;
+  esac
 }
 
 # macOS keychain is the one detector source an isolated config dir cannot mask, so it is
@@ -290,6 +307,7 @@ cmd_launch() {
   mkdir -p "$isolated_config_dir"
   assert_isolated_dir_has_no_subscription
   assert_no_keychain_subscription
+  assert_proxy_marker_mode
   export CLAUDE_CONFIG_DIR="$isolated_config_dir"
 
   if ! command -v claude >/dev/null 2>&1; then
@@ -305,7 +323,8 @@ cmd_launch() {
   printf '  config dir: %s (isolated; your native ~/.claude is untouched)\n' "$isolated_config_dir"
   printf '  auth      : opencodex proxy owns authentication; no Anthropic subscription credential in scope\n'
   printf '  routed at : http://127.0.0.1:%s\n' "${port:-unknown}"
-  printf '  command   : mise -C %s exec -- ocx claude %s\n\n' "$root" "$*"
+  # Forwarded Claude arguments can contain inline settings and secrets. Never echo raw argv.
+  printf '  command   : mise -C %s exec -- ocx claude [forwarded arguments withheld]\n\n' "$root"
   # ocx claude re-checks liveness itself and then execs `claude` with stdio inherited. With
   # every ANTHROPIC*/CLAUDE* slot scrubbed and no reachable subscription credential, its auth
   # resolver lands on proxy markerMode -- the supported shape.
@@ -400,28 +419,145 @@ cmd_restart() {
   printf '\nrestarted. A healthy gateway is evidence, not authorization.\n'
 }
 
+normalize_identifier() {
+  LC_ALL=C tr '[:upper:]_.' '[:lower:]--' <<<"$1" | tr -d '[:space:]'
+}
+
+anthropic_identifier() {
+  case "$(normalize_identifier "$1")" in
+    anthropic|anthropic-apikey|anthropic-key|anthropic-claude|claude|claude-ai) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+endpoint_host() {
+  local value authority host
+  value="$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$1")"
+  case "$value" in http://*|https://*) ;; *) return 1 ;; esac
+  authority="${value#*://}"; authority="${authority%%/*}"; authority="${authority##*@}"
+  host="${authority%%:*}"; host="${host%.}"
+  [ -n "$host" ] && printf '%s' "$host"
+}
+
+anthropic_endpoint_argument() {
+  local argument value host next_value=false
+  for argument in "$@"; do
+    if $next_value; then
+      value="$argument"; next_value=false
+    else
+      case "$(normalize_identifier "$argument")" in
+        --base-url|--endpoint|--auth-url) next_value=true; continue ;;
+        --base-url=*|--endpoint=*|--auth-url=*) value="${argument#*=}" ;;
+        *) continue ;;
+      esac
+    fi
+    host="$(endpoint_host "$value" || true)"
+    case "$host" in anthropic.com|*.anthropic.com|claude.ai|*.claude.ai) return 0 ;; esac
+  done
+  return 1
+}
+
+explicit_non_anthropic_endpoint_argument() {
+  local argument value host next_value=false found=false
+  for argument in "$@"; do
+    if $next_value; then
+      value="$argument"; next_value=false
+    else
+      case "$(normalize_identifier "$argument")" in
+        --base-url|--endpoint) next_value=true; continue ;;
+        --base-url=*|--endpoint=*) value="${argument#*=}" ;;
+        *) continue ;;
+      esac
+    fi
+    found=true; host="$(endpoint_host "$value" || true)"
+    [ -n "$host" ] || return 1
+    case "$host" in anthropic.com|*.anthropic.com|claude.ai|*.claude.ai) return 1 ;; esac
+  done
+  $found
+}
+
+known_non_anthropic_provider() {
+  case "$(normalize_identifier "$1")" in
+    cursor|xai|command-code|kimi|kiro|openai-apikey|umans|opencode-go|neuralwatt|openrouter|cline-pass|cline|orcarouter|bizrouter|groq|google|google-vertex|google-antigravity|azure-openai|ollama|vllm|lm-studio|deepseek|cerebras|deepinfra|hyperbolic|baseten|commandcode|together|fireworks|firepass|moonshot|huggingface|nvidia|venice|zai|zhipu-bigmodel|nanogpt|synthetic|siliconflow|qwen-cloud|tencent-coding-plan|volcengine|volcengine-coding-plan|volcengine-agent-plan|qianfan|alibaba|alibaba-token-plan|alibaba-token-plan-intl|parallel|zenmux|litellm|ollama-cloud|mistral|minimax|minimax-cn|kimi-code|opencode-zen|vercel-ai-gateway|opencode-free|xiaomi|kilo|mimo-free|cloudflare-ai-gateway|cloudflare-workers-ai|github-copilot|gitlab-duo|openai) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+configured_provider_class() {
+  local provider="$1" config result
+  config="$(ocx config show --json 2>/dev/null)" || return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  result="$(jq -r --arg provider "$provider" '
+    .providers[$provider] as $p
+    | if $p == null then "absent" else
+        (($p.baseUrl // $p.baseURL // $p.endpoint // "") | ascii_downcase) as $url
+        | if ($url | test("^https?://([^/]+\\.)?(anthropic\\.com|claude\\.ai)(:[0-9]+)?(/|$)"))
+          then "anthropic" else "other" end
+      end
+  ' 2>/dev/null <<<"$config")" || return 2
+  case "$result" in anthropic) return 0 ;; other) return 1 ;; absent) return 3 ;; *) return 2 ;; esac
+}
+
+provider_allowed_for_mutation() {
+  local provider="$1" status
+  anthropic_identifier "$provider" && return 1
+  configured_provider_class "$provider"; status=$?
+  case "$status" in
+    0|2) return 1 ;;
+    1) return 0 ;;
+    3) known_non_anthropic_provider "$provider" ;;
+    *) return 1 ;;
+  esac
+}
+
+refuse_configuration() {
+  refuse "opencodex configuration route refused ($1); this split plane admits only reviewed non-Anthropic provider operations"
+}
+
 cmd_configure() {
   require_ocx
   if [ "$#" -eq 0 ]; then
-    printf 'Interactive opencodex provider configuration. This script runs ocx verbs; it\n'
-    printf 'never reads, stores, or forwards a credential itself.\n\n'
-    printf 'Supported (non-Anthropic providers only -- see docs/adr/0003):\n'
-    printf '  opencodex-claude.sh configure login <provider>    OAuth or API-key login\n'
-    printf '  opencodex-claude.sh configure provider list       Providers and registry\n'
-    printf '  opencodex-claude.sh configure account list        Accounts and key pools\n'
-    printf '  opencodex-claude.sh configure setup               Full interactive setup\n\n'
-    printf 'Run `mise -C %s exec -- ocx help <verb>` for the upstream surface.\n' "$root"
+    printf 'Reviewed opencodex provider configuration. This wrapper never prints secret argv.\n\n'
+    printf 'Supported: inspected non-Anthropic login/account/provider mutations and masked\n'
+    printf 'provider/account/config inspection. Interactive setup, GUI, arbitrary config\n'
+    printf 'mutation/import/export, and unknown future routes fail closed.\n\n'
+    printf 'Run `mise -C %s exec -- ocx help <verb>` to inspect the upstream surface.\n' "$root"
     return 0
   fi
-  # `ocx login anthropic` / `anthropic-apikey` would attach an Anthropic credential to the
-  # gateway. The API-key form is a different credential class than subscription OAuth, but
-  # neither is this bundle's use for the gateway, and the OAuth form is the prohibited one.
-  case "${1:-} ${2:-}" in
-    "login anthropic"|"login anthropic-apikey")
-      refuse "\`ocx $1 $2\` would attach an Anthropic credential to the gateway; this split plane routes non-Anthropic models only"
+
+  local verb subcommand provider route
+  verb="$(normalize_identifier "${1:-}")"
+  subcommand="$(normalize_identifier "${2:-}")"
+  route="$verb${subcommand:+ $subcommand}"
+  case "$verb $subcommand" in
+    "help "|"--help "|"-h "|"provider list"|"provider show"|"provider presets"|"account list"|"account current"|"config show"|"config get"|"config validate")
       ;;
+    "init "|"setup "|"gui "|"config set"|"config unset"|"config import"|"config export")
+      refuse_configuration "unbounded-route"
+      ;;
+    "login "*|"logout "*)
+      provider="${2:-}"
+      provider_allowed_for_mutation "$provider" || refuse_configuration "anthropic-or-unclassifiable-provider"
+      ;;
+    "provider add")
+      provider="${3:-}"
+      anthropic_identifier "$provider" && refuse_configuration "anthropic-provider"
+      anthropic_endpoint_argument "${@:4}" && refuse_configuration "anthropic-endpoint"
+      provider_allowed_for_mutation "$provider" || explicit_non_anthropic_endpoint_argument "${@:4}" \
+        || refuse_configuration "anthropic-or-unclassifiable-provider"
+      ;;
+    "provider edit"|"provider update"|"provider remove"|"provider set-default"|"provider selected")
+      provider="${3:-}"
+      provider_allowed_for_mutation "$provider" || refuse_configuration "anthropic-or-unclassifiable-provider"
+      anthropic_endpoint_argument "${@:4}" && refuse_configuration "anthropic-endpoint"
+      ;;
+    "account login"|"account reauth"|"account code"|"account cancel"|"account use"|"account remove"|"account add-key"|"account alias"|"account rename")
+      provider="${3:-}"
+      provider_allowed_for_mutation "$provider" || refuse_configuration "anthropic-or-unclassifiable-provider"
+      ;;
+    *) refuse_configuration "unknown-route" ;;
   esac
-  printf 'about to run: mise -C %s exec -- ocx %s\n\n' "$root" "$*"
+  printf 'about to run an approved opencodex configuration route (%s)\n\n' "$route"
   ocx "$@"
 }
 

@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
 import sys
 import tempfile
@@ -19,11 +21,16 @@ from typing import Any
 import install_operator_tools as operator_tools
 
 
-RECEIPT_VERSION = 1
-MISSING = {"missing": True}
+RECEIPT_VERSION = 2
+LEGACY_RECEIPT_VERSION = 1
+MANAGED_KEYS = ("type", "command")
 
 
 class StatuslineError(RuntimeError):
+    pass
+
+
+class SettingsChangedError(StatuslineError):
     pass
 
 
@@ -42,135 +49,455 @@ def receipt_path(state_root: Path) -> Path:
 
 def assert_physical_parent(path: Path) -> None:
     if path.is_symlink():
-        raise StatuslineError(f"settings path must not be a link: {path}")
+        raise StatuslineError(f"path must not be a link: {path}")
     current = path.parent
     while not current.exists() and current != current.parent:
         current = current.parent
     if current.is_symlink() or not current.is_dir():
-        raise StatuslineError(f"settings parent must be a physical directory: {current}")
+        raise StatuslineError(f"path parent must be a physical directory: {current}")
     if hasattr(os, "getuid") and current.stat().st_uid != os.getuid():
-        raise StatuslineError(f"settings parent is not owned by the current user: {current}")
+        raise StatuslineError(f"path parent is not owned by the current user: {current}")
 
 
-def load_settings(path: Path) -> dict[str, Any]:
+def digest_bytes(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def file_snapshot(path: Path) -> tuple[dict[str, Any], bytes | None]:
     assert_physical_parent(path)
-    if not path.exists():
-        return {}
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        if path.is_symlink():
+            raise StatuslineError(f"path must not be a link: {path}")
+        return {"exists": False}, None
+    except OSError as exc:
+        raise StatuslineError(f"cannot open {path}: {exc}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise StatuslineError(f"path must be a regular file: {path}")
+        if hasattr(os, "getuid") and before.st_uid != os.getuid():
+            raise StatuslineError(f"path is not owned by the current user: {path}")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            content = handle.read()
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    identity_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_uid,
+        stat.S_IMODE(before.st_mode),
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    identity_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_uid,
+        stat.S_IMODE(after.st_mode),
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if identity_before != identity_after:
+        raise SettingsChangedError(f"path changed while it was being read: {path}")
+    return {
+        "exists": True,
+        "identity": {
+            "device": before.st_dev,
+            "inode": before.st_ino,
+            "uid": before.st_uid,
+            "mode": stat.S_IMODE(before.st_mode),
+            "size": before.st_size,
+            "mtime_ns": before.st_mtime_ns,
+            "ctime_ns": before.st_ctime_ns,
+        },
+        "sha256": digest_bytes(content),
+    }, content
+
+
+def load_settings(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    snapshot, content = file_snapshot(path)
+    if content is None:
+        return {}, snapshot
+    try:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise StatuslineError(f"cannot read Claude settings {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise StatuslineError(f"Claude settings must contain a JSON object: {path}")
     statusline = value.get("statusLine")
     if statusline is not None and not isinstance(statusline, dict):
         raise StatuslineError("Claude statusLine must be a JSON object")
-    return value
+    return value, snapshot
 
 
-def atomic_json(path: Path, value: dict[str, Any], mode: int) -> None:
+def json_bytes(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def atomic_bytes(
+    path: Path,
+    content: bytes,
+    mode: int,
+    expected: dict[str, Any] | None = None,
+) -> None:
+    assert_physical_parent(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
-            handle.write(content); handle.flush(); os.fsync(handle.fileno())
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if expected is not None:
+            current, _ = file_snapshot(path)
+            if current != expected:
+                raise SettingsChangedError(
+                    f"Claude settings changed before replacement; preserving operator edit: {path}"
+                )
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        sync_directory(path.parent)
     finally:
-        try: os.unlink(temporary)
-        except FileNotFoundError: pass
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
-def load_receipt(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
+def atomic_json(
+    path: Path,
+    value: dict[str, Any],
+    mode: int,
+    expected: dict[str, Any] | None = None,
+) -> None:
+    atomic_bytes(path, json_bytes(value), mode, expected)
+
+
+def remove_durable(path: Path) -> None:
+    path.unlink()
+    sync_directory(path.parent)
+
+
+def validate_previous(previous: Any) -> bool:
+    if not isinstance(previous, dict) or set(previous) != set(MANAGED_KEYS):
+        return False
+    for record in previous.values():
+        if not isinstance(record, dict) or not isinstance(record.get("present"), bool):
+            return False
+        if record["present"]:
+            if set(record) != {"present", "value"} or not isinstance(record["value"], str):
+                return False
+        elif set(record) != {"present"}:
+            return False
+    return True
+
+
+def validate_snapshot(value: Any, *, after: bool = False) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("exists"), bool):
+        return False
+    if not value["exists"]:
+        return not after and set(value) == {"exists"}
+    digest = value.get("sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        return False
+    if after:
+        return (
+            set(value) == {"exists", "sha256", "uid", "mode"}
+            and isinstance(value.get("uid"), int)
+            and isinstance(value.get("mode"), int)
+        )
+    identity = value.get("identity")
+    return isinstance(identity, dict) and set(identity) == {
+        "device", "inode", "uid", "mode", "size", "mtime_ns", "ctime_ns"
+    } and all(isinstance(item, int) for item in identity.values())
+
+
+def legacy_receipt(value: dict[str, Any]) -> dict[str, Any] | None:
+    if value.get("version") != LEGACY_RECEIPT_VERSION:
         return None
-    if path.is_symlink():
-        raise StatuslineError(f"statusline receipt must not be a link: {path}")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise StatuslineError(f"cannot read statusline receipt {path}: {exc}") from exc
-    if value.get("version") != RECEIPT_VERSION or not isinstance(value.get("previous"), dict):
+    managed = value.get("managed")
+    previous = value.get("previous")
+    if not isinstance(managed, dict) or not isinstance(previous, dict):
+        return None
+    converted: dict[str, dict[str, Any]] = {}
+    for key in MANAGED_KEYS:
+        if key not in managed or not isinstance(managed[key], str) or key not in previous:
+            return None
+        old = previous[key]
+        converted[key] = {"present": False} if old == {"missing": True} else {"present": True, "value": old}
+    return {
+        "version": RECEIPT_VERSION,
+        "phase": "committed",
+        "settings": value.get("settings"),
+        "managed": {key: managed[key] for key in MANAGED_KEYS},
+        "previous": converted,
+    }
+
+
+def validate_receipt(value: Any, path: Path) -> dict[str, Any]:
+    if not isinstance(value, dict):
         raise StatuslineError(f"invalid statusline receipt: {path}")
+    converted = legacy_receipt(value)
+    if converted is not None:
+        value = converted
+    managed = value.get("managed")
+    target = value.get("settings")
+    if (
+        value.get("version") != RECEIPT_VERSION
+        or value.get("phase") not in {"committed", "pending"}
+        or not isinstance(target, str)
+        or not Path(target).is_absolute()
+        or not isinstance(managed, dict)
+        or set(managed) != set(MANAGED_KEYS)
+        or not all(isinstance(managed[key], str) for key in MANAGED_KEYS)
+        or not validate_previous(value.get("previous"))
+    ):
+        raise StatuslineError(f"invalid statusline receipt: {path}")
+    if value["phase"] == "pending":
+        if (
+            value.get("operation") not in {"activate", "deactivate"}
+            or not validate_snapshot(value.get("before"))
+            or not validate_snapshot(value.get("after"), after=True)
+        ):
+            raise StatuslineError(f"invalid pending statusline transaction: {path}")
     return value
 
 
+def load_receipt(path: Path) -> dict[str, Any] | None:
+    snapshot, content = file_snapshot(path)
+    del snapshot
+    if content is None:
+        return None
+    try:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StatuslineError(f"cannot read statusline receipt {path}: {exc}") from exc
+    return validate_receipt(value, path)
+
+
 def managed_values(command: Path) -> dict[str, str]:
-    return {"type": "command", "command": str(command)}
+    # Claude invokes statusLine.command through a shell. Quote even user-selected bin paths so
+    # spaces and metacharacters remain one executable pathname rather than shell syntax.
+    return {"type": "command", "command": shlex.quote(str(command))}
 
 
-def field_or_missing(statusline: dict[str, Any], key: str) -> Any:
-    return statusline[key] if key in statusline else MISSING
+def previous_values(statusline: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        key: ({"present": True, "value": statusline[key]} if key in statusline else {"present": False})
+        for key in MANAGED_KEYS
+    }
 
 
-def activate(config: operator_tools.Config, path: Path, state_root: Path, dry_run: bool) -> tuple[int, list[str]]:
-    if os.name == "nt":
-        raise StatuslineError("statusline activation is unsupported on native Windows")
-    command = operator_tools.exact_owned_statusline(config)
-    receipt = receipt_path(state_root)
-    if load_receipt(receipt) is not None:
+def after_snapshot(content: bytes, mode: int) -> dict[str, Any]:
+    return {
+        "exists": True,
+        "sha256": digest_bytes(content),
+        "uid": os.getuid() if hasattr(os, "getuid") else 0,
+        "mode": mode,
+    }
+
+
+def matches_after(snapshot: dict[str, Any], after: dict[str, Any]) -> bool:
+    if not snapshot.get("exists") or snapshot.get("sha256") != after.get("sha256"):
+        return False
+    identity = snapshot.get("identity", {})
+    return identity.get("uid") == after.get("uid") and identity.get("mode") == after.get("mode")
+
+
+def committed_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "version": RECEIPT_VERSION,
+        "phase": "committed",
+        "settings": receipt["settings"],
+        "managed": receipt["managed"],
+        "previous": receipt["previous"],
+    }
+
+
+def recover_pending(receipt_file: Path, receipt: dict[str, Any] | None, *, dry_run: bool) -> dict[str, Any] | None:
+    if receipt is None or receipt.get("phase") != "pending":
+        return receipt
+    if dry_run:
+        raise StatuslineError("a pending statusline transaction requires recovery; rerun without --dry-run")
+    target = Path(receipt["settings"])
+    current, _ = file_snapshot(target)
+    operation = receipt["operation"]
+    if matches_after(current, receipt["after"]):
+        sync_directory(target.parent)
+        if operation == "activate":
+            committed = committed_receipt(receipt)
+            atomic_json(receipt_file, committed, 0o600)
+            return committed
+        remove_durable(receipt_file)
+        return None
+    if current == receipt["before"]:
+        if operation == "activate":
+            remove_durable(receipt_file)
+            return None
+        committed = committed_receipt(receipt)
+        atomic_json(receipt_file, committed, 0o600)
+        return committed
+    raise StatuslineError(
+        f"pending statusline {operation} transaction conflicts with current settings; preserving both: {target}"
+    )
+
+
+def _activate(
+    config: operator_tools.Config,
+    path: Path,
+    state_root: Path,
+    dry_run: bool,
+) -> tuple[int, list[str]]:
+    receipt_file = receipt_path(state_root)
+    receipt = recover_pending(receipt_file, load_receipt(receipt_file), dry_run=dry_run)
+    if receipt is not None:
         raise StatuslineError("a managed statusline activation receipt already exists")
-    settings = load_settings(path)
+    command = operator_tools.exact_owned_statusline(config)
+    settings, before = load_settings(path)
     statusline = settings.get("statusLine") or {}
     wanted = managed_values(command)
     for key, value in wanted.items():
         if key in statusline and statusline[key] != value:
             raise StatuslineError(f"foreign statusLine.{key} value would be overwritten")
-    previous = {key: field_or_missing(statusline, key) for key in wanted}
-    statusline.update(wanted); settings["statusLine"] = statusline
+    previous = previous_values(statusline)
+    statusline.update(wanted)
+    settings["statusLine"] = statusline
+    mode = before.get("identity", {}).get("mode", 0o600)
+    content = json_bytes(settings)
+    pending = {
+        "version": RECEIPT_VERSION,
+        "phase": "pending",
+        "operation": "activate",
+        "settings": str(path),
+        "managed": wanted,
+        "previous": previous,
+        "before": before,
+        "after": after_snapshot(content, mode),
+    }
     messages = [f"would activate: {path} -> {command}" if dry_run else f"activated: {path} -> {command}"]
-    if not dry_run:
-        original_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
-        atomic_json(path, settings, original_mode)
-        atomic_json(receipt, {"version": RECEIPT_VERSION, "settings": str(path), "managed": wanted, "previous": previous}, 0o600)
+    if dry_run:
+        return 0, messages
+    atomic_json(receipt_file, pending, 0o600)
+    try:
+        atomic_bytes(path, content, mode, before)
+    except SettingsChangedError:
+        remove_durable(receipt_file)
+        raise
+    atomic_json(receipt_file, committed_receipt(pending), 0o600)
     return 0, messages
 
 
-def deactivate(path: Path, state_root: Path, dry_run: bool) -> tuple[int, list[str]]:
-    receipt_file = receipt_path(state_root); receipt = load_receipt(receipt_file)
-    if receipt is None:
-        return 1, ["statusline is not managed"]
-    if receipt.get("settings") != str(path):
-        raise StatuslineError("statusline receipt targets a different Claude settings path")
-    settings = load_settings(path); statusline = settings.get("statusLine") or {}
-    managed = receipt["managed"]
-    for key, value in managed.items():
-        if statusline.get(key, MISSING) != value:
-            raise StatuslineError(f"statusLine.{key} changed after activation; preserving operator edit")
+def activate(
+    config: operator_tools.Config,
+    path: Path,
+    state_root: Path,
+    dry_run: bool,
+) -> tuple[int, list[str]]:
+    with operator_tools.lifecycle_lock(config):
+        return _activate(config, path, state_root, dry_run)
+
+
+def restored_settings(settings: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
+    statusline = settings.get("statusLine") or {}
     for key, previous in receipt["previous"].items():
-        if previous == MISSING:
-            statusline.pop(key, None)
+        if previous["present"]:
+            statusline[key] = previous["value"]
         else:
-            statusline[key] = previous
+            statusline.pop(key, None)
     if statusline:
         settings["statusLine"] = statusline
     else:
         settings.pop("statusLine", None)
+    return settings
+
+
+def _deactivate(
+    path: Path,
+    state_root: Path,
+    dry_run: bool,
+) -> tuple[int, list[str]]:
+    receipt_file = receipt_path(state_root)
+    receipt = recover_pending(receipt_file, load_receipt(receipt_file), dry_run=dry_run)
+    if receipt is None:
+        return 1, ["statusline is not managed"]
+    if receipt.get("settings") != str(path):
+        raise StatuslineError("statusline receipt targets a different Claude settings path")
+    settings, before = load_settings(path)
+    statusline = settings.get("statusLine") or {}
+    managed = receipt["managed"]
+    for key, value in managed.items():
+        if statusline.get(key, object()) != value:
+            raise StatuslineError(f"statusLine.{key} changed after activation; preserving operator edit")
+    settings = restored_settings(settings, receipt)
+    mode = before.get("identity", {}).get("mode", 0o600)
+    content = json_bytes(settings)
+    pending = {
+        **committed_receipt(receipt),
+        "phase": "pending",
+        "operation": "deactivate",
+        "before": before,
+        "after": after_snapshot(content, mode),
+    }
     messages = [f"would deactivate: {path}" if dry_run else f"deactivated: {path}"]
-    if not dry_run:
-        original_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
-        atomic_json(path, settings, original_mode)
-        receipt_file.unlink()
+    if dry_run:
+        return 0, messages
+    atomic_json(receipt_file, pending, 0o600)
+    try:
+        atomic_bytes(path, content, mode, before)
+    except SettingsChangedError:
+        atomic_json(receipt_file, committed_receipt(pending), 0o600)
+        raise
+    remove_durable(receipt_file)
     return 0, messages
 
 
-def status(path: Path, state_root: Path) -> tuple[int, list[str]]:
-    settings = load_settings(path); receipt = load_receipt(receipt_path(state_root))
+def deactivate(
+    config: operator_tools.Config,
+    path: Path,
+    state_root: Path,
+    dry_run: bool,
+) -> tuple[int, list[str]]:
+    with operator_tools.lifecycle_lock(config):
+        return _deactivate(path, state_root, dry_run)
+
+
+def _status(path: Path, state_root: Path) -> tuple[int, list[str]]:
+    settings, _ = load_settings(path)
+    receipt = load_receipt(receipt_path(state_root))
     statusline = settings.get("statusLine") or {}
     if receipt is None:
         if statusline:
             return 1, [f"unmanaged statusline: {path}"]
         return 1, [f"statusline inactive: {path}"]
+    if receipt.get("phase") == "pending":
+        return 1, [f"statusline {receipt['operation']} recovery pending: {path}"]
     managed = receipt["managed"]
-    if receipt.get("settings") != str(path) or any(statusline.get(key, MISSING) != value for key, value in managed.items()):
+    if receipt.get("settings") != str(path) or any(statusline.get(key, object()) != value for key, value in managed.items()):
         return 1, [f"statusline conflict: {path}"]
     return 0, [f"statusline active: {path} -> {managed['command']}"]
+
+
+def status(
+    config: operator_tools.Config,
+    path: Path,
+    state_root: Path,
+) -> tuple[int, list[str]]:
+    with operator_tools.lifecycle_lock(config):
+        return _status(path, state_root)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -186,19 +513,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    home = absolute(args.home); state_root = absolute(args.state_root) if args.state_root else operator_tools.state_root_for(home)
+    home = absolute(args.home)
+    state_root = absolute(args.state_root) if args.state_root else operator_tools.state_root_for(home)
     bin_dir = absolute(args.bin_dir) if args.bin_dir else operator_tools.default_bin_dir(home)
     path = settings_path(home, args.claude_config_dir)
     config = operator_tools.Config(Path(__file__).resolve().parents[1], home, bin_dir, state_root, require_path=False)
     try:
         code, messages = {
-            "status": lambda: status(path, state_root),
+            "status": lambda: status(config, path, state_root),
             "activate": lambda: activate(config, path, state_root, args.dry_run),
-            "deactivate": lambda: deactivate(path, state_root, args.dry_run),
+            "deactivate": lambda: deactivate(config, path, state_root, args.dry_run),
         }[args.command]()
     except (StatuslineError, operator_tools.OperatorToolsError) as exc:
-        print(f"fatal: {exc}", file=sys.stderr); return 2
-    for message in messages: print(message)
+        print(f"fatal: {exc}", file=sys.stderr)
+        return 2
+    for message in messages:
+        print(message)
     return code
 
 
