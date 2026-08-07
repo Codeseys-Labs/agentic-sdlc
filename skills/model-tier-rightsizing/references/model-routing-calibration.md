@@ -234,6 +234,140 @@ field. And per the same canary, effective effort readback on that gateway was ho
 unavailable: a `requestedEffort` the gateway derived from a thinking budget is evidence about the
 request, never readback of what the upstream did.
 
+### Direct provider routes: Muse Spark (Meta)
+
+A third route family is admitted alongside Codex-OAuth-via-gateway and Bedrock: Meta's Muse
+Spark, reached **directly**, with no gateway in the path. Evidence is the executed
+qualification in `docs/research/2026-08-07-muse-spark-qualification.md` (verdict QUALIFIED WITH
+CONDITIONS, conditions M1–M8) and the decision record `docs/adr/0007-muse-spark-direct-route.md`.
+
+**Exact IDs, admission, and auth.** Base URL `https://api.meta.ai` — recorded **without** a
+`/v1` suffix, because an Anthropic-shaped client appends `/v1/messages` itself and the doubled
+path answers **401**, not 404. The three IDs served on 2026-08-07 were
+`muse-spark-1.2-contributor`, `muse-spark-1.2`, and `muse-spark-1.1`. Catalog membership in
+`GET /v1/models` is the admission check, exactly as for a gateway route but for a different
+reason: here every non-catalog ID — a bogus version, a `claude-*` ID, a `meta/`-prefixed form,
+even a case-variant of a real ID — was refused **404 `model_not_found`** by the provider itself.
+There is no default-provider fallthrough to alarm on, because there is no second router. Auth is
+Meta's **own** API key, accepted as either `Authorization: Bearer` or `x-api-key`. A Claude
+subscription credential is never involved; per ADR-0003 item 2 this is the supported shape, and
+pointing a client's base URL here while a subscription credential is in scope is the prohibited
+shape.
+
+**Three surfaces, with different capabilities.** All three were exercised live:
+
+| Surface | Status | Effort channel | Identity field |
+|---|---|---|---|
+| `POST /v1/responses` | primary; reasoning + message blocks | `reasoning.effort` | `model`, plus a retrievable stored record |
+| `POST /v1/messages` | Anthropic-shaped; `redacted_thinking` + text, tool_use, SSE | `thinking.budget_tokens` (≥1024, and must be **less than** `max_tokens`) | `model` only |
+| `POST /v1/chat/completions` | OpenAI-shaped; reasoning billed but not exposed | not accepted | `model` only |
+
+`reasoning` is rejected as an unknown parameter on `/v1/messages`; `thinking` is rejected on
+`/v1/responses`. The effort vocabulary the provider itself enumerated in a 400 is `none`,
+`minimal`, `low`, `medium`, `high`, `xhigh` — **no `max`**, and `none` is refused for these
+models even though it is in the enumeration. `xhigh` is the top usable band here, so a lane whose
+calibrated band above is `max` cannot be expressed on this route and must either drop to `xhigh`
+deliberately or stay off it.
+
+**HAZARD — reasoning tokens are charged against the output budget, and starvation returns HTTP
+200 with empty output.** Executed on `/v1/responses` with a trivial prompt at
+`reasoning.effort: low`:
+
+| `max_output_tokens` | HTTP | `status` | `reasoning_tokens` | visible text |
+|---:|---:|---|---:|---|
+| 32 | 200 | `incomplete` | 29 | **none — empty `output` array** |
+| 128 | 200 | `incomplete` | 125 | **none — empty `output` array** |
+| 600 | 200 | `completed` | 210 | `budget` |
+
+The same starvation reproduces on `/v1/messages` (`max_tokens: 32` → `stop_reason: max_tokens`,
+`thinking_tokens: 29`, empty `content` array). Two consequences. First, **a liveness or health
+check that asserts only HTTP 200 is worthless on this route** — it passes against a route that
+cannot emit text at all; assert non-empty text. Second, budget guidance must cover reasoning:
+observed reasoning consumption on trivial prompts ranged 48–499 tokens across efforts and models,
+so a budget under roughly 600 risks an empty completion even for a one-word answer, and the
+`incomplete`/`max_tokens` signal is the only distinguishing evidence. Reasoning content itself is
+never readable — `/v1/responses` returns a reasoning block with an empty `summary`,
+`/v1/messages` returns `redacted_thinking`, and the SSE stream omits the thinking block entirely
+while still billing for it.
+
+**Context window: 1,048,576 tokens, and it is a SHARED input+output budget — measured, not
+assumed.** The vendor claim is checkable cheaply because rejections cost nothing. With a trivial
+input, the largest accepted `max_output_tokens` was 1048407 and 1048463 was refused 400; with a
+9765-token input (per `count_tokens`), the boundary moved to exactly 1038811 — and
+`9765 + 1038811 = 1048576 = 2^20` with zero remainder. Confirmed as an oracle: for a given input,
+`max_output_tokens = 1048576 − count_tokens` is accepted and one more is refused. So the window is
+exactly 2^20 and input and output draw on **one** budget; a caller cannot request a large output
+and a large input. What remains a **vendor claim not measured** is whether quality holds across a
+filled window — only the admission arithmetic was measured, never a large request. Above the
+window the failure mode changes: an absurd budget returns **429** (`rate_limit_exceeded`,
+"reserved capacity"), not 400, so an oversized request can read as throttling rather than as the
+size error it is.
+
+**Identity: the response body's `model` field is the ONLY channel, and this is weaker than the
+gateway route.** No provider/model response header exists; there is no attribution log; there is
+no usage or audit surface (`/v1/usage`, `/v1/organization/usage`, `/v1/audit_logs`, `/v1/logs` all
+404). `GET /v1/responses/<id>` does return a server-side record, but only for `/v1/responses` with
+`store: true` (default), never for `/v1/messages`, and it reports the same `model` string from the
+same vendor — a second read of one assertion, not an independent channel. Compare the two routes
+honestly:
+
+- The **gateway** route has a genuinely independent channel: `resolvedModel` in the attribution
+  log, recorded separately from the caller's requested string, which is what caught the alias echo
+  and the dated-snapshot suppression. Its response body is *inadmissible* precisely because the log
+  disagreed with it.
+- The **Muse Spark** route has no such channel, so `model_identity_basis` cannot rest on
+  independent observation. What is available is weaker in kind, not merely in quantity: the body's
+  `model` is an **echo of the request**. A mismatch is real evidence of failure, and none was ever
+  observed across every probe; a match is consistent with a truthful report and with a server that
+  echoes without checking, and these probes cannot separate those. The load-bearing mitigation is
+  that fabrication has no route to succeed here: a non-catalog ID is refused 404 rather than
+  silently substituted, so there is no observed path by which a request for one catalog ID is
+  served by a different model while reporting the requested one. That is an argument from the
+  absence of a substitution mechanism, not a positive identity observation, and it should be
+  recorded as such rather than upgraded.
+
+Consequently a `RuntimeAssignment` on this route records `adapter_response_readback` as its
+`observed_identity_source` and carries **neither** gateway field (`gateway_attribution_log`,
+`catalog_bytes` pointers are gateway-route fields). Effort readback is **honestly unavailable**:
+`/v1/responses` echoes the requested `reasoning.effort` back verbatim in the response — never
+record that as readback, it is the requested value returning. The one genuinely
+non-request-derived effort signal is the *model default* observable when effort is **omitted**:
+all three models reported `high`. `usage.output_tokens_details.reasoning_tokens` is real observed
+telemetry about consumption, but it is not an effort value in the policy vocabulary and does not
+satisfy effort readback.
+
+**Tier placement: ADMITTED AS A ROUTE, TIER-UNPROVEN.** These probes were trivial smoke prompts —
+one-word answers, a two-city tool call. They establish transport, admission, fail-closed behavior,
+surface shape, and the budget arithmetic. They establish **nothing** about task fit, and capability
+tiering from a handful of smoke probes is exactly the weak evidence this calibration refuses to
+promote. Under the qualification ladder above the route sits at **`route-probed`** — a live call on
+the exact tuple returned a real response — and **not** at `role-qualified` in any role. Under the
+evidence-class ladder, the capability claims a reader might want (agentic/coding strength, 1M-context
+usefulness) rest on `vendor-hypothesis`; only transport and admission are `exact-route-live`. Per the
+three provenance classes, documented positioning is `mined` at best, which may *propose* a routing
+reconsideration and can never raise a rung or fill a scale-setter slot. Therefore:
+
+- **No tier assignment is recorded for `muse-spark-1.2-contributor` or `muse-spark-1.2`.** They
+  are not added to any eligible pair, and no phase, blast-radius, or roadmap row above is
+  changed. The six-primary pair policy is untouched.
+- The route may be selected only for work whose failure is caught by a **complete deterministic
+  check** — the mechanical-floor control predicate — and even then as an explicitly recorded
+  experiment, not as a pair member. It is ineligible for frontier or judgment-workhorse work: a
+  frontier slot requires a locally observed `role-qualified` route, and `xhigh` is its ceiling.
+- Promotion requires the A0–A6 ladder with paired isolation and utility arms, starting at A0
+  (which these probes satisfy) and a real task-fit comparison against an incumbent pair member on
+  representative work. A single passing run is a toy pass.
+- `muse-spark-1.1` is catalog-present and probe-answering; it is recorded as the small/fast slot
+  for the launcher only, with no tier claim at all.
+
+**Quota, from response headers rather than a vendor page.** The two tiers expose different
+limits, which is the sharpest observed difference between them: `muse-spark-1.2-contributor`
+returned `x-ratelimit-limit-requests: 100` with `x-ratelimit-limit-tokens: 3000000`, while
+`muse-spark-1.2` and `muse-spark-1.1` returned `3000` and `4000000`. Account-, date-, and
+key-specific; re-read the headers before sizing any fan-out. The 100-request contributor ceiling
+is low enough to exhaust in one wave, so the contributor tier is unsuitable for fan-out
+regardless of capability.
+
 ## Three provenance classes and qualification rungs
 
 A routing *decision* (as opposed to a single capability claim, above) draws on three

@@ -168,11 +168,21 @@ def _custody_objects_present() -> bool:
     if not GIT_DIR.is_dir() or GIT_DIR.is_symlink():
         return False
     refs = [f"refs/heads/{ref}" for ref in REQUIRED_FROZEN_REFS]
+    # `rev-parse --verify` on a full 40-hex string echoes it back WITHOUT reading the object
+    # store, so it answered "present" for objects this checkout no longer had. The peel to
+    # `^{commit}` forces resolution, which is what "present" has to mean here. Every name is
+    # peeled, including the refs, so a dangling ref cannot pass either.
     for name in (ASSESSED_HEAD_COMMIT, f"refs/heads/{ASSESSED_RELEASE_BRANCH}", *refs):
         try:
-            git("rev-parse", "--verify", name)
+            git("rev-parse", "--verify", f"{name}^{{commit}}")
         except subprocess.CalledProcessError:
             return False
+    # Containment is part of custody: the assessed commit must still be reachable from the
+    # release line, not merely present as a loose object.
+    try:
+        git("merge-base", "--is-ancestor", ASSESSED_HEAD_COMMIT, f"refs/heads/{ASSESSED_RELEASE_BRANCH}")
+    except subprocess.CalledProcessError:
+        return False
     return True
 
 

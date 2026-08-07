@@ -193,6 +193,18 @@ run = "scripts/opencodex-claude.sh restart"
 description = "Configure opencodex providers through their own login flows"
 run = "scripts/opencodex-claude.sh configure"
 
+[tasks."muse:launch"]
+description = "Launch a second Claude Code process directly against Meta's Muse Spark endpoint"
+run = "scripts/muse-claude.sh launch"
+
+[tasks."muse:status"]
+description = "Report Muse Spark route configuration, credential source, and live reachability"
+run = "scripts/muse-claude.sh status"
+
+[tasks."muse:probe"]
+description = "Verify the Muse Spark catalog and one tiny completion without launching Claude"
+run = "scripts/muse-claude.sh probe"
+
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"
 run = "lefthook install"
