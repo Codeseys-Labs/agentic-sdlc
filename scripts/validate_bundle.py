@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -32,6 +33,20 @@ REQUIRED_TASKS = {
     "bundle:install:all-hosts",
     "bundle:status:all-hosts",
     "research-os:install",
+    "operator-tools:install",
+    "operator-tools:status",
+    "operator-tools:uninstall",
+    "operator-tools:self-test",
+    "claude:statusline:status",
+    "claude:statusline:activate",
+    "claude:statusline:deactivate",
+    "ocx:launch",
+    "ocx:ultracode",
+    "ocx:status",
+    "ocx:restart",
+    "ocx:configure",
+    "mermaid:provision",
+    "mermaid:linux-test",
     "test",
     "self-test",
     "secrets",
@@ -61,7 +76,64 @@ MERMAID_TOOL = "npm:@mermaid-js/mermaid-cli"
 # not here (docs/adr/0003: non-Anthropic routing only, never subscription OAuth).
 OPENCODEX_VERSION = "2.10.2"
 OPENCODEX_TOOL = "npm:@bitkyc08/opencodex"
-NPM_BACKED_TOOLS = frozenset({SEEDS_TOOL, MERMAID_TOOL, OPENCODEX_TOOL})
+# node 22.22.3 bundles npm 10.9.8, so the M0b renderer's npm identity is pinned as its own
+# tool. scripts/provision_mermaid_linux.py resolves exactly this version through `mise where`
+# to install the renderer's node_modules. Provisioning is an explicit operator step and no
+# gate leaf invokes it, so this pin never becomes a bootstrap prerequisite.
+MERMAID_NPM_VERSION = "10.8.1"
+MERMAID_NPM_TOOL = "npm"
+MERMAID_NPM_BACKEND = "npm:npm"
+# The renderer supply chain is pinned by exact digest, not by version range: the lock bytes and
+# the policy bytes are both hashed, so a dependency edit or a policy loosening fails the gate.
+MERMAID_PACKAGE_LOCK_SHA256 = "939c3abe521d3e2075cf757f2761fa1d3103daf270be778eae159b45e6e3bb88"
+MERMAID_POLICY_SHA256 = "ee669a8ee36c085713071e91cb1b2b38c75f28dec9a0cfbbc1cd86559ca6ecce"
+MERMAID_POLICY_SCHEMA = "mermaid-renderer-linux/v1"
+MERMAID_PACKAGE_PINS = {
+    "@mermaid-js/mermaid-cli": "11.16.0",
+    "@puppeteer/browsers": "3.0.6",
+    "mermaid": "11.16.0",
+    "puppeteer": "25.3.0",
+}
+MERMAID_LOCK_RESOLUTIONS = {
+    "node_modules/@mermaid-js/mermaid-cli": "11.16.0",
+    "node_modules/@mermaid-js/parser": "1.2.0",
+    "node_modules/@puppeteer/browsers": "3.0.6",
+    "node_modules/mermaid": "11.16.0",
+    "node_modules/puppeteer": "25.3.0",
+}
+MERMAID_BROWSER_IDENTITY = {
+    "build_id": "150.0.7871.24",
+    "executable_sha256": "db4fe5b63d1b56729feb1eeebc82967768e66ef823ba942b2d4e506a34dc4a78",
+    "cache_tree_sha256": "3afbf64662eb240f67e98b7f352532de67e09dc9dabfd5390172c0c630b7ecfa",
+}
+OPERATOR_TOOL_ARTIFACTS = frozenset(
+    {
+        "assets/claude/statusline-command.sh",
+        "assets/launchers/ocx-launch.in",
+        "assets/launchers/ocx-ultracode.in",
+        "scripts/install_operator_tools.py",
+        "scripts/manage_claude_statusline.py",
+        "tests/test_claude_statusline.py",
+        "tests/test_manage_claude_statusline.py",
+        "tests/test_operator_tools.py",
+        "tests/test_opencodex_claude.py",
+    }
+)
+MERMAID_REQUIRED_ARTIFACTS = frozenset(
+    {
+        "scripts/provision_mermaid_linux.py",
+        "scripts/render_mermaid_linux.py",
+        "scripts/sanitize_mermaid_svg.mjs",
+        "tests/test_mermaid_renderer.py",
+        "tests/test_mermaid_renderer_gate.py",
+        "tests_linux/test_mermaid_renderer_e2e.py",
+        "tests/fixtures/mermaid-renderer/corpus.json",
+    }
+)
+# Generated trees that are provisioned, not reviewed. Walking them would make the secret scan
+# and the gate-graph copy depend on whether a host has run provisioning.
+UNREVIEWED_TREES = frozenset({".git", "node_modules", ".mermaid-runtime", "__pycache__"})
+NPM_BACKED_TOOLS = frozenset({SEEDS_TOOL, MERMAID_TOOL, OPENCODEX_TOOL, MERMAID_NPM_TOOL})
 # A pinned backend is part of the contract: it fixes WHERE a tool comes from, so a registry
 # alias cannot be silently repointed at a different upstream.
 EXPECTED_LOCK_BACKENDS = {
@@ -77,8 +149,9 @@ EXPECTED_LOCK_BACKENDS = {
     BETTERLEAKS_TOOL: BETTERLEAKS_TOOL,
     MERMAID_TOOL: MERMAID_TOOL,
     OPENCODEX_TOOL: OPENCODEX_TOOL,
+    MERMAID_NPM_TOOL: MERMAID_NPM_BACKEND,
 }
-MISE_LOCK_SHA256 = "f6d1e7e4004bcf2d46eeda7c8e44507caae06d024677464a86985b9d5bb98019"
+MISE_LOCK_SHA256 = "6859c0558b4729e95c07fd9bc39e0b41a2d3ea22f866b8a40da9911e6aad8a5d"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -89,8 +162,22 @@ TASK_COMMANDS = {
     "bundle:install:all-hosts": "--script scripts/run_all_hosts.py install",
     "bundle:status:all-hosts": "--script scripts/run_all_hosts.py status",
     "research-os:install": "--script skills/codex-research-os/scripts/install_research_os.py",
+    "operator-tools:install": "--script scripts/install_operator_tools.py install",
+    "operator-tools:status": "--script scripts/install_operator_tools.py status",
+    "operator-tools:uninstall": "--script scripts/install_operator_tools.py uninstall",
+    "operator-tools:self-test": "--script scripts/install_operator_tools.py self-test",
+    "claude:statusline:status": "--script scripts/manage_claude_statusline.py status",
+    "claude:statusline:activate": "--script scripts/manage_claude_statusline.py activate",
+    "claude:statusline:deactivate": "--script scripts/manage_claude_statusline.py deactivate",
+    "mermaid:linux-test": "--with pyyaml==6.0.3 python -m unittest discover -s tests_linux",
     "test": "--with pyyaml==6.0.3 python -m unittest discover -s tests",
     "self-test": "--script scripts/install_skill_bundle.py self-test",
+}
+# Pinned outside TASK_COMMANDS because the M0b boundary is Linux x64 only: a run_windows
+# variant would advertise a platform the renderer explicitly refuses (EXIT_UNSUPPORTED).
+MERMAID_PROVISION_TASK = {
+    "description": "Provision the pinned Linux Mermaid browser runtime (explicit, not a gate)",
+    "run": f"uv run --python {PYTHON_VERSION} --script scripts/provision_mermaid_linux.py",
 }
 # The secrets task runs the pinned scanner binary directly, not through uv, so it is pinned
 # on its own. `dir` scans the working tree; the full-history verb (`git`) is deliberately not
@@ -1135,6 +1222,84 @@ def validate_secrets_config(root: Path, result: Validation) -> None:
         )
 
 
+def validate_mermaid_renderer(root: Path, result: Validation) -> None:
+    """Pin the M0b renderer supply chain and its Linux-only safety contract.
+
+    The renderer executes a downloaded browser over untrusted diagram text, so the reviewed
+    artifact here is the whole identity: exact direct dependencies, exact transitive
+    resolutions, the lock bytes, the policy bytes, and the browser digest. Version strings
+    alone would leave the sanitizer allowlist and the sandbox limits free to be loosened
+    without failing the gate. Rendering itself stays advisory — nothing in `check` invokes
+    the renderer or requires a provisioned runtime.
+    """
+    package_path = root / "package.json"
+    lock_path = root / "package-lock.json"
+    policy_path = root / "policy" / "mermaid-renderer-linux-v1.json"
+    for path, label in (
+        (package_path, "package.json"),
+        (lock_path, "package-lock.json"),
+        (policy_path, "Mermaid renderer policy"),
+    ):
+        if not path.is_file():
+            result.error(f"{label} is required")
+            return
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        result.error(f"invalid Mermaid renderer artifact: {exc}")
+        return
+
+    if package.get("private") is not True or package.get("dependencies") != MERMAID_PACKAGE_PINS:
+        result.error("package.json must be private and contain only the exact Mermaid renderer direct pins")
+    if package.get("packageManager") != f"npm@{MERMAID_NPM_VERSION}" or package.get("engines") != {"node": NODE_VERSION}:
+        result.error("package.json must pin the certified npm and Node identities")
+
+    root_dependencies = lock.get("packages", {}).get("", {}).get("dependencies")
+    if lock.get("lockfileVersion") != 3 or root_dependencies != MERMAID_PACKAGE_PINS:
+        result.error("package-lock.json must be lockfileVersion 3 with the exact Mermaid direct graph")
+    if sha256_bytes(lock_path.read_bytes()) != MERMAID_PACKAGE_LOCK_SHA256:
+        result.error("package-lock.json SHA-256 must equal the certified Mermaid dependency graph")
+    for path_key, version in MERMAID_LOCK_RESOLUTIONS.items():
+        if lock.get("packages", {}).get(path_key, {}).get("version") != version:
+            result.error(f"package-lock.json must resolve {path_key} {version}")
+
+    if sha256_bytes(policy_path.read_bytes()) != MERMAID_POLICY_SHA256:
+        result.error("Mermaid renderer policy does not match the canonical contract")
+    if policy.get("schema_version") != MERMAID_POLICY_SCHEMA:
+        result.error(f"Mermaid renderer policy schema must equal {MERMAID_POLICY_SCHEMA}")
+    browser = policy.get("browser")
+    if not isinstance(browser, dict) or any(browser.get(key) != value for key, value in MERMAID_BROWSER_IDENTITY.items()):
+        result.error("Mermaid renderer browser identity mismatch")
+
+    missing = sorted(path for path in MERMAID_REQUIRED_ARTIFACTS if not (root / path).is_file())
+    if missing:
+        result.error(f"Mermaid renderer artifacts missing: {', '.join(missing)}")
+
+
+def validate_operator_tools(root: Path, result: Validation) -> None:
+    missing = sorted(path for path in OPERATOR_TOOL_ARTIFACTS if not (root / path).is_file())
+    if missing:
+        result.error(f"operator-tool artifacts missing: {', '.join(missing)}")
+        return
+    bash = shutil.which("bash")
+    if bash is None:
+        result.warn("bash is unavailable; operator-tool shell syntax was not checked")
+        return
+    for relative in (
+        "assets/claude/statusline-command.sh",
+        "assets/launchers/ocx-launch.in",
+        "assets/launchers/ocx-ultracode.in",
+        "scripts/opencodex-claude.sh",
+    ):
+        completed = subprocess.run(
+            [bash, "-n", str(root / relative)], capture_output=True, text=True, check=False
+        )
+        if completed.returncode:
+            result.error(f"invalid shell syntax in {relative}: {completed.stderr.strip()}")
+
+
 def validate_mise(root: Path, result: Validation) -> None:
     path = root / "mise.toml"
     if not path.is_file():
@@ -1161,6 +1326,7 @@ def validate_mise(root: Path, result: Validation) -> None:
         "lefthook": LEFTHOOK_VERSION,
         "node": NODE_VERSION,
         "bun": BUN_VERSION,
+        MERMAID_NPM_TOOL: MERMAID_NPM_VERSION,
         "ripgrep": RIPGREP_VERSION,
         "fd": FD_VERSION,
         "jq": JQ_VERSION,
@@ -1198,12 +1364,46 @@ def validate_mise(root: Path, result: Validation) -> None:
     if tasks.get("secrets") != expected_secrets:
         result.error(f"mise.toml secrets must contain only its description and the exact working-tree scan {SECRETS_COMMAND!r}")
     validate_secrets_config(root, result)
+    expected_ocx_tasks = {
+        "ocx:launch": {
+            "description": "Launch a second Claude Code process through the opencodex gateway",
+            "run": "scripts/opencodex-claude.sh launch",
+        },
+        "ocx:ultracode": {
+            "description": "Launch opencodex Claude with session Ultracode and ordinary permissions",
+            "run": "scripts/opencodex-claude.sh launch-ultracode",
+        },
+        "ocx:status": {
+            "description": "Report opencodex gateway reachability and configured providers",
+            "run": "scripts/opencodex-claude.sh status",
+        },
+        "ocx:restart": {
+            "description": "Stop the opencodex gateway cleanly and ensure it is healthy again",
+            "run": "scripts/opencodex-claude.sh restart",
+        },
+        "ocx:configure": {
+            "description": "Configure opencodex providers through their own login flows",
+            "run": "scripts/opencodex-claude.sh configure",
+        },
+    }
+    for name, expected in expected_ocx_tasks.items():
+        if tasks.get(name) != expected:
+            result.error(f"mise.toml task {name} must contain only {expected}")
+    if tasks.get("mermaid:provision") != MERMAID_PROVISION_TASK:
+        result.error(f"mise.toml mermaid:provision must contain only {MERMAID_PROVISION_TASK}")
     expected_check = {
         "description": "Run validation, installer tests, lifecycle self-test, and the secrets scan",
         "depends": ["validate", "test", "self-test", "secrets"],
     }
     if tasks.get("check") != expected_check:
         result.error("mise.toml check must contain only its description and exact validate/test/self-test/secrets dependencies")
+    # Provisioning downloads a pinned browser, so wiring either Mermaid task into the gate
+    # would turn a convenience surface into a bootstrap prerequisite and make the verdict
+    # depend on network reachability. The exact-dict check above already rejects that; this
+    # states the boundary where a future edit would look for it.
+    for leaf in expected_check["depends"]:
+        if leaf.startswith("mermaid:"):
+            result.error("mise.toml check must not depend on a Mermaid task: rendering is advisory")
 
     lock_path = root / "mise.lock"
     if not lock_path.is_file():
@@ -1227,6 +1427,7 @@ def validate_mise(root: Path, result: Validation) -> None:
         "lefthook": LEFTHOOK_VERSION,
         "node": NODE_VERSION,
         "bun": BUN_VERSION,
+        MERMAID_NPM_TOOL: MERMAID_NPM_VERSION,
         "ripgrep": RIPGREP_VERSION,
         "fd": FD_VERSION,
         "jq": JQ_VERSION,
@@ -1368,15 +1569,21 @@ def validate_manifests(root: Path, result: Validation) -> None:
 
 
 def validate_policy(root: Path, result: Validation) -> None:
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix not in TEXT_SUFFIXES or ".git" in path.parts:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            continue
-        if path.name != "validate_bundle.py" and SECRET_PATTERN.search(text):
-            result.error(f"possible secret or internal hostname found: {path.relative_to(root)}")
+    # os.walk rather than rglob so provisioned trees are pruned instead of visited: a
+    # provisioned node_modules is tens of thousands of unreviewed files, and scanning it would
+    # make this verdict depend on whether the host has run Mermaid provisioning.
+    for directory, directories, filenames in os.walk(root):
+        directories[:] = [name for name in directories if name not in UNREVIEWED_TREES]
+        for filename in filenames:
+            path = Path(directory) / filename
+            if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if path.name != "validate_bundle.py" and SECRET_PATTERN.search(text):
+                result.error(f"possible secret or internal hostname found: {path.relative_to(root)}")
 
 
 def validate(root: Path) -> Validation:
@@ -1387,6 +1594,8 @@ def validate(root: Path) -> Validation:
     validate_agents(root, result)
     validate_managed_role_contract(root, result)
     validate_role_manifest(root, result)
+    validate_mermaid_renderer(root, result)
+    validate_operator_tools(root, result)
     validate_mise(root, result)
     validate_gate_graph(root, result)
     validate_versions(root, result)

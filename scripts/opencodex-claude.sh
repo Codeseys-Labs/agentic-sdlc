@@ -4,7 +4,7 @@
 #
 # Purpose: run a SECOND Claude Code process pointed at the local opencodex proxy, for
 # non-Anthropic-model work, while the operator's native Claude Code session and config are
-# left untouched. Subcommands: launch | status | restart | configure.
+# left untouched. Subcommands: launch | launch-ultracode | status | restart | configure.
 #
 # ENSURE-UP: `launch` and `restart` own the gateway lifecycle rather than merely attaching.
 # Supervision is DELEGATED to opencodex's own verbs (`ocx ensure` starts-if-down, waits, and
@@ -61,13 +61,16 @@ readiness_poll_seconds=1
 
 usage() {
   cat <<'EOF'
-usage: opencodex-claude.sh <launch|status|restart|configure> [args...]
+usage: opencodex-claude.sh <launch|launch-ultracode|status|restart|configure> [args...]
 
   launch [claude args...]   Ensure the gateway is healthy (start it if down, restart once if
                             half-up), then launch a second Claude Code process through it
                             with an isolated CLAUDE_CONFIG_DIR and no Anthropic subscription
                             credential in scope. Fails closed if the gateway never becomes
                             healthy.
+  launch-ultracode [args...]  Apply the session-only {"ultracode":true} setting, then use the
+                            same fail-closed launch path. This convenience route refuses a
+                            competing --settings argument and permission-bypass flags.
   status                    Supervision view: pid, port, uptime, healthy/down, log location,
                             configured providers, attribution stream. Exit 0 healthy.
   restart                   Stop the gateway cleanly if running, then ensure it is back up
@@ -309,6 +312,30 @@ cmd_launch() {
   ocx claude "$@"
 }
 
+cmd_launch_ultracode() {
+  local argument previous=""
+  for argument in "$@"; do
+    case "$argument" in
+      --settings|--settings=*)
+        printf 'REFUSED: launch-ultracode owns the session --settings value; use ordinary launch for a custom settings document\n' >&2
+        return 3
+        ;;
+      --dangerously-skip-permissions|--permission-mode=bypassPermissions)
+        printf 'REFUSED: launch-ultracode never bypasses permissions; use ordinary launch for an explicitly chosen risk profile\n' >&2
+        return 3
+        ;;
+      bypassPermissions)
+        if [ "$previous" = "--permission-mode" ]; then
+          printf 'REFUSED: launch-ultracode never bypasses permissions; use ordinary launch for an explicitly chosen risk profile\n' >&2
+          return 3
+        fi
+        ;;
+    esac
+    previous="$argument"
+  done
+  cmd_launch --settings '{"ultracode":true}' "$@"
+}
+
 cmd_status() {
   require_ocx
   local json ok pid port uptime
@@ -400,6 +427,7 @@ cmd_configure() {
 
 case "${1:-}" in
   launch) shift; cmd_launch "$@" ;;
+  launch-ultracode) shift; cmd_launch_ultracode "$@" ;;
   status) shift; cmd_status "$@" ;;
   restart) shift; cmd_restart "$@" ;;
   configure) shift; cmd_configure "$@" ;;

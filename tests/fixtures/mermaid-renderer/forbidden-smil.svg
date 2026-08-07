@@ -1,0 +1,1 @@
+<svg xmlns="http://www.w3.org/2000/svg"><rect id="box" width="1" height="1"/><animate href="#box" attributeName="x" to="100"/><set href="#box" attributeName="fill" to="red"/></svg>

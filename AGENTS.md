@@ -55,6 +55,37 @@ as the router.
   internal hostnames. Host-specific detail belongs in per-host manifests or the
   installer.
 
+## Linux Mermaid renderer boundary
+
+Diagram rendering is a Linux x64-only advisory surface, never a bootstrap prerequisite and
+never a gate leaf. `mise run check` must stay green on a host that has never provisioned it:
+`mermaid:provision` and `mermaid:linux-test` are deliberately absent from `check`, from
+`lefthook.yml`, and from CI, and the bounded `tests_linux` suite skips with named reasons when
+the runtime receipt, `bwrap`, or the pinned browser is unavailable. Provisioning downloads a
+pinned browser, so it stays an explicit operator step.
+
+Two limits in `policy/mermaid-renderer-linux-v1.json` are **resource-availability ceilings
+calibrated to the pinned chrome-headless-shell 150.0.7871.24, not output-size controls**, and
+ADR-0006 records their measurement: `max_rss_bytes` is 1,610,612,736 (1.5 GiB) against a
+measured worst-case summed process-tree RSS near 690 MiB, and `max_output_file_bytes` is
+67,108,864 (64 MiB) applied as `RLIMIT_FSIZE`, which the kernel charges against every file the
+sandboxed browser writes — profile, GPU and Dawn caches, fontconfig caches, logs — about 2.5 MB
+of bookkeeping per render. Do not retighten `max_output_file_bytes` toward an SVG-shaped
+number; at 512 KiB the browser dies mid-session as an opaque puppeteer `Connection closed`.
+SVG size is bounded independently by `max_raw_bytes` and `max_final_bytes`, enforced at four
+points across the wrapper and the sanitizer. A browser pin bump re-opens both calibrations:
+re-measure rather than assume. Rendering itself stays advisory and is never a gate leaf, so
+these ceilings govern whether a render can run, never whether any verdict holds.
+
+Callers may invoke only `scripts/render_mermaid_linux.py <definition> <final-svg>`. Direct
+`mmdc`, raw SVG, caller-supplied Mermaid/Puppeteer configs, profiles, cache paths, and launch
+flags are all forbidden: the wrapper owner-generates every config, requires `/usr/bin/bwrap`
+with network denial, and fails closed when provenance or sandbox admission fails. macOS and
+Windows rendering are uncertified — the wrapper returns its explicit unsupported-platform exit
+code rather than claiming renderer support. The validator pins the supply chain by digest
+(`package-lock.json` and `policy/mermaid-renderer-linux-v1.json` bytes, plus the browser
+hashes), so loosening the sanitizer allowlist or the sandbox limits fails the gate.
+
 ## Installing this bundle
 
 mise 2026.4.27+ is the only bootstrap prerequisite; it is the managed-tool bootstrap, not the
@@ -89,6 +120,19 @@ receipt detects ordinary drift, not a same-UID TOCTOU racer. The Seeds lock prov
 version and npm backend, not tarball or transitive dependency integrity. Never accept ambient
 Seeds provenance.
 
+Record is the conductor's queue write and the only mode that mutates a queue. It admits exactly
+two queue verbs and rejects every other form, including any removal, pruning, closing, claiming,
+or syncing shape. It inherits the whole inspect admission and adds two conditions: the caller
+passes `--queue-writer conductor` plus `--expect-queue <sha256>` naming the exact queue it
+classified against, and after the write the launcher re-reads the queue and admits only the
+prestate plus exactly the requested delta. A moved queue, an unrequested field, a rewritten or
+reordered neighbouring record, an added or removed queue file, or a plan transition beyond the
+owning plan's status and timestamp is refused with the divergence named. A prestate the queue
+writer would silently rewrite is refused before the writer starts, and a writer that fails after
+moving the queue is reported as an unknown effect rather than a success or a clean refusal. The
+queue's own lock stays the queue writer's. A verified record is evidence, never authorization for
+push, publication, PR mutation, merge, deployment, or any other outward effect.
+
 Before spawn, the conductor supplies a certified `RuntimeAssignment` with requested
 model/effort/context values; `resolution_state` must be `resolved`. Exact model/effort request
 injection is mandatory and immutable. The requested model tier and the resolved provider/model
@@ -107,7 +151,19 @@ model selection as policy.
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`
 - `bundle:install:all-hosts`, `bundle:status:all-hosts`
+- `operator-tools:install`, `operator-tools:status`, `operator-tools:uninstall`, `operator-tools:self-test`
+- `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
+- `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
 - `research-os:install`, `test`, `self-test`, `secrets`, `check`, `hooks:install`, `setup`
+
+Operator tools are an explicit Unix lifecycle plane, not part of plugin or ordinary bundle
+installation. They install only into an existing user-owned PATH directory and never edit shell
+startup files or PATH. The statusline remains inactive until the operation-specific
+`claude:statusline:activate` command; it owns only `statusLine.type` and `statusLine.command` and
+preserves conflicts. Both anywhere opencodex commands delegate to the canonical supervised
+launcher. `ocx-ultracode` enables session Ultracode without bypassing permissions and refuses
+competing settings or bypass flags. Native Windows statusline/operator-tool activation is not
+certified and fails closed.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim

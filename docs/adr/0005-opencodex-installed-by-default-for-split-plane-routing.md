@@ -86,8 +86,13 @@ only, so a supervision call does mutate shared Codex config.
    regenerated `mise.lock`. It joins the convenience tier: no gate consumes it,
    and its absence degrades developer experience without changing any verdict.
 2. **`scripts/opencodex-claude.sh` is the only supported entry point**, with
-   subcommands `launch`, `status`, `restart`, and `configure` (also wired as the
-   `ocx:launch`, `ocx:status`, `ocx:restart`, `ocx:configure` mise tasks).
+   subcommands `launch`, `launch-ultracode`, `status`, `restart`, and `configure` (also wired
+   as the `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure` mise
+   tasks). The separate, explicit operator-tools lifecycle can install `ocx-launch` and
+   `ocx-ultracode` into an already-on-PATH user bin directory; both are generated delegates
+   to this canonical script, never alternate gateway launchers. The Ultracode route injects
+   only the session setting, does not bypass permissions, and refuses competing settings or
+   bypass flags.
    `launch` runs the gateway-routed Claude Code process under an isolated
    `CLAUDE_CONFIG_DIR` beneath `XDG_STATE_HOME`, so the operator's native
    `~/.claude` session state, roster agents, and model cache are never mutated.

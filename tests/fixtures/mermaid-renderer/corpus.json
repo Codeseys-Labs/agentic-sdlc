@@ -1,0 +1,15 @@
+{
+  "schema_version": "mermaid-renderer-corpus/v1",
+  "fixtures": [
+    {"path": "trusted-flowchart.mmd", "status": "accepted", "policy_family": "mermaid-source"},
+    {"path": "allowed.svg", "status": "accepted", "policy_family": "svg-allowlist"},
+    {"path": "forbidden-active.svg", "status": "rejected", "policy_family": "active-content"},
+    {"path": "forbidden-uri.svg", "status": "rejected", "policy_family": "uri"},
+    {"path": "forbidden-css.svg", "status": "rejected", "policy_family": "css"},
+    {"path": "forbidden-smil.svg", "status": "rejected", "policy_family": "smil"},
+    {"path": "forbidden-foreign-object.svg", "status": "rejected", "policy_family": "html-integration"},
+    {"path": "forbidden-namespace.svg", "status": "rejected", "policy_family": "namespace"},
+    {"path": "forbidden-doctype-entity.svg", "status": "rejected", "policy_family": "xml-declaration"},
+    {"path": "forbidden-malformed.svg", "status": "rejected", "policy_family": "xml-parser"}
+  ]
+}

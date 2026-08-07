@@ -26,6 +26,9 @@ class GateGraphTests(unittest.TestCase):
     TOOLCHAIN_MUTATIONS = (
         ("mise.toml", 'node = "22.22.3"', 'node = "22.22.2"', "mise.toml tools must equal"),
         ("mise.toml", 'bun = "1.3.10"', 'bun = "1.3.9"', "mise.toml tools must equal"),
+        # The renderer's npm identity is pinned separately from node, which bundles 10.9.8.
+        # Drift here silently changes how the M0b node_modules tree is built.
+        ("mise.toml", 'npm = "10.8.1"', 'npm = "10.8.0"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "0.5.14"', 'version = "0.5.13"', "mise.toml tools must equal"),
         ("mise.toml", 'package_manager = "npm"', 'package_manager = "bun"', "npm.package_manager must equal npm"),
         ("mise.toml", 'depends = ["node"]', 'depends = []', "Seeds tool must depend on node"),
@@ -132,6 +135,9 @@ class GateGraphTests(unittest.TestCase):
                 "macos-x64-baseline", "windows-x64", "windows-x64-baseline",
             },
         },
+        # Bare `npm` resolves through the npm backend, so it locks version+backend only,
+        # exactly like the scoped npm pins below.
+        "npm": {"version": "10.8.1", "backend": "npm:npm"},
         "npm:@os-eco/seeds-cli": {"version": "0.5.14", "backend": "npm:@os-eco/seeds-cli"},
         "npm:@mermaid-js/mermaid-cli": {
             "version": "11.16.0",
@@ -153,6 +159,7 @@ class GateGraphTests(unittest.TestCase):
         "github:betterleaks/betterleaks": {"checksum", "url", "url_api"},
     }
     NPM_BACKED_LOCK_TOOLS = {
+        "npm",
         "npm:@os-eco/seeds-cli",
         "npm:@mermaid-js/mermaid-cli",
         "npm:@bitkyc08/opencodex",
@@ -176,6 +183,26 @@ class GateGraphTests(unittest.TestCase):
         # The pinned config is the other half of the same control: pinning only the flag would
         # leave an edit to the file it points at free to disable the default ruleset.
         (".config/betterleaks.toml", "useDefault = true", "useDefault = false", ".config/betterleaks.toml must contain only [extend] useDefault = true"),
+        # Renaming a Mermaid task away is caught: the renderer is advisory, but a task the
+        # validator names must exist, or the M0b entry point is a dangling reference.
+        ("mise.toml", '[tasks."mermaid:linux-test"]', '[tasks."mermaid:missing"]', "mise.toml missing task mermaid:linux-test"),
+        ("mise.toml", '[tasks."mermaid:provision"]', '[tasks."mermaid:setup"]', "mise.toml missing task mermaid:provision"),
+        # Provisioning downloads a pinned browser, so promoting it into the gate would make a
+        # green verdict require network reachability. Wiring it into check must fail.
+        (
+            "mise.toml",
+            'depends = ["validate", "test", "self-test", "secrets"]',
+            'depends = ["validate", "test", "self-test", "secrets", "mermaid:linux-test"]',
+            "check must contain only",
+        ),
+        # The provision task is Linux x64 only: a run_windows variant would advertise a
+        # platform the renderer explicitly refuses with EXIT_UNSUPPORTED.
+        (
+            "mise.toml",
+            'run = "uv run --python 3.12.11 --script scripts/provision_mermaid_linux.py"',
+            'run = "uv run --python 3.12.11 --script scripts/provision_mermaid_linux.py"\nrun_windows = "uv.exe run --python 3.12.11 --script scripts/provision_mermaid_linux.py"',
+            "mermaid:provision must contain only",
+        ),
         ("mise.toml", 'run = "uv run --python 3.12.11 --script scripts/validate_bundle.py"', 'run = "python3 scripts/validate_bundle.py"', "task validate.run must equal"),
         ("mise.toml", 'min_version = "2026.4.27"', 'min_version = "2025.1.0"', "must require mise 2026.4.27"),
         ("scripts/validate-bundle.sh", 'exec mise -C "$root" exec -- uv run --python 3.12.11', "exec python3", "exec-only pinned mise/uv wrapper"),
@@ -196,7 +223,14 @@ class GateGraphTests(unittest.TestCase):
 
     def copied_repo(self, temp: str) -> Path:
         repo = Path(temp) / "repo"
-        shutil.copytree(ROOT, repo, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        # Provisioned trees are excluded so a mutation fixture costs the same on a host that
+        # has run Mermaid provisioning as on one that never has.
+        shutil.copytree(
+            ROOT,
+            repo,
+            symlinks=True,
+            ignore=shutil.ignore_patterns(".git", "node_modules", ".mermaid-runtime", "__pycache__"),
+        )
         return repo
 
     def run_validator(self, repo: Path) -> subprocess.CompletedProcess[str]:
@@ -521,6 +555,29 @@ class GateGraphTests(unittest.TestCase):
         # Every declared leaf must be a real task; a phantom dependency is not a gate.
         for leaf in depends:
             self.assertIn(leaf, config["tasks"])
+
+    def test_mermaid_rendering_is_advisory_and_not_a_gate_leaf(self) -> None:
+        """`mise run check` must stay green on a host that has never provisioned the renderer.
+
+        Provisioning downloads a pinned browser, so any Mermaid leaf in the gate would make a
+        green verdict depend on network reachability and on ~200 MB of unreviewed runtime.
+        """
+        config = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
+        tasks = config["tasks"]
+        for name in ("mermaid:provision", "mermaid:linux-test"):
+            self.assertIn(name, tasks)
+        self.assertNotIn("mermaid:provision", config["tasks"]["check"]["depends"])
+        self.assertNotIn("mermaid:linux-test", config["tasks"]["check"]["depends"])
+        # No gate leaf may reach a Mermaid task transitively either.
+        for leaf in config["tasks"]["check"]["depends"]:
+            self.assertEqual([], [name for name in tasks[leaf].get("depends", []) if name.startswith("mermaid:")])
+        # The renderer's own suite lives outside `tests`, so `mise run test` cannot pull in a
+        # provisioning requirement through unittest discovery.
+        self.assertIn("discover -s tests_linux", tasks["mermaid:linux-test"]["run"])
+        self.assertIn("discover -s tests", tasks["test"]["run"])
+        lefthook = (ROOT / "lefthook.yml").read_text(encoding="utf-8")
+        self.assertNotIn("mermaid", lefthook)
+        self.assertNotIn("mermaid", CI_WORKFLOW.read_text(encoding="utf-8"))
 
     def test_removing_secrets_from_check_is_caught(self) -> None:
         """Mutation negative: the wiring cannot be dropped while the validator stays green."""

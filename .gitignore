@@ -8,6 +8,7 @@ __pycache__/
 .env
 .venv/
 node_modules/
+.mermaid-runtime/
 dist/
 build/
 *.log

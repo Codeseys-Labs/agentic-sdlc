@@ -372,6 +372,10 @@ url = "https://nodejs.org/dist/v22.22.3/node-v22.22.3-win-x64.zip"
 checksum = "sha256:6c8d54f635feff4df76c2ca80f45332eb2ff57d25226edce36592e51a177ee33"
 url = "https://nodejs.org/dist/v22.22.3/node-v22.22.3-win-x64.zip"
 
+[[tools.npm]]
+version = "10.8.1"
+backend = "npm:npm"
+
 [[tools."npm:@bitkyc08/opencodex"]]
 version = "2.10.2"
 backend = "npm:@bitkyc08/opencodex"

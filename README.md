@@ -217,6 +217,10 @@ The public task surface is intentionally small:
 | `bundle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
 | `bundle:status:all-hosts` | Report current-host and native-Windows state when run from WSL. |
 | `research-os:install` | Scaffold the repo-scoped research OS through pinned uv/Python; pass installer arguments after `--`. |
+| `operator-tools:install` / `operator-tools:status` / `operator-tools:uninstall` | Explicitly manage the Unix statusline and anywhere opencodex launch commands in an existing user PATH. |
+| `operator-tools:self-test` | Exercise the operator-command lifecycle in an isolated home. |
+| `claude:statusline:status` / `activate` / `deactivate` | Inspect or explicitly manage only Claude Code's `statusLine` fields. |
+| `ocx:launch` / `ocx:ultracode` | Launch the supervised split plane normally or with session-only Ultracode and ordinary permissions. |
 | `test` | Run the installer test suite. |
 | `self-test` | Exercise install/status/uninstall in an isolated home. |
 | `check` | Run the authoritative validation, tests, and self-test gate. |
@@ -242,6 +246,45 @@ The native Windows path runs the ordinary current-host task; it does not invoke 
 `bundle:install:all-hosts` or `bundle:status:all-hosts` is run from WSL, it runs the WSL
 current-host lifecycle first and then invokes the native Windows mise task. The two host
 summaries remain separate, and the native task's arguments and exit code are preserved.
+
+### Optional statusline and anywhere opencodex commands
+
+The Claude/Codex bundle installer and the plugin do not own shell aliases, PATH, or global
+Claude settings. Installing into a PATH directory is a persistent user-environment mutation and
+requires explicit operation-specific approval for that exact directory; a general install
+approval never covers it. A separate Unix operator-tools plane can then install three executable
+copies into `${XDG_BIN_HOME:-$HOME/.local/bin}`, and only when that physical user-owned
+directory is already on `PATH`:
+
+```bash
+mise run operator-tools:install
+ocx-launch                 # supervised ordinary split-plane launch
+ocx-ultracode              # supervised launch with session Ultracode; no permission bypass
+mise run operator-tools:status
+```
+
+No shell startup file or PATH value is edited. Both launch commands delegate to
+`scripts/opencodex-claude.sh`, so ADR-0005 credential refusal, environment scrubbing, isolated
+Claude config, and identity-checked supervision remain mandatory. `ocx-ultracode` refuses
+competing `--settings` and permission-bypass flags instead of silently copying a dangerous
+alias. Launch/restart still carries opencodex's documented shared `~/.codex` configuration side
+effect.
+
+The packaged statusline is offline, uses approximate built-in model-family prices only for its
+advisory subagent breakdown, and is not activated by installation. Changing global Claude
+settings requires explicit operation-specific approval for that exact settings file:
+
+```bash
+mise run claude:statusline:activate -- --dry-run
+mise run claude:statusline:activate
+mise run claude:statusline:status
+mise run claude:statusline:deactivate
+```
+
+Activation verifies the exact owned executable and mutates only `statusLine.type` and
+`statusLine.command`; unrelated settings are preserved. A foreign statusline or later operator
+edit is preserved and reported as a conflict. This initial surface supports Linux, WSL, and
+macOS; native Windows activation fails with a named unsupported verdict.
 
 ### Safe migration and lifecycle rules
 
