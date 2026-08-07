@@ -198,7 +198,9 @@ error can happen," not "the boundary is exactly here."
   shared checkout, and that directory must no longer exist once the agent finishes. Assert
   the dispatched working directory positively (not merely "not equal to the shared
   checkout" — assert it structurally matches wherever the implementation is documented to
-  place isolated worktrees).
+  place isolated worktrees — for this bundle that is the in-workspace
+  `<repo>/.worktrees/<seed-id>-<slug>/` substrate whose canonical rule lives in
+  `references/seeds-worktrees.md` § Worktree substrate).
 - **No isolation requested, nothing changes.** A call that never asked for isolation must
   dispatch with the caller's own working directory (typically: the dispatch stub receives
   no explicit override at all, i.e. it inherits by omission) — proving the feature is

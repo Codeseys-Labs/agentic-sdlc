@@ -32,6 +32,9 @@ Default behavior is conservative:
 - leave historical docs in place;
 - create a generic OS layer that future agents adapt.
 
+`--target` is required and never defaults to the current directory, so an argument-less run
+refuses instead of scaffolding the whole OS into whatever repo invoked it.
+
 Use `--force` only when intentionally replacing the generated OS files. Use `--dry-run` to preview.
 
 After install, run in the target repo:
@@ -94,7 +97,7 @@ explicitly which parts ship today and which do not:
   one typed `SeedProposal` for conductor triage; it never creates, claims, updates, closes,
   syncs, or dispositions Seeds.
 
-## HyperResearch Doctrine
+## External Research Doctrine
 
 A research run is a cost, so run live external research only when
 external evidence is load-bearing for the decision at hand; otherwise reason from the

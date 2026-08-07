@@ -40,6 +40,9 @@ REQUIRED_TASKS = {
     "claude:statusline:status",
     "claude:statusline:activate",
     "claude:statusline:deactivate",
+    "libraries:list",
+    "libraries:install",
+    "libraries:status",
     "ocx:launch",
     "ocx:ultracode",
     "ocx:status",
@@ -169,6 +172,12 @@ TASK_COMMANDS = {
     "claude:statusline:status": "--script scripts/manage_claude_statusline.py status",
     "claude:statusline:activate": "--script scripts/manage_claude_statusline.py activate",
     "claude:statusline:deactivate": "--script scripts/manage_claude_statusline.py deactivate",
+    # Pinned like the operator-tools rows: same uv entrypoint on both platforms, so the exact
+    # command string is part of the contract. `install` carries no --yes here; the dry run is
+    # the default and the operator supplies --yes as a task argument.
+    "libraries:list": "--script scripts/install_external_libraries.py list",
+    "libraries:install": "--script scripts/install_external_libraries.py install",
+    "libraries:status": "--script scripts/install_external_libraries.py status",
     "mermaid:linux-test": "--with pyyaml==6.0.3 python -m unittest discover -s tests_linux",
     "test": "--with pyyaml==6.0.3 python -m unittest discover -s tests",
     "self-test": "--script scripts/install_skill_bundle.py self-test",
@@ -1556,6 +1565,9 @@ def validate_manifests(root: Path, result: Validation) -> None:
     manifests = (
         ".claude-plugin/plugin.json",
         ".claude-plugin/marketplace.json",
+        # The marketplace entry's source is ./plugin, so this manifest — not the root
+        # one — is what a marketplace install actually reads. It must parse too.
+        "plugin/.claude-plugin/plugin.json",
         ".codex-plugin/plugin.json",
         ".agents/plugins/marketplace.json",
         "gemini-extension.json",

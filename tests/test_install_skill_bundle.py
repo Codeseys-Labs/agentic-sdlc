@@ -2101,6 +2101,52 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(result.messages, ("self-test passed",))
             self.assertFalse(config.home.exists())
 
+    def test_status_on_a_clean_host_names_the_empty_result_and_next_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "all", root / "state"
+            )
+
+            checked = installer.status(config)
+
+            self.assertEqual(checked.exit_code, 0)
+            self.assertEqual(
+                checked.messages[-1],
+                "no owned entries for this host (run: mise run bundle:install)",
+            )
+
+    def test_status_always_ends_with_a_counted_summary_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            self.install_only(config, entry)
+            destination = installer.destination_for(entry, config)
+
+            installed = installer.status(config)
+            installer.remove_path(destination)
+            absent = installer.status(config)
+
+            self.assertEqual(installed.exit_code, 0)
+            self.assertEqual(installed.messages[-1], "1 ok, 0 conflict, 0 absent")
+            self.assertEqual(absent.exit_code, 1)
+            self.assertEqual(absent.messages[-1], "0 ok, 0 conflict, 1 absent")
+
+    def test_status_summary_is_terminal_for_every_counted_shape(self) -> None:
+        self.assertEqual(
+            installer.status_summary({"ok": 0, "conflict": 0, "absent": 0}),
+            "no owned entries for this host (run: mise run bundle:install)",
+        )
+        self.assertEqual(
+            installer.status_summary({"ok": 3, "conflict": 2, "absent": 1}),
+            "3 ok, 2 conflict, 1 absent",
+        )
+
     def make_identity_repo(self, root: Path) -> None:
         (root / "skills" / "agentic-sdlc-orchestrator").mkdir(parents=True)
         (root / "skills" / "agentic-sdlc-orchestrator" / "SKILL.md").write_text(

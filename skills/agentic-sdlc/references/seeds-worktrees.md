@@ -89,13 +89,26 @@ Choose a wave from ready Seeds:
 - If the main checkout is dirty, only inspect it or do narrow safe work there. Use clean worktrees for write-capable workers.
 - Cap parallel worktrees based on repo risk and machine capacity. Three to five is usually enough.
 
-## Worktree Pattern
+## Worktree substrate
 
-Recommended branch naming:
+**Canonical rule, owned here. Every wave worktree lives INSIDE the workspace at
+`<repo>/.worktrees/<seed-id>-<slug>/`, on branch `work/<seed-id>-<slug>`, and `.worktrees/`
+is gitignored end to end. Never a sibling `../<repo>-<something>` directory.**
+
+A colocated, ignored worktree stays inside the workspace root, so it inherits the
+repository's own ignore rules, is excluded by the tree scanners that already skip
+`.worktrees`, and stays inside any sandbox that confines an agent to the project directory. A
+sibling directory escapes all three. Executed confirmation that `git worktree add` works
+normally inside a gitignored path, and that an unignored `.worktrees/` gets staged as an
+embedded repository by `git add -A`, is recorded in `references/worktree-lifecycle.md`
+§ Verified Git facts.
 
 ```bash
-git worktree add ../<repo>-wt-<seed-id> -b work/<seed-id>-<slug>
+git -C <repo> worktree add <repo>/.worktrees/<seed-id>-<slug> -b work/<seed-id>-<slug> <base>
 ```
+
+Pass the target as an absolute path: a relative path resolves against the caller's cwd, so
+the same command run from a subdirectory creates `<repo>/<subdir>/.worktrees/<id>`.
 
 Worker prompt must include:
 
@@ -106,13 +119,10 @@ Worker prompt must include:
 - Explicit instruction to avoid unrelated changes.
 - Artifact path for the worker report.
 
-After worker completion:
-
-1. Inspect `git status --short` and `git diff`.
-2. Run targeted gates in the worktree.
-3. Commit the worktree branch if accepted.
-4. Rebase onto the integration branch.
-5. Squash merge or cherry-pick into the integration branch according to repo policy.
+For the full step-by-step lifecycle — create, gate, review, integrate (which form this repo
+prefers and why), reconcile through the conductor-only record seam, and clean up, each with
+its refusal and recovery case — read `references/worktree-lifecycle.md`. It owns those exact
+commands; do not re-derive them here.
 
 ## Git hygiene while a wave is active
 
@@ -149,9 +159,11 @@ gets its own checkout, never a shared one. A gate writes build output, and plant
 restores fixtures; two gate runs sharing one working tree can overwrite each other's
 compiled output or fixtures without either run detecting it.
 
+After the § Worktree substrate `add` above, share the installed dependency tree instead of
+reinstalling it:
+
 ```sh
-git -C <repo> worktree add <repo>/.worktrees/<id> -b <branch> <base>
-cp -al <repo>/node_modules <repo>/.worktrees/<id>/node_modules
+cp -al <repo>/node_modules <repo>/.worktrees/<seed-id>-<slug>/node_modules
 ```
 
 `cp -al` hardlinks an installed dependency tree into the new worktree instead of

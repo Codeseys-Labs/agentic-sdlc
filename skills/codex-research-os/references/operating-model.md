@@ -66,7 +66,7 @@ Use for existing code, papers, benchmarks, or dossiers:
 8. Run replication and adversarial review.
 9. Update ledgers and next action.
 
-## HyperResearch Doctrine
+## External Research Doctrine
 
 Live external research is a cost. Run it only when external evidence is load-bearing for
 the decision at hand; otherwise reason from the repository, existing ledgers, and prior

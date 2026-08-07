@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agentic-sdlc",
   "description": "Provider-native multi-agent SDLC with Seeds, git worktree waves, and evidence-graded research teams; cmux remains an optional view/event layer for supported hosts",
   "version": "0.7.2",
@@ -6,6 +7,8 @@
     "name": "Baladithya Balamurugan"
   },
   "license": "MIT",
+  "homepage": "https://github.com/Codeseys-Labs/agentic-sdlc",
+  "repository": "https://github.com/Codeseys-Labs/agentic-sdlc",
   "keywords": [
     "sdlc",
     "orchestration",

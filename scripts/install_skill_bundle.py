@@ -2747,6 +2747,13 @@ def install(config: Config) -> Result:
         return _install(config)
 
 
+def status_summary(counts: dict[str, int]) -> str:
+    """Render the terminal status line so status is never silent."""
+    if not any(counts.values()):
+        return "no owned entries for this host (run: mise run bundle:install)"
+    return f"{counts['ok']} ok, {counts['conflict']} conflict, {counts['absent']} absent"
+
+
 def status(config: Config) -> Result:
     """Report ownership and pending recovery health without writing anything."""
     state = load_config_state(config)
@@ -2754,6 +2761,7 @@ def status(config: Config) -> Result:
         return inspect_v1_state(config, state)
     validate_state(config, state)
     messages, partial = recover_transactions(config, state, read_only=True)
+    counts = {"ok": 0, "conflict": 0, "absent": 0}
     for key, record in state["entries"].items():
         if config.agent != "all" and record.get("agent") != config.agent:
             continue
@@ -2762,15 +2770,20 @@ def status(config: Config) -> Result:
         destination = Path(key)
         if not record_authority_matches(key, record, config):
             partial = True
+            counts["conflict"] += 1
             messages.append(f"root/collection conflict: {destination}")
         elif not path_present(destination):
             partial = True
+            counts["absent"] += 1
             messages.append(f"absent: {destination}")
         elif entry_matches_record(destination, record):
+            counts["ok"] += 1
             messages.append(f"ok: {destination}")
         else:
             partial = True
+            counts["conflict"] += 1
             messages.append(f"conflict: {destination}")
+    messages.append(status_summary(counts))
     return Result(1 if partial else 0, tuple(messages))
 
 

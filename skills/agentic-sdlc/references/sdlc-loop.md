@@ -8,8 +8,8 @@ Frame:
 - State the exact done condition.
 - Read repo intent docs, roadmap, ADRs, and current queue state.
 - Decide whether the run is direct, a provider-native delegation, or a worktree wave.
-  discovered capabilities as candidates until required probes, trust, and adapter readback
-  succeed; missing, unpinned, untrusted, or ambiguous capability fails closed.
+  Treat discovered capabilities as candidates until required probes, trust, and adapter
+  readback succeed. Missing, unpinned, untrusted, or ambiguous capability fails closed.
 - Set caps: worker count, worktree count, max review/fix rounds, and stop conditions.
 
 Discover:
@@ -18,7 +18,8 @@ Discover:
 - Persist worker findings under a run directory such as `docs/agentic-runs/<date>-<slug>/`.
 
 Research:
-- Use HyperResearch only when external knowledge is load-bearing.
+- Run external research only when external knowledge is load-bearing: use a deep-research
+  pipeline if the host provides one, otherwise go to primary sources directly.
 - Keep the canonical research query separate from wrapper requirements.
 - Feed the final report path into Plan; do not paste large reports into prompts.
 

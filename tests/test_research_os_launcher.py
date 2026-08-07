@@ -220,6 +220,17 @@ class ResearchOSLauncherTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--target", result.stdout)
+        self.assertIn("required", result.stdout)
+
+    def test_pinned_research_installer_task_refuses_an_implicit_target(self) -> None:
+        result = subprocess.run(
+            ["mise", "-C", str(SCRIPT.parents[3]), "run", "research-os:install"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--target", result.stderr)
 
     def test_research_os_installer_is_standalone_with_packaged_policy_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -163,6 +163,25 @@ description = "Exercise operator command lifecycle in an isolated home"
 run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py self-test"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py self-test"
 
+# Opt-in third-party skill library installs (docs/adr/0009). Explicit and separate from
+# `bundle:install`: no task here is a dependency of `setup`, `check`, or any gate leaf, and
+# `install` refuses without an explicitly named library. Front doors are each library's own
+# installer, so no bytes enter this repository and no bootstrap prerequisite is added.
+[tasks."libraries:list"]
+description = "List installable external skill libraries, their front doors, and their surface cost"
+run = "uv run --python 3.12.11 --script scripts/install_external_libraries.py list"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_external_libraries.py list"
+
+[tasks."libraries:install"]
+description = "Install explicitly named external skill libraries through their own front doors (dry run without --yes)"
+run = "uv run --python 3.12.11 --script scripts/install_external_libraries.py install"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_external_libraries.py install"
+
+[tasks."libraries:status"]
+description = "Report which external skill libraries are already present in this home"
+run = "uv run --python 3.12.11 --script scripts/install_external_libraries.py status"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_external_libraries.py status"
+
 [tasks."claude:statusline:status"]
 description = "Inspect the optional managed Claude Code statusline"
 run = "uv run --python 3.12.11 --script scripts/manage_claude_statusline.py status"

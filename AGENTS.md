@@ -7,6 +7,16 @@ as the router.
 
 ## What this bundle provides
 
+This bundle installs only its own skills, agents, and commands. **No task, installer path,
+hook, or command in it fetches, renders, or installs a third-party skill library** —
+hyperresearch, ECC (`affaan-m/ECC`), `mattpocock/skills`, or any other named library is the
+operator's own install through that library's own front door, and this bundle's installer
+preserves those foreign entries rather than competing with them, so both coexist safely.
+Foreign ideas enter only as an adapted `references/*.md` with a root `NOTICE` donor entry,
+re-expressed rather than copied. See
+`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md` and
+`skills/agentic-sdlc/references/skill-authoring.md`.
+
 - `skills/agentic-sdlc/` — the flagship skill: provider-native,
   project-scale agentic SDLC with Seeds, git worktree waves, mission/backlog-zero
   doctrine, tiered orchestration, and evidence-graded research teams. Roles and verdicts
@@ -88,17 +98,26 @@ hashes), so loosening the sanitizer allowlist or the sandbox limits fails the ga
 
 ## Installing this bundle
 
-mise 2026.4.27+ is the only bootstrap prerequisite; it is the managed-tool bootstrap, not the
+mise 2026.4.27+ is the only bootstrap prerequisite. It is the managed-tool bootstrap, not the
 sole readiness prerequisite. It pins uv, consumes the checked-in cross-platform `mise.lock`, and
 uv supplies Python 3.12.11 for all authoritative Python entrypoints. Git, a verified Seeds
 distribution, supported trust behavior, repository gates, and any selected adapter remain
-runtime-readiness capabilities, not additional bootstrap prerequisites; missing, unpinned,
-untrusted, or ambiguous capability means not Git-ready. Trust is scoped to each
+runtime-readiness capabilities, not additional bootstrap prerequisites. Missing, unpinned,
+untrusted, or ambiguous capability means the checkout is not Git-ready. Trust is scoped to each
 absolute config path: every linked worktree must review and trust its own `mise.toml`, and
 `MISE_PARANOID=1` fails closed until that explicit trust step. Persistent `mise trust`,
 Codex/global config, shell-alias, and credential mutations each require explicit
-operation-specific user approval; process-scoped `mise --no-config` test execution is allowed
+operation-specific user approval. Process-scoped `mise --no-config` test execution is allowed
 without persisting trust. Never make permanent Windows environment/trust/config changes.
+
+From a clean clone the order is: clone, review `mise.toml` and `mise.lock`, obtain explicit
+operation-specific approval and run `mise trust ./mise.toml` for that exact reviewed config path,
+`mise --locked install`, then `mise run bundle:install`. Without the trust step every later `mise`
+command in the repository exits with `config files are not trusted`. Resolving the lock downloads
+roughly 1.3 GB across the 13 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
+so skipping the explicit install step does not avoid the cost — the first `mise run <task>`
+installs all 13 without prompting. `mise run check` then takes about 7 minutes and ran 572 tests
+as last measured; the count grows with the suite, and the gate's verdict is the evidence.
 
 To acquire Seeds from an exact clean Git distribution root, run the installed flagship
 `tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.22.3.
@@ -136,14 +155,14 @@ push, publication, PR mutation, merge, deployment, or any other outward effect.
 Before spawn, the conductor supplies a certified `RuntimeAssignment` with requested
 model/effort/context values; `resolution_state` must be `resolved`. Exact model/effort request
 injection is mandatory and immutable. The requested model tier and the resolved provider/model
-are separate facts: requested model selection is recorded as resolved, inherited, or unresolved,
+are separate facts. Requested model selection is recorded as resolved, inherited, or unresolved,
 and it is never proof. `resolved_provider` and `resolved_model_id` require verified model
-identity; an independently observed provider/model source may be unavailable only for an
+identity. An independently observed provider/model source may be unavailable only for an
 unambiguous exact-ID mapping backed by immutable request/model evidence, and resolved is recorded
 only after adapter readback. Effective effort/context readback may be honestly unavailable, and
 requested values never become readback. Requested, inherited, unresolved, or incomplete
 assignments stop before dispatch and therefore stop before spawn. The selected host or launcher
-must inject the exact requested model and effort; if it cannot inject both, return one
+must inject the exact requested model and effort. If it cannot inject both, return one
 SeedProposal, not a dispatch. Prompt prose does not enforce a Codex model or effort.
 Provider-neutral roles contain no static model or effort pin and never recommend host-default
 model selection as policy.
@@ -154,7 +173,15 @@ model selection as policy.
 - `operator-tools:install`, `operator-tools:status`, `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
-- `research-os:install`, `test`, `self-test`, `secrets`, `check`, `hooks:install`, `setup`
+- `muse:launch`, `muse:status`, `muse:probe` — the Muse Spark fallback direct route; the primary
+  route stays `ocx:launch`
+- `mermaid:provision`, `mermaid:linux-test` — explicit Linux x64 renderer steps, never gate leaves
+- `research-os:install` (`--target` required, no implicit current-directory scaffold), `validate`,
+  `test`, `self-test`, `secrets`, `check`, `hooks:install`, `setup`
+
+That list is every task `mise tasks` reports. `mise run bundle:status` always ends with one
+terminal line — either `no owned entries for this host` or an `N ok, M conflict, K absent`
+summary — so a silent exit 0 is a defect, not a clean host.
 
 Operator tools are an explicit Unix lifecycle plane, not part of plugin or ordinary bundle
 installation. They install only into an existing user-owned PATH directory and never edit shell

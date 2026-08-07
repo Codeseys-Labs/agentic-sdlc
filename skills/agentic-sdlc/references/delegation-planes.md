@@ -50,7 +50,10 @@ needs, (c) lifetime beyond the conversation, (d) engine mixing.
   reviewer/critic labels are advisory; they do not authorize outward effects. Humans alone
   authorize push, publication, PR mutation, merge, deployment, credential, and evidence-store
   operations.
-- Write-capable workers get their own worktree; read-only workers can share.
+- Write-capable workers get their own worktree; read-only workers can share. The substrate is
+  in-workspace `<repo>/.worktrees/<seed-id>-<slug>/` — the canonical rule lives in
+  `references/seeds-worktrees.md` § Worktree substrate and the step-by-step lifecycle in
+  `references/worktree-lifecycle.md`; do not improvise a location or a cleanup sequence here.
 - Long-running: use the selected host's native background/persistent mechanism plus
   artifact files. Never hold a blocking call open for hours.
 - Results land in FILES at assigned artifact paths; chat summaries are hints, not evidence.

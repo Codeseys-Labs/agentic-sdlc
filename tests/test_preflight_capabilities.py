@@ -1667,6 +1667,12 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             / "references"
             / "seeds-worktrees.md"
         ).read_text()
+        # These assertions pin DOCTRINE PHRASES, not layout. Matching raw text made a line
+        # rewrap look like a doctrine deletion: a prose pass split "same-UID TOCTOU" across a
+        # newline and the gate went red while the claim was still fully present. Collapsing
+        # whitespace keeps the pin on the words, which is the thing worth defending.
+        skill = " ".join(skill.split())
+        reference = " ".join(reference.split())
         for content in (skill, reference):
             self.assertIn("mise --locked install", content)
             self.assertIn("same-UID TOCTOU", content)

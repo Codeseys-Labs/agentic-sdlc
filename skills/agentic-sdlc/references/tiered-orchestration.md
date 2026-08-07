@@ -65,6 +65,9 @@ Use provider-native roles, subagents, workflows, teams, or background tasks for 
 work after capability, trust, and transport certification. Use an optional view/event adapter
 only when it is already active and never as a load-bearing requirement. Write-capable workers
 use separate worktrees; read-only workers can share. Keep results in assigned artifact files.
+Worktree location and lifecycle are not decided here: `references/seeds-worktrees.md`
+§ Worktree substrate owns the in-workspace `.worktrees/<seed-id>-<slug>/` rule and
+`references/worktree-lifecycle.md` owns the create-through-clean-up commands.
 
 ## Bounded backflow
 

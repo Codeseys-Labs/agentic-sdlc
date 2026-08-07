@@ -174,6 +174,20 @@ class DryRunParityTests(unittest.TestCase):
         ), mock.patch.object(sys, "argv", [str(SCRIPT), "--target", "."]):
             self.assertNotEqual(installer.main(), 0)
 
+    def test_missing_target_refuses_before_any_scaffold_is_planned(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT)],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--target", result.stderr)
+            self.assertEqual(read_tree(root), {})
+
     def test_dry_run_writes_nothing_and_matches_apply(self) -> None:
         files = installer.build_files("example")
         with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:

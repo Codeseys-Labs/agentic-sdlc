@@ -31,6 +31,8 @@ Each row names the single site that OWNS the rule. Read the rule there; do not r
 | Change-flow rule | Authoritative site |
 |---|---|
 | One-writer ownership per layer/branch | `skills/stacked-prs/SKILL.md` § Stacked pull requests (intro + Normal shape) |
+| Worktree substrate (in-workspace `.worktrees/<seed-id>-<slug>/`, never a sibling) | `skills/agentic-sdlc/references/seeds-worktrees.md` § Worktree substrate |
+| Worktree lifecycle steps + per-step refusal/recovery (create, gate, review, integrate, reconcile, clean up) | `skills/agentic-sdlc/references/worktree-lifecycle.md` |
 | Boundary snapshot (branch, tip, PR#, base/head, remote OID) | `skills/stacked-prs/SKILL.md` § Safety doctrine; mechanics form in `skills/stacked-prs-gh-cli/SKILL.md` § Create and record boundaries |
 | Recovery refs / pre-op tags (pre-squash tag, reset to prev-main) | `skills/agentic-sdlc/references/worktree-integration.md` § Hazard 3 + § Squash-scope discipline |
 | Rebase boundary (replays only the child) | `skills/stacked-prs/SKILL.md` § Safety doctrine; mechanics in `skills/stacked-prs-gh-cli/SKILL.md` § Parent merge, abandonment, or rename |

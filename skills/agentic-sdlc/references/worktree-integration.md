@@ -5,6 +5,12 @@ onto a shared branch — the fan-in step after an Act wave. Four hazards, all ob
 plus the squash-scope discipline. Skipping these produces merges that LOOK clean and are
 wrong.
 
+Scope: this file owns the fan-in hazards only. Worktree location, creation, gating, queue
+reconciliation, and cleanup belong to `references/seeds-worktrees.md` § Worktree substrate
+(the canonical in-workspace `<repo>/.worktrees/<seed-id>-<slug>/` rule) and
+`references/worktree-lifecycle.md` (the per-step commands, refusals, and recoveries, whose
+integrate step defers to the hazards below).
+
 ## Hazard 1 — validate footprint against the MERGE-BASE, not the other HEAD
 
 A worktree usually branches from an older base than current `main` (housekeeping lands
@@ -21,9 +27,9 @@ git diff --name-only "$MB..$BRANCH" | grep -v '^expected/scope/'   # out-of-scop
 
 ## Hazard 2 — deliverables split across worktrees with a PLACEHOLDER trap
 
-A plan may put real handlers in wt-A/B/C and the WIRING (plus deliberate loud-stub copies
-of those handlers) in wt-D. Blind `git merge wt-D` ships the DEAD STUBS. This is assembly,
-not merge:
+A plan may put real handlers in the worktrees for Seeds A/B/C and the WIRING (plus deliberate
+loud-stub copies of those handlers) in Seed D's worktree. Blind `git merge work/<D>-<slug>`
+ships the DEAD STUBS. This is assembly, not merge:
 
 1. Read the plan/conductor's verdict first — it declares the topology.
 2. Copy REAL artifacts from their owning worktrees; WIRING from the wiring worktree;

@@ -5,76 +5,85 @@ description: This skill should be used when the user asks to frame, plan, execut
 
 # Agentic SDLC Orchestrator
 
-Use this skill to run a repeatable, project-generic implementation loop. The skill is
-policy and coordination guidance, not an actor, credential, permission grant, evidence
-store, Git executor, or validator:
+Use this skill to run a repeatable, project-generic implementation loop. The skill gives
+policy and coordination guidance only. It is not:
+
+- an actor
+- a credential
+- a permission grant
+- an evidence store
+- a Git executor
+- a validator
 
 `Agent entrypoint -> provider-native delegation (or direct execution) -> Seeds queue -> worktrees -> tests/review -> squash/rebase -> PR`
 
-Roles submit findings or candidate changes. Reviewer and critic labels are recommendations;
-they never authorize an outward effect. One macro conductor records evidence and keeps the
-queue; only the integrator may execute an already authorized fan-in mutation, and the
+Roles submit findings or candidate changes. Reviewer and critic labels are recommendations.
+They never authorize an outward effect. One macro conductor records evidence and keeps the
+queue. Only the integrator may execute an already authorized fan-in mutation. The
 integrator never acquires the user's authority.
 
-Keep the active host session as the macro conductor and use its native delegation tools by
-default. The full Frame -> Ship loop is available only after required Git, Seeds, gate,
+Keep the active host session as the macro conductor. Use its native delegation tools by
+default. The full Frame -> Ship loop is available only after the required Git, Seeds, gate,
 trust, and selected-adapter capabilities are probed and verified. Missing, unpinned,
-untrusted, or ambiguous required capability fails closed. Add cmux only when it is already active and useful for visibility or event messaging. Never
-install, start, or enable cmux or tmux merely to run this skill. Use Seeds as the
-queue of record. Global bundle distribution is a separate lifecycle plane from
-per-project activation: activate a repository through the `/sdlc-init` runbook (or the
-same intent on a non-Claude host) — reviewed tracked Git baseline, Seeds, pinned gates,
-trust, and shared AGENTS.md guidance — before the first Frame or Wave.
-Mise is the only bootstrap prerequisite: from a reviewed distribution checkout, run the installed
+untrusted, or ambiguous required capability fails closed. Add cmux only when it is already
+active and useful for visibility or event messaging. Never install, start, or enable cmux or
+tmux merely to run this skill. Use Seeds as the queue of record.
+
+Global bundle distribution is a separate lifecycle plane from per-project activation.
+Activate a repository through the `/sdlc-init` runbook (or the same intent on a non-Claude
+host) before the first Frame or Wave. Activation establishes a reviewed tracked Git
+baseline, Seeds, pinned gates, trust, and shared AGENTS.md guidance.
+Mise is the only bootstrap prerequisite. From a reviewed distribution checkout, run the installed
 flagship tool `seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node
-`22.22.3`. Bootstrap requires an exact clean Git distribution root: it rejects any nested checkout
-path or distribution whose tracked, staged, untracked, or ignored content differs from the exact
-`HEAD` tree. Bootstrap alone runs the
-reviewed `mise --locked install` with only that root `mise.toml`/adjacent lock, fresh private
-mise data/cache/home, fixed official npm registry, distinct empty npmrc files, and hooks/config
-environment disabled; ambient HOME, npmrc/registry, and mise config/data/cache cannot select
-acquisition. It then resolves exact config-free roots and atomically publishes an active tuple
-receipt. It verifies the executing Node and recorded Node are exactly `22.22.3`, Bun `1.3.10`,
-the exact `@os-eco/seeds-cli@0.5.14` package/bin/layout, permits only the real package's benign
-string `engines.bun` compatibility declaration, rejects actual Bun/config/TypeScript/macro/preload
-controls, and records a trusted empty Bun configuration, the exact Git root/commit/tree plus
+`22.22.3`. Bootstrap requires an exact clean Git distribution root. It rejects any nested checkout
+path. It also rejects a distribution whose tracked, staged, untracked, or ignored content differs
+from the exact `HEAD` tree. Bootstrap alone runs the reviewed `mise --locked install`. That install
+uses only the root `mise.toml`/adjacent lock, a fresh private mise data/cache/home, the fixed
+official npm registry, distinct empty npmrc files, and a disabled hooks/config environment. Ambient
+HOME, npmrc/registry, and mise config/data/cache cannot select acquisition. Bootstrap then resolves
+exact config-free roots and atomically publishes an active tuple receipt. It verifies the executing
+Node and the recorded Node are exactly `22.22.3`, and Bun is exactly `1.3.10`, and the package/bin
+layout matches exact `@os-eco/seeds-cli@0.5.14`. It permits only the real package's benign string
+`engines.bun` compatibility declaration; it rejects actual Bun/config/TypeScript/macro/preload
+controls. It records a trusted empty Bun configuration, the exact Git root/commit/tree plus
 `mise.toml`/`mise.lock`, and typed tree/file hashes. It retains the preceding receipt for explicit
 rollback. The receipt establishes an execution integrity boundary against ordinary accidental
-drift, not tarball/transitive authenticity and not a same-UID TOCTOU attacker racing verification
-and execution. npm version/backend and a lock do not authenticate a tarball or its transitives.
+drift. It does not establish tarball/transitive authenticity. It does not stop a
+same-UID TOCTOU attacker that races verification against execution. An npm version, a backend,
+and a lock do not authenticate a tarball or its transitive dependencies.
 
 After an explicit successful bootstrap, `Seeds(<target>, <args...>)` is implemented by
 `seeds-launcher.mjs inspect --target <target> <args...>` under the exact recorded and currently
 executing Node `22.22.3`.
-`inspect` never installs, invokes mise, networks, discovers replacement tooling, repairs state,
-or accepts ambient provenance. It loads and validates only the active receipt and recorded
-current hashes, accepts only `--version`, `prime`, `ready [--format json]`, and
+`inspect` never installs, invokes mise, or networks. It never discovers replacement tooling,
+repairs state, or accepts ambient provenance. It loads and validates only the active receipt and
+the recorded current hashes. It accepts only `--version`, `prime`, `ready [--format json]`, and
 `blocked [--format json]`, and rejects every other form before Bun starts. Node has `shell:false`
 and invokes the exact recorded absolute Bun/entry pair with `--config=<trusted-file>`,
-`--no-env-file`, and `--no-install`; the child gets only a short environment allowlist. Its PATH
-is only the separately resolved and recorded Git directory, with portable system/global Git config
-isolation. Target `bunfig`, `.env`, package config, ambient `BUN_*`, `NODE_OPTIONS`, npm/mise
-overrides, and unreviewed Seeds debug variables have no execution effect.
+`--no-env-file`, and `--no-install`. The child process gets only a short environment allowlist.
+Its PATH holds only the separately resolved and recorded Git directory, with portable
+system/global Git config isolation. Target `bunfig`, `.env`, package config, ambient `BUN_*`,
+`NODE_OPTIONS`, npm/mise overrides, and unreviewed Seeds debug variables have no execution effect.
 
 The conductor's durable queue write is `seeds-launcher.mjs record --target <target>
---queue-writer conductor --expect-queue <sha256> <verb> ...`, which admits exactly two queue
+--queue-writer conductor --expect-queue <sha256> <verb> ...`. It admits exactly two queue
 verbs and nothing else — no removal, pruning, closing, claiming, or syncing form is accepted.
 It reuses the whole `inspect` admission (same active receipt, same current-hash checks, same
 exact absolute Bun/entry pair, same environment allowlist) and adds a compare-and-swap plus a
-readback. The caller must name the exact queue digest it classified against; a queue that moved
-is refused with both digests named. After the write the launcher re-reads the queue and verifies
-the post-state is the prestate plus exactly the requested delta, refusing while naming any
-divergence — an unrequested field, a rewritten or reordered neighbouring record, an added or
+readback. The caller must name the exact queue digest it classified against. A queue that moved
+is refused with both digests named. After the write, the launcher re-reads the queue and verifies
+that the post-state equals the prestate plus exactly the requested delta. It refuses while naming
+any divergence: an unrequested field, a rewritten or reordered neighbouring record, an added or
 removed queue file, or a plan transition outside the owning plan's status and timestamp. A
 prestate the queue writer would silently rewrite (malformed, duplicated, or non-canonical
 records) is refused before the writer starts. The explicit `--queue-writer conductor`
 acknowledgement keeps the seam from becoming generally writable. The queue's own lock stays the
-queue writer's; the seam adds none. A verified record is the conductor's own evidence and
+queue writer's; the seam adds none. A verified record is the conductor's own evidence. It
 authorizes no push, PR, merge, deployment, or other outward effect.
 
 ## Repo Location
 
-This skill is maintained in a private repository; the clone location varies
+This skill is maintained in a private repository. The checkout location varies
 per machine. Locate the checkout by searching for this skill's directory
 (`skills/agentic-sdlc/`) rather than assuming a fixed path or forge name.
 
@@ -128,7 +137,8 @@ Use this phase order unless the task is clearly smaller:
 
 1. Frame: define done, constraints, repo state, queue state, and allowed blast radius.
 2. Discover: assign read-only workers across code areas. Require file/line evidence.
-3. Research: use HyperResearch only for external or load-bearing unknowns.
+3. Research: only for external or load-bearing unknowns — a deep-research pipeline if the
+   host provides one, otherwise primary sources directly.
 4. Plan: emit workstreams, dependencies, worktree strategy, gates, rollback, and Seeds updates.
 5. Act: launch workers in separate worktrees for independent workstreams.
 6. Review: review stable branch/worktree snapshots, not only worker summaries.
@@ -173,7 +183,14 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 Read only what is needed:
 
 - `references/sdlc-loop.md`: phase gates, backflow, done criteria.
-- `references/seeds-worktrees.md`: Seeds queue, worktree wave, squash/rebase, PR handling.
+- `references/seeds-worktrees.md`: Seeds queue, worktree wave, squash/rebase, PR handling, and
+  the canonical in-workspace `.worktrees/<seed-id>-<slug>/` substrate rule.
+- `references/worktree-lifecycle.md`: one wave worktree end to end with the refusal and
+  recovery case for every step — create (one writer, path-before-branch guard), gate inside
+  the worktree, review from a snapshot, integrate (why this repo prefers squash), reconcile
+  through the conductor-only record seam, and clean up (`remove`/`prune`/branch deletion,
+  dirty and unmerged cases). Carries the executed Git facts and the harness-worktree
+  interaction.
 - `references/cmux-integration.md`: optional cmux view/event integration. Load only when cmux is already active or explicitly requested.
 - `references/delegation-planes.md`: native per-provider decision matrices, cost ladder, and write-conflict rules.
 - `references/worktree-integration.md`: fan-in hazards — merge-base footprint (not HEAD diff), placeholder-trap assembly, re-gate-on-main (worktree-green ≠ main-green), clean 3-way apply ≠ semantic correctness, squash-scope discipline.
@@ -194,9 +211,11 @@ Read only what is needed:
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
   alternate VCS substrate is activated by this bundle.
 - `references/skill-authoring.md`: admission floor, the four-gate test, the ≥2-of-5
-  promotion test, and retire-by-redirect for deciding whether a candidate earns its own
-  `SKILL.md` versus a section of an existing skill or a `references/*.md` file. Read
-  before adding, revising, or retiring any skill in this bundle.
+  promotion test, the foreign-skill-library rule (this bundle ships only its own skills and
+  never fetches a third-party library), and retire-by-redirect for deciding whether a
+  candidate earns its own `SKILL.md` versus a section of an existing skill or a
+  `references/*.md` file. Read before adding, revising, or retiring any skill in this
+  bundle.
 - `references/worktree-failclosed-tests.md`: a language-agnostic test-design contract for
   fail-closed worktree isolation — planted-violation cases (occupied branch, non-git cwd,
   throwing observer, mid-flight abort, timeout), redaction and start/end pair-completeness

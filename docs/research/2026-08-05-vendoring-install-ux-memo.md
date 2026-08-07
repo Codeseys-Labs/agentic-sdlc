@@ -1,5 +1,50 @@
 # Vendoring + Install-UX Synthesis Memo
 
+> **CORRECTION, 2026-08-07 — this memo's LICENSE/NOTICE prerequisite is SATISFIED. Do not
+> re-derive it as a blocker.** §4's "License — blocks backlog #7–#10, #13 today" and the
+> 2026-08-06 banner's closing "Still true: this repo has no `LICENSE`/`NOTICE` and declares
+> `"license": "UNLICENSED"`" are both now stale. Verified in this working tree:
+>
+> - A root **`LICENSE`** (MIT) and a root **`NOTICE`** (343 lines, a per-donor provenance
+>   register with a re-resolved commit, the grant reproduced where required, the origin
+>   question answered separately from the licence question, and a what-is / what-is-not-derived
+>   pair per donor) both exist.
+> - **`.claude-plugin/plugin.json:8` now declares `"license": "MIT"`**, not `UNLICENSED`.
+> - `NOTICE` carries its own **"Adding a donor to this file"** checklist, so the attribution
+>   surface this memo asked for is not just present but has a documented entry procedure.
+> - The decision behind it is recorded at
+>   `docs/adr/0001-mit-license-and-root-notice-attribution.md`, which cites this memo's §4 as
+>   the finding that forced it.
+>
+> Two naming/scope notes for anyone diffing this memo against the tree: the file landed as
+> **`NOTICE`**, not as the `THIRD-PARTY-NOTICES.md` this memo named, and the register is
+> currently **intra-family only** — it records pi-lab-family donors, and no third-party donor
+> entry exists yet. The prerequisite is satisfied; it has simply never been exercised on a
+> third-party donor.
+>
+> **Commit provenance, stated honestly.** The landing commit was reported to this pass as
+> `01e1437`; that object does **not** resolve in this checkout (`git cat-file -t 01e1437` →
+> "Not a valid object name"), and no sibling checkout or worktree resolves it either. In this
+> repository's history the landing commit is **`043bd42`** — *"docs: add MIT LICENSE, NOTICE
+> provenance register, and the first four ADRs"* — whose message states plainly that
+> "plugin.json licence field corrected from UNLICENSED". Treat `01e1437` as a hash from a
+> different (probably rebased) commit line for the same change, and cite `043bd42` when
+> working from this checkout.
+>
+> **What this does NOT unblock.** The prerequisite being satisfied does not make this memo's
+> vendoring backlog live. `docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md`
+> decides the general question separately and on three grounds that have nothing to do with
+> licensing: the four-gate proportionality test, ADR-0002's single-bootstrap-prerequisite rule,
+> and the mechanical name-collision fact. A library the operator wants is the operator's own
+> install; foreign material enters only as an adapted `references/*.md` plus a `NOTICE` donor
+> entry. Read that record before reviving any row in §1's table.
+>
+> One more §4 blocker is also closed, recorded here for the same reason: **"Gate gap: skills
+> are not model-pin-checked"** no longer holds. `validate_skills` in
+> `scripts/validate_bundle.py` now parses skill frontmatter semantically and errors with
+> `static model is forbidden` / `static model_reasoning_effort is forbidden`, matching what
+> `validate_agents` already did for agent files.
+
 > **CORRECTION, 2026-08-06 — the ECC licensing blocker in this memo is WRONG.** The later
 > restructure judge concluded "ECC: no resolvable license on any candidate repo. Not
 > redistributable. USER DECISION, blocking." pi-lab had already resolved this in

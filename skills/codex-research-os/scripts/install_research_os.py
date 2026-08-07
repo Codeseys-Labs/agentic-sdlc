@@ -2841,7 +2841,10 @@ def apply_install(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Install a Codex-native research OS scaffold into a repository.")
-    parser.add_argument("--target", default=".", help="Target repository root.")
+    # Required, never defaulted to the current directory: a no-argument run once scaffolded the
+    # whole research OS into the invoking repository. The target root is an explicit operator
+    # choice, so the missing argument fails before any path is resolved.
+    parser.add_argument("--target", required=True, help="Target repository root (required).")
     parser.add_argument("--project-name", default=None, help="Human-readable project name.")
     parser.add_argument("--force", action="store_true", help="Re-copy owned but modified files back to canonical.")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing.")

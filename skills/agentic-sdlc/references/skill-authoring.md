@@ -126,7 +126,51 @@ Clearing one of the five is a preference. Clearing two or more is the argument t
 justifies the heavier form — write which two (or more), explicitly, in the change that
 adds the skill, so a later reviewer can check the argument rather than re-deriving it.
 
-## 4. Retire by redirect, never by deletion
+## 4. Foreign skill libraries are the operator's own install
+
+**Rule. This bundle ships only its own skills, agents, and commands. No task, installer
+path, hook, or command in it fetches, renders, or installs a third-party skill library.**
+A library the operator wants is installed by the operator, through that library's own
+front door, and this bundle's installer preserves those foreign entries rather than
+competing with them — an entry the installer does not own is classified `foreign` and left
+alone.
+
+Foreign material enters this repository by exactly one path: an **adapted
+`references/*.md` file with a donor entry added to the root `NOTICE` in the same change**.
+Ideas are re-expressed in this bundle's own prose and vocabulary; bytes are not copied. A
+near-verbatim copy is not an adaptation and this path does not admit it. Follow `NOTICE`'s
+own "Adding a donor to this file" checklist, and repeat the provenance statement in a
+header inside the derived file.
+
+Three independent reasons, each sufficient on its own:
+
+1. **Section 3's gates fail at scale.** Gate 2 (proportionality) is the binding one: a
+   catalog of a few hundred foreign entries against this bundle's own handful is a
+   catastrophic selection-surface failure, buying an enormous multiplication of what a
+   selector must reason over in exchange for a firing rate nobody has measured. Gate 3
+   (trigger existence today) disposes of the remainder, and Gate 1 cannot even be
+   attempted for a bulk import — no bulk description names its nearest neighbor.
+2. **Every front door those libraries ship would add a second bootstrap prerequisite or
+   break lock doctrine.** A second package manager, a network credential at install time,
+   or a pin form that cannot carry a per-platform checksum are all forbidden; `AGENTS.md`
+   and `docs/adr/0002-mise-is-the-single-front-door.md` own that rule.
+3. **Name collision is mechanical and silent.** A library's own installer often already
+   occupies its skill names in the operator's home. Vendoring one of those names under its
+   upstream form hard-blocks this bundle's own install of that entry — the installer
+   preserves the non-owned entry, which is correct, and ours never lands. The operator
+   sees no error; the skill simply is not the one this bundle wrote.
+
+If a genuinely new, non-colliding, freestanding capability ever clears Section 3 on its
+own merits, it lands under a project-scoped name (`skills/sdlc-<capability>/` or another
+short project prefix), never under an upstream author's bare name. Clearing the gates is
+the requirement; the prefix is only the naming rule that applies afterward.
+
+The decision and its evidence live in
+`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md`, including
+the named libraries and their verified licence, version, and collision facts. Cite it
+rather than re-deriving the answer.
+
+## 5. Retire by redirect, never by deletion
 
 **Rule. A retired skill keeps its directory and its trigger surface, and spends its
 description routing away from itself, toward its replacement.**
@@ -150,11 +194,12 @@ Three obligations travel with a redirect:
    behind a retirement notice is the same failure as a stale pointer left behind a
    deletion, just quieter.
 
-## 5. What this reference does not do
+## 6. What this reference does not do
 
 - It does not enforce anything beyond Section 1's mechanical floor, which `mise run
-  check` already covers. Sections 2 through 4 are judgement calls for a human reviewer or
-  an integrator to weigh, not gate leaves.
+  check` already covers. Sections 2 through 5 are judgement calls for a human reviewer or
+  an integrator to weigh, not gate leaves — including Section 4, whose rule is enforced at
+  review rather than by any check.
 - It does not publish a corpus-wide description-byte budget for this bundle. If that
   number matters for a decision, measure it against the current tree at decision time
   rather than reusing a number written in this file — any such figure goes stale the
