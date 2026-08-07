@@ -62,6 +62,38 @@ EFFECTIVE_DIVERGENCE_FIELDS = {
     "effort": "effort_effective_divergence",
     "context": "context_effective_divergence",
 }
+# Where an independent model-identity observation came from. Naming the source is required
+# because "independent readback" is a claim about provenance, and an unnamed provenance is not
+# evidence. A gateway's response `model` field is refused outright rather than merely graded: it
+# echoes the caller's own request string, so a caller-chosen alias comes back as identity while
+# the gateway's own attribution records a different model. The admissible gateway source is that
+# attribution record, correlated by request ID.
+IDENTITY_SOURCE_ADAPTER = "adapter_response_readback"
+IDENTITY_SOURCE_GATEWAY_LOG = "gateway_attribution_log"
+IDENTITY_SOURCE_GATEWAY_BODY = "gateway_response_body"
+ADMISSIBLE_IDENTITY_SOURCES = (IDENTITY_SOURCE_ADAPTER, IDENTITY_SOURCE_GATEWAY_LOG)
+BASE_INDEPENDENT_MODEL_FIELDS = {
+    "source_kind",
+    "status",
+    "schema",
+    "observed_provider",
+    "observed_model_id",
+    "observed_identity_source",
+    "readback_bytes_sha256",
+    "assignment_binding_sha256",
+}
+GATEWAY_ATTRIBUTION_FIELDS = {
+    "response_bytes",
+    "observed_provider_pointer",
+    "observed_model_pointer",
+}
+# Catalog membership, not a prefix convention, is what a gateway route can actually be held to:
+# an unrecognized model string is forwarded verbatim to the default provider rather than
+# refused, so both bare and provider-prefixed forms of an unknown ID behave identically and a
+# prefix rule discriminates nothing. The dispatching harness captures the served catalog at
+# dispatch time; this validator checks only that the captured bytes really do carry the exact
+# dispatched ID at the named position.
+GATEWAY_CATALOG_FIELDS = {"catalog_bytes", "catalog_bytes_sha256", "catalog_model_pointer"}
 UNRESOLVED = object()
 UNPARSEABLE = object()
 
@@ -198,6 +230,32 @@ def resolve_json_pointer(document: Any, pointer: str) -> Any:
     return current
 
 
+def pointer_bound_string(
+    field: str,
+    location: str,
+    parsed: Any,
+    pointer: Any,
+    errors: list[str],
+) -> str | None:
+    """Resolve one pointer inside already-parsed bytes and require it to name a string.
+
+    Returns the resolved string so the caller can compare it against the receipt field it is
+    supposed to bind. A pointer that does not resolve binds nothing at all, which is why an
+    unresolved pointer is an error rather than a silent absence.
+    """
+    if not isinstance(pointer, str):
+        errors.append(f"model readback evidence {field} must be a JSON pointer string")
+        return None
+    resolved = resolve_json_pointer(parsed, pointer)
+    if resolved is UNRESOLVED:
+        errors.append(f"model readback evidence {field} does not resolve in {location}")
+        return None
+    if not isinstance(resolved, str):
+        errors.append(f"model readback evidence {field} resolves to a non-string value")
+        return None
+    return resolved
+
+
 def request_echo_forms(receipt: dict[str, Any], requested_value: str) -> tuple[set[str], list[Any]]:
     """The request-derived shapes a holder of the request alone could have written.
 
@@ -252,6 +310,12 @@ def construct_receipt(
     context_readback_status: str,
     observed_provider: str | None = None,
     observed_model_id: str | None = None,
+    observed_identity_source: str = IDENTITY_SOURCE_ADAPTER,
+    model_readback_response_bytes: str | None = None,
+    model_observed_provider_pointer: str | None = None,
+    model_observed_model_pointer: str | None = None,
+    catalog_bytes: str | None = None,
+    catalog_model_pointer: str | None = None,
     observed_effort: str | None = None,
     observed_context_form: str | None = None,
     effort_readback_response_bytes: str | None = None,
@@ -309,17 +373,52 @@ def construct_receipt(
             "assignment_binding_sha256": binding_digest,
         }
     elif model_identity_basis == "independent_readback":
-        receipt["model_readback_evidence"] = {
+        if observed_identity_source not in ADMISSIBLE_IDENTITY_SOURCES:
+            raise ValueError(
+                "observed_identity_source is not admissible; a gateway response body echoes the "
+                "caller's requested model string and can never be an identity readback"
+            )
+        evidence = {
             "source_kind": "transport_readback",
             "status": "verified",
             "schema": "runtime-assignment-readback/v1",
             "observed_provider": observed_provider,
             "observed_model_id": observed_model_id,
+            "observed_identity_source": observed_identity_source,
             "readback_bytes_sha256": sha256_json(
                 {"model_id": observed_model_id, "provider": observed_provider}
             ),
             "assignment_binding_sha256": binding_digest,
         }
+        if observed_identity_source == IDENTITY_SOURCE_GATEWAY_LOG:
+            if not is_nonempty_string(model_readback_response_bytes):
+                raise ValueError(
+                    "gateway identity requires the attribution record's own bytes; a response "
+                    "body is not admissible"
+                )
+            if not isinstance(model_observed_provider_pointer, str) or not isinstance(
+                model_observed_model_pointer, str
+            ):
+                raise ValueError(
+                    "gateway identity requires pointers naming where the attribution record "
+                    "reported the resolved provider and model"
+                )
+            if not is_nonempty_string(catalog_bytes) or not isinstance(catalog_model_pointer, str):
+                raise ValueError(
+                    "gateway identity requires the served catalog bytes and a pointer naming the "
+                    "dispatched exact model ID inside them; catalog membership is the rule, not a "
+                    "prefix convention"
+                )
+            evidence.update(
+                response_bytes=model_readback_response_bytes,
+                readback_bytes_sha256=sha256_text(model_readback_response_bytes),
+                observed_provider_pointer=model_observed_provider_pointer,
+                observed_model_pointer=model_observed_model_pointer,
+                catalog_bytes=catalog_bytes,
+                catalog_bytes_sha256=sha256_text(catalog_bytes),
+                catalog_model_pointer=catalog_model_pointer,
+            )
+        receipt["model_readback_evidence"] = evidence
     else:
         raise ValueError("model_identity_basis is unsupported")
 
@@ -437,15 +536,24 @@ def model_evidence_errors(receipt: dict[str, Any], policy: dict[str, Any], error
         errors.append("model_identity_basis is unsupported")
         return
 
-    required = {
-        "source_kind",
-        "status",
-        "schema",
-        "observed_provider",
-        "observed_model_id",
-        "readback_bytes_sha256",
-        "assignment_binding_sha256",
-    }
+    declared_source = receipt["model_readback_evidence"].get("observed_identity_source") if isinstance(
+        receipt["model_readback_evidence"], dict
+    ) else None
+    # The response body is refused by name rather than graded, because on a gateway route it
+    # reports the caller's own request string: a caller-chosen alias comes back as identity while
+    # the gateway's attribution records the model that actually served the request. Refusing the
+    # source before checking its shape keeps a well-formed body from validating as identity.
+    if declared_source == IDENTITY_SOURCE_GATEWAY_BODY:
+        errors.append(
+            "model readback evidence observed_identity_source may not be the gateway response "
+            "body; it echoes the caller's requested model string, so record the gateway "
+            "attribution log or an unavailable readback instead"
+        )
+        return
+    gateway = declared_source == IDENTITY_SOURCE_GATEWAY_LOG
+    required = set(BASE_INDEPENDENT_MODEL_FIELDS)
+    if gateway:
+        required |= GATEWAY_ATTRIBUTION_FIELDS | GATEWAY_CATALOG_FIELDS
     evidence = typed_evidence(
         exact_object(receipt["model_readback_evidence"], required, "model readback", errors),
         policy,
@@ -459,13 +567,93 @@ def model_evidence_errors(receipt: dict[str, Any], policy: dict[str, Any], error
     for field in ("observed_provider", "observed_model_id"):
         if not is_nonempty_string(evidence[field]):
             errors.append(f"model readback evidence {field} must be a non-empty string")
+    if evidence["observed_identity_source"] not in ADMISSIBLE_IDENTITY_SOURCES:
+        errors.append("model readback evidence observed_identity_source is not an admissible source")
     if not is_sha256(evidence["readback_bytes_sha256"]):
         errors.append("model readback evidence readback_bytes_sha256 must be a lowercase SHA-256 digest")
-    expected = {"model_id": receipt["resolved_model_id"], "provider": receipt["resolved_provider"]}
     if evidence["observed_provider"] != receipt["resolved_provider"] or evidence["observed_model_id"] != receipt["resolved_model_id"]:
         errors.append("model readback evidence does not bind observed provider/model to the receipt")
-    if evidence["readback_bytes_sha256"] != sha256_json(expected):
-        errors.append("model readback evidence digest does not bind the resolved provider/model")
+    if not gateway:
+        expected = {"model_id": receipt["resolved_model_id"], "provider": receipt["resolved_provider"]}
+        if is_sha256(evidence["readback_bytes_sha256"]) and evidence["readback_bytes_sha256"] != sha256_json(expected):
+            errors.append("model readback evidence digest does not bind the resolved provider/model")
+        return
+    gateway_attribution_errors(receipt, evidence, errors)
+    gateway_catalog_errors(receipt, evidence, errors)
+
+
+def gateway_attribution_errors(receipt: dict[str, Any], evidence: dict[str, Any], errors: list[str]) -> None:
+    """Bind gateway identity to the attribution record's own bytes at named positions.
+
+    The digest covers the attribution bytes themselves, never a dict recomputed from the
+    receipt's resolved pair, so a holder of the request cannot manufacture it. Both the provider
+    and the model bind through their own pointer: an attribution record names a requested model
+    as well as a resolved one, and only the position distinguishes them.
+    """
+    if not is_nonempty_string(evidence["response_bytes"]):
+        errors.append("model readback evidence response_bytes must be a non-empty string")
+        return
+    if is_sha256(evidence["readback_bytes_sha256"]) and evidence["readback_bytes_sha256"] != sha256_text(
+        evidence["response_bytes"]
+    ):
+        errors.append("model readback evidence digest does not bind the gateway attribution bytes")
+    parsed = parse_response_body(evidence["response_bytes"])
+    if parsed is UNPARSEABLE:
+        errors.append(
+            "model readback evidence response_bytes must parse as JSON; freeform gateway text "
+            "cannot bind a resolved model identity and must be recorded as status unavailable"
+        )
+        return
+    if is_request_echo(receipt, receipt["requested_model_id"], evidence["response_bytes"], parsed):
+        errors.append(
+            "model readback response bytes are a request echo, not a gateway attribution record"
+        )
+    observed = {
+        "observed_provider_pointer": ("observed_provider", "resolved_provider"),
+        "observed_model_pointer": ("observed_model", "resolved_model_id"),
+    }
+    for pointer_field, (label, receipt_field) in observed.items():
+        resolved = pointer_bound_string(
+            pointer_field, "the gateway attribution record", parsed, evidence[pointer_field], errors
+        )
+        if resolved is not None and resolved != receipt[receipt_field]:
+            errors.append(
+                f"model readback evidence {label} at {pointer_field} does not equal the receipt "
+                f"{receipt_field}"
+            )
+
+
+def gateway_catalog_errors(receipt: dict[str, Any], evidence: dict[str, Any], errors: list[str]) -> None:
+    """Require the dispatched exact ID to be present in the served catalog bytes.
+
+    This is the only rule a gateway route can actually be held to. An unrecognized model string
+    is not refused by the router — it is forwarded verbatim to the default provider — so both
+    bare and provider-prefixed forms of an unknown ID behave identically and a prefix convention
+    discriminates nothing. Being present in the catalog does discriminate.
+    """
+    if not is_nonempty_string(evidence["catalog_bytes"]):
+        errors.append("model readback evidence catalog_bytes must be a non-empty string")
+        return
+    if not is_sha256(evidence["catalog_bytes_sha256"]):
+        errors.append("model readback evidence catalog_bytes_sha256 must be a lowercase SHA-256 digest")
+    elif evidence["catalog_bytes_sha256"] != sha256_text(evidence["catalog_bytes"]):
+        errors.append("model readback evidence catalog_bytes_sha256 does not bind the served catalog bytes")
+    catalog = parse_response_body(evidence["catalog_bytes"])
+    if catalog is UNPARSEABLE:
+        errors.append(
+            "model readback evidence catalog_bytes must parse as JSON; freeform catalog text "
+            "cannot establish membership of the dispatched exact model ID"
+        )
+        return
+    resolved = pointer_bound_string(
+        "catalog_model_pointer", "the served model catalog", catalog, evidence["catalog_model_pointer"], errors
+    )
+    if resolved is not None and resolved != receipt["resolved_model_id"]:
+        errors.append(
+            "model readback evidence catalog_model_pointer does not name the dispatched exact "
+            "model ID in the served catalog; an ID absent from the catalog is forwarded verbatim "
+            "to the default provider rather than refused"
+        )
 
 
 def readback_evidence_errors(name: str, receipt: dict[str, Any], policy: dict[str, Any], errors: list[str]) -> None:

@@ -1048,6 +1048,96 @@ class RuntimeContractValidationTests(unittest.TestCase):
             context_observed_value_pointer=self.response_pointer("context_form"),
         )
 
+    def gateway_attribution(
+        self,
+        *,
+        resolved_model: str = "gpt-5.6-terra",
+        requested_model: str = "gpt-5.6-terra",
+        provider: str = "openai",
+    ) -> str:
+        """One gateway attribution record, shaped like the qualification canary's own log line.
+
+        It carries the requested model alongside the resolved one on purpose: only the pointed-at
+        position distinguishes them, which is why identity binds through a pointer.
+        """
+        return json.dumps(
+            {
+                "provider": provider,
+                "requestId": "ocx-canary-65",
+                "requestedModel": requested_model,
+                "resolvedModel": resolved_model,
+                "status": 200,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def served_catalog(self, *model_ids: str) -> str:
+        """The gateway's served `GET /v1/models` catalog, defaulting to the canary's seven IDs."""
+        ids = model_ids or (
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex-spark",
+        )
+        return json.dumps(
+            {"data": [{"id": model_id, "object": "model"} for model_id in ids]},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def gateway_receipt(
+        self,
+        *,
+        attribution: str | None = None,
+        catalog: str | None = None,
+        catalog_model_pointer: str = "/data/1/id",
+    ) -> dict[str, object]:
+        """A gateway-routed receipt: identity from the attribution log, plus catalog membership."""
+        return receipt_admission.construct_receipt(
+            policy=RECEIPT_POLICY,
+            requested_model_id="gpt-5.6-terra",
+            requested_effort="high",
+            requested_context_form="base",
+            adapter_id="opencodex",
+            adapter_version="2.10.2",
+            adapter_config={"provider": "openai", "transport": "gateway"},
+            model_identity_basis="independent_readback",
+            observed_provider="openai",
+            observed_model_id="gpt-5.6-terra",
+            observed_identity_source=receipt_admission.IDENTITY_SOURCE_GATEWAY_LOG,
+            model_readback_response_bytes=attribution if attribution is not None else self.gateway_attribution(),
+            model_observed_provider_pointer="/provider",
+            model_observed_model_pointer="/resolvedModel",
+            catalog_bytes=catalog if catalog is not None else self.served_catalog(),
+            catalog_model_pointer=catalog_model_pointer,
+            effort_readback_status="unavailable",
+            context_readback_status="unavailable",
+        )
+
+    def rebound_model_readback(self, **changes: object) -> dict[str, object]:
+        """A gateway receipt whose model evidence fields are swapped, digests recomputed.
+
+        Every refusal these fixtures provoke is therefore a refusal of what the bytes *mean*,
+        not of a stale digest — unless the test is specifically about the digest.
+        """
+        receipt = self.gateway_receipt()
+        evidence = dict(receipt["model_readback_evidence"])
+        evidence.update(changes)
+        if "response_bytes" in changes and "readback_bytes_sha256" not in changes:
+            evidence["readback_bytes_sha256"] = hashlib.sha256(
+                str(changes["response_bytes"]).encode("utf-8")
+            ).hexdigest()
+        if "catalog_bytes" in changes and "catalog_bytes_sha256" not in changes:
+            evidence["catalog_bytes_sha256"] = hashlib.sha256(
+                str(changes["catalog_bytes"]).encode("utf-8")
+            ).hexdigest()
+        receipt["model_readback_evidence"] = evidence
+        return receipt
+
     def admit_receipt(self, receipt: dict[str, object] | str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(RECEIPT_ADMISSION)],
@@ -1568,6 +1658,337 @@ class RuntimeContractValidationTests(unittest.TestCase):
         self.assertIn(
             "context_effective_divergence is not an allowed divergence state",
             receipt_admission.receipt_errors(out_of_vocabulary_state, RECEIPT_POLICY),
+        )
+
+    def test_gateway_routed_identity_validates_from_attribution_log_and_catalog_membership(self) -> None:
+        receipt = self.gateway_receipt()
+        self.assertEqual(receipt_admission.receipt_errors(receipt, RECEIPT_POLICY), [])
+        evidence = receipt["model_readback_evidence"]
+        self.assertEqual(
+            evidence["observed_identity_source"], receipt_admission.IDENTITY_SOURCE_GATEWAY_LOG
+        )
+        # The digest binds the attribution bytes themselves, not a dict recomputed from the
+        # receipt's resolved pair — which any holder of the request could have written.
+        self.assertEqual(
+            evidence["readback_bytes_sha256"],
+            hashlib.sha256(evidence["response_bytes"].encode("utf-8")).hexdigest(),
+        )
+        self.assertNotEqual(
+            evidence["readback_bytes_sha256"],
+            hashlib.sha256(
+                json.dumps(
+                    {"model_id": "gpt-5.6-terra", "provider": "openai"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
+        result = self.admit_receipt(receipt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "validated")
+
+    def test_gateway_identity_may_not_be_sourced_from_the_response_body(self) -> None:
+        """A gateway body echoes the caller's own model string, so it is refused by name.
+
+        The canary's sharpest edge: a request for the roster alias `claude-ocx-native--…` came
+        back with that alias in the body while the attribution log recorded `gpt-5.6-terra`. A
+        client reading only the body records a Claude identity for a request OpenAI served.
+        """
+        receipt = self.gateway_receipt()
+        evidence = dict(receipt["model_readback_evidence"])
+        evidence["observed_identity_source"] = receipt_admission.IDENTITY_SOURCE_GATEWAY_BODY
+        receipt["model_readback_evidence"] = evidence
+        errors = receipt_admission.receipt_errors(receipt, RECEIPT_POLICY)
+        self.assertIn(
+            "model readback evidence observed_identity_source may not be the gateway response "
+            "body; it echoes the caller's requested model string, so record the gateway "
+            "attribution log or an unavailable readback instead",
+            errors,
+        )
+        result = self.admit_receipt(receipt)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["status"], "invalid")
+
+        # An arbitrary provenance string is refused for the same reason the request-injection
+        # source_kind vocabulary is closed: naming a source is not the same as having one.
+        for arbitrary in ("self_attested", "caller_says_so", "host_default"):
+            with self.subTest(source=arbitrary):
+                mutant = self.gateway_receipt()
+                evidence = {
+                    key: value
+                    for key, value in mutant["model_readback_evidence"].items()
+                    if key not in receipt_admission.GATEWAY_CATALOG_FIELDS
+                    and key not in receipt_admission.GATEWAY_ATTRIBUTION_FIELDS
+                }
+                evidence["observed_identity_source"] = arbitrary
+                evidence["readback_bytes_sha256"] = hashlib.sha256(
+                    json.dumps(
+                        {"model_id": "gpt-5.6-terra", "provider": "openai"},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                mutant["model_readback_evidence"] = evidence
+                self.assertIn(
+                    "model readback evidence observed_identity_source is not an admissible source",
+                    receipt_admission.receipt_errors(mutant, RECEIPT_POLICY),
+                )
+
+        # An unnamed provenance is not evidence either, and the construction path refuses the
+        # body source outright rather than building a receipt that only fails at admission.
+        unnamed = self.gateway_receipt()
+        unnamed["model_readback_evidence"] = {
+            key: value
+            for key, value in unnamed["model_readback_evidence"].items()
+            if key != "observed_identity_source"
+        }
+        self.assertTrue(
+            any(
+                "missing fields: observed_identity_source" in error
+                for error in receipt_admission.receipt_errors(unnamed, RECEIPT_POLICY)
+            ),
+            receipt_admission.receipt_errors(unnamed, RECEIPT_POLICY),
+        )
+        with self.assertRaisesRegex(ValueError, "gateway response body echoes"):
+            receipt_admission.construct_receipt(
+                policy=RECEIPT_POLICY,
+                requested_model_id="gpt-5.6-terra",
+                requested_effort="high",
+                requested_context_form="base",
+                adapter_id="opencodex",
+                adapter_version="2.10.2",
+                adapter_config={"provider": "openai", "transport": "gateway"},
+                model_identity_basis="independent_readback",
+                observed_provider="openai",
+                observed_model_id="gpt-5.6-terra",
+                observed_identity_source=receipt_admission.IDENTITY_SOURCE_GATEWAY_BODY,
+                effort_readback_status="unavailable",
+                context_readback_status="unavailable",
+            )
+
+    def test_gateway_identity_binds_resolved_model_through_a_pointer_not_the_requested_field(self) -> None:
+        """An attribution record names both models; only the position tells them apart."""
+        alias_echo = self.gateway_attribution(
+            resolved_model="gpt-5.6-terra", requested_model="claude-ocx-native--gpt-5.6-terra"
+        )
+        pointed_at_requested = self.rebound_model_readback(
+            response_bytes=alias_echo, observed_model_pointer="/requestedModel"
+        )
+        self.assertIn(
+            "model readback evidence observed_model at observed_model_pointer does not equal the "
+            "receipt resolved_model_id",
+            receipt_admission.receipt_errors(pointed_at_requested, RECEIPT_POLICY),
+        )
+
+        disagreeing = self.rebound_model_readback(response_bytes=self.gateway_attribution(resolved_model="gpt-5.6-luna"))
+        self.assertIn(
+            "model readback evidence observed_model at observed_model_pointer does not equal the "
+            "receipt resolved_model_id",
+            receipt_admission.receipt_errors(disagreeing, RECEIPT_POLICY),
+        )
+
+        for name, pointer in {
+            "unresolvable member": "/absentModel",
+            "pointer through a scalar": "/status/0",
+            "relative pointer": "resolvedModel",
+        }.items():
+            with self.subTest(unresolvable=name):
+                receipt = self.rebound_model_readback(observed_model_pointer=pointer)
+                self.assertIn(
+                    "model readback evidence observed_model_pointer does not resolve in the "
+                    "gateway attribution record",
+                    receipt_admission.receipt_errors(receipt, RECEIPT_POLICY),
+                )
+
+        wrong_provider = self.rebound_model_readback(
+            response_bytes=self.gateway_attribution(provider="anthropic")
+        )
+        self.assertIn(
+            "model readback evidence observed_provider at observed_provider_pointer does not "
+            "equal the receipt resolved_provider",
+            receipt_admission.receipt_errors(wrong_provider, RECEIPT_POLICY),
+        )
+
+        prose = self.rebound_model_readback(response_bytes="the gateway resolved gpt-5.6-terra")
+        self.assertIn(
+            "model readback evidence response_bytes must parse as JSON; freeform gateway text "
+            "cannot bind a resolved model identity and must be recorded as status unavailable",
+            receipt_admission.receipt_errors(prose, RECEIPT_POLICY),
+        )
+
+        stale_digest = self.rebound_model_readback(
+            response_bytes=self.gateway_attribution(), readback_bytes_sha256="0" * 64
+        )
+        self.assertIn(
+            "model readback evidence digest does not bind the gateway attribution bytes",
+            receipt_admission.receipt_errors(stale_digest, RECEIPT_POLICY),
+        )
+
+        echo = self.rebound_model_readback(
+            response_bytes=REQUEST_TUPLE_BYTES, observed_model_pointer="/model_id"
+        )
+        self.assertIn(
+            "model readback response bytes are a request echo, not a gateway attribution record",
+            receipt_admission.receipt_errors(echo, RECEIPT_POLICY),
+        )
+
+    def test_gateway_dispatch_requires_the_exact_id_to_be_in_the_served_catalog(self) -> None:
+        """Catalog membership is the enforceable rule; a prefix convention discriminates nothing.
+
+        The canary proved bare `claude-opus-5` and `anthropic/claude-opus-5` behave identically:
+        both fall through to the default provider rather than being refused by the router, so what
+        the receipt can be held to is presence in the gateway's own served catalog.
+        """
+        absent = self.served_catalog("gpt-5.6-sol", "gpt-5.6-luna")
+        self.assertNotIn("gpt-5.6-terra", [entry["id"] for entry in json.loads(absent)["data"]])
+        not_in_catalog = self.rebound_model_readback(catalog_bytes=absent)
+        self.assertIn(
+            "model readback evidence catalog_model_pointer does not name the dispatched exact "
+            "model ID in the served catalog; an ID absent from the catalog is forwarded verbatim "
+            "to the default provider rather than refused",
+            receipt_admission.receipt_errors(not_in_catalog, RECEIPT_POLICY),
+        )
+
+        # A prefixed form is not the dispatched exact ID either: the catalog entry must match it.
+        prefixed = self.rebound_model_readback(catalog_bytes=self.served_catalog("openai/gpt-5.6-terra"), catalog_model_pointer="/data/0/id")
+        self.assertIn(
+            "model readback evidence catalog_model_pointer does not name the dispatched exact "
+            "model ID in the served catalog; an ID absent from the catalog is forwarded verbatim "
+            "to the default provider rather than refused",
+            receipt_admission.receipt_errors(prefixed, RECEIPT_POLICY),
+        )
+
+        for name, pointer in {
+            "unresolvable index": "/data/99/id",
+            "unresolvable member": "/data/1/absent",
+            "relative pointer": "data/1/id",
+        }.items():
+            with self.subTest(unresolvable=name):
+                receipt = self.rebound_model_readback(catalog_model_pointer=pointer)
+                self.assertIn(
+                    "model readback evidence catalog_model_pointer does not resolve in the served "
+                    "model catalog",
+                    receipt_admission.receipt_errors(receipt, RECEIPT_POLICY),
+                )
+
+        non_string = self.rebound_model_readback(catalog_model_pointer="/data/1")
+        self.assertIn(
+            "model readback evidence catalog_model_pointer resolves to a non-string value",
+            receipt_admission.receipt_errors(non_string, RECEIPT_POLICY),
+        )
+
+        malformed_digest = self.rebound_model_readback(
+            catalog_bytes=self.served_catalog(), catalog_bytes_sha256="not-a-digest"
+        )
+        self.assertIn(
+            "model readback evidence catalog_bytes_sha256 must be a lowercase SHA-256 digest",
+            receipt_admission.receipt_errors(malformed_digest, RECEIPT_POLICY),
+        )
+
+        unbound_digest = self.rebound_model_readback(
+            catalog_bytes=self.served_catalog(), catalog_bytes_sha256="0" * 64
+        )
+        self.assertIn(
+            "model readback evidence catalog_bytes_sha256 does not bind the served catalog bytes",
+            receipt_admission.receipt_errors(unbound_digest, RECEIPT_POLICY),
+        )
+
+        prose_catalog = self.rebound_model_readback(catalog_bytes="the catalog serves gpt-5.6-terra")
+        self.assertIn(
+            "model readback evidence catalog_bytes must parse as JSON; freeform catalog text "
+            "cannot establish membership of the dispatched exact model ID",
+            receipt_admission.receipt_errors(prose_catalog, RECEIPT_POLICY),
+        )
+
+        result = self.admit_receipt(not_in_catalog)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["status"], "invalid")
+
+        # The construction path refuses to build a gateway receipt with no catalog evidence at all.
+        with self.assertRaisesRegex(ValueError, "catalog membership is the rule"):
+            receipt_admission.construct_receipt(
+                policy=RECEIPT_POLICY,
+                requested_model_id="gpt-5.6-terra",
+                requested_effort="high",
+                requested_context_form="base",
+                adapter_id="opencodex",
+                adapter_version="2.10.2",
+                adapter_config={"provider": "openai", "transport": "gateway"},
+                model_identity_basis="independent_readback",
+                observed_provider="openai",
+                observed_model_id="gpt-5.6-terra",
+                observed_identity_source=receipt_admission.IDENTITY_SOURCE_GATEWAY_LOG,
+                model_readback_response_bytes=self.gateway_attribution(),
+                model_observed_provider_pointer="/provider",
+                model_observed_model_pointer="/resolvedModel",
+                effort_readback_status="unavailable",
+                context_readback_status="unavailable",
+            )
+
+    def test_gateway_evidence_fields_are_closed_and_never_required_off_the_gateway_route(self) -> None:
+        """Catalog and attribution fields belong to the gateway route only.
+
+        The direct-Anthropic path keeps the shape the 31 role contracts already project: no new
+        top-level field, and no new required interior field on a non-gateway receipt.
+        """
+        adapter_receipt = receipt_admission.construct_receipt(
+            policy=RECEIPT_POLICY,
+            requested_model_id="claude-opus-4-8",
+            requested_effort="high",
+            requested_context_form="base",
+            adapter_id="workflow",
+            adapter_version="1.0.0",
+            adapter_config={"provider": "anthropic", "transport": "workflow"},
+            model_identity_basis="independent_readback",
+            observed_provider="anthropic",
+            observed_model_id="claude-opus-4-8",
+            effort_readback_status="unavailable",
+            context_readback_status="unavailable",
+        )
+        self.assertEqual(receipt_admission.receipt_errors(adapter_receipt, RECEIPT_POLICY), [])
+        self.assertEqual(
+            set(adapter_receipt["model_readback_evidence"]),
+            receipt_admission.BASE_INDEPENDENT_MODEL_FIELDS,
+        )
+        self.assertEqual(
+            adapter_receipt["model_readback_evidence"]["observed_identity_source"],
+            receipt_admission.IDENTITY_SOURCE_ADAPTER,
+        )
+        self.assertEqual(tuple(adapter_receipt), tuple(RECEIPT_POLICY["canonical_receipt_fields"]))
+
+        # An adapter-sourced receipt may not smuggle in gateway fields, and a gateway-sourced one
+        # may not omit them: both directions are closed-shape refusals.
+        smuggled = json.loads(json.dumps(adapter_receipt))
+        smuggled["model_readback_evidence"]["catalog_bytes"] = self.served_catalog()
+        self.assertTrue(
+            any(
+                "unexpected fields: catalog_bytes" in error
+                for error in receipt_admission.receipt_errors(smuggled, RECEIPT_POLICY)
+            ),
+            receipt_admission.receipt_errors(smuggled, RECEIPT_POLICY),
+        )
+
+        stripped = self.gateway_receipt()
+        stripped["model_readback_evidence"] = {
+            key: value
+            for key, value in stripped["model_readback_evidence"].items()
+            if key not in receipt_admission.GATEWAY_CATALOG_FIELDS
+        }
+        self.assertTrue(
+            any(
+                "missing fields: catalog_bytes, catalog_bytes_sha256, catalog_model_pointer" in error
+                for error in receipt_admission.receipt_errors(stripped, RECEIPT_POLICY)
+            ),
+            receipt_admission.receipt_errors(stripped, RECEIPT_POLICY),
+        )
+
+        # The mapping-only basis is untouched: it never claimed an independent observation.
+        self.assertEqual(receipt_admission.receipt_errors(self.valid_receipt(), RECEIPT_POLICY), [])
+        self.assertEqual(
+            self.valid_receipt()["model_readback_evidence"]["source_kind"], "policy_exact_id_mapping"
+        )
+        self.assertNotIn(
+            "observed_identity_source", self.valid_receipt()["model_readback_evidence"]
         )
 
     def test_receipt_admission_denies_unsafe_evidence_mutants(self) -> None:

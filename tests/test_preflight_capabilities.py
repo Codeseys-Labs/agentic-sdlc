@@ -36,6 +36,9 @@ EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
         # .worktrees/<name>/commands/sdlc-init.md), so it reports violations that do not
         # exist in what this commit actually ships.
         ".worktrees",
+        # Same reasoning for the harness-created agent worktrees under .claude/worktrees/
+        # (and .claude/ generally is host-local session config, not shipped surface).
+        ".claude",
         "__pycache__",
         "archive",
         "archives",

@@ -35,6 +35,10 @@ def scan_for_cao(root: Path) -> list[str]:
         rel = path.relative_to(root)
         if ".git" in rel.parts or "__pycache__" in rel.parts or "tests" in rel.parts:
             continue
+        # Vendored/installed dependency trees and harness worktrees are not this commit's
+        # shipped surface; scanning them reports other packages' or other commits' bytes.
+        if "node_modules" in rel.parts or ".worktrees" in rel.parts or ".claude" in rel.parts:
+            continue
         rel_posix = rel.as_posix()
         # (a) CAO-named path / profile dir / install path.
         if "cao" in path.name.lower() or "cao-profiles" in rel.parts:

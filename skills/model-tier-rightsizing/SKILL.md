@@ -94,8 +94,8 @@ alias, or echoed prompt text is not resolution evidence.
 
 It rejects duplicate JSON members and arbitrary provenance strings. Each evidence object has a
 closed shape: request evidence binds the canonical requested-tuple digest; mapping evidence is
-only the policy reference; verified model evidence binds the observed provider/model and its
-digest to the resolved pair. Verified effort/context evidence is different in kind: it carries
+only the policy reference; verified model evidence names its `observed_identity_source` and binds
+the observed provider/model to the resolved pair. Verified effort/context evidence is different in kind: it carries
 the transport's own response bytes, and `readback_bytes_sha256` binds exactly those bytes —
 never a digest recomputed from a requested value, which any holder of the request could write.
 Those bytes must parse as JSON, and `observed_value_pointer` names the exact RFC 6901 location
@@ -115,6 +115,20 @@ refuses provably request-derived bytes, and cannot by itself authenticate that a
 came from the transport. `validated` means only that this internal schema and
 digest consistency check passed; `invalid` means it did not. The validator never authenticates
 an issuer or claims external injection, readback, admission, or spawn identity.
+
+A gateway-routed assignment is held to two further rules, because a gateway is a second router
+between the caller and the model. `observed_identity_source` must be `gateway_attribution_log`:
+the gateway's response `model` field is inadmissible by name, since it echoes the caller's own
+requested string — a caller-chosen alias comes back as identity while the attribution record
+names the model that actually served the request. Identity then binds through
+`observed_provider_pointer` and `observed_model_pointer` into the attribution bytes, because that
+record names the requested model alongside the resolved one and only the position tells them
+apart. Second, the dispatched exact ID must be present in the gateway's served `GET /v1/models`
+catalog, proven by `catalog_bytes`, its digest, and `catalog_model_pointer`. Catalog membership is
+the enforceable rule and a provider-prefix convention is not: an unrecognized model string is
+forwarded verbatim to the default provider rather than refused, so bare and prefixed forms of an
+unknown ID behave identically. These fields exist only on the gateway route; a direct-adapter
+receipt records `adapter_response_readback` and carries neither.
 
 The policy validates only certified requested tuples. Claude base tuples remain eligible; exact
 Claude `[1m]` forms are invalid until tuple-specific policy evidence exists. GPT `[1m]` forms

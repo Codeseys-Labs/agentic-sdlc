@@ -201,6 +201,39 @@ of a real schema; the rung names, observation-state vocabulary, and field list a
 universal standard. Re-derive your own status ladder, observation-state taxonomy, and
 required-field contract for your own transport rather than copying these labels verbatim.
 
+### Gateway routes: catalog membership and log-sourced identity
+
+A route that passes through a gateway carries two extra required fields, both enforced in
+`scripts/receipt_admission.py` rather than documented as advice. They come from an executed
+qualification canary (`docs/research/2026-08-07-opencodex-qualification-canary.md`, conditions
+C1 and C2) against one live gateway deployment, and each replaces a rule that looked safe and
+was not.
+
+1. **Catalog membership, not a provider-prefix convention.** The canary requested
+   `anthropic/claude-opus-5` and bare `claude-opus-5` and got *identical* behavior: neither was
+   refused by the router. Both were classified `routeKind: "default-provider"` and forwarded
+   verbatim to the configured default provider, where the upstream rejected them. The
+   fail-closed outcome was the upstream's property, not the gateway's, and it holds only while
+   that provider happens to refuse unknown names. A prefix therefore discriminates nothing. What
+   does discriminate is presence in the gateway's own served `GET /v1/models` catalog, so the
+   receipt records the catalog bytes, their digest, and a pointer to the dispatched exact ID
+   inside them. Treat `routeKind: "default-provider"` in a gateway's attribution log as an alarm:
+   it means the router did not recognize the target.
+2. **Identity from the attribution log, never the response body.** The canary requested a
+   `claude-`-prefixed roster alias; the response body echoed that alias back while the attribution
+   log recorded the OpenAI model that actually served it, and the log never recorded the inbound
+   alias at all. The body also suppressed a dated snapshot the log carried (`gpt-5.4-mini` in the
+   body against `gpt-5.4-mini-2026-03-17` in the log), and no provider/model response header
+   exists on that surface. A client reading only the body would record a false model identity. So
+   `resolved_model_id` evidence for a gateway route is sourced only from the attribution record's
+   resolved-model field, correlated by request ID, and bound through a pointer — that record names
+   the requested model beside the resolved one, and position is the only thing separating them.
+
+Both are gateway-route facts. A direct-adapter route records adapter-sourced identity and neither
+field. And per the same canary, effective effort readback on that gateway was honestly
+unavailable: a `requestedEffort` the gateway derived from a thinking budget is evidence about the
+request, never readback of what the upstream did.
+
 ## Three provenance classes and qualification rungs
 
 A routing *decision* (as opposed to a single capability claim, above) draws on three
