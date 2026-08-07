@@ -158,6 +158,22 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         self.assertFalse(log.exists())
 
+    def test_configure_refuses_mixed_case_renamed_anthropic_provider(self) -> None:
+        config = {
+            "providers": {
+                "Research-Vendor": {
+                    "adapter": "anthropic",
+                    "baseUrl": "https://api.anthropic.com",
+                }
+            }
+        }
+        result, log = self.run_launcher(
+            "configure", "account", "add-key", "research-vendor", config=config
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertFalse(log.exists())
+
     def test_configure_refuses_unbounded_and_unknown_routes(self) -> None:
         cases = (
             ("setup",),

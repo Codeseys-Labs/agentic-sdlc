@@ -488,7 +488,8 @@ configured_provider_class() {
   config="$(ocx config show --json 2>/dev/null)" || return 2
   command -v jq >/dev/null 2>&1 || return 2
   result="$(jq -r --arg provider "$provider" '
-    .providers[$provider] as $p
+    ($provider | ascii_downcase) as $wanted
+    | (.providers // {} | to_entries | map(select((.key | ascii_downcase) == $wanted)) | first | .value) as $p
     | if $p == null then "absent" else
         (($p.baseUrl // $p.baseURL // $p.endpoint // "") | ascii_downcase) as $url
         | if ($url | test("^https?://([^/]+\\.)?(anthropic\\.com|claude\\.ai)(:[0-9]+)?(/|$)"))

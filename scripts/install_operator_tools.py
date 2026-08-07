@@ -386,7 +386,7 @@ def install(config: Config) -> tuple[int, list[str]]:
         return _install(config)
 
 
-def status(config: Config) -> tuple[int, list[str]]:
+def _status(config: Config) -> tuple[int, list[str]]:
     validate_bin_dir(config)
     state = load_state(config.state_path, config)
     messages: list[str] = []
@@ -408,6 +408,11 @@ def status(config: Config) -> tuple[int, list[str]]:
         else:
             messages.append(f"ok: {path}")
     return (1 if partial else 0), messages
+
+
+def status(config: Config) -> tuple[int, list[str]]:
+    with lifecycle_lock(config):
+        return _status(config)
 
 
 def _uninstall(config: Config) -> tuple[int, list[str]]:
