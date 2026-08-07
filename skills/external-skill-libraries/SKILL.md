@@ -21,17 +21,25 @@ Install a third party's skill library by running **that library's own installer*
 explicit operator step. Read this when a library is wanted, when a name collides, or when
 someone asks whether a catalog is worth its cost.
 
-The tool is `scripts/install_external_libraries.py`, wired as three mise tasks:
+The tool is `scripts/install_external_libraries.py`, wired as four mise tasks:
 
 ```bash
 mise run libraries:list      # what is available, its front door, its cost, what is detected
 mise run libraries:status    # what is already present in this home
 mise run libraries:install   # refuses without an explicit library name
+mise run libraries:migrate   # retire another channel's copies of the SAME upstream, then install
 ```
 
-`install` and `uninstall` take **explicitly named libraries only**. There is deliberately no
-verb that installs everything, and none of these verbs is reachable from `bundle:install`,
-`bundle:install:claude`, `bundle:install:codex`, `setup`, or any gate leaf.
+`install`, `migrate`, and `uninstall` take **explicitly named libraries only**. There is
+deliberately no verb that installs everything, and none of these verbs is reachable from
+`bundle:install`, `bundle:install:claude`, `bundle:install:codex`, `setup`, or any gate leaf.
+
+Every library is reachable. `list` prints a `reach it by:` line per library with the exact
+command, so a refusal names its own route out rather than reading as a dead end. The states are
+`installable`, `installable after migration` (another channel provably holds the same upstream),
+`installable accepting duplication` (it holds some names unprovably, so only
+`--allow-duplicate-channel` clears it), `installable behind <flag>` (a cost to acknowledge), and
+`blocked` — reserved for a library that cannot be honestly run at all, which no library is today.
 
 ## The distinction that makes this safe
 
@@ -60,26 +68,43 @@ instruction to run the installer:
 | Library | Surface | Channel | Front door |
 |---|---|---|---|
 | `mattpocock` | 25 skills | plugin (namespaced) | `claude plugins install mattpocock-skills` |
-| `ecc` | 284 skills, 67 agents, 94 shims | flat `~/.claude/skills/` | `npx ecc-universal setup` |
+| `ecc` | 284 declared / 280 measured skills, 67 agents, 94 commands | flat `~/.claude/skills/` | `npx -y -p ecc-universal ecc install --target claude --profile full` |
 | `hyperresearch` | 17 skills + 14 agents, rendered | flat, `hyperresearch`-prefixed | `uv tool install hyperresearch` |
 
-**ECC's 284-skill surface is the headline.** Against this bundle's 9 skills that is a ~31×
+**ECC's surface is the headline.** Against this bundle's 10 skills, 284 entries is a ~28×
 multiplication of what a selector must reason over, in exchange for a firing rate nobody has
 measured for any individual entry. It writes flat into `~/.claude/skills/<skill-name>/` — the
-same namespace this bundle's entries occupy — so every one of the 284 names is a
-first-writer-wins claim. It is gated behind `--acknowledge-ecc-surface` **and**
-`--names-from`, because its surface cannot be enumerated offline and a precheck that cannot
-run must not report a pass. A second, independent block also stands: ECC's own README
-requires `ecc-universal` 2.2.0 or newer for the guided commands while npm's `latest` serves
-2.1.0, so the documented front door is newer than the published artifact.
+same namespace this bundle's entries occupy — so every name is a first-writer-wins claim. It is
+gated behind `--acknowledge-ecc-surface`, which is about **cost**, not version.
+
+Two ECC facts are easy to get wrong, and both were verified against the published artifact
+rather than the README:
+
+- **The README's front door does not exist.** `npx ecc-universal setup` cannot run: the
+  published 2.1.0 tarball declares no `ecc-universal` bin and `ecc` has no `setup` verb, so npm
+  exits "could not determine executable to run" regardless of any version question. The wired
+  front door is the artifact's real one, `ecc install --target claude --profile <name>`, which
+  refuses outright unless given a profile.
+- **The version gap is accepted, not resolved.** ECC's README documents guided commands
+  requiring 2.2.0+ while npm's `latest` serves 2.1.0. The operator accepted npm `latest`; the
+  gap survives as a printed caveat on every dry run, and a front-door failure is reported as a
+  failure rather than assumed to be a finished install.
+
+Its surface cannot be enumerated offline, so `--names-from` remains available for a real
+precheck and its absence is reported as **`precheck: SKIPPED, not passed`** — never as a pass.
+The honest enumeration is ECC's own `--dry-run --json` plan, which lists every destination path
+it would write; `list` prints that command. Against the resolved `full` profile it measures 983
+file operations: 280 flat skill names, 67 agents, 94 commands, 122 rules files, 170 scripts.
+`--profile` accepts six narrower profiles (`ecc catalog profiles --json`) for a smaller surface.
 
 **mattpocock is cheap by an order of magnitude** — 25 versioned entries through an official
 marketplace plugin, already listed, so there is no `marketplace add` step to run first.
 Because a plugin is namespaced it cannot *lose* a name; its failure mode is the opposite one,
 duplication, which upstream names itself: "Pick one — installing both leaves you with every
 skill twice." Its editable npm front door (`npx skills@latest add mattpocock/skills`) is
-deliberately **not** wired here — that is the channel that competes for flat names, and it
-prompts interactively.
+deliberately **not** wired for installing — that is the channel that competes for flat names,
+and it prompts interactively. When that channel already holds the names, `migrate` is the route:
+see below.
 
 **hyperresearch is not a skill library at all.** It is a CLI that *renders* skills and agents
 into a home or a project. Installing the tool writes no skills; its own `hyperresearch
@@ -107,6 +132,45 @@ A symlink counts as occupying a name. An entry another installer linked into pla
 name just as firmly as a real directory, and reading it as absent is exactly what produces a
 silent loss.
 
+## Migration: same upstream, different channel
+
+The duplicate-channel refusal is not a dead end. When the names are held by **another channel
+serving the same upstream**, removing them is de-duplication rather than capability loss, and
+`migrate` does it through that channel's own front door:
+
+```bash
+mise run libraries:migrate -- mattpocock          # prints the proof and the exact command
+mise run libraries:migrate -- mattpocock --yes    # removes, re-checks, then installs
+```
+
+**Provenance is the whole licence for a removal.** Filesystem presence proves presence, not
+provenance, so `migrate` consults the *other channel's own lock file*
+(`$XDG_STATE_HOME/skills/.skill-lock.json`, else `~/.agents/.skill-lock.json`) and matches each
+occupied name's recorded `source` **and** `sourceUrl` against the library's upstream. Anything it
+cannot prove, it leaves alone:
+
+- No lock file, an unreadable one, or one at a schema version older than the channel's own
+  reader accepts → **refuse**. An unavailable proof is not a passed one.
+- A name absent from the lock → **refuse that name**. Occupied but unattributable.
+- A name recorded against a different `source`, or the same short name with a different clone
+  URL → **refuse that name**. A label is not an identity.
+- Any unproven name at all → **refuse the whole migration** rather than half-doing it.
+
+The removal runs `npx -y skills@latest remove --global --agent claude-code --yes <names…>`.
+Two scoping choices matter. `--global` because the names are in a home. `--agent claude-code`
+because without it that command targets **every** agent it knows: it deletes the canonical
+`~/.agents/skills/<name>`, every other agent's link to it, and the lock entry. Scoped to one
+agent it removes only `~/.claude/skills/<name>` and leaves the canonical copy, the other hosts'
+links, and the lock intact — so resolving a Claude Code collision does not take the skill away
+from Codex, and the change is re-linkable.
+
+**This module never deletes anything itself.** No `rm`, no `unlink`, no path touched directly;
+the other channel's own verb does the work. Ordering is enforced: removal, then a **fresh
+precheck against the real filesystem**, then the install. If removal fails, or if it reports
+success while names are still occupied — a partial removal — `migrate` **stops before
+installing** and says what remains. Installing over a still-occupied name is exactly the silent
+loss the precheck exists to prevent.
+
 The precedent is `scripts/install_skill_bundle.py`, which classifies an entry it does not own
 at a managed path as `foreign` and **preserves** it rather than replacing it. That makes
 coexistence the default in one direction — a foreign entry survives this bundle's install.
@@ -122,13 +186,37 @@ many skills it adds. `--yes` is required to invoke anything.
 ```bash
 mise run libraries:install -- mattpocock            # prints the plan, runs nothing
 mise run libraries:install -- mattpocock --yes      # invokes the front door
+mise run libraries:migrate -- mattpocock            # when another channel holds the names
+mise run libraries:install -- ecc --acknowledge-ecc-surface                      # precheck SKIPPED
 mise run libraries:install -- ecc --acknowledge-ecc-surface --names-from /tmp/ecc-names.txt
 ```
 
 Enumerate a library's names with the command `libraries:list` prints for it, never by
 guessing. `uninstall` runs the library's own documented removal path or refuses; it never
-deletes a path it did not see that library's installer create. ECC has no wired uninstall
-because its own path is repo-local and needs a clone.
+deletes a path it did not see that library's installer create. ECC's published artifact does
+expose `ecc uninstall --target claude`, scoped to what its own install-state recorded, so it is
+wired.
+
+## Exit codes: describing is not doing
+
+A dry run and a real install are different operations, and they no longer share an exit path.
+
+| Code | Means |
+|---|---|
+| `0` | The operation did what it was asked to. For a dry run that **includes describing a refusal** — "these 21 names are occupied", "`claude` is not on PATH, so a real install would refuse". |
+| `1` | A real (`--yes`) operation was asked to change something and could not: refused precheck, missing front-door tool, or a front door that exited nonzero. |
+| `2` | The invocation itself was unusable — no library named, unknown library, unreadable name list. |
+
+So `libraries:install -- <lib>` without `--yes` exits **0 on any machine**, including one with no
+`claude`, no `npx`, and no installed tools, because "the front door is missing" is a fact it
+reports rather than a failure it suffered. The refusal is still printed in full, and the dry run
+says which case it is.
+
+This was a real defect, not a preference: the old code failed a dry run whenever any refusal
+fired, so `mise run check` passed on a developer host that happened to have `claude` on PATH and
+went red on a clean machine. Reading a nonzero dry-run exit as "the tool broke" was the confusion.
+A real `--yes` install with a missing front door still exits nonzero — that half is asserted
+separately so the fix cannot decay into blanket leniency.
 
 ## Standing boundaries
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -33,8 +35,17 @@ def load_module():
 MODULE = load_module()
 
 
-def make_home(names: tuple[str, ...] = (), links: dict[str, str] | None = None) -> Path:
-    """Build a throwaway home whose skills dir holds exactly ``names`` plus ``links``."""
+def make_home(
+    names: tuple[str, ...] = (),
+    links: dict[str, str] | None = None,
+    lock: dict[str, dict] | None = None,
+    lock_version: int = 3,
+) -> Path:
+    """Build a throwaway home whose skills dir holds exactly ``names`` plus ``links``.
+
+    ``lock`` writes the competing channel's own lock file at the path that channel resolves,
+    which is the only thing the migration path will accept as provenance.
+    """
     temporary = tempfile.TemporaryDirectory()
     home = Path(temporary.name) / "home"
     skills = home / ".claude" / "skills"
@@ -43,11 +54,35 @@ def make_home(names: tuple[str, ...] = (), links: dict[str, str] | None = None) 
         (skills / name).mkdir()
     for name, target in (links or {}).items():
         (skills / name).symlink_to(target)
+    if lock is not None:
+        agents = home / ".agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        (agents / ".skill-lock.json").write_text(
+            json.dumps({"version": lock_version, "skills": lock}), encoding="utf-8"
+        )
     make_home.cleanups.append(temporary)
     return home
 
 
 make_home.cleanups = []  # type: ignore[attr-defined]
+
+
+def matt_lock(*names: str) -> dict[str, dict]:
+    """A lock file recording ``names`` against mattpocock's real upstream identifiers."""
+    return {
+        name: {
+            "source": MODULE.MATTPOCOCK.lock_source,
+            "sourceType": "github",
+            "sourceUrl": MODULE.MATTPOCOCK.lock_source_url,
+            "pluginName": "mattpocock-skills",
+        }
+        for name in names
+    }
+
+
+# The subset of mattpocock's declared names used to stand in for "another channel already holds
+# these". Taken from the real row so the fixture cannot drift from what the library declares.
+OCCUPIED_SAMPLE = MODULE.MATTPOCOCK.names[:3]
 
 
 class PrecheckTests(unittest.TestCase):
@@ -140,17 +175,90 @@ class PrecheckTests(unittest.TestCase):
         self.assertEqual(check.home_collisions, ())
         self.assertEqual(len(check.reinstalls), len(MODULE.HYPERRESEARCH.names))
 
-    def test_ecc_is_blocked_on_version_and_unenumerable_surface(self) -> None:
+    def test_ecc_is_gated_on_its_surface_cost_not_on_its_version(self) -> None:
+        # The version gap is an accepted caveat, not a refusal (operator decision, ADR-0009
+        # amendment 2026-08-07). What still gates ECC is the 284-entry surface.
         check = MODULE.precheck(MODULE.ECC, self.config(make_home()))
         self.assertTrue(check.refused)
-        self.assertIn("2.2.0", check.refusal)
         self.assertIn("284", check.refusal)
+        self.assertIn("--acknowledge-ecc-surface", check.refusal)
+        self.assertNotIn("2.2.0", check.refusal)
 
-    def test_ecc_acknowledgement_alone_does_not_clear_the_block(self) -> None:
+    def test_ecc_version_gap_survives_as_a_visible_caveat(self) -> None:
+        # Overruled does not mean deleted. The gap must still be recorded and printed.
+        caveats = " ".join(MODULE.ECC.caveats)
+        self.assertIn("2.2.0", caveats)
+        self.assertIn("2.1.0", caveats)
+        rendered = "\n".join(
+            MODULE.render_plan(
+                MODULE.precheck(
+                    MODULE.ECC,
+                    self.config(make_home(), acknowledge_ecc_surface=True),
+                ),
+                self.config(make_home(), acknowledge_ecc_surface=True),
+            )
+        )
+        self.assertIn("VERSION GAP (accepted)", rendered)
+
+    def test_ecc_acknowledgement_alone_proceeds_with_the_precheck_marked_skipped(self) -> None:
+        # The surface cannot be enumerated offline, so requiring --names-from would make ECC
+        # unreachable. It proceeds, but the check must report SKIPPED rather than passed.
+        config = self.config(make_home(), acknowledge_ecc_surface=True)
+        check = MODULE.precheck(MODULE.ECC, config)
+        self.assertFalse(check.refused, check.refusal)
+        self.assertTrue(check.skipped)
+        rendered = "\n".join(MODULE.render_plan(check, config))
+        self.assertIn("SKIPPED, not passed", rendered)
+        self.assertNotIn("precheck:     passed", rendered)
+
+    def test_a_passed_precheck_never_renders_like_a_skipped_one(self) -> None:
+        config = self.config(make_home())
+        rendered = "\n".join(
+            MODULE.render_plan(MODULE.precheck(MODULE.MATTPOCOCK, config), config)
+        )
+        self.assertIn("precheck:     passed", rendered)
+        self.assertNotIn("SKIPPED", rendered)
+
+    def test_ecc_front_door_is_the_one_the_published_artifact_actually_exposes(self) -> None:
+        # The README's `npx ecc-universal setup` has no bin in the published 2.1.0 tarball, so
+        # wiring it would guarantee a failure. Pin the verified path instead.
+        front_door = " ".join(MODULE.ECC.front_door)
+        self.assertNotIn("ecc-universal setup", front_door)
+        self.assertIn("-p ecc-universal", front_door)
+        self.assertIn("ecc install", front_door)
+        # The CLI refuses outright when given no profile, so one must be pinned.
+        self.assertIn("--profile", front_door)
+
+    def test_a_blocked_fact_is_not_overridable_by_any_cost_flag(self) -> None:
+        # `blocked` means "cannot be honestly run", `acknowledgement` means "expensive". No row
+        # sets `blocked` today; the distinction is load-bearing, so it is tested rather than
+        # left to rot into something a flag can wave away.
+        library = MODULE.Library(
+            key="fixture",
+            origin="https://example.invalid/fixture",
+            licence="MIT",
+            version="1.0.0",
+            channel="home-skills",
+            front_door=("true",),
+            front_door_source="fixture",
+            requires=(),
+            names=("fixture-only",),
+            blocked="its published artifact does not contain the documented entrypoint",
+        )
         check = MODULE.precheck(
-            MODULE.ECC, self.config(make_home(), acknowledge_ecc_surface=True)
+            library,
+            self.config(
+                make_home(), acknowledge_ecc_surface=True, allow_duplicate_channel=True
+            ),
         )
         self.assertTrue(check.refused)
+        self.assertIn("does not contain the documented entrypoint", check.refusal)
+        self.assertEqual(MODULE.library_state(check), "blocked")
+
+    def test_no_shipped_library_row_is_blocked(self) -> None:
+        # The deliverable: all three must be reachable. A `blocked` row would be a dead end.
+        for library in MODULE.LIBRARIES.values():
+            self.assertEqual(library.blocked, "", library.key)
 
     def test_unenumerable_surface_refuses_rather_than_passing(self) -> None:
         library = MODULE.Library(
@@ -197,6 +305,364 @@ class PrecheckTests(unittest.TestCase):
         )
 
 
+class ProvenanceProofTests(unittest.TestCase):
+    """The only thing that licenses a removal: the other channel's own record of the upstream.
+
+    Filesystem presence proves presence, not provenance. Every case here is about what happens
+    when that record is missing, stale, or points somewhere else — the answer is always that the
+    name is left alone.
+    """
+
+    def tearDown(self) -> None:
+        while make_home.cleanups:  # type: ignore[attr-defined]
+            make_home.cleanups.pop().cleanup()  # type: ignore[attr-defined]
+
+    def config(self, home: Path, **overrides: object) -> object:
+        return MODULE.Config(repo_root=ROOT, home=home, **overrides)  # type: ignore[arg-type]
+
+    def test_matching_source_and_url_prove_the_same_upstream(self) -> None:
+        home = make_home(names=OCCUPIED_SAMPLE, lock=matt_lock(*OCCUPIED_SAMPLE))
+        proven, unavailable = MODULE.prove_same_upstream(
+            MODULE.MATTPOCOCK, OCCUPIED_SAMPLE, self.config(home)
+        )
+        self.assertEqual(unavailable, "")
+        self.assertTrue(all(item.proven for item in proven), proven)
+        self.assertEqual(len(proven), len(OCCUPIED_SAMPLE))
+
+    def test_a_different_source_refuses_that_name(self) -> None:
+        lock = matt_lock(*OCCUPIED_SAMPLE)
+        lock[OCCUPIED_SAMPLE[0]]["source"] = "vercel-labs/skills"
+        home = make_home(names=OCCUPIED_SAMPLE, lock=lock)
+        proven, _ = MODULE.prove_same_upstream(
+            MODULE.MATTPOCOCK, OCCUPIED_SAMPLE, self.config(home)
+        )
+        by_name = {item.name: item for item in proven}
+        self.assertFalse(by_name[OCCUPIED_SAMPLE[0]].proven)
+        self.assertIn("vercel-labs/skills", by_name[OCCUPIED_SAMPLE[0]].reason)
+        self.assertTrue(by_name[OCCUPIED_SAMPLE[1]].proven)
+
+    def test_a_matching_source_with_a_foreign_clone_url_refuses(self) -> None:
+        # A short name is not an identity. A different repository can wear the same label.
+        lock = matt_lock(*OCCUPIED_SAMPLE)
+        lock[OCCUPIED_SAMPLE[0]]["sourceUrl"] = "https://github.com/impostor/skills.git"
+        home = make_home(names=OCCUPIED_SAMPLE, lock=lock)
+        proven, _ = MODULE.prove_same_upstream(
+            MODULE.MATTPOCOCK, OCCUPIED_SAMPLE, self.config(home)
+        )
+        by_name = {item.name: item for item in proven}
+        self.assertFalse(by_name[OCCUPIED_SAMPLE[0]].proven)
+        self.assertIn("sourceUrl", by_name[OCCUPIED_SAMPLE[0]].reason)
+
+    def test_a_name_missing_from_the_lock_refuses(self) -> None:
+        # Occupied on disk, unrecorded in the lock: an unattributable entry, so untouchable.
+        home = make_home(names=OCCUPIED_SAMPLE, lock=matt_lock(*OCCUPIED_SAMPLE[1:]))
+        proven, _ = MODULE.prove_same_upstream(
+            MODULE.MATTPOCOCK, OCCUPIED_SAMPLE, self.config(home)
+        )
+        by_name = {item.name: item for item in proven}
+        self.assertFalse(by_name[OCCUPIED_SAMPLE[0]].proven)
+        self.assertIn("no entry", by_name[OCCUPIED_SAMPLE[0]].reason)
+
+    def test_no_lock_file_at_all_is_an_unavailable_proof_not_an_empty_one(self) -> None:
+        home = make_home(names=OCCUPIED_SAMPLE)
+        proven, unavailable = MODULE.prove_same_upstream(
+            MODULE.MATTPOCOCK, OCCUPIED_SAMPLE, self.config(home)
+        )
+        self.assertEqual(proven, ())
+        self.assertIn("no lock file", unavailable)
+
+    def test_a_stale_lock_schema_version_is_refused_rather_than_read(self) -> None:
+        # The channel's own reader discards a lock below its current version, so crediting one
+        # would attribute provenance to a document its writer considers void.
+        home = make_home(
+            names=OCCUPIED_SAMPLE, lock=matt_lock(*OCCUPIED_SAMPLE), lock_version=2
+        )
+        _, unavailable = MODULE.prove_same_upstream(
+            MODULE.MATTPOCOCK, OCCUPIED_SAMPLE, self.config(home)
+        )
+        self.assertIn("schema version 2", unavailable)
+
+    def test_a_corrupt_lock_file_is_refused_by_name(self) -> None:
+        home = make_home(names=OCCUPIED_SAMPLE)
+        lock_path = home / ".agents" / ".skill-lock.json"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("{not json", encoding="utf-8")
+        _, unavailable = MODULE.prove_same_upstream(
+            MODULE.MATTPOCOCK, OCCUPIED_SAMPLE, self.config(home)
+        )
+        self.assertIn("not valid JSON", unavailable)
+
+    def test_a_library_with_no_recorded_lock_source_can_never_be_migrated(self) -> None:
+        library = MODULE.Library(
+            key="fixture",
+            origin="https://example.invalid/fixture",
+            licence="MIT",
+            version="1.0.0",
+            channel="plugin",
+            front_door=("true",),
+            front_door_source="fixture",
+            requires=(),
+            names=OCCUPIED_SAMPLE,
+        )
+        home = make_home(names=OCCUPIED_SAMPLE, lock=matt_lock(*OCCUPIED_SAMPLE))
+        proven, unavailable = MODULE.prove_same_upstream(
+            library, OCCUPIED_SAMPLE, self.config(home)
+        )
+        self.assertEqual(proven, ())
+        self.assertIn("no competing-channel lock source", unavailable)
+
+
+class MigrationTests(unittest.TestCase):
+    """The migrate verb: prove, print, require --yes, re-check, and stop on partial removal."""
+
+    def tearDown(self) -> None:
+        while make_home.cleanups:  # type: ignore[attr-defined]
+            make_home.cleanups.pop().cleanup()  # type: ignore[attr-defined]
+
+    def config(self, home: Path, **overrides: object) -> object:
+        return MODULE.Config(repo_root=ROOT, home=home, **overrides)  # type: ignore[arg-type]
+
+    def occupied_home(self) -> Path:
+        return make_home(
+            links={
+                name: f"../../.agents/skills/{name}" for name in OCCUPIED_SAMPLE
+            },
+            lock=matt_lock(*OCCUPIED_SAMPLE),
+        )
+
+    def setUp(self) -> None:
+        """Pretend every front-door tool is present, whatever this host actually has.
+
+        These tests are about migration ORDERING, not about tool discovery. Letting them read
+        the real PATH made them pass on a dev host with `claude` and `npx` installed and fail on
+        a clean machine — the same host-dependence that took the repository gate red in a
+        container. Tool discovery is asserted deliberately elsewhere, by stubbing the other way.
+        """
+        self._real_which = MODULE.shutil.which
+        MODULE.shutil.which = lambda tool: f"/usr/bin/{tool}"  # type: ignore[assignment]
+        self.addCleanup(setattr, MODULE.shutil, "which", self._real_which)
+
+    def test_the_removal_command_is_the_other_channels_own_front_door(self) -> None:
+        command = MODULE.removal_command(("alpha", "beta"))
+        self.assertEqual(
+            command,
+            (
+                "npx",
+                "-y",
+                "skills@latest",
+                "remove",
+                "--global",
+                "--agent",
+                "claude-code",
+                "--yes",
+                "alpha",
+                "beta",
+            ),
+        )
+        # Scoping to one agent is what keeps the canonical copy and every other agent's link.
+        self.assertIn("--agent", command)
+        self.assertIn("claude-code", command)
+
+    def test_migrate_is_a_dry_run_without_yes_and_removes_nothing(self) -> None:
+        home = self.occupied_home()
+        code, lines = MODULE.command_migrate(["mattpocock"], self.config(home))
+        output = "\n".join(lines)
+        self.assertEqual(code, 0, output)
+        self.assertIn("DRY RUN", output)
+        self.assertIn("Nothing was removed, and nothing was installed", output)
+        # The links must still be there afterwards.
+        for name in OCCUPIED_SAMPLE:
+            self.assertTrue((home / ".claude" / "skills" / name).is_symlink(), name)
+
+    def test_the_dry_run_prints_the_exact_command_and_the_exact_names(self) -> None:
+        home = self.occupied_home()
+        _, lines = MODULE.command_migrate(["mattpocock"], self.config(home))
+        output = "\n".join(lines)
+        self.assertIn("npx -y skills@latest remove --global --agent claude-code --yes", output)
+        for name in OCCUPIED_SAMPLE:
+            self.assertIn(name, output)
+        self.assertIn("exact names:", output)
+        # And what it would install afterwards.
+        self.assertIn(" ".join(MODULE.MATTPOCOCK.front_door), output)
+
+    def test_migrate_refuses_when_any_occupied_name_is_unproven(self) -> None:
+        # Asserted under --yes, where a refusal genuinely is this run's failure. The same
+        # refusal described by a dry run exits 0; that split is asserted separately, and
+        # pinning the code here rather than the message would have hidden it.
+        lock = matt_lock(*OCCUPIED_SAMPLE)
+        lock[OCCUPIED_SAMPLE[0]]["source"] = "someone-else/skills"
+        home = make_home(names=OCCUPIED_SAMPLE, lock=lock)
+        code, lines = MODULE.command_migrate(
+            ["mattpocock"], self.config(home, assume_yes=True)
+        )
+        output = "\n".join(lines)
+        self.assertEqual(code, 1)
+        self.assertIn("NOT PROVEN, left alone", output)
+        self.assertIn("stays exactly where it is", output)
+        self.assertNotIn("would remove", output)
+
+    def test_migrate_refuses_when_provenance_is_unavailable(self) -> None:
+        home = make_home(names=OCCUPIED_SAMPLE)  # occupied, but no lock file
+        code, lines = MODULE.command_migrate(
+            ["mattpocock"], self.config(home, assume_yes=True)
+        )
+        output = "\n".join(lines)
+        self.assertEqual(code, 1)
+        self.assertIn("provenance cannot be established", output)
+        self.assertIn("proves presence, not provenance", output)
+
+    def test_migrate_with_nothing_occupied_points_at_install_instead(self) -> None:
+        code, lines = MODULE.command_migrate(
+            ["mattpocock"], self.config(make_home(), assume_yes=True)
+        )
+        output = "\n".join(lines)
+        self.assertEqual(code, 1)
+        self.assertIn("nothing to migrate", output)
+
+    def test_a_dry_run_migrate_describes_a_refusal_without_failing(self) -> None:
+        # Every refusal reason `migrate` can reach, described rather than suffered. This is the
+        # host-independent half: none of it depends on which tools happen to be on PATH.
+        cases = {
+            "unprovable occupant": make_home(
+                names=OCCUPIED_SAMPLE,
+                lock={
+                    **matt_lock(*OCCUPIED_SAMPLE[1:]),
+                    OCCUPIED_SAMPLE[0]: {"source": "someone-else/skills"},
+                },
+            ),
+            "no lock file": make_home(names=OCCUPIED_SAMPLE),
+            "nothing occupied": make_home(),
+        }
+        for label, home in cases.items():
+            with self.subTest(case=label):
+                code, lines = MODULE.command_migrate(["mattpocock"], self.config(home))
+                self.assertEqual(code, 0, "\n".join(lines))
+                self.assertIn("Nothing was removed", "\n".join(lines))
+
+    def test_migrate_without_a_named_library_refuses(self) -> None:
+        with self.assertRaises(MODULE.ExternalLibraryError):
+            MODULE.command_migrate([], self.config(make_home()))
+
+    def test_migrate_stops_before_installing_when_removal_fails(self) -> None:
+        home = self.occupied_home()
+        calls: list[tuple[str, ...]] = []
+
+        def failing_front_door(command, config):  # type: ignore[no-untyped-def]
+            calls.append(tuple(command))
+            return 1, [f"front door exited 1: {' '.join(command)}"]
+
+        original = MODULE.run_front_door
+        MODULE.run_front_door = failing_front_door  # type: ignore[assignment]
+        try:
+            code, lines = MODULE.command_migrate(
+                ["mattpocock"], self.config(home, assume_yes=True)
+            )
+        finally:
+            MODULE.run_front_door = original  # type: ignore[assignment]
+        output = "\n".join(lines)
+        self.assertEqual(code, 1)
+        self.assertIn("STOPPED before installing", output)
+        # Exactly one call: the removal. The install must never have been attempted.
+        self.assertEqual(len(calls), 1, calls)
+        self.assertNotIn(MODULE.MATTPOCOCK.front_door, calls)
+
+    def test_migrate_stops_when_removal_succeeds_but_names_are_still_occupied(self) -> None:
+        # The partial-removal case: exit code 0, names still there. Installing now would be the
+        # silent loss this module exists to prevent.
+        home = self.occupied_home()
+        calls: list[tuple[str, ...]] = []
+
+        def lying_front_door(command, config):  # type: ignore[no-untyped-def]
+            calls.append(tuple(command))
+            return 0, ["front door completed"]
+
+        original = MODULE.run_front_door
+        MODULE.run_front_door = lying_front_door  # type: ignore[assignment]
+        try:
+            code, lines = MODULE.command_migrate(
+                ["mattpocock"], self.config(home, assume_yes=True)
+            )
+        finally:
+            MODULE.run_front_door = original  # type: ignore[assignment]
+        output = "\n".join(lines)
+        self.assertEqual(code, 1)
+        self.assertIn("STOPPED before installing", output)
+        self.assertIn("still occupied", output)
+        self.assertEqual(len(calls), 1, calls)
+
+    def test_migrate_installs_only_after_the_precheck_re_run_passes(self) -> None:
+        home = self.occupied_home()
+        calls: list[tuple[str, ...]] = []
+
+        def removing_front_door(command, config):  # type: ignore[no-untyped-def]
+            calls.append(tuple(command))
+            # Emulate the other channel actually removing its links.
+            if "remove" in command:
+                for name in OCCUPIED_SAMPLE:
+                    (home / ".claude" / "skills" / name).unlink()
+            return 0, ["front door completed"]
+
+        original = MODULE.run_front_door
+        MODULE.run_front_door = removing_front_door  # type: ignore[assignment]
+        try:
+            code, lines = MODULE.command_migrate(
+                ["mattpocock"], self.config(home, assume_yes=True)
+            )
+        finally:
+            MODULE.run_front_door = original  # type: ignore[assignment]
+        output = "\n".join(lines)
+        self.assertEqual(code, 0, output)
+        self.assertIn("precheck re-run after removal: passed", output)
+        self.assertEqual(len(calls), 2, calls)
+        self.assertEqual(calls[1], MODULE.MATTPOCOCK.front_door)
+
+    def test_migration_makes_the_library_reachable_rather_than_a_dead_end(self) -> None:
+        home = self.occupied_home()
+        config = self.config(home)
+        check = MODULE.precheck(MODULE.MATTPOCOCK, config)
+        self.assertTrue(check.refused)
+        self.assertEqual(len(check.migratable), len(OCCUPIED_SAMPLE))
+        self.assertEqual(MODULE.library_state(check), "installable after migration")
+        self.assertIn("libraries:migrate", MODULE.reach_command(check))
+
+    def test_a_partly_unprovable_occupancy_is_not_advertised_as_migratable(self) -> None:
+        lock = matt_lock(*OCCUPIED_SAMPLE[1:])
+        home = make_home(names=OCCUPIED_SAMPLE, lock=lock)
+        check = MODULE.precheck(MODULE.MATTPOCOCK, self.config(home))
+        self.assertTrue(check.refused)
+        self.assertNotEqual(MODULE.library_state(check), "installable after migration")
+        self.assertIn("provably the same upstream", check.refusal)
+
+    def test_a_partly_unprovable_occupancy_is_still_not_a_dead_end(self) -> None:
+        # `migrate` correctly refuses here, but accepting the duplication is a real route, so
+        # reporting "blocked / no route" would be wrong.
+        lock = matt_lock(*OCCUPIED_SAMPLE[1:])
+        home = make_home(names=OCCUPIED_SAMPLE, lock=lock)
+        check = MODULE.precheck(MODULE.MATTPOCOCK, self.config(home))
+        self.assertEqual(MODULE.library_state(check), "installable accepting duplication")
+        self.assertIn("--allow-duplicate-channel", MODULE.reach_command(check))
+        self.assertNotIn("no route", MODULE.reach_command(check))
+        # And the route it names must actually work.
+        cleared = MODULE.precheck(
+            MODULE.MATTPOCOCK, self.config(home, allow_duplicate_channel=True)
+        )
+        self.assertFalse(cleared.refused, cleared.refusal)
+
+    def test_no_deletion_primitive_appears_anywhere_in_the_module(self) -> None:
+        # The removal must always go through the other channel's front door. A direct unlink or
+        # rmtree here would be the whole safety argument collapsing.
+        text = SCRIPT.read_text(encoding="utf-8")
+        for forbidden in (
+            "shutil.rmtree",
+            "os.unlink",
+            "os.remove",
+            ".unlink(",
+            "rmdir",
+            "rm -rf",
+        ):
+            self.assertNotIn(forbidden, text, f"{forbidden} must not appear")
+
+
 class DryRunCommandTests(unittest.TestCase):
     """End-to-end verb behavior through the CLI. Nothing reaches the network."""
 
@@ -220,7 +686,8 @@ class DryRunCommandTests(unittest.TestCase):
         for key in ("mattpocock", "ecc", "hyperresearch"):
             self.assertIn(key, result.stdout)
         self.assertIn("claude plugins install mattpocock-skills", result.stdout)
-        self.assertIn("npx ecc-universal setup", result.stdout)
+        # Not `npx ecc-universal setup`: that bin does not exist in the published artifact.
+        self.assertIn("ecc install --target claude", result.stdout)
         self.assertIn("uv tool install hyperresearch", result.stdout)
         self.assertIn("284", result.stdout)
         self.assertIn("Nothing below is installed by `bundle:install`", result.stdout)
@@ -230,6 +697,112 @@ class DryRunCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DRY RUN", result.stdout)
         self.assertIn("No library was installed and no command was run", result.stdout)
+
+    def run_cli_without_front_door_tools(self, *arguments: str):
+        """Run the CLI as a machine with none of the front-door tools installed.
+
+        run_cli inherits the developer's PATH, so a dev host with `claude` and `npx` on it
+        never exercises the missing-front-door branch. A container replay from the public
+        remote did, and the gate went red there while staying green here. PATH is therefore
+        stripped to the interpreter's own directory plus the system ones.
+        """
+        environment = dict(os.environ)
+        environment["PATH"] = os.pathsep.join([str(Path(sys.executable).parent), "/usr/bin", "/bin"])
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--home", str(make_home()), *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT),
+            env=environment,
+        )
+
+    def test_dry_run_describing_a_refusal_succeeds_on_a_machine_with_no_front_door(self) -> None:
+        # Describing a refusal accurately IS the dry run's job, so it exits 0 even where the
+        # front-door tool is absent. Anything else makes an honest answer look like a crash.
+        for arguments in (("mattpocock",), ("ecc", "--acknowledge-ecc-surface"), ("hyperresearch",)):
+            with self.subTest(library=arguments[0]):
+                result = self.run_cli_without_front_door_tools("install", *arguments)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("No library was installed and no command was run", result.stdout)
+
+    def test_a_real_install_still_fails_when_the_front_door_is_absent(self) -> None:
+        # The other half of the contract: with --yes a refusal means nothing was installed, so
+        # the exit code must say so. This is what keeps the dry-run change above from being a
+        # blanket softening.
+        result = self.run_cli_without_front_door_tools("install", "hyperresearch", "--yes")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_every_verb_survives_a_machine_with_no_front_door_tool_at_all(self) -> None:
+        """The container's condition, asserted per verb rather than only for `install`.
+
+        `shutil.which` is stubbed to None instead of stripping PATH, so the assertion holds even
+        on a host where a tool sits in the interpreter's own directory — which is exactly how
+        `claude` leaked back in and hid this defect during an earlier check.
+        """
+        original = MODULE.shutil.which
+        MODULE.shutil.which = lambda tool: None  # type: ignore[assignment]
+        self.addCleanup(setattr, MODULE.shutil, "which", original)
+        home = make_home(
+            links={n: f"../../.agents/skills/{n}" for n in OCCUPIED_SAMPLE},
+            lock=matt_lock(*OCCUPIED_SAMPLE),
+        )
+        config = MODULE.Config(repo_root=ROOT, home=home)
+        for label, call in (
+            ("list", lambda c: MODULE.command_list(c)),
+            ("status", lambda c: MODULE.command_status(c)),
+            ("install", lambda c: MODULE.command_install(["mattpocock"], c)),
+            ("install ecc", lambda c: MODULE.command_install(["ecc"], c)),
+            ("install hyperresearch", lambda c: MODULE.command_install(["hyperresearch"], c)),
+            ("migrate", lambda c: MODULE.command_migrate(["mattpocock"], c)),
+            ("uninstall", lambda c: MODULE.command_uninstall(["hyperresearch"], c)),
+        ):
+            with self.subTest(verb=label):
+                code, lines = call(config)
+                self.assertEqual(code, 0, f"{label}:\n" + "\n".join(lines))
+
+    def test_a_real_run_of_every_mutating_verb_fails_with_no_front_door_tool(self) -> None:
+        # The paired half, so the test above cannot be satisfied by making everything exit 0.
+        original = MODULE.shutil.which
+        MODULE.shutil.which = lambda tool: None  # type: ignore[assignment]
+        self.addCleanup(setattr, MODULE.shutil, "which", original)
+        home = make_home(
+            links={n: f"../../.agents/skills/{n}" for n in OCCUPIED_SAMPLE},
+            lock=matt_lock(*OCCUPIED_SAMPLE),
+        )
+        config = MODULE.Config(repo_root=ROOT, home=home, assume_yes=True)
+        for label, call in (
+            ("install", lambda c: MODULE.command_install(["hyperresearch"], c)),
+            ("migrate", lambda c: MODULE.command_migrate(["mattpocock"], c)),
+            ("uninstall", lambda c: MODULE.command_uninstall(["hyperresearch"], c)),
+        ):
+            with self.subTest(verb=label):
+                code, lines = call(config)
+                output = "\n".join(lines)
+                self.assertEqual(code, 1, f"{label}:\n{output}")
+                # Every one of these must name the tool rather than failing opaquely.
+                self.assertRegex(output, r"not (?:on|found on) PATH")
+
+    def test_no_front_door_ever_runs_during_a_dry_run(self) -> None:
+        # The property the exit code is a proxy for. If a dry run ever reached a subprocess, the
+        # exit-code semantic would be describing something that already happened.
+        calls: list[tuple[str, ...]] = []
+        original = MODULE.run_front_door
+        MODULE.run_front_door = lambda command, config: (  # type: ignore[assignment]
+            calls.append(tuple(command)),
+            (0, ["should not happen"]),
+        )[1]
+        self.addCleanup(setattr, MODULE, "run_front_door", original)
+        home = make_home(
+            links={n: f"../../.agents/skills/{n}" for n in OCCUPIED_SAMPLE},
+            lock=matt_lock(*OCCUPIED_SAMPLE),
+        )
+        config = MODULE.Config(repo_root=ROOT, home=home)
+        MODULE.command_install(["mattpocock"], config)
+        MODULE.command_install(["ecc", "hyperresearch"], config)
+        MODULE.command_migrate(["mattpocock"], config)
+        MODULE.command_uninstall(["hyperresearch"], config)
+        self.assertEqual(calls, [], f"a dry run invoked: {calls}")
 
     def test_dry_run_states_version_destination_and_surface_before_asking(self) -> None:
         result = self.run_cli("install", "mattpocock")
@@ -249,10 +822,60 @@ class DryRunCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown librar", result.stderr)
 
-    def test_refused_library_exits_nonzero_without_running_a_front_door(self) -> None:
+    def test_refusal_is_reported_without_running_a_front_door(self) -> None:
+        # The refusal must be VISIBLE and nothing may run. The exit code is deliberately 0
+        # here: this is a dry run, and describing "a real install would refuse, because X" is
+        # the dry run succeeding at its job. The nonzero exit belongs to a real --yes install,
+        # asserted separately, where a refusal means nothing got installed.
         result = self.run_cli("install", "ecc")
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("REFUSED", result.stdout)
+        self.assertIn("No library was installed and no command was run", result.stdout)
+
+    def test_a_real_refused_install_exits_nonzero(self) -> None:
+        result = self.run_cli("install", "ecc", "--yes")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("REFUSED", result.stdout)
+
+    def test_all_three_libraries_are_reachable_by_a_named_command(self) -> None:
+        # The deliverable: no library may be a dead end in `list`.
+        result = self.run_cli("list")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("no route:", result.stdout)
+        self.assertNotIn("[blocked]", result.stdout)
+        for key in ("mattpocock", "ecc", "hyperresearch"):
+            self.assertIn(f"libraries:install -- {key}", result.stdout)
+
+    def test_list_reports_ecc_behind_its_surface_gate_not_as_blocked(self) -> None:
+        result = self.run_cli("list")
+        self.assertIn("ecc  [installable behind --acknowledge-ecc-surface]", result.stdout)
+
+    def test_list_reports_a_migratable_library_as_installable_after_migration(self) -> None:
+        home = make_home(
+            names=OCCUPIED_SAMPLE, lock=matt_lock(*OCCUPIED_SAMPLE)
+        )
+        result = self.run_cli("list", home=home)
+        self.assertIn("mattpocock  [installable after migration]", result.stdout)
+        self.assertIn("libraries:migrate -- mattpocock", result.stdout)
+
+    def test_ecc_dry_run_behind_its_gate_labels_the_precheck_skipped(self) -> None:
+        result = self.run_cli("install", "ecc", "--acknowledge-ecc-surface")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SKIPPED, not passed", result.stdout)
+        self.assertIn("VERSION GAP (accepted)", result.stdout)
+        self.assertIn("DRY RUN", result.stdout)
+
+    def test_migrate_requires_yes_through_the_cli(self) -> None:
+        home = make_home(
+            links={n: f"../../.agents/skills/{n}" for n in OCCUPIED_SAMPLE},
+            lock=matt_lock(*OCCUPIED_SAMPLE),
+        )
+        result = self.run_cli("migrate", "mattpocock", home=home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DRY RUN", result.stdout)
+        self.assertIn("Nothing was removed", result.stdout)
+        for name in OCCUPIED_SAMPLE:
+            self.assertTrue((home / ".claude" / "skills" / name).is_symlink(), name)
 
     def test_one_refusal_does_not_stop_the_other_named_library(self) -> None:
         result = self.run_cli("install", "ecc", "mattpocock")
@@ -269,10 +892,46 @@ class DryRunCommandTests(unittest.TestCase):
         self.assertIn("uv tool uninstall hyperresearch", result.stdout)
         self.assertIn("DRY RUN", result.stdout)
 
-    def test_uninstall_refuses_when_no_removal_front_door_exists(self) -> None:
-        result = self.run_cli("uninstall", "ecc")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("no uninstall front door is wired", result.stdout)
+    def test_ecc_uninstall_runs_its_own_published_removal_verb(self) -> None:
+        # The published artifact does expose `ecc uninstall`, so the earlier "no removal path"
+        # refusal no longer matches the evidence. Asserted against the recorded row rather than
+        # through the CLI, because reaching that line requires `npx` on PATH and this assertion
+        # is about what is wired, not about what this host has installed.
+        self.assertEqual(
+            MODULE.ECC.uninstall,
+            ("npx", "-y", "-p", "ecc-universal", "ecc", "uninstall", "--target", "claude"),
+        )
+        code, lines = MODULE.command_uninstall(
+            ["ecc"], MODULE.Config(repo_root=ROOT, home=make_home())
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("DRY RUN", "\n".join(lines))
+
+    def test_uninstall_still_refuses_a_library_with_no_removal_front_door(self) -> None:
+        library = MODULE.Library(
+            key="fixture",
+            origin="https://example.invalid/fixture",
+            licence="MIT",
+            version="1.0.0",
+            channel="home-skills",
+            front_door=("true",),
+            front_door_source="fixture",
+            requires=(),
+            names=("fixture-only",),
+        )
+        original = dict(MODULE.LIBRARIES)
+        MODULE.LIBRARIES["fixture"] = library
+        try:
+            # Under --yes, so the refusal is this run's failure rather than a description.
+            code, lines = MODULE.command_uninstall(
+                ["fixture"],
+                MODULE.Config(repo_root=ROOT, home=make_home(), assume_yes=True),
+            )
+        finally:
+            MODULE.LIBRARIES.clear()
+            MODULE.LIBRARIES.update(original)
+        self.assertEqual(code, 1)
+        self.assertIn("no uninstall front door is wired", "\n".join(lines))
 
     def test_missing_front_door_tool_fails_closed_with_a_named_reason(self) -> None:
         # PATH is emptied so `claude` cannot resolve; the refusal must name the tool
@@ -308,7 +967,13 @@ class IsolationFromInstallPathTests(unittest.TestCase):
         tasks = config["tasks"]
         library_tasks = {name for name in tasks if name.startswith("libraries:")}
         self.assertEqual(
-            library_tasks, {"libraries:list", "libraries:install", "libraries:status"}
+            library_tasks,
+            {
+                "libraries:list",
+                "libraries:install",
+                "libraries:status",
+                "libraries:migrate",
+            },
         )
         for name, task in tasks.items():
             if name.startswith("libraries:"):

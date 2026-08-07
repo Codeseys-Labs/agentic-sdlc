@@ -35,10 +35,32 @@ What this deliberately does NOT do:
 - **No ownership of foreign files.** Anything a library writes belongs to that library.
   `uninstall` runs the library's own documented removal path or refuses; it never deletes a
   path this module did not see the library's own installer create.
+- **No deletion, ever, by this module.** `migrate` de-duplicates a name held by a *different
+  channel serving the same upstream*, and it does so by invoking that channel's own `remove`
+  front door. There is no `rm` here, no `unlink`, and no path this module touches directly. A
+  name it cannot prove is the same upstream — from that channel's own lock file — is left
+  exactly where it is.
 - **Installing is not endorsing.** A library listed here is reachable, not recommended.
   Licence, provenance, and content review remain the operator's.
 - **A successful install is evidence, not authorization.** It authorizes no push, no
   publication, no merge, no deployment, and no further install.
+
+Exit codes distinguish *describing* from *doing*, because a dry run and a real install are
+different operations that were previously sharing one exit path:
+
+- **0** — the operation did what it was asked to do. For a dry run that includes describing a
+  refusal: "these 21 names are occupied", or "`claude` is not on PATH, so a real install would
+  refuse". The description is the deliverable, and it succeeded. Nothing ran, nothing changed,
+  and the reason is on stdout.
+- **1** — a real (`--yes`) operation was asked to change something and could not: a refused
+  precheck, a missing front-door tool, or a front door that exited nonzero.
+- **2** — the invocation itself was unusable: no library named, an unknown library, an
+  unreadable name list. That is a usage error rather than a description or an attempt.
+
+The practical consequence is that `install <lib>` without `--yes` exits 0 on any machine,
+including one with no `claude`, no `npx`, and no installed tools, because "the front door is
+missing" is a fact it reports rather than a failure it suffered. Reading a nonzero dry-run exit
+as "the tool broke" was the confusion this split removes.
 
 Precedent for the ownership model: `scripts/install_skill_bundle.py` classifies an entry it
 does not own at a managed path as `foreign` and **preserves** it rather than replacing it
@@ -53,6 +75,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import shutil
@@ -89,7 +112,13 @@ class Library:
     enumeration: str = ""
     uninstall: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
+    # An unresolved *fact* that makes a library unsafe to run at all — not a cost, and not
+    # overridable by any flag. No row currently sets this: ECC's version gap used to, and the
+    # operator accepted that gap, so it moved to `caveats`. The mechanism stays because the
+    # next library that cannot be honestly run needs somewhere to say so, and the difference
+    # between "expensive" (acknowledgement) and "unsafe" (blocked) must not collapse.
     blocked: str = ""
+    # A COST the operator can accept with an explicit flag. Never an unresolved fact.
     acknowledgement: str = ""
     extra_agents: tuple[str, ...] = field(default_factory=tuple)
     # A prefix every name this library writes carries. Where one exists, an occupied name
@@ -97,6 +126,15 @@ class Library:
     # it as a reinstall rather than as a foreign occupant. Attribution by name shape is an
     # inference from the naming scheme, never a provenance claim about the bytes on disk.
     name_prefix: str = ""
+    # The exact `source` string a competing channel's own lock file records for this same
+    # upstream. This is the ONLY thing that licenses a migration: a name occupied by a
+    # different channel serving the *same* upstream is de-duplication, and a name occupied by
+    # anything else is a foreign entry that stays where it is. A library with no value here
+    # can never be migrated, because there is nothing to prove sameness against.
+    lock_source: str = ""
+    lock_source_url: str = ""
+    # Caveats that survive an accepted install: recorded, printed, and never silently dropped.
+    caveats: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def surface(self) -> int:
@@ -156,6 +194,10 @@ MATTPOCOCK = Library(
         "--jq '.content' | base64 -d"
     ),
     uninstall=("claude", "plugins", "uninstall", "mattpocock-skills"),
+    # What `npx skills` records for this same upstream, read from a real lock file rather than
+    # assumed: source "mattpocock/skills", sourceUrl the .git clone URL.
+    lock_source="mattpocock/skills",
+    lock_source_url="https://github.com/mattpocock/skills.git",
     notes=(
         "Cheapest of the three by an order of magnitude: 25 entries, versioned, with a"
         " read-only managed update path.",
@@ -165,7 +207,8 @@ MATTPOCOCK = Library(
         "The editable alternative front door is `npx skills@latest add mattpocock/skills`,"
         " which writes flat files the operator owns. It is NOT wired here: it is the"
         " channel that competes for flat names, and it prompts interactively for which"
-        " skills and which agents to take.",
+        " skills and which agents to take. When that channel already holds the names, the"
+        " `migrate` verb retires them through its own `remove` path first.",
         "Its own post-install step is `/setup-matt-pocock-skills`, once per repository.",
     ),
 )
@@ -176,39 +219,81 @@ ECC = Library(
     licence="MIT",
     version="2.1.0",
     channel="home-skills",
-    # README "Guided setup (recommended)" -> `npx ecc-universal setup`.
-    front_door=("npx", "ecc-universal", "setup"),
-    front_door_source="affaan-m/ECC README, 'Install ECC' -> 'Guided setup (recommended)'",
+    # NOT the README's `npx ecc-universal setup`. That command cannot run: the published
+    # 2.1.0 tarball's `bin` map is ecc / ecc-control-pane / ecc-install / ecc-memory-mcp /
+    # ecc-plan-canvas, with no `ecc-universal` bin and no `setup` verb anywhere in `ecc`'s
+    # command table, so npx exits "could not determine executable to run" regardless of the
+    # version gap. `-p ecc-universal ecc` names the package and the real bin separately.
+    # `--profile` is mandatory: the CLI refuses with "No install profile, module IDs,
+    # included components, or legacy languages were provided" when given none.
+    front_door=(
+        "npx",
+        "-y",
+        "-p",
+        "ecc-universal",
+        "ecc",
+        "install",
+        "--target",
+        "claude",
+        "--profile",
+        "full",
+    ),
+    front_door_source=(
+        "ecc-universal 2.1.0 published artifact: `ecc --help` command table + `ecc install"
+        " --help` usage, verified against the tarball's package.json bin map"
+    ),
     requires=("npx",),
-    # 284 directories under skills/. Deliberately NOT embedded: the list is large, it moves,
-    # and a stale embedded copy would make the precheck confidently wrong. Supply it with
-    # --names-from instead, which is why this row is blocked rather than merely warned about.
+    # Deliberately NOT embedded: the list is large, it moves, and a stale embedded copy would
+    # make the precheck confidently wrong. Its own front door enumerates it exactly, so
+    # --names-from has a real source rather than a guess.
     names=(),
     catalog_size=284,
-    enumeration="gh api repos/affaan-m/ECC/contents/skills --paginate --jq '.[].name'",
-    uninstall=(),
+    # The library's OWN dry run, which lists every destination path it would write. That is a
+    # stronger enumeration than a directory listing of the repo: it reflects the resolved
+    # profile rather than the whole catalog.
+    enumeration=(
+        "npx -y -p ecc-universal ecc install --target claude --profile full --dry-run --json"
+        " | python3 -c \"import json,re,sys;p=json.load(sys.stdin)['plan'];"
+        "print('\\n'.join(sorted({m.group(1) for o in p['operations']"
+        " for m in [re.search(r'/[.]claude/skills/([^/]+)/',o['destinationPath'])] if m})))\""
+    ),
+    # Its own uninstall verb, present in the published artifact and recorded-state scoped.
+    uninstall=("npx", "-y", "-p", "ecc-universal", "ecc", "uninstall", "--target", "claude"),
     notes=(
         "The headline cost. Self-reported as 284 skills, 67 agents, and 94 command shims"
-        " against this bundle's 9 skills.",
-        "Its manual install writes each skill flat to `~/.claude/skills/<skill-name>/` —"
-        " the same single namespace this bundle's own entries occupy, so every one of the"
-        " 284 names is a first-writer-wins claim.",
+        " against this bundle's 10 skills. A `--profile full --dry-run` against the"
+        " published 2.1.0 artifact measures 983 file operations: 280 flat skill names, 67"
+        " agents, 94 commands, 122 rules files, and 170 scripts.",
+        "It writes each skill flat to `~/.claude/skills/<skill-name>/` — the same single"
+        " namespace this bundle's own entries occupy, so every one of those names is a"
+        " first-writer-wins claim.",
         "Its README warns against stacking install methods: 'Installing ECC twice into the"
-        " same harness can duplicate skills, commands, hooks, or configuration.'",
-        "Uninstall is repo-local (`node scripts/uninstall.js --dry-run`, then without the"
-        " flag) and requires a clone, so no uninstall front door is wired here.",
+        " same harness can duplicate skills, commands, hooks, or configuration.' Do not"
+        " combine this front door with `/plugin install ecc@ecc`.",
+        "`--profile full` is the widest of seven profiles. `ecc catalog profiles --json`"
+        " lists the narrower ones (minimal, core, developer, security, research), and"
+        " `--profile <name>` on the front door installs a smaller surface for a smaller"
+        " cost. Nothing here prefers `full`; it is simply the one whose surface is measured.",
     ),
-    blocked=(
-        "two independent unresolved facts. (1) Version: ECC's own README requires"
-        " `ecc-universal` 2.2.0 or newer for the guided commands, and the npm `latest`"
-        " dist-tag serves 2.1.0 — the documented front door is newer than the published"
-        " artifact, so `setup` is not known to exist in what npm would fetch. (2) Surface:"
-        " 284 names cannot be enumerated without network, so the collision precheck cannot"
-        " run and would have to be skipped rather than passed"
+    # The version gap is an accepted, recorded caveat rather than a refusal (operator
+    # decision, ADR-0009 amendment 2026-08-07). It is not silently dropped: it prints in
+    # `list`, in every dry run, and before any --yes invocation.
+    caveats=(
+        "VERSION GAP (accepted): ECC's README documents guided commands requiring"
+        " `ecc-universal` 2.2.0 or newer, and npm's `latest` dist-tag serves 2.1.0. The"
+        " operator accepted npm `latest`. The README's `npx ecc-universal setup` is NOT the"
+        " front door used here, because that bin does not exist in the published 2.1.0"
+        " artifact at all; the verified `ecc install` path is used instead. A front-door"
+        " failure is therefore reported as a failure and never assumed to be success.",
+        "SURFACE (not overruled): 284 declared entries against a selection surface an agent"
+        " reasons over on every turn. The --acknowledge-ecc-surface gate stands, because it"
+        " is about cost rather than version.",
     ),
     acknowledgement=(
-        "ECC adds 284 entries to an always-loaded selection surface. Pass --acknowledge-ecc-surface"
-        " together with --names-from <file> (see the enumeration command in `list`) to proceed"
+        "ECC adds 284 entries to an always-loaded selection surface. Pass"
+        " --acknowledge-ecc-surface to accept that cost. Add --names-from <file> (from the"
+        " enumeration command in `list`) to run the collision precheck; without it the"
+        " precheck is reported as SKIPPED, never as passed"
     ),
 )
 
@@ -290,6 +375,7 @@ class Config:
     acknowledge_ecc_surface: bool = False
     allow_duplicate_channel: bool = False
     names_from: Path | None = None
+    state_home: Path | None = None
 
     @property
     def skills_dir(self) -> Path:
@@ -302,6 +388,136 @@ class Config:
     @property
     def plugins_state(self) -> Path:
         return self.home / ".claude" / "plugins" / "installed_plugins.json"
+
+    @property
+    def skill_lock(self) -> Path:
+        """The competing channel's own lock file, resolved the way that channel resolves it.
+
+        The `skills` CLI reads `$XDG_STATE_HOME/skills/.skill-lock.json` when that variable is
+        set and `~/.agents/.skill-lock.json` otherwise. Guessing only the second path would
+        make the provenance proof silently unavailable on a host that sets the first, and an
+        unavailable proof must refuse rather than fall through to a filesystem guess.
+        """
+        if self.state_home is not None:
+            return self.state_home / "skills" / ".skill-lock.json"
+        return self.home / ".agents" / ".skill-lock.json"
+
+
+# The lock schema version this module knows how to read. The `skills` CLI itself discards a
+# lock recording anything lower, so reading one as authoritative would credit provenance to a
+# document its own writer considers stale.
+SKILL_LOCK_VERSION = 3
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """What a competing channel's own lock file says about one occupied name.
+
+    `proven` is true only when that channel recorded this exact name as coming from the
+    library's own upstream. Everything else — no lock, an unreadable lock, a lock at an
+    unknown schema version, a name absent from it, or a name recorded against a different
+    source — is unproven, and unproven means untouched.
+    """
+
+    name: str
+    proven: bool
+    source: str = ""
+    source_url: str = ""
+    reason: str = ""
+
+
+def read_skill_lock(config: Config) -> tuple[dict[str, dict], str]:
+    """Read the competing channel's lock file. Returns (entries, unavailable_reason).
+
+    Every failure is a *reason*, never an empty dict that reads like "nothing is managed
+    there". The difference matters: absent provenance must block a removal, and a silent empty
+    result would instead let one proceed.
+    """
+    path = config.skill_lock
+    if not path.is_file():
+        return {}, f"no lock file at {path}"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, f"cannot read {path}: {exc}"
+    except ValueError as exc:
+        return {}, f"{path} is not valid JSON: {exc}"
+    if not isinstance(document, dict):
+        return {}, f"{path} is not a JSON object"
+    version = document.get("version")
+    if not isinstance(version, int):
+        return {}, f"{path} records no integer schema version"
+    if version < SKILL_LOCK_VERSION:
+        return {}, (
+            f"{path} is at schema version {version}, older than the version"
+            f" {SKILL_LOCK_VERSION} this reads; its own writer discards it as stale"
+        )
+    entries = document.get("skills")
+    if not isinstance(entries, dict):
+        return {}, f"{path} records no skills object"
+    return {
+        name: entry for name, entry in entries.items() if isinstance(entry, dict)
+    }, ""
+
+
+def prove_same_upstream(
+    library: Library, names: tuple[str, ...], config: Config
+) -> tuple[tuple[Provenance, ...], str]:
+    """Decide, per name, whether another channel's lock attributes it to the SAME upstream.
+
+    This is the entire licence for a removal. Filesystem presence proves presence, not
+    provenance — the precheck says so in as many words — so the *other channel's own record*
+    is what is consulted, and a name it does not vouch for is left alone.
+    """
+    if not library.lock_source:
+        return (), (
+            f"{library.key} records no competing-channel lock source, so no occupied name"
+            " can be proven to be the same upstream"
+        )
+    entries, unavailable = read_skill_lock(config)
+    if unavailable:
+        return (), unavailable
+    results: list[Provenance] = []
+    for name in names:
+        entry = entries.get(name)
+        if entry is None:
+            results.append(
+                Provenance(name, False, reason="no entry in the other channel's lock file")
+            )
+            continue
+        source = str(entry.get("source", ""))
+        source_url = str(entry.get("sourceUrl", ""))
+        if source != library.lock_source:
+            results.append(
+                Provenance(
+                    name,
+                    False,
+                    source,
+                    source_url,
+                    reason=(
+                        f"lock records source {source!r}, not {library.lock_source!r}"
+                    ),
+                )
+            )
+            continue
+        # Where the library records a clone URL too, both must agree. A matching short name
+        # with a different URL is a different repository wearing the same label.
+        if library.lock_source_url and source_url != library.lock_source_url:
+            results.append(
+                Provenance(
+                    name,
+                    False,
+                    source,
+                    source_url,
+                    reason=(
+                        f"lock records sourceUrl {source_url!r}, not"
+                        f" {library.lock_source_url!r}"
+                    ),
+                )
+            )
+            continue
+        results.append(Provenance(name, True, source, source_url))
+    return tuple(results), ""
 
 
 def absolute(path: Path) -> Path:
@@ -363,6 +579,20 @@ class Precheck:
     new_names: tuple[str, ...]
     reinstalls: tuple[str, ...] = ()
     refusal: str = ""
+    # True when the surface could not be enumerated and the operator accepted proceeding
+    # anyway. A skipped precheck is NOT a passed one, and every renderer must say which it
+    # was; this flag exists so nothing can print the two the same way.
+    skipped: bool = False
+    skipped_reason: str = ""
+    # Set when the only thing standing between this library and its install is a set of names
+    # another channel holds for the same upstream. That is the migration path, and naming it
+    # here is what keeps `list` from reporting a dead end.
+    migratable: tuple[str, ...] = ()
+    # True when the refusal is the plugin-channel duplication one, which --allow-duplicate-channel
+    # always clears. Tracked separately from `migratable` because a partly-unprovable occupancy
+    # cannot be migrated but is still reachable that way, and reporting it as a dead end would be
+    # wrong in exactly the case the operator asked not to be a dead end.
+    duplicate_channel: bool = False
 
     @property
     def refused(self) -> bool:
@@ -381,15 +611,38 @@ def precheck(library: Library, config: Config) -> Precheck:
     if config.names_from is not None:
         names = load_names_override(config.names_from)
 
-    if library.blocked and not (
-        library.key == "ecc" and config.acknowledge_ecc_surface and config.names_from
-    ):
+    if library.blocked:
         reason = library.blocked
         if library.acknowledgement:
             reason = f"{reason}. {library.acknowledgement}"
         return Precheck(library, names, (), (), (), refusal=reason)
 
+    # A library gated on the cost of its surface rather than on any unresolved fact. The gate
+    # is the acknowledgement; the enumeration is a separate question answered just below.
+    if library.acknowledgement and not (
+        library.key == "ecc" and config.acknowledge_ecc_surface
+    ):
+        return Precheck(library, names, (), (), (), refusal=library.acknowledgement)
+
     if not names:
+        skipped_reason = (
+            f"the {library.surface} names {library.key} writes cannot be enumerated without"
+            " running its own front door, so no collision comparison was performed"
+        )
+        # The surface is unenumerable offline and the operator acknowledged the cost. Refusing
+        # here would make the library unreachable; pretending the precheck passed would be a
+        # lie. So it proceeds with the check explicitly labelled SKIPPED, everywhere it is
+        # reported, and the install's own front-door exit code becomes the only success claim.
+        if library.key == "ecc" and config.acknowledge_ecc_surface:
+            return Precheck(
+                library,
+                names,
+                (),
+                (),
+                (),
+                skipped=True,
+                skipped_reason=skipped_reason,
+            )
         return Precheck(
             library,
             names,
@@ -418,7 +671,14 @@ def precheck(library: Library, config: Config) -> Precheck:
     )
     new_names = tuple(sorted(name for name in names if name not in occupied))
 
+    # Which occupied names the other channel's own lock attributes to this same upstream.
+    # Only these are candidates for migration; everything else is a foreign entry.
+    occupied_names = tuple(name for name, _ in home_collisions)
+    provenance, _unavailable = prove_same_upstream(library, occupied_names, config)
+    migratable = tuple(sorted(item.name for item in provenance if item.proven))
+
     refusal = ""
+    duplicate_channel = False
     if bundle_collisions:
         refusal = (
             f"{len(bundle_collisions)} name(s) collide with skills this bundle installs:"
@@ -435,14 +695,29 @@ def precheck(library: Library, config: Config) -> Precheck:
         # A plugin channel cannot lose a name, so this is not a blocked install — it is a
         # doubled capability, which upstream names as its own failure mode. Refusing is the
         # only point at which it is still cheap to notice.
+        duplicate_channel = True
         refusal = (
             f"{len(home_collisions)} of this library's {len(names)} skill name(s) are"
             f" already present in {config.skills_dir} through a different channel, so"
             " installing the plugin would load the same capability twice. Upstream's own"
             " README: 'Pick one — installing both leaves you with every skill twice.'"
-            " Remove the other channel's copies first, or pass"
-            " --allow-duplicate-channel to accept the duplication deliberately"
         )
+        if len(migratable) == len(home_collisions):
+            # Not a dead end: every occupant is provably the same upstream arriving by a
+            # different road, so de-duplicating is a channel change rather than a capability
+            # loss. Say so, and name the verb.
+            refusal += (
+                f" All {len(migratable)} are provably the same upstream in the other"
+                f" channel's own lock file, so `migrate {library.key}` can retire them"
+                " through that channel's own removal path and then install. Or pass"
+                " --allow-duplicate-channel to accept the duplication deliberately"
+            )
+        else:
+            refusal += (
+                f" {len(migratable)} of {len(home_collisions)} are provably the same"
+                " upstream; the rest are not, so `migrate` would refuse them. Pass"
+                " --allow-duplicate-channel to accept the duplication deliberately"
+            )
     return Precheck(
         library,
         names,
@@ -451,6 +726,8 @@ def precheck(library: Library, config: Config) -> Precheck:
         new_names,
         reinstalls,
         refusal,
+        migratable=migratable,
+        duplicate_channel=duplicate_channel,
     )
 
 
@@ -486,10 +763,24 @@ def render_plan(check: Precheck, config: Config) -> list[str]:
         if check.reinstalls:
             detail += f", {len(check.reinstalls)} its own prior install"
         lines.append(detail)
+    # A skipped precheck and a passed one must never render alike. This is the only line that
+    # reports precheck state, and it says SKIPPED in words rather than by omission.
+    if check.skipped:
+        lines.append(f"precheck:     SKIPPED, not passed — {check.skipped_reason}")
+        lines.append(
+            "              Nothing verified that these names are free. Supply --names-from"
+            " <file> to turn this into a real comparison."
+        )
+    elif check.names and not check.refused:
+        lines.append(
+            f"precheck:     passed against {len(check.names)} enumerated name(s)"
+        )
     missing = front_door_available(library)
     lines.append(
         f"front-door tool: {'MISSING -> ' + missing if missing else 'present'}"
     )
+    for caveat in library.caveats:
+        lines.append(f"caveat:       {caveat}")
     for note in library.notes:
         lines.append(f"note:         {note}")
     if library.uninstall:
@@ -513,6 +804,53 @@ def report_collisions(check: Precheck, config: Config) -> list[str]:
     return lines
 
 
+def library_state(check: Precheck) -> str:
+    """The one-word status in `list`. A library reachable by a documented verb is not blocked.
+
+    "blocked" is reserved for a library with no route at all. A library whose only obstacle is
+    a set of names another channel holds for the same upstream has a route — `migrate` — and
+    calling that blocked would report a dead end where one does not exist.
+    """
+    if not check.refused:
+        return "installable, precheck SKIPPED" if check.skipped else "installable"
+    library = check.library
+    if check.migratable and len(check.migratable) == len(check.home_collisions):
+        return "installable after migration"
+    if check.duplicate_channel:
+        # Some occupants are unprovable, so `migrate` refuses — but duplication is still an
+        # accepted-cost route, so this is not a dead end.
+        return "installable accepting duplication"
+    if library.acknowledgement:
+        return f"installable behind {surface_gate(library)}"
+    return "blocked"
+
+
+def surface_gate(library: Library) -> str:
+    return f"--acknowledge-{library.key}-surface"
+
+
+def reach_command(check: Precheck) -> str:
+    """The exact command that reaches this library from where it currently stands."""
+    library = check.library
+    if check.refused and check.migratable and len(check.migratable) == len(
+        check.home_collisions
+    ):
+        return f"mise run libraries:migrate -- {library.key}   # then --yes to execute"
+    if check.refused and library.acknowledgement:
+        return (
+            f"mise run libraries:install -- {library.key} {surface_gate(library)}"
+            "   # then --yes to execute"
+        )
+    if check.refused and check.duplicate_channel:
+        return (
+            f"mise run libraries:install -- {library.key} --allow-duplicate-channel"
+            "   # then --yes to execute"
+        )
+    if check.refused:
+        return "no route: resolve the refusal above first"
+    return f"mise run libraries:install -- {library.key}   # then --yes to execute"
+
+
 def command_list(config: Config) -> tuple[int, list[str]]:
     bundle = bundle_skill_names(config.repo_root)
     occupied = present_names(config.skills_dir)
@@ -526,7 +864,7 @@ def command_list(config: Config) -> tuple[int, list[str]]:
     ]
     for library in LIBRARIES.values():
         check = precheck(library, config)
-        state = "blocked" if check.refused else "installable"
+        state = library_state(check)
         detected = detect(library, config)
         lines.append(f"{library.key}  [{state}]  detected: {detected}")
         lines.extend(f"  {line}" for line in render_plan(check, config))
@@ -534,6 +872,7 @@ def command_list(config: Config) -> tuple[int, list[str]]:
             lines.append(f"  enumerate:    {library.enumeration}")
         if check.refused:
             lines.append(f"  REFUSED:      {check.refusal}")
+        lines.append(f"  reach it by:  {reach_command(check)}")
         lines.append("")
     lines.append(
         "Installing is not endorsing, and a successful install is evidence, not"
@@ -631,18 +970,28 @@ def command_install(keys: list[str], config: Config) -> tuple[int, list[str]]:
         lines.append(f"=== {key} ===")
         lines.extend(render_plan(check, config))
         lines.extend(report_collisions(check, config))
+        # A refusal is a *fact about what a real install would do*. Reporting it is the dry
+        # run's whole job, so only a real install treats it as this run's own failure.
         if check.refused:
-            failed = True
+            failed = failed or config.assume_yes
             lines.append(f"REFUSED: {check.refusal}")
             lines.append("")
             continue
         missing = front_door_available(library)
         if missing:
-            failed = True
+            failed = failed or config.assume_yes
             lines.append(
                 f"REFUSED: front-door tool not found on PATH: {missing}. This module"
                 " installs no tool of its own"
             )
+            if not config.assume_yes:
+                # Still say DRY RUN. The run was asked to describe an outcome and it did;
+                # omitting the line here made a described refusal look like a different kind
+                # of event from a described install.
+                lines.append(
+                    "DRY RUN: nothing was run. The tool above is missing, so a real --yes"
+                    " install would refuse rather than proceed."
+                )
             lines.append("")
             continue
         if not config.assume_yes:
@@ -656,12 +1005,245 @@ def command_install(keys: list[str], config: Config) -> tuple[int, list[str]]:
         lines.extend(output)
         if code:
             failed = True
+            # A front door that exits nonzero is a failed install, full stop. This matters most
+            # for a library whose documented entrypoint may not exist in the published
+            # artifact: the failure must read as a failure rather than as a finished install.
+            lines.append(
+                f"install FAILED for {key}: the front door did not complete. Nothing here"
+                " infers success from having run a command, and no part of this counts as"
+                " authorization for any further effect."
+            )
+        elif check.skipped:
+            lines.append(
+                "front door completed, but the collision precheck was SKIPPED, not passed."
+                " Names this library took from another writer would not have been reported."
+                f" Compare {config.skills_dir} against the enumeration command in `list`."
+            )
         lines.append("")
     if not config.assume_yes:
         lines.append(
             "Dry run is the default. No library was installed and no command was run."
         )
+        if any(line.startswith("REFUSED:") for line in lines):
+            lines.append(
+                "Exit 0: a dry run's job is to describe the outcome, and the refusal above is"
+                " that description. A real install (--yes) of the same thing would exit 1."
+            )
+        # A dry run's job is to DESCRIBE the outcome, so describing a refusal accurately is a
+        # success: exit 0, with the refusal on the page. Exiting nonzero here made the honest
+        # answer "a real install would refuse, because X" indistinguishable from "this tool
+        # broke", and it made the repository gate pass on a machine that happens to have the
+        # front-door tools on PATH while failing on a machine that does not — the defect a
+        # container replay from the public remote exposed. A real install (--yes) keeps the
+        # nonzero exit below, because there the refusal means nothing was installed.
+        return 0, lines
     return (1 if failed else 0), lines
+
+
+# The competing channel's OWN removal front door. Verified against `skills remove --help` and
+# its `removeCommand` source. Two scoping decisions are load-bearing:
+#   --global      the occupied names are in a home, not a project checkout.
+#   --agent claude-code
+#                 without it, `remove` targets every agent in its registry: it deletes the
+#                 canonical ~/.agents/skills/<name>, every other agent's link to it, and the
+#                 lock entry. Scoped to one agent it removes only ~/.claude/skills/<name> and
+#                 leaves the canonical copy, the other agents' links, and the lock intact.
+#                 De-duplicating a Claude Code name must not take the skill away from Codex.
+# Names are appended by the caller. Nothing here shells out through a shell, so no name is
+# ever word-split or glob-expanded.
+CHANNEL_REMOVAL_FRONT_DOOR = (
+    "npx",
+    "-y",
+    "skills@latest",
+    "remove",
+    "--global",
+    "--agent",
+    "claude-code",
+    "--yes",
+)
+CHANNEL_REMOVAL_SOURCE = "`npx -y skills@latest remove --help` (skills CLI 1.5.22)"
+
+
+def removal_command(names: tuple[str, ...]) -> tuple[str, ...]:
+    return CHANNEL_REMOVAL_FRONT_DOOR + tuple(names)
+
+
+def refusal_exit(config: Config) -> int:
+    """The exit code a refusal earns, which depends on what was asked.
+
+    A dry run was asked to *describe* what would happen; a refusal is a valid description, so
+    describing one accurately is a success. A real (`--yes`) run was asked to *change* something
+    and did not, so the same refusal is that run's failure. Sharing one exit path between the two
+    is what made this module's gate pass on a host with the front-door tools on PATH and fail on
+    a host without them.
+    """
+    return 1 if config.assume_yes else 0
+
+
+def command_migrate(keys: list[str], config: Config) -> tuple[int, list[str]]:
+    """Retire another channel's copies of the SAME upstream, then install through this one.
+
+    The ordering is the whole point. Removal runs through the other channel's own front door,
+    the precheck is then re-run against the real filesystem, and only a precheck that actually
+    passes admits the install. A partial removal stops before installing, because installing
+    over a still-occupied name is the silent loss this module exists to prevent.
+    """
+    if not keys:
+        raise ExternalLibraryError(
+            "name at least one library to migrate. There is no verb that migrates everything"
+        )
+    unknown = [key for key in keys if key not in LIBRARIES]
+    if unknown:
+        raise ExternalLibraryError(
+            f"unknown librar(ies): {', '.join(unknown)}. Known: {', '.join(LIBRARIES)}"
+        )
+    lines: list[str] = []
+    failed = False
+    for key in keys:
+        library = LIBRARIES[key]
+        lines.append(f"=== {key} ===")
+        code, output = migrate_one(library, config)
+        lines.extend(output)
+        if code:
+            failed = True
+        lines.append("")
+    if not config.assume_yes:
+        lines.append(
+            "Dry run is the default. Nothing was removed, and nothing was installed."
+        )
+    return (1 if failed else 0), lines
+
+
+def migrate_one(library: Library, config: Config) -> tuple[int, list[str]]:
+    lines: list[str] = []
+    check = precheck(library, config)
+    occupied = tuple(name for name, _ in check.home_collisions)
+
+    if not occupied:
+        lines.append(
+            "nothing to migrate: no name this library writes is occupied by another writer."
+            f" Use `libraries:install -- {library.key}` instead."
+        )
+        return refusal_exit(config), lines
+
+    provenance, unavailable = prove_same_upstream(library, occupied, config)
+    lines.append(f"provenance oracle: {config.skill_lock}")
+    lines.append(f"  removal front door documented at: {CHANNEL_REMOVAL_SOURCE}")
+    if unavailable:
+        lines.append(
+            f"REFUSED: provenance cannot be established — {unavailable}. Presence on the"
+            " filesystem proves presence, not provenance; without the other channel's own"
+            " record that these names are the same upstream, nothing here will remove them."
+        )
+        return refusal_exit(config), lines
+
+    proven = tuple(item for item in provenance if item.proven)
+    unproven = tuple(item for item in provenance if not item.proven)
+    for item in proven:
+        lines.append(f"  PROVEN same upstream: {item.name} (source {item.source})")
+    for item in unproven:
+        lines.append(f"  NOT PROVEN, left alone: {item.name} — {item.reason}")
+
+    if unproven:
+        lines.append(
+            f"REFUSED: {len(unproven)} of {len(occupied)} occupied name(s) cannot be proven"
+            f" to be the same upstream as {library.key}. Anything unproven is a foreign entry"
+            " and stays exactly where it is, so this migration would be incomplete and is not"
+            " attempted. Resolve those names yourself, or accept the duplication with"
+            " --allow-duplicate-channel on `install`."
+        )
+        return refusal_exit(config), lines
+
+    names = tuple(item.name for item in proven)
+    command = removal_command(names)
+    lines.append("")
+    lines.append(f"would remove {len(names)} name(s) via the other channel's own front door:")
+    lines.append(f"  {' '.join(command)}")
+    lines.append(f"  exact names: {', '.join(names)}")
+    lines.append(
+        "  scope: --agent claude-code removes only"
+        f" {config.skills_dir}/<name>. The canonical copy under"
+        f" {config.home / '.agents' / 'skills'}, every other agent's link to it, and the lock"
+        " entry all survive, so no other host loses the capability."
+    )
+    lines.append("  this module runs no rm of its own, and touches no path directly.")
+    lines.append("")
+    lines.append("then would install:")
+    lines.append(f"  {' '.join(library.front_door)}")
+
+    # Both tools are reported before either is acted on, so a dry run on a machine with neither
+    # names both rather than stopping at the first one. Under --yes each is a hard stop, because
+    # then the run was asked to change something it cannot.
+    missing = front_door_available(library)
+    npx_missing = shutil.which(CHANNEL_REMOVAL_FRONT_DOOR[0]) is None
+    if npx_missing:
+        lines.append(
+            f"REFUSED: the other channel's removal front door needs"
+            f" {CHANNEL_REMOVAL_FRONT_DOOR[0]}, which is not on PATH"
+        )
+    if missing:
+        lines.append(
+            f"REFUSED: this library's own front-door tool is not on PATH: {missing}."
+            " Removal is not attempted, because a removal whose install cannot follow would"
+            " leave the home with neither channel."
+        )
+    if npx_missing or missing:
+        if config.assume_yes:
+            return 1, lines
+        lines.append("")
+        lines.append(
+            "DRY RUN: nothing was removed and nothing was installed. The tool(s) named above"
+            " are missing, so a real --yes migration would refuse rather than proceed."
+        )
+        return 0, lines
+
+    if not config.assume_yes:
+        lines.append("")
+        lines.append(
+            "DRY RUN: nothing was removed and nothing was installed. Re-run with --yes to"
+            " execute the removal and then the install."
+        )
+        return 0, lines
+
+    lines.append("")
+    code, output = run_front_door(command, config)
+    lines.extend(output)
+    if code:
+        lines.append(
+            "STOPPED before installing: the removal front door failed, so the names may still"
+            " be occupied. Installing now could silently lose either copy."
+        )
+        return 1, lines
+
+    # Re-run the precheck against the real filesystem. The removal's exit code says the command
+    # succeeded; only a fresh look says the names are actually free.
+    after = precheck(library, config)
+    still_occupied = tuple(name for name, _ in after.home_collisions)
+    if still_occupied:
+        lines.append(
+            f"STOPPED before installing: {len(still_occupied)} name(s) are still occupied"
+            f" after removal: {', '.join(still_occupied)}. The removal reported success, so"
+            " this is a partial removal rather than a failure — read the front door's own"
+            " output above before retrying."
+        )
+        return 1, lines
+    if after.refused:
+        lines.append(
+            f"STOPPED before installing: the precheck still refuses — {after.refusal}"
+        )
+        return 1, lines
+    lines.append(
+        f"precheck re-run after removal: passed, {len(after.new_names)} name(s) now free"
+    )
+    code, output = run_front_door(library.front_door, config)
+    lines.extend(output)
+    if code:
+        lines.append(
+            "The other channel's copies were removed but this library's front door failed."
+            " The home now has neither; re-run the install once the cause above is fixed."
+        )
+        return 1, lines
+    return 0, lines
 
 
 def command_uninstall(keys: list[str], config: Config) -> tuple[int, list[str]]:
@@ -675,8 +1257,10 @@ def command_uninstall(keys: list[str], config: Config) -> tuple[int, list[str]]:
     for key in keys:
         library = LIBRARIES[key]
         lines.append(f"=== {key} ===")
+        # Same describing-vs-doing split as `install`: under a dry run a refusal is the
+        # description that was asked for, so it does not fail the run.
         if not library.uninstall:
-            failed = True
+            failed = failed or config.assume_yes
             lines.append(
                 "REFUSED: no uninstall front door is wired for this library. Its own"
                 " removal path is the only supported one, and this module never deletes a"
@@ -686,8 +1270,10 @@ def command_uninstall(keys: list[str], config: Config) -> tuple[int, list[str]]:
             continue
         missing = front_door_available(library)
         if missing:
-            failed = True
+            failed = failed or config.assume_yes
             lines.append(f"REFUSED: front-door tool not found on PATH: {missing}")
+            if not config.assume_yes:
+                lines.append("DRY RUN: nothing was run.")
             lines.append("")
             continue
         lines.append(f"would run: {' '.join(library.uninstall)}")
@@ -757,6 +1343,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     subparsers.add_parser(
         "status", parents=[common], help="what is already present in the target home"
     )
+    migrate = subparsers.add_parser(
+        "migrate",
+        parents=[common],
+        help=(
+            "retire another channel's copies of the same upstream through that channel's own"
+            " removal path, then install through this one"
+        ),
+    )
+    migrate.add_argument("libraries", nargs="*")
     uninstall = subparsers.add_parser(
         "uninstall", parents=[common], help="run a library's own removal path"
     )
@@ -767,13 +1362,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     names_from = getattr(args, "names_from", None)
+    home = absolute(getattr(args, "home", None) or Path.home())
+    # The competing channel resolves its lock through XDG_STATE_HOME. Honour that only when the
+    # target home is the real one; a --home fixture must not read the operator's lock file and
+    # conclude anything about a directory it is not looking at.
+    state_home = os.environ.get("XDG_STATE_HOME")
     config = Config(
         repo_root=Path(__file__).resolve().parents[1],
-        home=absolute(getattr(args, "home", None) or Path.home()),
+        home=home,
         assume_yes=getattr(args, "yes", False),
         acknowledge_ecc_surface=getattr(args, "acknowledge_ecc_surface", False),
         allow_duplicate_channel=getattr(args, "allow_duplicate_channel", False),
         names_from=absolute(names_from) if names_from else None,
+        state_home=(
+            absolute(Path(state_home))
+            if state_home and home == absolute(Path.home())
+            else None
+        ),
     )
     try:
         if args.command == "list":
@@ -782,6 +1387,8 @@ def main(argv: list[str] | None = None) -> int:
             code, messages = command_status(config)
         elif args.command == "install":
             code, messages = command_install(args.libraries, config)
+        elif args.command == "migrate":
+            code, messages = command_migrate(args.libraries, config)
         else:
             code, messages = command_uninstall(args.libraries, config)
     except ExternalLibraryError as exc:

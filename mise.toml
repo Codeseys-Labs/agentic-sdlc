@@ -182,6 +182,11 @@ description = "Report which external skill libraries are already present in this
 run = "uv run --python 3.12.11 --script scripts/install_external_libraries.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_external_libraries.py status"
 
+[tasks."libraries:migrate"]
+description = "Retire another channel's copies of the same upstream through that channel's own removal path, then install (dry run without --yes)"
+run = "uv run --python 3.12.11 --script scripts/install_external_libraries.py migrate"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_external_libraries.py migrate"
+
 [tasks."claude:statusline:status"]
 description = "Inspect the optional managed Claude Code statusline"
 run = "uv run --python 3.12.11 --script scripts/manage_claude_statusline.py status"

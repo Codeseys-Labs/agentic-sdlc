@@ -242,6 +242,140 @@ The three libraries, with the facts re-verified for this record:
   library was installed and no front door was invoked.** A passing gate is evidence of
   conformance only and authorizes nothing.
 
+## Amendment — 2026-08-07: two operator decisions, and one upstream fact that outranked both
+
+- **Status:** accepted, same day as the original record.
+- **Deciders:** operator (both decisions), agent (evidence and implementation).
+- **What changed:** Decision item 1 gains a verb, Decision item 4 gains a migration rule, and
+  Decision item 6 is substantially rewritten. Everything else stands, in particular items 2, 3,
+  5, 7, 8, and 10 — no gate reaches the new verb, dry run remains the default, nothing is
+  vendored, no credential is handled, no bootstrap prerequisite is added, and an install still
+  authorizes nothing.
+
+**Operator decision 1: same-upstream de-duplication is allowed, through the other channel's own
+removal path.** The original record's duplicate-channel rule refused and stopped there, offering
+only `--allow-duplicate-channel`. Against the live home that made mattpocock a dead end: 21 of
+its 25 names were already held by `npx skills`, so the only routes were "accept duplication" or
+"do it by hand". The operator directed that the occupants be **removed first, then installed
+through this bundle**, so the tool must offer that migration rather than only refusing.
+
+`libraries:migrate` implements it, and the safety of the whole thing rests on one distinction:
+**presence is not provenance.** A directory listing proves a name is taken and says nothing about
+who took it. So the migration's licence to remove comes from the *competing channel's own lock
+file* (`$XDG_STATE_HOME/skills/.skill-lock.json`, else `~/.agents/.skill-lock.json`), matching each
+occupied name's recorded `source` **and** `sourceUrl` against the library's upstream. Consequences,
+stated as refusals because that is what they are:
+
+- A name whose lock entry names a **different** `source` is not touched. Neither is one whose
+  `source` matches but whose clone URL does not — a label is not an identity.
+- A name **absent** from the lock is not touched. Occupied but unattributable.
+- **No lock file, an unreadable one, or one at a schema version the channel's own reader
+  discards** refuses the migration outright. An unavailable proof is not a passed one.
+- A **single** unproven name refuses the whole migration rather than half-completing it.
+- Removal runs the other channel's own verb,
+  `npx -y skills@latest remove --global --agent claude-code --yes <names…>`. **This tool contains
+  no deletion primitive** — no `rm`, no `unlink`, no path touched directly — and a test asserts
+  their absence, because that absence is the argument.
+- `--agent claude-code` is load-bearing, not cosmetic. Verified against the CLI's source and in
+  fixture homes: a bare `remove --global` targets **every** agent in its registry, deleting the
+  canonical `~/.agents/skills/<name>`, every other agent's link, and the lock entry. On a home
+  whose lock lists 16 agents that is a capability loss for 15 hosts that were not the problem.
+  Scoped to one agent it removes only `~/.claude/skills/<name>` and the rest survives, so the
+  change is narrow and re-linkable.
+- **Ordering is enforced:** remove, then re-run the precheck against the real filesystem, then
+  install. A removal that fails stops the migration. So does a removal that exits **zero while
+  names remain occupied** — the partial-removal case, which is more dangerous than an outright
+  failure precisely because it looks like success. Installing over a still-occupied name is the
+  silent loss the precheck exists to prevent.
+- If removal succeeds and the *install* then fails, that is reported plainly: the home has
+  neither channel, and the install must be re-run once the named cause is fixed.
+
+**Operator decision 2: ECC's npm `latest` is accepted, and the version gap survives as a
+recorded caveat.** The original Decision item 6 refused ECC on two independent facts. The version
+fact — README requires 2.2.0+, npm `latest` serves 2.1.0 — is **overruled**: `latest` is accepted.
+It is not silently dropped. It is recorded as a `caveat:` line that prints in `list` and on every
+dry run, and the install treats a nonzero front-door exit as a **failed install** rather than
+inferring success from having run a command. The surface fact stands: `--acknowledge-ecc-surface`
+is still required, because it is about cost and the operator did not overrule it.
+
+**The upstream fact that outranked both decisions.** Re-verifying the front door before relying
+on it showed that ECC's documented entrypoint **does not exist in the published artifact at
+all**. `npx ecc-universal setup` fails with npm's "could not determine executable to run", and
+would keep failing at any version: the 2.1.0 tarball declares bins `ecc`, `ecc-control-pane`,
+`ecc-install`, `ecc-memory-mcp`, `ecc-plan-canvas` — no `ecc-universal` bin — and `ecc`'s own
+command table has no `setup` verb. Accepting `latest` on the recorded front door would therefore
+have shipped a guaranteed failure with an accepted-caveat label on it. The wired front door is the
+artifact's real one, `npx -y -p ecc-universal ecc install --target claude --profile full`, taken
+from `ecc --help` and `ecc install --help`; a profile is mandatory because the CLI refuses without
+one. **A README is a claim and the published artifact is the fact**, and where they disagree the
+artifact wins — that is the durable rule this episode establishes, beyond ECC.
+
+Two further corrections fell out of the same verification, both making the record more accurate
+rather than more permissive:
+
+- **ECC does have a wired uninstall.** The original record said its removal path was repo-local
+  and needed a clone. That describes the repository's `scripts/uninstall.js`; the published
+  artifact exposes `ecc uninstall --target claude`, scoped to its own recorded install-state and
+  supporting `--dry-run`. It is now wired.
+- **The surface is enumerable after all, by the library's own dry run.** `ecc install --dry-run
+  --json` emits every destination path it would write. Against the resolved `full` profile that is
+  983 operations: 280 distinct flat skill names, 67 agents, 94 commands, 122 rules files, 170
+  scripts. Upstream's self-reported 67 and 94 match exactly; its 284 skills measure 280 for this
+  profile. `--names-from` therefore now has a real source rather than a hand-maintained guess.
+
+**The skipped-precheck decision, and why it is not a loophole.** ECC's surface still cannot be
+enumerated without running its front door, so requiring `--names-from` unconditionally would keep
+ECC unreachable and defeat the goal. The honest resolution: where the surface cost is
+acknowledged, the install proceeds with the check reported as **`precheck: SKIPPED, not passed`**,
+in those words, on the plan and again after the front door completes. The rule "a precheck that
+cannot run is not a precheck that passed" is unchanged — what changed is that the skip is now
+*labelled* rather than converted into a refusal. `--names-from` remains available and turns the
+skip into a real comparison; run against the real 280 names it found exactly one genuine
+collision (`benchmark`, an unrelated local skill with no lock entry — unattributable, so not
+migratable, and correctly refused).
+
+**Decision item 6, as amended.** ECC is gated behind `--acknowledge-ecc-surface` alone. Its
+version gap and its skipped precheck are recorded, printed caveats rather than blocks. Its front
+door is the published artifact's, not the README's. The `blocked` mechanism from the original
+item 6 is retained in the code but set by no library row — it means "cannot be honestly run" as
+distinct from "expensive", and a test keeps the two from collapsing into each other.
+
+**Net effect on reachability.** All three libraries are reachable, and `list` prints the exact
+command for each: mattpocock as *installable after migration*, ecc as *installable behind
+--acknowledge-ecc-surface*, hyperresearch as *installable*. No library reports as blocked, and a
+test asserts that. Nothing is auto-invoked: the dependency-closure test still walks `setup`,
+`check`, `bundle:install`, `test`, and `self-test` and fails if any reaches a `libraries:*` task.
+
+**Amendment item: a dry run's exit code describes, it does not attempt.** A container replay from
+the public remote found that `mise run check` was RED on a fresh machine while green on the
+developer host. Decision item 8 ("failures fail closed with a named reason") had been implemented
+as *every* refusal failing the process, which conflated two different operations. The split now
+recorded:
+
+- **0** — the operation did what it was asked. For a dry run that includes describing a refusal:
+  occupied names, or a front-door tool that is absent so a real install would refuse. The
+  description is the deliverable and it succeeded; the reason is printed in full.
+- **1** — a real (`--yes`) operation was asked to change something and could not.
+- **2** — the invocation itself was unusable (no library named, unknown library, unreadable name
+  list). Unchanged.
+
+Decision item 8's fail-closed property is **not** weakened: a real install, migration, or
+uninstall with a missing front-door tool or a refused precheck still exits nonzero, and paired
+tests assert both halves so the change cannot decay into blanket leniency. A further test asserts
+the property the exit code stands for — that no front door is ever invoked during a dry run at
+all.
+
+The root cause is worth recording because it generalises: `shutil.which` is the only input to
+these rules that varies by **host** rather than by evidence, so any test that reads the ambient
+PATH silently tests the developer's machine. Nine of this module's own tests were host-dependent
+in exactly that way. Two specific traps: stripping PATH to the interpreter's directory does not
+work, because a tool installed beside the interpreter (`~/.local/bin/claude` next to
+`~/.local/bin/uv`) walks straight back in — the missing-tool branch then never executes and the
+check reports a pass it never performed; and asserting an exit **code** where the behaviour of
+interest is a **message** hides semantic changes. Tool presence is now stubbed rather than
+inferred from the environment, verified green under both a genuinely clean PATH and the developer
+host, and confirmed to fail when the old conflated behaviour is reintroduced.
+
 ## Reversal condition
 
 Reopened by an observable change in either direction.
@@ -253,10 +387,21 @@ the compromised channel. If a front door begins requiring a credential in the en
 is removed rather than accommodated: Decision item 7's no-credential property is not
 negotiable against convenience.
 
-**Toward looser on ECC specifically.** If npm publishes `ecc-universal` 2.2.0 or newer, the
-version block in Decision item 6 clears on its own. The surface block does not: 284 entries
-still require both the acknowledgment and an enumerated name list, and that requirement is
-about proportionality rather than about the version.
+**Toward looser on ECC specifically.** Superseded by the 2026-08-07 amendment: there is no
+version block left to clear, because the operator accepted npm `latest`. If npm publishes
+`ecc-universal` 2.2.0 or newer, re-verify whether a `setup` bin appears in the *artifact* — and if
+it does, decide deliberately whether to switch the wired front door to it, rather than assuming
+the README's command became correct. The surface acknowledgment does not clear: it is about
+proportionality, not about the version. What would relax it is measurement — a per-entry firing
+rate showing the 284 rows earn their share of a selector's attention.
+
+**Toward stricter on the migration path.** If the `skills` CLI changes its removal semantics — if
+`--agent` stops scoping, if the lock schema changes shape, or if `remove` begins expanding a name
+list — the migration's safety argument is invalidated and must be re-derived against the new
+behaviour rather than carried forward. The specific properties depended on, each verified against
+its source and in fixture homes: `--agent claude-code` leaves the canonical copy, other agents'
+links, and the lock entry intact; a lock below schema version 3 is discarded by its own reader;
+and names are matched through `sanitizeName` and dropped when unmatched rather than expanded.
 
 **Toward automatic installation.** If a future operator decision asks for a library to be
 installed by `bundle:install` or `setup`, that reopens Decision item 2 in a new record rather
