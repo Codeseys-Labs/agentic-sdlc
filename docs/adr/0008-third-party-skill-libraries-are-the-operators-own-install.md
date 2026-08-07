@@ -1,6 +1,20 @@
-# ADR-0008 — A third-party skill library is the operator's own install; this bundle ships only its own skills, agents, and commands, and never fetches, renders, or installs a foreign catalog
+# ADR-0008 — A third-party skill library is never vendored into this bundle; its bytes stay upstream and adaptation requires a NOTICE donor entry
 
-- **Status:** accepted
+- **Status:** accepted — **in part.** Read the next line before treating any part of this
+  record as a constraint.
+- **Refined in part by:** `docs/adr/0009-external-skill-libraries-are-opt-in-through-their-own-front-doors.md`,
+  which overrides **Decision item 1** (no task installs a third-party skill library) and
+  **Considered option 3** (which rejected exactly the `libraries:*` tasks 0009 adds). Those two
+  no longer bind: this bundle now ships opt-in `libraries:list`/`libraries:status`/`libraries:install`
+  tasks that invoke a named library's own front door. **Everything else here still binds** — in
+  particular Decision item 2 (foreign bytes are never vendored; adaptation plus a `NOTICE` donor
+  entry is the only inbound path), Decision item 3 (a library is installed through its own front
+  door and the installer preserves the result), Decision item 5 (project-scoped naming), reasons
+  1 and 3 of item 4 (selection surface, silent name collision), and ADR-0002's
+  bootstrap-prerequisite count, which 0009 also does not raise. Per
+  `skills/adr-lifecycle/references/lifecycle-states.md` § Partial supersession this record stays
+  `accepted` rather than flipping to `superseded by`, because most of it remains in force; the
+  status is annotated instead so no reader takes item 1 as current.
 - **Date:** 2026-08-07
 - **Deciders:** operator (decision), agent (evidence and drafting)
 - **Relates to:** `docs/adr/0001-mit-license-and-root-notice-attribution.md`
@@ -8,8 +22,9 @@
   `docs/adr/0002-mise-is-the-single-front-door.md`
   (Decision items 1 and 2 — the prerequisite count this record must not raise),
   `skills/agentic-sdlc/references/skill-authoring.md`
-  (the four-gate admission test, restated for foreign content in its
-  "Foreign skill libraries" section),
+  (the four-gate admission test, restated for foreign content in its Section 4, now titled
+  "A foreign skill library is never vendored, and installable only on request" to carry
+  0009's refinement),
   `scripts/install_skill_bundle.py` (the installer whose ownership model makes
   coexistence work), `NOTICE`,
   `docs/research/2026-08-05-vendoring-install-ux-memo.md`,
@@ -27,14 +42,20 @@ unfinished vendoring backlog rather than as a settled policy. This record states
 rule the repository has in fact been following.
 
 **Nothing external is installed today, and that was verified rather than assumed.** A
-real install of this bundle writes exactly its own content: 9 skills, 7 Claude role
-agents plus 7 Codex role TOMLs, and 4 commands. `bundle:status` reports every entry
-`ok:` with zero `conflict`/`foreign`/`missing`/`drift`, and zero foreign files appear
-anywhere in the install (`docs/research/2026-08-06-clean-install-verification.md`
-records the same shape at the earlier 8-skill count). The installer has **no network
-path at all** — `scripts/install_skill_bundle.py` contains no HTTP client, no
-`urllib`, and no shell-out to a fetcher; it symlinks or copies from this checkout and
-nothing else. So the decision below is not a new restriction on shipped behavior. It
+real install of this bundle writes exactly its own content and nothing else. The
+authoritative statement of *what* it writes is the installer's own enumeration —
+`discover_entries()` in `scripts/install_skill_bundle.py`, which globs exactly
+`skills/*/SKILL.md` (each installed for both the Claude and Codex planes),
+`agents/claude/*.md`, `commands/*.md`, and `agents/codex/*.toml`. Read that function
+rather than trusting a count here: the count moves with the tree, and a frozen number
+in this record is stale the next time a skill lands. Measured at this record's date, it
+resolves to 10 skills across two planes plus 7 Claude role agents, 7 Codex role TOMLs,
+and 4 commands — 38 entries. `bundle:status` reports every entry `ok:` with zero
+`conflict`/`foreign`/`missing`/`drift`, and zero foreign files appear anywhere in the
+install (`docs/research/2026-08-06-clean-install-verification.md` records the same
+shape at an earlier, smaller skill count). The installer has **no network path at
+all** — `scripts/install_skill_bundle.py` contains no HTTP client, no `urllib`, and no
+shell-out to a fetcher; it symlinks or copies from this checkout and nothing else. So the decision below is not a new restriction on shipped behavior. It
 is a description of shipped behavior, promoted to doctrine so it stops being
 re-litigated.
 
@@ -43,8 +64,9 @@ The three libraries, with the facts that matter:
 - **hyperresearch** — PyPI package `hyperresearch` 0.10.0, MIT, Jordan Gibbs. It is a
   **CLI that renders** skills and agents into a home directory at install time, not a
   static catalog. Its rendered agents carry static `model:` frontmatter, which
-  `scripts/validate_bundle.py:1194` (and its sibling check at `:1181`) rejects
-  outright with `static model is forbidden`. Vendoring its output would also freeze
+  `validate_agents()` in `scripts/validate_bundle.py` rejects outright with
+  `static model is forbidden` — at `:1189-1190` for a Claude `.md` agent and at
+  `:1202-1203` for a Codex `.toml` agent. Vendoring its output would also freeze
   one operator's rendered profile — one machine's model map, one machine's paths — as
   this bundle's doctrine, and would ship the unresolved template placeholders the
   renderer leaves behind.

@@ -47,9 +47,20 @@ git -C "$REPO" show-ref --verify --quiet "refs/heads/$BR" \
 git -C "$REPO" worktree add "$WT" -b "$BR" <base>
 ```
 
-Use `git -C "$REPO"` with an absolute `$WT`, never a bare relative path. A relative path
-resolves against the caller's cwd, so the same command run from a subdirectory creates
-`<repo>/<subdir>/.worktrees/<id>` — still ignored, still wrong (verified).
+Use `git -C "$REPO"` with an absolute `$WT`, never a bare relative path — but for the reason
+below, not the one it is easy to assume. Under `git -C "$REPO"`, Git changes directory
+**first**, so a relative `$WT` resolves against `$REPO`, not against the caller's cwd: run from
+`<repo>/sub/deeper`, `git -C "$REPO" worktree add .worktrees/<id> -b <br> <base>` lands at
+`<repo>/.worktrees/<id>`, which is the intended path (verified).
+
+The hazard is that the surrounding shell does **not** get that `-C`. The `test -e "$WT"`
+precondition above, every `git -C "$WT" ...` command in Steps 3 and 6, and the worker prompt's
+path all resolve `$WT` against the caller's own cwd. From a subdirectory the precondition
+silently checks a path that does not exist while the `add` targets one that does — the guard and
+the command disagree, and `git -C ".worktrees/<id>" status` fails outright with
+`fatal: cannot change to '.worktrees/<id>': No such file or directory` (both verified). An
+absolute `$WT` makes every one of those consumers agree regardless of where the wave is driven
+from, which is why the rule stands.
 
 Add `--lock --reason "wave writer <seed-id>"` when another agent may run `git worktree prune`
 while this writer is live: a locked entry is skipped by prune even when its directory is
@@ -193,7 +204,7 @@ git -C "$REPO" branch -d "$BR"                   # or -D, see the table
 | Worktree is locked | Exit 128, `fatal: cannot remove a locked working tree; use 'remove -f -f' to override or unlock first` — a **single** `--force` is also refused (verified) | `worktree unlock "$WT"` then remove, or `remove -f -f` when you own the lock and have inspected the tree |
 | The branch is checked out in a live worktree | `branch -d`/`-D` exit 1, `error: cannot delete branch '<br>' used by worktree at '<path>'` (verified) | Remove the worktree first. Branch deletion is always the last step |
 | Someone deleted the directory with `rm -rf` | The registration survives: `worktree list --porcelain` marks the entry `prunable` / `gitdir file points to non-existent location`, and re-adding that path fails "missing but already registered" (verified) | `git worktree prune` removes exactly those dead registrations — it removes no live worktree and deletes no branch. A **locked** missing entry is not pruned at all (verified, exit 0, nothing removed) until `worktree unlock` |
-| Removing a worktree that itself contains a nested worktree | The parent directory is removed and the **child stays registered** and prunable; a retry reports `fatal: '<path>' is not a working tree` (verified) | Remove children bottom-up first. If it already happened, `git worktree prune` clears the orphaned child registration, then check for a stranded child branch |
+| Removing a worktree that itself contains a nested worktree | `remove` on the parent **succeeds** (exit 0) and deletes the parent directory and the child's directory with it, but the **child stays registered** and is marked `prunable` (verified). Nothing errors at this point, which is what makes it easy to miss. The `fatal: '<path>' is not a working tree` message comes from re-running `remove` against the now-deleted **parent** path (exit 128) — not from the child, whose own `remove` still exits 0 (both verified) | Remove children bottom-up first. If it already happened, `git worktree prune` alone clears the orphaned child registration (verified: exit 0, child entry gone, no other entry touched) — a second `remove` on the parent is not the recovery and only produces the misleading fatal. Then check for a stranded child branch: prune deletes no branch, so `work/<child>` survives and needs Step 6's content check before `branch -d`/`-D` (verified) |
 | Branch is unmerged | `branch -d` exit 1, `error: the branch '<br>' is not fully merged` (verified) | If the work has not landed, keep the branch and record why. If it has, use the content check below |
 | Branch was **squash**-merged and `-d` still refuses | Expected: a squash creates no merge edge, so `-d` refuses, `git branch --merged <integration>` omits the branch, and `git cherry -v` reports every commit as `+` / unlanded — all three verified. None of them is a squash-landed detector | The check that works is content equivalence: `git diff --stat <integration> "$BR"` producing **empty** output. Empty diff **plus** a green re-gate on the integration branch is the evidence for `branch -D`. Anything else: keep the branch |
 
@@ -243,7 +254,9 @@ a harness-side cleanup must not reach into `.worktrees/`.
 7. **Nesting works and inherits the ignore rule.** A worktree created from inside a linked
    worktree lands at `<parent>/.worktrees/<id>`, is matched by the same root `.gitignore`
    rule (`check-ignore -v` reports `.gitignore:1:.worktrees/`), and registers as a third
-   peer in the repo-wide list. Removing the parent leaves the child registered.
+   peer in the repo-wide list. Removing the parent succeeds silently and leaves the child
+   registered and `prunable`; `prune` alone clears that orphan, and the child's branch survives
+   it. Step 6's nested-worktree row owns the recovery and the message attribution.
 8. **`worktree prune` is registration-only.** After a manual `rm -rf`, prune removes the dead
    registration and nothing else; it never deletes a branch or a live worktree, and it skips
    locked entries.

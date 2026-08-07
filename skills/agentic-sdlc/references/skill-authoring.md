@@ -126,49 +126,64 @@ Clearing one of the five is a preference. Clearing two or more is the argument t
 justifies the heavier form — write which two (or more), explicitly, in the change that
 adds the skill, so a later reviewer can check the argument rather than re-deriving it.
 
-## 4. Foreign skill libraries are the operator's own install
+## 4. A foreign skill library is never vendored, and installable only on request
 
-**Rule. This bundle ships only its own skills, agents, and commands. No task, installer
-path, hook, or command in it fetches, renders, or installs a third-party skill library.**
-A library the operator wants is installed by the operator, through that library's own
-front door, and this bundle's installer preserves those foreign entries rather than
-competing with them — an entry the installer does not own is classified `foreign` and left
-alone.
+**Rule, in two parts. This bundle never copies a third-party library's bytes into its own
+tree. It can invoke that library's own installer, on the operator's explicit request,
+through a task no gate and no setup path reaches.** Vendoring and invoking look adjacent
+and are not the same act, and conflating them is the mistake this section exists to
+prevent.
 
-Foreign material enters this repository by exactly one path: an **adapted
-`references/*.md` file with a donor entry added to the root `NOTICE` in the same change**.
-Ideas are re-expressed in this bundle's own prose and vocabulary; bytes are not copied. A
-near-verbatim copy is not an adaptation and this path does not admit it. Follow `NOTICE`'s
-own "Adding a donor to this file" checklist, and repeat the provenance statement in a
-header inside the derived file.
+**Why vendoring stays closed.** Copying foreign bytes into `skills/` puts another party's
+content in this repository's distribution: it triggers the root `NOTICE` donor obligation,
+drags a licence along, freezes one snapshot of a catalog that keeps moving, and puts
+entries this bundle did not author onto its own selection surface as things it ships.
+Foreign material therefore enters by exactly one path: an **adapted `references/*.md` file
+with a donor entry added to the root `NOTICE` in the same change**. Ideas are re-expressed
+in this bundle's own prose and vocabulary; bytes are not copied. A near-verbatim copy is
+not an adaptation and this path does not admit it. Follow `NOTICE`'s own "Adding a donor to
+this file" checklist, and repeat the provenance statement in a header inside the derived
+file.
 
-Three independent reasons, each sufficient on its own:
+**Why invoking is open, and how it stays safe.** Running a third party's own installer
+copies nothing here. The bytes land in the operator's home, written by the library's own
+code, under its own name and licence, exactly as if the operator had typed the command —
+so no donor obligation attaches, because this bundle is not a donee. Three properties keep
+that from becoming vendoring by another route, and each is load-bearing:
 
-1. **Section 3's gates fail at scale.** Gate 2 (proportionality) is the binding one: a
-   catalog of a few hundred foreign entries against this bundle's own handful is a
-   catastrophic selection-surface failure, buying an enormous multiplication of what a
-   selector must reason over in exchange for a firing rate nobody has measured. Gate 3
-   (trigger existence today) disposes of the remainder, and Gate 1 cannot even be
-   attempted for a bulk import — no bulk description names its nearest neighbor.
-2. **Every front door those libraries ship would add a second bootstrap prerequisite or
-   break lock doctrine.** A second package manager, a network credential at install time,
-   or a pin form that cannot carry a per-platform checksum are all forbidden; `AGENTS.md`
-   and `docs/adr/0002-mise-is-the-single-front-door.md` own that rule.
-3. **Name collision is mechanical and silent.** A library's own installer often already
-   occupies its skill names in the operator's home. Vendoring one of those names under its
-   upstream form hard-blocks this bundle's own install of that entry — the installer
-   preserves the non-owned entry, which is correct, and ours never lands. The operator
-   sees no error; the skill simply is not the one this bundle wrote.
+- **Explicit and opt-in.** The `libraries:*` tasks are invoked deliberately and dry-run
+  without `--yes`. No gate leaf and no `setup`/`bundle:install` path reaches them, so an
+  install is never a side effect of setting up this repository.
+- **No new prerequisite.** A front door invoked by a separate task that nothing in the
+  gate's dependency closure depends on adds no bootstrap prerequisite. That is the
+  distinction from a *pinned* front door in `[tools]`, which
+  `docs/adr/0002-mise-is-the-single-front-door.md` does forbid.
+- **Collision-checked before it runs.** Name collision is mechanical and silent: first
+  writer holds a name, and the loser's entry simply is not the one that loads, with no
+  error at all. The precheck compares against this bundle's own names rather than
+  describing the hazard in prose.
+
+Two of Section 3's gate arguments survive unchanged and are why installation is a choice
+rather than a default. **Gate 2 (proportionality) is the binding one:** a catalog of a few
+hundred foreign entries against this bundle's own handful is a catastrophic
+selection-surface failure, buying an enormous multiplication of what a selector must reason
+over in exchange for a firing rate nobody has measured. **Gate 3 (trigger existence today)**
+disposes of the remainder, and Gate 1 cannot even be attempted for a bulk import — no bulk
+description names its nearest neighbor. Those costs land in the operator's home when they
+ask for them; they are not this bundle's to impose.
 
 If a genuinely new, non-colliding, freestanding capability ever clears Section 3 on its
 own merits, it lands under a project-scoped name (`skills/sdlc-<capability>/` or another
 short project prefix), never under an upstream author's bare name. Clearing the gates is
 the requirement; the prefix is only the naming rule that applies afterward.
 
-The decision and its evidence live in
-`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md`, including
-the named libraries and their verified licence, version, and collision facts. Cite it
-rather than re-deriving the answer.
+The decisions and their evidence live in
+`docs/adr/0009-external-skill-libraries-are-opt-in-through-their-own-front-doors.md` (the
+opt-in mechanism, the named libraries, and their re-verified front doors) and
+`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md` (the
+no-vendoring rule 0009 refines, with the licence, version, and collision facts). The
+`external-skill-libraries` skill owns the operational procedure. Cite them rather than
+re-deriving the answer.
 
 ## 5. Retire by redirect, never by deletion
 

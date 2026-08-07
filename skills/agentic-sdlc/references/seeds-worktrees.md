@@ -107,17 +107,13 @@ embedded repository by `git add -A`, is recorded in `references/worktree-lifecyc
 git -C <repo> worktree add <repo>/.worktrees/<seed-id>-<slug> -b work/<seed-id>-<slug> <base>
 ```
 
-Pass the target as an absolute path: a relative path resolves against the caller's cwd, so
-the same command run from a subdirectory creates `<repo>/<subdir>/.worktrees/<id>`.
+Pass the target as an absolute path. `references/worktree-lifecycle.md` § Step 1 owns the
+reason, including what `git -C` actually does to a relative path and which surrounding
+consumers it does not cover; do not restate or re-derive it here.
 
-Worker prompt must include:
-
-- Seed id and acceptance criteria.
-- Worktree absolute path.
-- Files/directories in scope.
-- Commands to run.
-- Explicit instruction to avoid unrelated changes.
-- Artifact path for the worker report.
+The worker prompt's required contents are owned by `references/worktree-lifecycle.md` § Step 1,
+alongside the create commands they accompany. Read them there rather than keeping a second copy
+here that can drift from it.
 
 For the full step-by-step lifecycle — create, gate, review, integrate (which form this repo
 prefers and why), reconcile through the conductor-only record seam, and clean up, each with

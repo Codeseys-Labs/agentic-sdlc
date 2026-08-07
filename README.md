@@ -20,7 +20,8 @@ Codex/Gemini/OpenCode). On top sit THIN per-host manifests, all version-locked b
 
 Adding a skill means adding a `skills/<name>/SKILL.md` directory. The installer, validator, and
 all distribution planes pick it up automatically. Never hand-edit one manifest's version.
-`scripts/bump-version.sh <x.y.z>` writes all of them; `--check` reports drift in CI.
+`scripts/bump-version.sh <x.y.z>` writes all of them; `--check` gates drift in CI — the
+validator reports a disagreeing manifest as an error, so the gate and CI fail closed on drift.
 
 The baseline shape:
 
@@ -45,14 +46,32 @@ start, or enable cmux or tmux merely to use this bundle.
 
 ## Contents
 
-**This bundle installs only its own skills, agents, and commands, and never fetches,
-renders, or installs a third-party skill library.** No task or installer path in it reaches
-a foreign catalog — hyperresearch, ECC (`affaan-m/ECC`), `mattpocock/skills`, or any other.
-A library the operator wants is the operator's own install, through that library's own front
-door; this bundle's installer classifies those foreign entries as `foreign` and preserves
-them, so the two coexist safely. Foreign ideas enter here only as an adapted
-`references/*.md` with a root `NOTICE` donor entry. Decision and evidence:
-`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md`.
+**The rule on third-party skill libraries has two parts, and the distinction between them is
+the whole point: this bundle never *vendors* a foreign library's bytes, and it can *invoke* a
+library's own installer on explicit request.**
+
+- **Never vendored.** No foreign library's bytes are copied into this repository's tree. That
+  is what would trigger a `NOTICE` donor obligation under ADR-0001, drag another licence into
+  this distribution, freeze one snapshot of somebody else's catalog, and put entries this
+  bundle did not author onto its own selection surface. Foreign *ideas* enter here by exactly
+  one path: an adapted `references/*.md` file with a root `NOTICE` donor entry landed in the
+  same change, re-expressed in this bundle's own prose rather than copied.
+- **Installable on request.** `libraries:list`, `libraries:status`, and `libraries:install`
+  run a named library's *own* front door — `mattpocock/skills`, ECC (`affaan-m/ECC`), and
+  hyperresearch. Running a third party's installer copies nothing here: the bytes land in the
+  operator's home, written by the library's own code, under its own name and licence, exactly
+  as if the operator had typed the command. So no donor obligation attaches. These tasks are
+  opt-in and collision-checked, and **no gate leaf and no `setup` or `bundle:install` path
+  reaches them** — `check`'s dependency closure is `validate`, `test`, `self-test`, `secrets`,
+  and `setup`'s is `bundle:install` plus `hooks:install`. Installation is therefore a
+  deliberate choice, never a side effect.
+
+The installer's ownership model is what makes the two coexist: an entry this bundle does not
+own is classified `foreign` and preserved rather than replaced. Decisions and evidence:
+`docs/adr/0009-external-skill-libraries-are-opt-in-through-their-own-front-doors.md` (the
+opt-in mechanism) and
+`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md` (the
+no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
 
 - `skills/agentic-sdlc/`: the flagship, provider-native orchestration skill
   for any skill-capable CLI agent.
@@ -295,13 +314,16 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 | `ocx:launch` / `ocx:ultracode` | Launch the supervised split plane normally or with session-only Ultracode and ordinary permissions. |
 | `ocx:status` / `ocx:restart` / `ocx:configure` | Report opencodex gateway reachability, restart it cleanly, or configure providers through their own login flows. |
 | `muse:launch` / `muse:status` / `muse:probe` | Drive the Muse Spark fallback direct route: launch it, report its configuration and reachability, or probe its catalog plus one tiny completion without launching. The primary route stays `ocx:launch`. |
+| `libraries:list` / `libraries:status` | List the installable external skill libraries with their front doors and surface cost, or report which are already present in this home. Read-only. |
+| `libraries:install` | Install explicitly named external skill libraries through their own front doors; dry run unless `--yes`. Vendors nothing into this tree, and no gate leaf or `setup` path reaches it. |
+| `libraries:migrate` | De-duplicate a name another channel holds for the same upstream: retire that channel's copies through its own removal path, then install. Dry run unless `--yes`; names at least one library, never migrates everything. |
 | `mermaid:provision` | Provision the pinned Linux x64 Mermaid browser runtime. Downloads a pinned browser, so it is an explicit operator step and never a gate leaf. |
 | `mermaid:linux-test` | Run the bounded Linux Mermaid renderer tests; they skip with named reasons when the runtime is absent. |
 | `validate` | Run the portable bundle validator alone (the pre-commit hook's subset). |
 | `test` | Run the installer test suite. |
 | `self-test` | Exercise install/status/uninstall in an isolated home. |
 | `secrets` | Scan the working tree with the pinned scanner and the tracked extend-only config. History scanning stays a separate consented step. |
-| `check` | Run the authoritative validation, tests, self-test, and secrets gate: about 7 minutes, 572 tests as last measured. The count grows with the suite; the gate's verdict, not the count, is the evidence. |
+| `check` | Run the authoritative validation, tests, self-test, and secrets gate. Last measured on Linux: the `test` leaf ran 654 tests in 814s (`OK (skipped=13)`), while `validate` and `secrets` each finished in under 2s, so the suite dominates and 15 minutes is a reasonable budget — more on a loaded host, since gate runs contend for CPU and I/O. Treat both numbers as stale-by-design: the count grows with the suite, the clock varies by host, and the gate's verdict is the evidence. |
 | `hooks:install` | Install the checked-in lefthook hooks. |
 | `setup` | Bootstrap the pinned toolchain and repository setup (`bundle:install` plus `hooks:install`). |
 

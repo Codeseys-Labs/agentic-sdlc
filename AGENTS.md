@@ -7,14 +7,26 @@ as the router.
 
 ## What this bundle provides
 
-This bundle installs only its own skills, agents, and commands. **No task, installer path,
-hook, or command in it fetches, renders, or installs a third-party skill library** —
-hyperresearch, ECC (`affaan-m/ECC`), `mattpocock/skills`, or any other named library is the
-operator's own install through that library's own front door, and this bundle's installer
-preserves those foreign entries rather than competing with them, so both coexist safely.
-Foreign ideas enter only as an adapted `references/*.md` with a root `NOTICE` donor entry,
-re-expressed rather than copied. See
-`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md` and
+**Third-party skill libraries: never vendored, installable on request.** Keep the two halves
+distinct, because they are what separate a licence obligation from a convenience.
+
+**Never vendored.** No foreign library's bytes are copied into this repository's tree. Copying
+them is what triggers the `NOTICE` donor obligation under ADR-0001, drags another licence into
+this distribution, and puts entries this bundle did not author onto its own selection surface.
+Foreign *ideas* enter by exactly one path: an adapted `references/*.md` with a root `NOTICE`
+donor entry landed in the same change, re-expressed rather than copied.
+
+**Installable on request.** `libraries:list`, `libraries:status`, and `libraries:install` run a
+named library's own front door — `mattpocock/skills`, ECC (`affaan-m/ECC`), and hyperresearch.
+Invoking a third party's installer copies nothing here: the bytes land in the operator's home,
+written by the library's own code, under its own name and licence. No donor obligation attaches,
+because this bundle is not a donee. The tasks are opt-in, collision-checked, and reached by no
+gate leaf and no `setup`/`bundle:install` path, so installing is a deliberate choice and never a
+side effect. The installer's ownership model keeps the two coexisting: an entry this bundle does
+not own is classified `foreign` and preserved rather than replaced. See
+`docs/adr/0009-external-skill-libraries-are-opt-in-through-their-own-front-doors.md`,
+`docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md` (the no-vendoring
+rule 0009 refines), `skills/external-skill-libraries/`, and
 `skills/agentic-sdlc/references/skill-authoring.md`.
 
 - `skills/agentic-sdlc/` — the flagship skill: provider-native,
@@ -57,7 +69,8 @@ re-expressed rather than copied. See
   is evidence only; it does not authorize an outward effect.
 - Run `./scripts/install-skill-bundle.sh self-test` after installer changes.
 - Version bumps: `./scripts/bump-version.sh <version>` updates every manifest in one
-  shot; `--check` reports drift. Never hand-edit a single manifest's version.
+  shot; `--check` exits 1 on drift, and the validator raises a disagreeing manifest as an error,
+  so the gate and CI both fail closed on it. Never hand-edit a single manifest's version.
 - Adding a skill = adding `skills/<name>/SKILL.md` (name must equal the directory
   name; description ≤1024 chars). The installer/validator/planes pick it up
   automatically.
@@ -116,8 +129,10 @@ operation-specific approval and run `mise trust ./mise.toml` for that exact revi
 command in the repository exits with `config files are not trusted`. Resolving the lock downloads
 roughly 1.3 GB across the 13 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
 so skipping the explicit install step does not avoid the cost — the first `mise run <task>`
-installs all 13 without prompting. `mise run check` then takes about 7 minutes and ran 572 tests
-as last measured; the count grows with the suite, and the gate's verdict is the evidence.
+installs all 13 without prompting. `mise run check` last measured 654 tests in 814s with
+`OK (skipped=13)` on Linux, its `validate` and `secrets` leaves each under 2s, so budget about 15
+minutes and expect longer on a loaded host. Both figures go stale by design — the count grows
+with the suite and the clock varies by host — and the gate's verdict is the evidence.
 
 To acquire Seeds from an exact clean Git distribution root, run the installed flagship
 `tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.22.3.
@@ -176,10 +191,16 @@ model selection as policy.
 - `muse:launch`, `muse:status`, `muse:probe` — the Muse Spark fallback direct route; the primary
   route stays `ocx:launch`
 - `mermaid:provision`, `mermaid:linux-test` — explicit Linux x64 renderer steps, never gate leaves
+- `libraries:list`, `libraries:status`, `libraries:install`, `libraries:migrate` — external skill
+  libraries through their own front doors, opt-in and dry-run without `--yes`; `migrate` retires
+  another channel's copies of the same upstream through that channel's own removal path before
+  installing. Never gate leaves, and reached by no `setup`/`bundle:install` path
 - `research-os:install` (`--target` required, no implicit current-directory scaffold), `validate`,
   `test`, `self-test`, `secrets`, `check`, `hooks:install`, `setup`
 
-That list is every task `mise tasks` reports. `mise run bundle:status` always ends with one
+That list is every task `mise tasks` reports; re-run `mise tasks` and re-diff it against this
+list whenever a task is added or renamed, because a stale list here reads as an authoritative
+inventory. `mise run bundle:status` always ends with one
 terminal line — either `no owned entries for this host` or an `N ok, M conflict, K absent`
 summary — so a silent exit 0 is a defect, not a clean host.
 
