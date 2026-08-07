@@ -515,6 +515,32 @@ refuse_configuration() {
   refuse "opencodex configuration route refused ($1); this split plane admits only reviewed non-Anthropic provider operations"
 }
 
+# An unrecognized route is not a credential-boundary event. Printing the ADR-0003 notice for
+# a typo teaches the reader that the boundary fires at random, so it gets its own message that
+# names the admitted routes instead.
+refuse_unknown_route() {
+  printf '\nREFUSED: `ocx %s` is not an admitted configuration route.\n\n' "$1" >&2
+  cat >&2 <<'EOF'
+This wrapper admits a reviewed subset of the upstream surface, so an unrecognized or new
+upstream route fails closed rather than passing through unreviewed.
+
+Read-only inspection:
+  account list [provider] | account current <provider>
+  provider list | provider show | provider presets | provider selected
+  models list | models show | config show | config get | config validate
+  help <verb>                     (also: bare `account`, `provider`, `models`, `config`)
+
+Reviewed mutations (non-Anthropic providers only):
+  login <provider> | logout <provider>
+  account login|reauth|code|cancel|use|remove|add-key <provider> ...
+  provider add|edit|update|remove|set-default <provider> ...
+
+Inspect the full upstream surface without running it:
+  mise exec -- ocx help <verb>
+EOF
+  exit 3
+}
+
 cmd_configure() {
   require_ocx
   if [ "$#" -eq 0 ]; then
@@ -531,7 +557,11 @@ cmd_configure() {
   subcommand="$(normalize_identifier "${2:-}")"
   route="$verb${subcommand:+ $subcommand}"
   case "$verb $subcommand" in
-    "help "|"--help "|"-h "|"provider list"|"provider show"|"provider presets"|"account list"|"account current"|"config show"|"config get"|"config validate")
+    "help "|"--help "|"-h "|"help "*|"provider list"|"provider show"|"provider presets"|"provider selected"|"account list"|"account current"|"models list"|"models show"|"config show"|"config get"|"config validate")
+      ;;
+    # A bare inspection verb prints its own usage and reads nothing it should not. Refusing it
+    # sent readers to the credential notice for what is really a help request.
+    "account "|"provider "|"models "|"config ")
       ;;
     "init "|"setup "|"gui "|"config set"|"config unset"|"config import"|"config export")
       refuse_configuration "unbounded-route"
@@ -556,7 +586,7 @@ cmd_configure() {
       provider="${3:-}"
       provider_allowed_for_mutation "$provider" || refuse_configuration "anthropic-or-unclassifiable-provider"
       ;;
-    *) refuse_configuration "unknown-route" ;;
+    *) refuse_unknown_route "$route" ;;
   esac
   printf 'about to run an approved opencodex configuration route (%s)\n\n' "$route"
   ocx "$@"
