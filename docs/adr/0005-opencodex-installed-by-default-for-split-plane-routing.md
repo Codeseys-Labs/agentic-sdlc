@@ -5,7 +5,8 @@
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/adr/0003-gateway-stance-downgraded-to-optional.md`,
   `docs/research/2026-08-05-gateway-selection-memo.md` and its 2026-08-05
-  addendum, `skills/repo-toolchain-gates/SKILL.md`
+  addendum, `docs/research/2026-08-07-opencodex-qualification-canary.md`
+  (closes the Decision item 5 canary gate), `skills/repo-toolchain-gates/SKILL.md`
 
 ## Context
 
@@ -120,10 +121,12 @@ only, so a supervision call does mutate shared Codex config.
    `ocx login anthropic` and `ocx login anthropic-apikey`.
 5. **Installing and launching are not route qualification.** The canary in the
    gateway memo's §4 (probes A, C, D, E, F — fail-closed routing, per-subagent
-   pinning, readback admissibility) remains **unrun** and remains the
-   qualification gate for trusting which model actually served a request.
-   ADR-0003's Decision item 3 keeps probe B moot. Nothing in this ADR runs,
-   satisfies, or substitutes for that canary.
+   pinning, readback admissibility) is the qualification gate for trusting which
+   model actually served a request. ADR-0003's Decision item 3 keeps probe B
+   moot. Nothing in this ADR runs, satisfies, or substitutes for that canary.
+   *Executed 2026-08-07 under separate explicit authorization; see the
+   Consequences entry and `docs/research/2026-08-07-opencodex-qualification-canary.md`
+   for the verdict and its eight binding conditions.*
 6. **The recorded stance in `skills/repo-toolchain-gates/SKILL.md` is
    rewritten, not deleted.** It now states that the tool is pinned, names the
    resolved version and decision date, relocates the surviving boundary to the
@@ -152,9 +155,20 @@ only, so a supervision call does mutate shared Codex config.
   wrapper entirely; the wrapper makes the boundary explicit and refusable at
   the supported entry point, and it does not claim to be a security boundary
   against the same OS user.
-- Negative: the qualification canary stays open, so no claim about *which model
-  actually served a gateway-routed request* is supportable yet. A healthy
-  `status` is a reachability observation and nothing more.
+- ~~Negative: the qualification canary stays open, so no claim about *which model
+  actually served a gateway-routed request* is supportable yet.~~ **Closed
+  2026-08-07 by `docs/research/2026-08-07-opencodex-qualification-canary.md`:
+  verdict QUALIFIED WITH CONDITIONS** for the non-Anthropic split-plane route.
+  Probes A, C, D, E, F plus streaming, concurrency, and effort probes were
+  executed against this deployment; probe B stays closed as prohibited. A claim
+  about which model served a request is now supportable **only** from the
+  `ocx observe logs --jsonl` `resolvedModel` field correlated by `requestId` —
+  the response body's `model` field echoes caller aliases and suppresses dated
+  snapshots, so it is inadmissible. The canary also supersedes the gateway memo's
+  "always `anthropic/`-prefix" contract item: unknown IDs in any form fall
+  through to `default-provider` rather than throwing, so the enforceable rule is
+  catalog membership in `GET /v1/models`, not a prefix convention. A healthy
+  `status` remains a reachability observation and nothing more.
 - Negative: supervision mutates shared Codex config as an upstream side effect
   (`~/.codex` is repointed at the proxy on ensure/start and restored on stop),
   so `launch` and `restart` are not side-effect-free for a Codex user. This is
