@@ -1326,7 +1326,9 @@ def validate_mise(root: Path, result: Validation) -> None:
         "lefthook": LEFTHOOK_VERSION,
         "node": NODE_VERSION,
         "bun": BUN_VERSION,
-        MERMAID_NPM_TOOL: MERMAID_NPM_VERSION,
+        # npm carries the node edge because its own installer IS npm: without it, a fresh
+        # machine's first `mise install` fails and then skips every other npm-backend pin.
+        MERMAID_NPM_TOOL: {"version": MERMAID_NPM_VERSION, "depends": ["node"]},
         "ripgrep": RIPGREP_VERSION,
         "fd": FD_VERSION,
         "jq": JQ_VERSION,

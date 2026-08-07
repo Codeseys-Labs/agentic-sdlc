@@ -15,6 +15,17 @@ ROOT = Path(__file__).parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "mermaid-renderer"
 POLICY_PATH = ROOT / "policy" / "mermaid-renderer-linux-v1.json"
 
+# `_sandbox_argv` refuses to build an argv when the pinned bwrap is absent, which is correct
+# for the renderer and wrong for these two tests: they assert the SHAPE of the argv and never
+# execute it. On a host without bwrap (a fresh container, notably) they errored instead of
+# skipping, which made the gate fail for a capability the gate does not require — rendering is
+# advisory. The capability is a real precondition for rendering, so it is named in the skip
+# rather than faked.
+SANDBOX_BINARY = Path(json.loads(POLICY_PATH.read_text(encoding="utf-8"))["sandbox"]["bwrap"])
+SANDBOX_AVAILABLE = SANDBOX_BINARY.is_file() and not SANDBOX_BINARY.is_symlink()
+SANDBOX_SKIP_REASON = f"the pinned sandbox binary {SANDBOX_BINARY} is unavailable on this host"
+
+
 
 class MermaidRendererTests(unittest.TestCase):
     def test_cli_rejects_extra_arguments_before_touching_paths(self) -> None:
@@ -159,6 +170,7 @@ class MermaidRendererTests(unittest.TestCase):
         self.assertEqual(child.call_args_list[0].args[2], 20.0)
         self.assertEqual(child.call_args_list[1].args[2], 20.0)
 
+    @unittest.skipUnless(SANDBOX_AVAILABLE, SANDBOX_SKIP_REASON)
     def test_sandbox_relocates_runtime_inputs_under_a_private_fixed_prefix(self) -> None:
         policy = renderer.load_policy(POLICY_PATH)
         with tempfile.TemporaryDirectory() as temp:
@@ -171,6 +183,7 @@ class MermaidRendererTests(unittest.TestCase):
         self.assertIn(renderer.SANDBOX_POLICY, argv)
         self.assertNotIn("/bin/sh", argv[argv.index("--") + 1:])
 
+    @unittest.skipUnless(SANDBOX_AVAILABLE, SANDBOX_SKIP_REASON)
     def test_sandbox_binds_only_the_verified_runtime_inputs(self) -> None:
         policy = renderer.load_policy(POLICY_PATH)
         with tempfile.TemporaryDirectory() as temp:

@@ -28,10 +28,13 @@ class GateGraphTests(unittest.TestCase):
         ("mise.toml", 'bun = "1.3.10"', 'bun = "1.3.9"', "mise.toml tools must equal"),
         # The renderer's npm identity is pinned separately from node, which bundles 10.9.8.
         # Drift here silently changes how the M0b node_modules tree is built.
-        ("mise.toml", 'npm = "10.8.1"', 'npm = "10.8.0"', "mise.toml tools must equal"),
+        ("mise.toml", 'npm = { version = "10.8.1", depends = ["node"] }', 'npm = { version = "10.8.0", depends = ["node"] }', "mise.toml tools must equal"),
+        # The depends edge is what makes a fresh-machine install succeed in one pass; dropping it
+        # reproduced the container failure, so it is pinned as its own mutation.
+        ("mise.toml", 'npm = { version = "10.8.1", depends = ["node"] }', 'npm = "10.8.1"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "0.5.14"', 'version = "0.5.13"', "mise.toml tools must equal"),
         ("mise.toml", 'package_manager = "npm"', 'package_manager = "bun"', "npm.package_manager must equal npm"),
-        ("mise.toml", 'depends = ["node"]', 'depends = []', "Seeds tool must depend on node"),
+        ("mise.toml", '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.14"\ndepends = ["node"]', '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.14"\ndepends = []', "Seeds tool must depend on node"),
         # Convenience-tier drift must fail exactly like bootstrap-tier drift. These tools are
         # not gate inputs, but an unpinned version is still an unreviewed binary.
         ("mise.toml", 'ripgrep = "15.2.0"', 'ripgrep = "14.1.1"', "mise.toml tools must equal"),

@@ -21,7 +21,12 @@ bun = "1.3.10"
 # provisioner resolves this exact npm through `mise where` and installs the renderer's
 # node_modules with it, so the npm identity is part of that supply chain, not a bootstrap
 # prerequisite: nothing in `mise run check` invokes it.
-npm = "10.8.1"
+# depends is load-bearing, not decoration: this is an npm:-backend tool whose own installer IS
+# npm, so without the edge mise scheduled it in the first pass and `npm install -g npm@10.8.1`
+# failed with "No such file or directory" on a machine that had no npm yet. That single failure
+# then skipped every other npm-backend pin. A container proved it: first `mise --locked install`
+# exited 1, the second exited 0.
+npm = { version = "10.8.1", depends = ["node"] }
 # Convenience tier: pinned so every host resolves the same binary, but no gate depends on
 # them. Absence degrades developer experience; it never changes a gate verdict.
 ripgrep = "15.2.0"
@@ -194,15 +199,15 @@ description = "Configure opencodex providers through their own login flows"
 run = "scripts/opencodex-claude.sh configure"
 
 [tasks."muse:launch"]
-description = "Launch a second Claude Code process directly against Meta's Muse Spark endpoint"
+description = "Launch Claude Code on the Muse Spark FALLBACK direct route (primary is ocx:launch --model muse/muse-spark-1.2)"
 run = "scripts/muse-claude.sh launch"
 
 [tasks."muse:status"]
-description = "Report Muse Spark route configuration, credential source, and live reachability"
+description = "Report Muse Spark fallback-route configuration, credential source, and live reachability"
 run = "scripts/muse-claude.sh status"
 
 [tasks."muse:probe"]
-description = "Verify the Muse Spark catalog and one tiny completion without launching Claude"
+description = "Verify the Muse Spark fallback route's catalog and one tiny completion without launching Claude"
 run = "scripts/muse-claude.sh probe"
 
 [tasks."hooks:install"]
