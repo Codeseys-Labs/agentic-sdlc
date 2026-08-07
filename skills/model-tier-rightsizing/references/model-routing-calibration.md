@@ -234,25 +234,82 @@ field. And per the same canary, effective effort readback on that gateway was ho
 unavailable: a `requestedEffort` the gateway derived from a thinking budget is evidence about the
 request, never readback of what the upstream did.
 
-### Direct provider routes: Muse Spark (Meta)
+### Muse Spark (Meta) — two routes, one model family
 
-A third route family is admitted alongside Codex-OAuth-via-gateway and Bedrock: Meta's Muse
-Spark, reached **directly**, with no gateway in the path. Evidence is the executed
-qualification in `docs/research/2026-08-07-muse-spark-qualification.md` (verdict QUALIFIED WITH
-CONDITIONS, conditions M1–M8) and the decision record `docs/adr/0007-muse-spark-direct-route.md`.
+A third model family is admitted alongside Codex-OAuth-via-gateway and Bedrock: Meta's Muse
+Spark. It is reachable on **two** routes with **different evidence properties**, and a
+`RuntimeAssignment` must record which one was used, because the identity rules differ:
 
-**Exact IDs, admission, and auth.** Base URL `https://api.meta.ai` — recorded **without** a
-`/v1` suffix, because an Anthropic-shaped client appends `/v1/messages` itself and the doubled
-path answers **401**, not 404. The three IDs served on 2026-08-07 were
-`muse-spark-1.2-contributor`, `muse-spark-1.2`, and `muse-spark-1.1`. Catalog membership in
-`GET /v1/models` is the admission check, exactly as for a gateway route but for a different
-reason: here every non-catalog ID — a bogus version, a `claude-*` ID, a `meta/`-prefixed form,
-even a case-variant of a real ID — was refused **404 `model_not_found`** by the provider itself.
-There is no default-provider fallthrough to alarm on, because there is no second router. Auth is
-Meta's **own** API key, accepted as either `Authorization: Bearer` or `x-api-key`. A Claude
-subscription credential is never involved; per ADR-0003 item 2 this is the supported shape, and
-pointing a client's base URL here while a subscription credential is in scope is the prohibited
-shape.
+1. **Via the opencodex gateway (PRIMARY).** Muse registered as an ordinary provider
+   (`ocx provider add muse --adapter openai-responses --base-url https://api.meta.ai/v1
+   --default-model muse-spark-1.2`), reached through the existing gateway and launcher.
+   Conditions **G1–G7**, plus the canary's C1–C8 which it inherits.
+2. **Directly, with no gateway (FALLBACK).** `ANTHROPIC_BASE_URL` pointed at
+   `https://api.meta.ai`, via `scripts/muse-claude.sh`. Conditions **M1–M8**.
+
+Evidence is the executed qualification in
+`docs/research/2026-08-07-muse-spark-qualification.md` — §1–§7 for the direct route (verdict
+QUALIFIED WITH CONDITIONS, M1–M8) and §8 for the gateway route (QUALIFIED WITH CONDITIONS,
+G1–G7) — and the decision record `docs/adr/0007-muse-spark-direct-route.md` (whose filename
+predates the two-route decision; its title and Decision are authoritative).
+
+**Why the gateway route is primary.** It has a per-request attribution channel that is observed
+**independently of the request string**, and its independence is *proved* rather than assumed:
+for `muse/muse-spark-1.2` the response body echoes `muse/muse-spark-1.2` while the log records
+`resolvedModel: muse-spark-1.2`. Because a second channel disagrees with the body, the log is
+demonstrably not a replay of the request — the same alias-echo divergence the canary found. The
+direct route has one channel and it agrees with itself, which distinguishes nothing. So the
+gateway route can satisfy canary **C2**; the direct route structurally cannot, and no wrapper
+can change that because there is no second channel to read. Prefer the gateway route unless a
+gateway process is unwanted or unavailable.
+
+**Base URLs are OPPOSITE on the two routes, and getting it wrong looks like a bad credential.**
+The direct route uses `https://api.meta.ai` **without** a `/v1` suffix, because an
+Anthropic-shaped client appends `/v1/messages` itself and the doubled path answers **401**, not
+404. The gateway provider's `baseUrl` **keeps** the `/v1`, because the `openai-responses` adapter
+appends only `/responses`. Copying either form into the other yields a 401 *with a fully valid
+credential*, so misconfiguration presents as a key problem on both. This is M5 for the direct
+route and **G5 inverts it** for the gateway route.
+
+**Exact IDs, admission, and auth.** The three IDs served on 2026-08-07 were
+`muse-spark-1.2-contributor`, `muse-spark-1.2`, and `muse-spark-1.1`. On the **direct** route,
+catalog membership in `GET /v1/models` is the admission check, and every non-catalog ID — a
+bogus version, a `claude-*` ID, a `meta/`-prefixed form, even a case-variant of a real ID — was
+refused **404 `model_not_found`** by the provider itself. There is no default-provider
+fallthrough to alarm on there, because there is no second router.
+
+On the **gateway** route that guarantee is weaker in a specific and load-bearing way, and it is
+condition **G2**: only the provider's *configured default model* resolves when requested bare.
+A `muse/`-prefixed unknown ID is refused 404, but `muse-spark-1.1` — a **real, served ID** —
+requested *without* the prefix is classified `routeKind: "default-provider"` and routed to
+**Codex**, which refuses it with a message about ChatGPT accounts. So **every dispatch on the
+gateway route carries the `muse/` prefix**: prefix *and* catalog membership, not either alone.
+A bare ID is not a stylistic choice there; it is a wrong-provider dispatch.
+
+**G1 — a configured provider is not a live provider, and the gap fails OPEN.** `ocx provider
+add` writes the config file only. Until `ocx sync` **and** a gateway restart have both run, a
+request naming the new provider's model is attempted and billed against the **default**
+provider while the attribution log names the wrong provider. This is the canary's C1/C5
+fail-open reached through a routine *successful* configuration command rather than through a
+typo, so `routeKind: "default-provider"` on a Muse-intended request is an alarm (**G4**) meaning
+either this window or a bare ID. Liveness is checkable because the two facts have separate
+sources: `ocx provider list` reads the config file, while the running gateway's own
+`GET /v1/models` reads the process catalog. `scripts/opencodex-claude.sh status` performs that
+comparison and reports **NOT-LIVE** for any configured-but-unserved provider; `configure` prints
+the required sequence after a successful mutation. Confirm liveness before dispatching —
+`provider add` succeeding is not evidence of it. Related caveats: `ocx provider test` reads
+liveness rather than configuration (a failure means "not live", not "not configured"), and
+`provider add` performs **no adapter validation**, so a mistyped adapter is stored silently and
+must be verified against a live request (**G7**).
+
+Auth on both routes is Meta's **own** API key, accepted as either `Authorization: Bearer` or
+`x-api-key`; the gateway's `openai-responses` adapter already sends bearer, so
+`--api-key-transport bearer` is rejected as anthropic-adapter-only and is unnecessary. A Claude
+subscription credential is never involved on either route; per ADR-0003 item 2 both are the
+supported shape, because what matters is whose credential authenticates rather than whether a
+proxy is present. Pointing a client's base URL here while a subscription credential is in scope
+is the prohibited shape, on either route. Note that the gateway route inherits canary **C8**:
+anything reaching the loopback port can spend the Meta key without presenting a credential.
 
 **Three surfaces, with different capabilities.** All three were exercised live:
 
@@ -303,8 +360,10 @@ window the failure mode changes: an absurd budget returns **429** (`rate_limit_e
 "reserved capacity"), not 400, so an oversized request can read as throttling rather than as the
 size error it is.
 
-**Identity: the response body's `model` field is the ONLY channel, and this is weaker than the
-gateway route.** No provider/model response header exists; there is no attribution log; there is
+**Identity on the DIRECT route: the response body's `model` field is the ONLY channel, and this
+is weaker than the gateway route.** (For the gateway route, identity comes from the attribution
+log per G3 — see the two-route comparison at the end of this subsection.)
+No provider/model response header exists; there is no attribution log; there is
 no usage or audit surface (`/v1/usage`, `/v1/organization/usage`, `/v1/audit_logs`, `/v1/logs` all
 404). `GET /v1/responses/<id>` does return a server-side record, but only for `/v1/responses` with
 `store: true` (default), never for `/v1/messages`, and it reports the same `model` string from the
@@ -326,9 +385,16 @@ honestly:
   absence of a substitution mechanism, not a positive identity observation, and it should be
   recorded as such rather than upgraded.
 
-Consequently a `RuntimeAssignment` on this route records `adapter_response_readback` as its
-`observed_identity_source` and carries **neither** gateway field (`gateway_attribution_log`,
-`catalog_bytes` pointers are gateway-route fields). Effort readback is **honestly unavailable**:
+Consequently a `RuntimeAssignment` on the **direct** route records `adapter_response_readback` as
+its `observed_identity_source` and carries **neither** gateway field (`gateway_attribution_log`,
+`catalog_bytes` pointers are gateway-route fields). On the **gateway** route the opposite holds
+and it is condition **G3**, which **supersedes M2** there: `resolved_model_id` comes **only** from
+the attribution log's `resolvedModel` correlated by `requestId`, the response body is
+**inadmissible** because it echoes the caller's `muse/`-prefixed alias, `observed_identity_source`
+is the gateway attribution log, and the gateway fields do apply. The receipt must record which
+route was used; the two rules must never be averaged or substituted for each other.
+
+Effort readback is **honestly unavailable** on both routes:
 `/v1/responses` echoes the requested `reasoning.effort` back verbatim in the response — never
 record that as readback, it is the requested value returning. The one genuinely
 non-request-derived effort signal is the *model default* observable when effort is **omitted**:
@@ -336,24 +402,30 @@ all three models reported `high`. `usage.output_tokens_details.reasoning_tokens`
 telemetry about consumption, but it is not an effort value in the policy vocabulary and does not
 satisfy effort readback.
 
-**Tier placement: ADMITTED AS A ROUTE, TIER-UNPROVEN.** These probes were trivial smoke prompts —
-one-word answers, a two-city tool call. They establish transport, admission, fail-closed behavior,
-surface shape, and the budget arithmetic. They establish **nothing** about task fit, and capability
-tiering from a handful of smoke probes is exactly the weak evidence this calibration refuses to
-promote. Under the qualification ladder above the route sits at **`route-probed`** — a live call on
+**Tier placement: ADMITTED AS ROUTES, TIER-UNPROVEN — on BOTH routes, unchanged by the second
+one.** These probes were trivial smoke prompts — one-word answers, a two-city tool call — on the
+direct route and again through the gateway. They establish transport, admission, fail-closed
+behavior, surface shape, and the budget arithmetic. They establish **nothing** about task fit, and
+capability tiering from a handful of smoke probes is exactly the weak evidence this calibration
+refuses to promote. **Adding a second transport to the same models cannot raise a rung**: a
+smoke probe proves a route carries bytes, never that a model fits a role, so two route-probed
+transports are two route-probed transports and not a promotion.
+
+Under the qualification ladder above, each route sits at **`route-probed`** — a live call on
 the exact tuple returned a real response — and **not** at `role-qualified` in any role. Under the
 evidence-class ladder, the capability claims a reader might want (agentic/coding strength, 1M-context
 usefulness) rest on `vendor-hypothesis`; only transport and admission are `exact-route-live`. Per the
 three provenance classes, documented positioning is `mined` at best, which may *propose* a routing
 reconsideration and can never raise a rung or fill a scale-setter slot. Therefore:
 
-- **No tier assignment is recorded for `muse-spark-1.2-contributor` or `muse-spark-1.2`.** They
-  are not added to any eligible pair, and no phase, blast-radius, or roadmap row above is
-  changed. The six-primary pair policy is untouched.
-- The route may be selected only for work whose failure is caught by a **complete deterministic
-  check** — the mechanical-floor control predicate — and even then as an explicitly recorded
-  experiment, not as a pair member. It is ineligible for frontier or judgment-workhorse work: a
-  frontier slot requires a locally observed `role-qualified` route, and `xhigh` is its ceiling.
+- **No tier assignment is recorded for `muse-spark-1.2-contributor` or `muse-spark-1.2`, on
+  either route.** They are not added to any eligible pair, and no phase, blast-radius, or
+  roadmap row above is changed. The six-primary pair policy is untouched.
+- Either route may be selected only for work whose failure is caught by a **complete
+  deterministic check** — the mechanical-floor control predicate — and even then as an explicitly
+  recorded experiment, not as a pair member. Both are ineligible for frontier or
+  judgment-workhorse work: a frontier slot requires a locally observed `role-qualified` route,
+  and `xhigh` is the ceiling.
 - Promotion requires the A0–A6 ladder with paired isolation and utility arms, starting at A0
   (which these probes satisfy) and a real task-fit comparison against an incumbent pair member on
   representative work. A single passing run is a toy pass.
@@ -367,6 +439,33 @@ returned `x-ratelimit-limit-requests: 100` with `x-ratelimit-limit-tokens: 30000
 key-specific; re-read the headers before sizing any fan-out. The 100-request contributor ceiling
 is low enough to exhaust in one wave, so the contributor tier is unsuitable for fan-out
 regardless of capability.
+
+**Choosing between the two routes.** Neither dominates; the properties differ in kind, so this
+is the comparison to consult before recording a `RuntimeAssignment`:
+
+| | Gateway (PRIMARY) | Direct (FALLBACK) |
+|---|---|---|
+| Independent per-request attribution | **yes** — log `resolvedModel`, proved independent by disagreeing with the body | **none** — body echoes the request |
+| Canary C2 satisfiable | **yes** | no |
+| `observed_identity_source` | gateway attribution log (G3) | `adapter_response_readback` (M2) |
+| Non-catalog ID fails closed | prefixed yes (404); **bare falls through to default** | **yes, uniformly** — 404 at the provider |
+| Valid non-default ID requested bare | **routed to the wrong provider** | resolves |
+| Dispatch form | **`muse/`-prefixed, always** (G2) | bare catalog ID, whole-match (M1) |
+| Base URL | `https://api.meta.ai/v1` (**with** `/v1`) | `https://api.meta.ai` (**no** `/v1`) |
+| Running process | supervised gateway on a loopback port | none |
+| Configuration sequencing hazard | **yes** — sync + restart, fail-open window (G1) | none |
+| Shared-config side effect | `ocx sync`/`ensure` rewrite `~/.codex` | none |
+| Loopback exposure | **yes** — canary C8 applies | none |
+| Cost accounting | gateway reports `price_unmatched`; use billed `input_tokens` | billed `input_tokens` |
+| Effort readback | unavailable (`reasoningOutputTokens` is consumption) | unavailable (echo is a trap) |
+
+Prefer the **gateway** route. Its two hazards are mechanically checkable and are checked — the
+`NOT-LIVE` status comparison catches G1, the prefix rule catches G2 — whereas the direct route's
+missing identity channel cannot be repaired by any wrapper. Since this bundle's whole
+`RuntimeAssignment` discipline turns on observed model identity, a route that can satisfy C2 is
+worth more than one that structurally cannot, once its hazards are guarded. Use the **direct**
+route when no gateway is wanted or the gateway is unavailable, and record its identity ceiling
+rather than papering over it.
 
 ## Three provenance classes and qualification rungs
 

@@ -21,6 +21,9 @@ class OpenCodexClaudeTests(unittest.TestCase):
         auth_mode: str = "",
         config: object | None = None,
         stdin: str | None = None,
+        ocx_exit: int = 0,
+        provider_list_json: object | None = None,
+        catalog_json: object | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -29,6 +32,9 @@ class OpenCodexClaudeTests(unittest.TestCase):
         bin_dir.mkdir()
         log = root / "calls.log"
         mise = bin_dir / "mise"
+        # `provider list --json` and `health --json` are answered from fixtures so the
+        # configured-vs-live comparison can be driven from the test. Everything else is
+        # recorded to the call log and exits with OCX_EXIT.
         mise.write_text(
             "#!/bin/sh\n"
             "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n"
@@ -36,14 +42,35 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "case \"${1:-} ${2:-} ${3:-}\" in\n"
             "  'ocx --version ') exit 0 ;;\n"
             "  'ocx health ') exit 0 ;;\n"
+            "  'ocx health --json') printf '{\"ok\":true,\"pid\":4242,\"port\":10100}\\n'; exit 0 ;;\n"
             "  'ocx config get') [ -n \"${AUTH_MODE:-}\" ] && printf '%s\\n' \"$AUTH_MODE\"; exit 0 ;;\n"
             "  'ocx config show') printf '%s\\n' \"$CONFIG_JSON\"; exit 0 ;;\n"
+            "  'ocx provider list') \n"
+            "    if [ \"${4:-}\" = --json ] || [ \"${3:-}\" = --json ]; then\n"
+            "      printf '%s\\n' \"$PROVIDER_LIST_JSON\"; exit 0\n"
+            "    fi\n"
+            "    printf 'Configured providers:\\n\\nAvailable from registry\\n'; exit 0 ;;\n"
             "esac\n"
             "printf '<%s>' \"$@\" >> \"$CALL_LOG\"\n"
             "printf '\\n' >> \"$CALL_LOG\"\n"
-            "exit 0\n"
+            "exit ${OCX_EXIT:-0}\n"
         )
         mise.chmod(0o755)
+        # curl stub: serves the gateway catalog fixture for /v1/models and fails for
+        # /healthz so uptime stays a nicety. CATALOG_JSON empty => unreachable catalog.
+        curl = bin_dir / "curl"
+        curl.write_text(
+            "#!/bin/sh\n"
+            "for argument in \"$@\"; do\n"
+            "  case \"$argument\" in\n"
+            "    */v1/models)\n"
+            "      [ -n \"${CATALOG_JSON:-}\" ] || exit 22\n"
+            "      printf '%s\\n' \"$CATALOG_JSON\"; exit 0 ;;\n"
+            "  esac\n"
+            "done\n"
+            "exit 22\n"
+        )
+        curl.chmod(0o755)
         jq = shutil.which("jq")
         if jq:
             (bin_dir / "jq").symlink_to(jq)
@@ -56,7 +83,12 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "CALL_LOG": str(log),
             "AUTH_MODE": auth_mode,
+            "OCX_EXIT": str(ocx_exit),
             "CONFIG_JSON": json.dumps(config if config is not None else {"providers": {}}),
+            "PROVIDER_LIST_JSON": json.dumps(
+                provider_list_json if provider_list_json is not None else {"configured": []}
+            ),
+            "CATALOG_JSON": "" if catalog_json is None else json.dumps(catalog_json),
         }
         result = subprocess.run(
             [BASH, str(SCRIPT), *arguments],
@@ -228,6 +260,162 @@ class OpenCodexClaudeTests(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 result, _ = self.run_launcher("configure", *arguments)
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    # --- Muse-as-a-provider: the gateway route ------------------------------------------
+    #
+    # `provider add muse --base-url https://api.meta.ai/v1` is the executed registration. It
+    # must be admitted on the explicit-non-Anthropic-endpoint rule, since `muse` is not in the
+    # upstream registry roster.
+
+    def test_configure_allows_muse_provider_add_with_meta_endpoint(self) -> None:
+        result, log = self.run_launcher(
+            "configure", "provider", "add", "muse", "--adapter", "openai-responses",
+            "--base-url", "https://api.meta.ai/v1", "--default-model", "muse-spark-1.2",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><provider><add><muse>", log.read_text())
+
+    def test_configure_allows_provider_test_for_non_anthropic(self) -> None:
+        config = {"providers": {"muse": {"baseUrl": "https://api.meta.ai/v1"}}}
+        result, log = self.run_launcher("configure", "provider", "test", "muse", config=config)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><provider><test><muse>", log.read_text())
+
+    def test_configure_refuses_provider_test_for_anthropic(self) -> None:
+        result, log = self.run_launcher("configure", "provider", "test", "anthropic")
+
+        self.assertEqual(result.returncode, 3)
+        self.assertFalse(log.exists())
+
+    # --- the sequencing hazard ----------------------------------------------------------
+
+    def test_provider_mutation_prints_required_sync_and_restart(self) -> None:
+        for arguments in (
+            ("provider", "add", "muse", "--base-url", "https://api.meta.ai/v1"),
+            ("provider", "edit", "custom-vendor", "--base-url", "https://models.example.test/v1"),
+            ("provider", "remove", "custom-vendor"),
+        ):
+            with self.subTest(arguments=arguments):
+                config = {"providers": {
+                    "muse": {"baseUrl": "https://api.meta.ai/v1"},
+                    "custom-vendor": {"baseUrl": "https://models.example.test/v1"},
+                }}
+                result, _ = self.run_launcher("configure", *arguments, config=config)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("NOT LIVE YET", result.stdout)
+                self.assertIn("ocx sync", result.stdout)
+                self.assertIn("restart", result.stdout)
+                self.assertIn("default-provider", result.stdout)
+
+    def test_read_only_route_prints_no_sync_notice(self) -> None:
+        config = {"providers": {"muse": {"baseUrl": "https://api.meta.ai/v1"}}}
+        for arguments in (
+            ("provider", "list"),
+            ("provider", "test", "muse"),
+            ("models", "list"),
+        ):
+            with self.subTest(arguments=arguments):
+                result, _ = self.run_launcher("configure", *arguments, config=config)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("NOT LIVE YET", result.stdout)
+
+    def test_failed_mutation_prints_no_sync_notice(self) -> None:
+        # A sync instruction after a write that did not land is a false instruction.
+        config = {"providers": {"muse": {"baseUrl": "https://api.meta.ai/v1"}}}
+        result, _ = self.run_launcher(
+            "configure", "provider", "add", "muse", "--base-url", "https://api.meta.ai/v1",
+            config=config, ocx_exit=1,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("NOT LIVE YET", result.stdout)
+
+    def test_argv_credential_warns_without_echoing_the_value(self) -> None:
+        secret = "OCX_TEST_SECRET"
+        result, log = self.run_launcher(
+            "configure", "provider", "add", "custom-vendor",
+            "--base-url", "https://models.example.test/v1", "--api-key", secret,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("WARNING", result.stderr)
+        self.assertIn("account add-key", result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        # A warning, never a refusal: upstream `provider add` has no stdin alternative.
+        self.assertTrue(log.exists())
+
+    def test_no_argv_credential_warning_without_a_key_flag(self) -> None:
+        result, _ = self.run_launcher(
+            "configure", "provider", "add", "custom-vendor",
+            "--base-url", "https://models.example.test/v1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("WARNING", result.stderr)
+
+    # --- status: configured vs LIVE catalog ---------------------------------------------
+
+    def test_status_reports_not_live_provider(self) -> None:
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [
+                {"name": "openai", "isDefault": True},
+                {"name": "muse", "isDefault": False},
+            ]},
+            catalog_json={"data": [{"id": "gpt-5.6-terra"}]},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("NOT-LIVE", result.stdout)
+        self.assertIn("muse", result.stdout)
+        self.assertIn("default-provider", result.stdout)
+
+    def test_status_reports_ok_when_configured_provider_is_served(self) -> None:
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [
+                {"name": "openai", "isDefault": True},
+                {"name": "muse", "isDefault": False},
+            ]},
+            catalog_json={"data": [
+                {"id": "gpt-5.6-terra"},
+                {"id": "muse/muse-spark-1.2"},
+            ]},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("every configured provider is served", result.stdout)
+        self.assertNotIn("NOT-LIVE", result.stdout)
+
+    def test_status_never_flags_the_default_provider_as_not_live(self) -> None:
+        # The default provider serves BARE ids, so there is no `openai/` prefix to match.
+        # Reporting it NOT-LIVE would be a false alarm on every healthy gateway.
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [{"name": "openai", "isDefault": True}]},
+            catalog_json={"data": [{"id": "gpt-5.6-terra"}]},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("NOT-LIVE", result.stdout)
+
+    def test_status_degrades_to_unknown_when_catalog_is_unreadable(self) -> None:
+        # An unreachable catalog must not be reported as either live or NOT-LIVE.
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [
+                {"name": "openai", "isDefault": True},
+                {"name": "muse", "isDefault": False},
+            ]},
+            catalog_json=None,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unknown", result.stdout)
+        self.assertNotIn("NOT-LIVE", result.stdout)
 
 
 if __name__ == "__main__":

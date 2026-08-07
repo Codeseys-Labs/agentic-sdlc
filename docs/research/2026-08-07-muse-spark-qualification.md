@@ -1,10 +1,17 @@
 # Muse Spark Qualification — Executed Evidence
 
-**Date:** 2026-08-07 · **Verdict: QUALIFIED WITH CONDITIONS** as a *route* — direct, no
-gateway — and **explicitly NOT qualified for any tier placement**. Transport, admission,
+**Date:** 2026-08-07 · **Verdict: QUALIFIED WITH CONDITIONS** on **two routes** — (1) direct,
+no gateway, and (2) as a registered **provider inside the opencodex gateway** — and
+**explicitly NOT qualified for any tier placement on either**. Transport, admission,
 fail-closed behavior, three surfaces, and the context-window arithmetic are all executed
 evidence. Task fit is not: every probe was a one-word smoke prompt, so the route is admitted
 at `route-probed` and is **tier-unproven**.
+
+**Recommended default: the gateway route** (§8). It is the only one of the two with a
+per-request attribution channel independent of the caller's request string, which is the exact
+evidence gap that caps the direct route's identity claim. The direct route remains the
+supported fallback when no gateway process is wanted. §8 records the trade in full, including
+the two hazards the gateway route adds and the direct route does not have.
 
 **Executed against:** the probe structure of
 `docs/research/2026-08-07-opencodex-qualification-canary.md` §4–§5 (explicit-ID resolution,
@@ -430,7 +437,12 @@ response and is useful for a support conversation, but it carries no model ident
 
 ---
 
-## 7. Overall verdict
+## 7. Overall verdict — the direct route
+
+**Scope note.** §1–§7 qualify the **direct** route only. The same models reached as a registered
+opencodex **provider** are qualified separately in §8, which has different evidence properties
+and its own conditions G1–G7, and which is the **recommended default**. This section's
+conditions M1–M8 bind the direct route; §8.5 records which of them the gateway route supersedes.
 
 **QUALIFIED WITH CONDITIONS** as a direct, non-gateway route on `POST /v1/messages` (streaming
 and non-streaming), `POST /v1/responses`, and `POST /v1/chat/completions`, for the three
@@ -485,17 +497,303 @@ every outward effect still requires its own explicit authorization.
 
 ---
 
-## 8. Reproduction
+## 8. Muse Spark through the opencodex gateway — executed evidence
+
+Everything in §1–§7 concerns the direct route. This section is a **second, separately executed
+qualification** of the same models reached as a registered provider inside the opencodex
+gateway (`ocx`, 2.10.2, PID 3176684, port 10100). It was run because §6.2's identity ceiling on
+the direct route is not a limitation of Muse Spark — it is a limitation of *reaching it
+directly*. The gateway has the attribution channel the direct route lacks.
+
+Registration, as executed (the key is environment-only and appears nowhere in this repository):
+
+```
+ocx provider add muse --adapter openai-responses --base-url https://api.meta.ai/v1 \
+    --api-key "$MODEL_API_KEY" --default-model muse-spark-1.2
+→ ✅ Provider "muse" added.
+     Apply to Codex: ocx sync
+```
+
+Two notes on the flags. `--api-key-transport bearer` is **rejected** ("supported only by the
+anthropic adapter"); it is unnecessary because the `openai-responses` adapter already sends
+`Authorization: Bearer`, which §4 confirms this endpoint accepts. And the base URL here **does**
+carry the `/v1` suffix, unlike the direct route (§6.5, M5) — the adapter appends only
+`/responses`, so the two routes require *opposite* base-URL forms. Copying one into the other
+produces the 401 that reads as a bad credential.
+
+### 8.1 SEQUENCING HAZARD — a configured provider is not a live provider, and the gap fails OPEN
+
+This is the single most important operational fact about this route, and it is the reason
+§8.3's guard exists.
+
+Immediately after `provider add` and **before** `ocx sync`, requests naming the new provider's
+model did not fail closed. They were served by the **default** provider:
+
+```
+POST http://127.0.0.1:10100/v1/messages
+{"model":"muse/muse-spark-1.2", …}   → HTTP 400
+{"error":{"message":"upstream error (400): {\"detail\":\"The 'muse-spark-1.2' model is not
+ supported when using Codex with a ChatGPT account.\"}"}}
+```
+Attribution line for that window: `provider: "openai"`, `routeKind: "default-provider"`. The
+bare form `muse-spark-1.2` behaved identically. The error text is the *Codex* upstream refusing
+a Meta model ID, because the request went to Codex.
+
+`ocx sync` followed by a gateway **restart** fixed it. After that sequence, re-verified live for
+this memo:
+
+| Requested `model` | HTTP | Body `model` | Log `provider` | Log `resolvedModel` | `routeKind` |
+|---|---:|---|---|---|---|
+| `muse/muse-spark-1.2` | 200 | `muse/muse-spark-1.2` | `muse` | `muse-spark-1.2` | `explicit-provider` |
+| `muse-spark-1.2` | 200 | `muse-spark-1.2` | `muse` | `muse-spark-1.2` | `explicit-provider` |
+| `muse/muse-spark-1.1` | 200 | `muse/muse-spark-1.1` | `muse` | `muse-spark-1.1` | `explicit-provider` |
+| `muse/muse-spark-1.2-contributor` | 200 | (echo) | `muse` | `muse-spark-1.2-contributor` | `explicit-provider` |
+
+All three catalog IDs resolve independently — the direct route's Probe B result reproduces here
+(§5.2). Selection reasons are recorded: `explicit-provider-namespace` for a `muse/`-prefixed
+request, `configured-default-model` for the bare `muse-spark-1.2`.
+
+**Why the fail-open matters more than the fix.** Between `provider add` and `sync` + restart
+there is a window in which a dispatch to the new provider is **attempted and billed against the
+wrong upstream** while the attribution log records the wrong provider. Nothing in the
+`provider add` output says the provider is not yet live — it says "Apply to Codex: `ocx sync`",
+which does not mention the restart and does not say what happens in the meantime. This is the
+canary's **C1/C5 fail-open condition reached through configuration drift rather than through a
+typo**: the canary's C5 says `routeKind: "default-provider"` must be treated as an alarm rather
+than a normal outcome, and here it is produced by a routine, successful configuration command.
+
+The two facts have **separate sources**, which is what makes the state mechanically detectable:
+`ocx provider list` reads the config *file*; the running gateway's own `GET /v1/models` reads
+the *process's* catalog. Post-sync the latter serves
+`muse/muse-spark-1.1`, `muse/muse-spark-1.2`, `muse/muse-spark-1.2-contributor` (each
+`owned_by: meta`) alongside the seven bare `gpt-*` IDs. Pre-sync it served only the `gpt-*`
+IDs. A provider in the first list and absent from the second is **NOT-LIVE**, and §8.3
+implements exactly that comparison.
+
+Note that `ocx sync --restart-codex` is not a substitute: it restarts *Codex app-server*
+processes, not the gateway. The gateway restart is separate.
+
+### 8.2 Two further findings, both corrections to the direct route's advantage
+
+**Non-catalog IDs do NOT uniformly fail closed here, and the surviving hole is the important
+one.** Re-verified live after sync + restart:
+
+| Requested `model` | HTTP | Error / outcome | Log `provider` | `routeKind` |
+|---|---:|---|---|---|
+| `muse/muse-spark-9.9-does-not-exist` | 404 | `not_found_error` | — | — |
+| `muse-spark-9.9-does-not-exist` (bare) | 400 | *Codex* upstream: "not supported when using Codex with a ChatGPT account" | **`openai`** | **`default-provider`** |
+| `muse-spark-1.1` (bare, real ID, **not** the configured default) | 400 | *Codex* upstream, same text | **`openai`** | **`default-provider`** |
+
+The third row is the finding. `muse-spark-1.1` is a **real, served Muse ID** — and requested
+bare, post-sync, it is routed to **Codex**, not to Meta. Only the provider's *configured default
+model* (`muse-spark-1.2`) resolves bare; every other Muse ID must carry the `muse/` prefix or it
+falls through to the default provider. So the sequencing hazard is not merely a startup-window
+problem: it is a **permanent property of bare model IDs on this route**. Dispatches on this
+route must be `muse/`-prefixed.
+
+This materially narrows the direct route's §5.3 advantage rather than removing it. The direct
+route refuses every non-catalog ID 404 at the provider. The gateway route refuses a *prefixed*
+unknown ID 404, but silently re-routes an *unprefixed* one — including a valid Muse ID — to
+whichever provider is default. §5.3's structural argument holds for the direct route only.
+
+**The response body echoes the caller's alias, so it is inadmissible here — and that is
+evidence the direct route cannot produce.** For `muse/muse-spark-1.2` the body reports
+`"model":"muse/muse-spark-1.2"` while the log records `resolvedModel: "muse-spark-1.2"`. That is
+the canary's §6.2 alias-echo divergence reproducing exactly. Its significance is inverted from
+what it looks like: because a second, independent channel *disagrees* with the body, the body is
+inadmissible **and the log is demonstrably not derived from the request string**. On the direct
+route there is only one channel and it agrees with itself, which is consistent both with a
+truthful report and with an unchecked echo (§6.2). Here the disagreement proves the log is a
+real observation. This satisfies the canary's **C2** shape: source `resolved_model_id` only from
+the log's `resolvedModel`, correlated by `requestId`.
+
+The log also carries genuine telemetry the direct route's body does not:
+`usage.reasoningOutputTokens` (231 of 243 output tokens on a one-word answer — §6.1's ratio,
+independently confirmed), `durationMs`, `firstOutputMs`, `admissionKind: "loopback"`, and
+`transportPhase: "terminal_sse"`. Cost is honestly absent: `"cost":{"kind":"unavailable",
+"reason":"price_unmatched"}` — the gateway has no price table for Meta models and says so rather
+than guessing.
+
+### 8.3 Two upstream inconsistencies, recorded as caveats
+
+**`ocx provider test muse` disagrees with itself across gateway states.** The team lead observed
+it fail with "unknown provider" while the provider was demonstrably serving requests. Re-run for
+this memo after sync + restart it now succeeds:
+
+```
+muse: connected
+Connected — 3 models available.
+Latency: 198 ms
+```
+
+So `provider test` appears to read the *live* catalog rather than the config file, which makes
+its earlier failure the same pre-sync state as §8.1 rather than an independent bug. Either way
+the lesson is the same and it is a caveat, not a blocker: **`provider test` is not a
+configuration check.** A failure means "not live", which is not the same as "not configured",
+and the two must not be conflated when diagnosing.
+
+**`provider add` performs no adapter validation, so a typo is stored silently.** Verified in an
+isolated `OPENCODEX_HOME` (a scratch directory, so the operator's live config was never touched
+— confirmed by its unchanged mtime):
+
+```
+OPENCODEX_HOME=/tmp/ocx-scratch-home ocx provider add scratch-bogus \
+    --adapter definitely-not-real --base-url https://models.example.test/v1 --api-key <placeholder>
+→ ✅ Provider "scratch-bogus" added.
+```
+`provider list --json` then reports `"adapter": "definitely-not-real"` verbatim. There is no
+enumeration check at add time. A mistyped adapter therefore produces a provider that is
+configured, looks configured in every inspection surface, and cannot work — and per §8.1 the
+requests aimed at it fall through to the default provider rather than erroring. The scratch home
+was removed afterwards.
+
+Also recorded from that scratch test: `--api-key` is **optional** on `provider add`, and
+`ocx account add-key <provider>` reads a key "only from piped stdin" (its own help text). That
+is the argv-safe credential path, since `--api-key <value>` is world-readable via `ps` for the
+life of the call. In this environment `account add-key` additionally requires an opencodex admin
+token ("Error: opencodex admin token required"), so it was not completed; the wrapper therefore
+**warns** about an argv key rather than refusing one (§8.4).
+
+### 8.4 What the wrapper now enforces
+
+`scripts/opencodex-claude.sh` was extended rather than duplicated, because `configure` already
+admitted `provider add|edit|remove` for a non-Anthropic provider via
+`provider_allowed_for_mutation` — `muse` is admitted on the explicit-non-Anthropic-endpoint rule,
+since it is not in the upstream registry roster. What was missing was the sequencing guard:
+
+- After any **successful** admitted `provider add|edit|update|remove|set-default`, the wrapper
+  prints a `NOT LIVE YET` notice naming both required steps (`ocx sync`, then its own `restart`)
+  and stating that requests in the meantime are billed against the default provider. It is
+  printed only on success, because instructing an operator to sync a write that did not land is a
+  false instruction. Neither step is run for them: `ocx sync` rewrites shared `~/.codex` state and
+  a restart interrupts in-flight turns, so each is separately authorized.
+- `status` gained a **configured vs LIVE catalog** section implementing §8.1's comparison, and it
+  degrades to `unknown` rather than to a verdict when the gateway is down or `jq`/`curl` are
+  missing. The default provider is never flagged, because it serves bare IDs and has no
+  `<name>/` prefix to match — flagging it would be a false alarm on every healthy gateway.
+- An `--api-key`/`--auth-token`/`--token` value on the command line **warns** (naming the flag,
+  never the value) and points at the stdin form. It warns rather than refuses because upstream
+  `provider add` offers no stdin or environment alternative for that flag, so refusing would
+  block the only non-interactive registration path.
+- `provider test <provider>` is now admitted read-only for non-Anthropic providers and prints no
+  sync notice; it is refused for Anthropic ones on the same rule as the mutations, because it
+  makes a live call with that provider's stored credential.
+
+Writing the guard surfaced a **pre-existing bug** in `status`, now fixed:
+`gateway_uptime_seconds` was documented as a cosmetic nicety, but under `set -o pipefail` a
+refused `/healthz` made its pipeline exit nonzero inside a command substitution under `set -e`,
+aborting the entire status report over a missing display field. It was found by a `curl` stub
+that declines `/healthz`, and it would have fired on any real gateway that was down — exactly
+when a status report is most needed.
+
+### 8.5 Reconciled verdict — two routes, different evidence, and which to prefer
+
+Muse Spark is **QUALIFIED WITH CONDITIONS on both routes**. The tier verdict is unchanged and
+unchanged *by* this section: still `route-probed`, still tier-unproven, on both. Adding a second
+transport to the same models cannot establish task fit, and these gateway probes were the same
+one-word smoke prompts.
+
+The evidence properties differ in kind, so neither route dominates:
+
+| | Direct (§1–§7) | Gateway (§8) |
+|---|---|---|
+| Independent per-request attribution | **none** — body echoes the request (§6.2) | **yes** — log `resolvedModel`, disagrees with the body (§8.2) |
+| Canary C2 satisfiable | no | **yes** |
+| Non-catalog ID fails closed | **yes, uniformly** — 404 at the provider (§5.3) | prefixed yes; **bare falls through to default** (§8.2) |
+| Valid non-default ID requested bare | resolves | **routed to the wrong provider** (§8.2) |
+| Running process required | none | supervised gateway on a loopback port |
+| Configuration sequencing hazard | none | **yes** — sync + restart, fail-open window (§8.1) |
+| Base URL form | `https://api.meta.ai` (**no** `/v1`) | `https://api.meta.ai/v1` (**with** `/v1`) |
+| Shared-config side effect | none | `ocx sync`/`ensure` rewrite `~/.codex` |
+| Loopback exposure | none | anything reaching the port spends the key (canary C8) |
+| Effort readback | unavailable (echo is a trap, §6.3) | unavailable; `reasoningOutputTokens` is consumption, not effort |
+| Cost accounting | billed `input_tokens` (§6.4) | honestly `unavailable` (`price_unmatched`) |
+
+**Recommendation: the gateway route is the default; the direct route is the fallback.** The
+reasoning is about which limitation can be repaired by discipline and which cannot.
+
+The gateway route's two hazards — the sync/restart window and the bare-ID fall-through — are
+both **mechanically checkable**, and both are now checked: §8.4's `NOT-LIVE` comparison catches
+the first, and a `muse/`-prefixed dispatch rule catches the second (recorded as G2 below). The
+direct route's limitation is not repairable by any wrapper: there is no second channel to read,
+so `model_identity_basis` there can never rest on an independent observation (§6.2). Given that
+this bundle's whole `RuntimeAssignment` discipline turns on observed model identity, a route
+that can satisfy C2 is worth more than a route that structurally cannot, once its hazards are
+guarded. It also inherits the existing supervised launcher, its isolation, and its ADR-0003
+refusals rather than needing a parallel implementation of each.
+
+The direct route keeps a real and distinct advantage that justifies keeping it: it needs **no
+running process, no port, no sync step, and no shared-config mutation**, and it fails closed on
+every non-catalog ID uniformly. When no gateway is wanted, or when the gateway is unavailable,
+it is the supported path — with its identity ceiling recorded rather than papered over.
+
+**Additional binding conditions for the gateway route**, on top of M1–M8 (which carry over
+except where noted):
+
+- **G1.** A provider mutation is not live until `ocx sync` **and** a gateway restart have both
+  run. Before dispatching, confirm the provider appears in the running gateway's
+  `GET /v1/models`, not merely in `ocx provider list`. `provider add` succeeding is not
+  evidence of liveness (§8.1).
+- **G2.** Every dispatched Muse ID on this route is **`muse/`-prefixed**. A bare non-default ID
+  — including a valid served one — is routed to the default provider (§8.2). This replaces M1's
+  "matched whole" catalog rule with a stricter one: prefix *and* catalog membership.
+- **G3.** `resolved_model_id` comes **only** from the attribution log's `resolvedModel`,
+  correlated by `requestId`. The response body is inadmissible here: it echoes the caller's
+  `muse/`-prefixed alias (§8.2). This **supersedes M2** for this route — `observed_identity_source`
+  is the gateway attribution log, not `adapter_response_readback`, and the gateway fields do
+  apply.
+- **G4.** `routeKind: "default-provider"` on a request intended for Muse is an **alarm**, per
+  canary C5. On this route it means either the sync window (G1) or a bare ID (G2).
+- **G5.** M5's base-URL rule **inverts**: the provider's `baseUrl` here is
+  `https://api.meta.ai/v1` **with** the suffix, because the adapter appends only `/responses`.
+  The direct route's suffix-free form is wrong here and vice versa.
+- **G6.** Canary C6 and C8 now bind: the provider roster is no longer `openai`-only, so C1's
+  catalog analysis is re-derived (done in §8.2, and the result is G2), and the gateway stays on
+  loopback — anything reaching the port can spend the Meta key without presenting a credential.
+- **G7.** The adapter string is verified against a live request, not against `provider add`
+  accepting it. Adapter names are not validated at add time (§8.3).
+
+**What §8 does not qualify.** Task fit or tier placement, on either route — unchanged and still
+the main open question. Streaming, tool calling, `count_tokens`, and the window arithmetic
+*through the gateway* (verified direct in §5.5–§5.8; the gateway's own translation of them was
+not re-probed). Restart durability, which `ocx status` itself reports as "AT RISK after restart
+(no viable background service)" — an unresolved gap from the canary's §6.6 that G1 makes more
+consequential, since a gateway that restarts without its config re-applied reopens the §8.1
+window. Concurrent dispatch across both routes at once. And per the standing boundary: **it
+authorizes nothing.**
+
+---
+
+## 9. Reproduction
 
 - Endpoint `https://api.meta.ai`; catalog IDs `muse-spark-1.2-contributor`, `muse-spark-1.2`,
   `muse-spark-1.1` as served 2026-08-07.
 - Probe bodies are quoted inline above; substitute `$MODEL_API_KEY` from the environment. No
   credential value appears in this memo or anywhere else in this repository, and the §5.4
   bearers are literal placeholder strings, not redactions.
-- Re-verify the route without launching a client:
+- Re-verify the direct route without launching a client:
   `mise run muse:probe` (or `scripts/muse-claude.sh probe`).
 - Scratch probe artifacts were written under `/tmp/muse-probe/` and are ephemeral, not
   committed.
+
+**Gateway route (§8).** Gateway: opencodex 2.10.2, PID 3176684, port 10100, config
+`~/.opencodex/config.json`, provider `muse` with `baseUrl https://api.meta.ai/v1` and
+`defaultModel muse-spark-1.2`. Requests are `POST http://127.0.0.1:10100/v1/messages` with
+`content-type: application/json` and `anthropic-version: 2023-06-01`. Re-verify with:
+
+- Liveness of the provider, not merely its configuration:
+  `scripts/opencodex-claude.sh status` (the `configured vs LIVE catalog` section), or read the
+  running gateway's catalog directly at `GET http://127.0.0.1:10100/v1/models` and confirm a
+  `muse/`-prefixed entry.
+- Attribution: `mise exec -- ocx observe logs --jsonl`, correlating by `requestId` and reading
+  `resolvedModel` — never the response body (§8.2, G3).
+- The bare-ID fall-through (§8.2) reproduces by requesting `muse-spark-1.1` without the `muse/`
+  prefix and reading `provider: "openai"`, `routeKind: "default-provider"` in the log.
+- The adapter-validation gap (§8.3) reproduces under an isolated `OPENCODEX_HOME` pointed at a
+  scratch directory, which leaves the operator's config untouched. Do not reproduce it against
+  a live config.
+- The `muse` provider was left configured and live at the operator's request, and the gateway
+  was left running.
 - Rerun triggers, per the calibration's own list: any change to the served catalog, the effort
   vocabulary, the window arithmetic, the auth forms accepted, or the rate-limit headers; and
   before any attempt to promote this route past `route-probed`.

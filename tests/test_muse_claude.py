@@ -386,6 +386,34 @@ class MuseClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertFalse(claude_log.exists())
 
+    # --- fallback framing ---------------------------------------------------------------
+    #
+    # ADR-0007 makes the gateway the primary path. A verdict-reporting subcommand that did not
+    # say so would leave an operator believing this is THE route, which is the mistake the ADR
+    # revision exists to correct -- so it is asserted rather than left to the header comment.
+
+    def test_probe_and_status_name_the_gateway_as_the_primary_path(self) -> None:
+        for subcommand in ("probe", "status"):
+            with self.subTest(subcommand=subcommand):
+                result, _, _ = self.run_launcher(subcommand)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("FALLBACK", result.stdout)
+                self.assertIn("opencodex-claude.sh launch", result.stdout)
+                self.assertIn("muse/muse-spark-1.2", result.stdout)
+                # The reason, not merely the label: the identity ceiling is why it is second.
+                # Matched on unwrapped text, since the notice is hard-wrapped prose.
+                unwrapped = " ".join(result.stdout.split())
+                self.assertIn("ONLY identity channel and it ECHOES the request", unwrapped)
+                self.assertIn("no attribution log", unwrapped)
+
+    def test_usage_names_the_gateway_as_the_primary_path(self) -> None:
+        result, _, _ = self.run_launcher("--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("FALLBACK", result.stdout)
+        self.assertIn("opencodex-claude.sh launch", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,28 @@
 #!/bin/bash
 # muse-claude.sh — direct-route launcher for Meta's Muse Spark models.
 #
+# THIS IS THE FALLBACK PATH. The PRIMARY path for Muse Spark is the opencodex gateway, where
+# Muse is registered as an ordinary provider:
+#
+#   scripts/opencodex-claude.sh configure provider add muse --adapter openai-responses \
+#       --base-url https://api.meta.ai/v1 --default-model muse-spark-1.2
+#   mise exec -- ocx sync && scripts/opencodex-claude.sh restart
+#   scripts/opencodex-claude.sh launch --model muse/muse-spark-1.2
+#
+# Prefer that path (ADR-0007 Decision item 2) because it has a per-request attribution log
+# whose `resolvedModel` is recorded INDEPENDENTLY of the caller's requested string -- proven
+# independent, because it disagrees with the response body (qualification §8.2). This route
+# has no such channel and cannot be given one: the response body is the only identity signal
+# and it is an ECHO of the request, so a match is consistent both with a truthful report and
+# with a server that echoes without checking (§6.2). That ceiling is not fixable here.
+#
+# Use THIS route when no gateway is wanted or the gateway is unavailable. What it buys, and
+# why it is kept rather than deleted (ADR-0007 Decision item 3): no running process, no port,
+# no `ocx sync` step, no shared ~/.codex mutation, no loopback exposure -- and every
+# non-catalog ID is refused 404 by the provider itself, uniformly, with no default-provider
+# fallthrough to guard against (§5.3). The gateway route re-routes an UNPREFIXED Muse ID to
+# whichever provider is default, even a valid served one (§8.2); this route cannot.
+#
 # Purpose: run a SECOND Claude Code process pointed straight at Meta's Anthropic-shaped
 # endpoint, authenticating with Meta's OWN API key, while the operator's native Claude Code
 # session and config are left untouched. Subcommands: launch | status | probe.
@@ -10,7 +32,9 @@
 # docs/research/2026-08-07-muse-spark-qualification.md §5.3). ANTHROPIC_BASE_URL points at
 # Meta directly. This is ADR-0003-clean for the same reason ADR-0003 item 2 carves out: a
 # non-Anthropic model authenticating with its own provider-issued credential. No Anthropic
-# subscription credential is involved, forwarded, or replayed.
+# subscription credential is involved, forwarded, or replayed. The gateway route is equally
+# ADR-0003-clean for the same reason: what matters is whose credential authenticates, not
+# whether a proxy is present.
 #
 # FAIL-CLOSED: reachability is never assumed from configuration. `launch` re-probes the live
 # catalog AND runs one tiny real completion before exec'ing Claude Code, because each failure
@@ -50,6 +74,10 @@ state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
 isolated_config_dir="$state_home/agentic-sdlc/muse-claude"
 
 # Base URL WITHOUT the /v1 suffix. Claude Code appends /v1/messages itself; see the header.
+# NOTE the inversion: the gateway route's provider baseUrl KEEPS the /v1 suffix, because the
+# openai-responses adapter appends only /responses. The two forms are opposites, and copying
+# either into the other yields a 401 WITH A VALID CREDENTIAL -- so misconfiguration reads as a
+# bad key on both routes (qualification §6.5 and §8 registration note).
 muse_base_url="${MUSE_BASE_URL:-https://api.meta.ai}"
 # Catalog IDs verified present on 2026-08-07. The catalog is re-probed at every launch rather
 # than trusted from this list, because catalog membership is the admission check.
@@ -64,6 +92,13 @@ probe_timeout_seconds=45
 usage() {
   cat <<'EOF'
 usage: muse-claude.sh <launch|status|probe> [claude args...]
+
+FALLBACK PATH. The primary path for Muse Spark is the opencodex gateway, where Muse is one
+more provider and gets an INDEPENDENT per-request attribution log that this route has no way
+to provide (ADR-0007 item 2):
+  scripts/opencodex-claude.sh launch --model muse/muse-spark-1.2
+Use this route when no gateway is wanted or the gateway is unavailable: it needs no running
+process, no port, and no sync step, and it refuses every non-catalog ID 404 uniformly.
 
   launch [claude args...]   Verify the route live (catalog + tiny real completion), then
                             launch a second Claude Code process against Meta's endpoint with
@@ -351,15 +386,36 @@ cmd_launch() {
   exec claude "$@"
 }
 
+# Printed by probe and status. The identity ceiling is the reason this route is the fallback,
+# so it is stated wherever the route reports a verdict rather than only in the header.
+print_fallback_notice() {
+  cat <<'EOF'
+
+route role: FALLBACK. The primary path for Muse Spark is the opencodex gateway, where Muse is
+a registered provider and each request gets an attribution log entry whose resolvedModel is
+observed INDEPENDENTLY of the request string:
+  scripts/opencodex-claude.sh launch --model muse/muse-spark-1.2
+This route has no attribution log, no provider/model response header, and no usage or audit
+surface. The response body's model field is the ONLY identity channel and it ECHOES the
+request, so a match cannot distinguish a truthful report from an unchecked echo. If you need
+independent per-request attribution, use the gateway path. Prefer this one when no gateway is
+wanted: it needs no process, no port, and no sync step, and every non-catalog ID is refused
+404 by the provider itself.
+Evidence: docs/research/2026-08-07-muse-spark-qualification.md §6.2 (this route) and §8
+(gateway route); decision: docs/adr/0007-muse-spark-direct-route.md items 2 and 3.
+EOF
+}
+
 cmd_probe() {
   resolve_credential
   verify_route
   printf '\nroute verified. That is evidence, not authorization, and it is not a capability\n'
   printf 'claim: per the qualification memo this route is admitted but TIER-UNPROVEN.\n'
+  print_fallback_notice
 }
 
 cmd_status() {
-  printf '== muse spark direct route ==\n'
+  printf '== muse spark direct route (FALLBACK; primary is the opencodex gateway) ==\n'
   printf '  endpoint    : %s\n' "$muse_base_url"
   printf '  main model  : %s\n' "$muse_default_model"
   printf '  small model : %s\n' "$muse_default_small_model"
@@ -399,6 +455,7 @@ cmd_status() {
   printf '\nreachable: the exact requested ID answered with non-empty text. That is evidence,\n'
   printf 'not authorization, and it grants no authority for any outward effect. It is also not\n'
   printf 'a capability claim -- the route is admitted but TIER-UNPROVEN.\n'
+  print_fallback_notice
 }
 
 case "${1:-}" in

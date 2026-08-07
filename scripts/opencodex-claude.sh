@@ -42,7 +42,16 @@
 #     proxy) and `ocx stop` restores it — an upstream side effect this wrapper surfaces rather
 #     than hides, because a supervision call therefore mutates shared Codex config.
 #   * No credential is read, written, printed, or forwarded by this script. `configure` hands
-#     off to ocx's own interactive login flows; this script never handles the secret.
+#     off to ocx's own interactive login flows; this script never handles the secret. It does
+#     WARN when a key is passed as `--api-key` on the command line, because argv is
+#     world-readable via `ps` for the life of the call -- see cmd_configure's help text for the
+#     stdin-only alternative.
+#   * `configure` does NOT make a provider mutation take effect. Writing a provider into the
+#     config file does not put it in the running gateway's catalog: `ocx sync` plus a gateway
+#     restart is required, and in the window between, a request naming the new provider's model
+#     falls through to the DEFAULT provider (see print_sync_required_notice). This wrapper
+#     reports that gap mechanically and refuses to close it silently, because `ocx sync`
+#     rewrites shared ~/.codex config and is its own authorized operation.
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -72,11 +81,18 @@ usage: opencodex-claude.sh <launch|launch-ultracode|status|restart|configure> [a
                             same fail-closed launch path. This convenience route refuses a
                             competing --settings argument and permission-bypass flags.
   status                    Supervision view: pid, port, uptime, healthy/down, log location,
-                            configured providers, attribution stream. Exit 0 healthy.
+                            configured providers, attribution stream. Also compares each
+                            CONFIGURED provider against the running gateway's LIVE catalog and
+                            warns NOT-LIVE for any that is configured but not served. Exit 0
+                            healthy.
   restart                   Stop the gateway cleanly if running, then ensure it is back up
                             and healthy. Fails closed on an unclean stop.
   configure [ocx args...]   Interactive passthrough to opencodex's own provider
-                            login/config commands. Prints the command before running it.
+                            login/config commands. Prints the command before running it. After
+                            an admitted provider add/edit/remove it prints the required
+                            `ocx sync` + restart sequence, because a configured provider is NOT
+                            live until then and requests fall through to the default provider
+                            in the meantime.
 
 exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (subscription-OAuth boundary)
 EOF
@@ -137,11 +153,14 @@ configured_port() {
 }
 
 # Uptime is a nicety, so it is read straight from /healthz and only when a fetcher exists.
+# The trailing `|| true` is load-bearing: under `set -o pipefail` a refused /healthz makes the
+# pipeline exit nonzero, which -- inside the `uptime="$(...)"` assignment in cmd_status and
+# under `set -e` -- would abort the whole status report over a missing cosmetic field.
 gateway_uptime_seconds() {
   local port="$1"
   command -v curl >/dev/null 2>&1 || return 0
-  curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null \
-    | sed -n 's/.*"uptime":\([0-9]*\).*/\1/p' | head -1
+  { curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null \
+    | sed -n 's/.*"uptime":\([0-9]*\).*/\1/p' | head -1; } || true
 }
 
 # True when something gateway-shaped exists but is not answering a healthy identity probe:
@@ -161,6 +180,93 @@ gateway_half_up() {
     curl -fsS --max-time 2 "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1 && return 0
   fi
   return 1
+}
+
+# --- configured-vs-live provider reconciliation -------------------------------------------
+#
+# A provider written into ~/.opencodex/config.json is NOT thereby in the running gateway's
+# routing table. The two facts have separate sources and this is the only honest way to tell
+# them apart:
+#   * CONFIGURED: `ocx provider list --json` .configured[].name -- reads the config file.
+#   * LIVE:       the running gateway's own `GET /v1/models` -- reads the process's catalog.
+# A provider present in the first and absent from the second is NOT-LIVE. That state is not
+# cosmetic: a request naming its model does not error, it is classified
+# `routeKind: "default-provider"` and forwarded to whichever provider is default, which bills
+# and attempts against the wrong upstream. That is the canary's C1/C5 fail-open condition
+# reached through configuration drift rather than through a typo.
+#
+# Both readers degrade to silence rather than to a false verdict: no jq, no curl, or an
+# unparseable payload yields "unknown", never "live" and never "NOT-LIVE".
+
+configured_provider_names() {
+  command -v jq >/dev/null 2>&1 || return 1
+  ocx provider list --json 2>/dev/null \
+    | jq -r '(.configured // []) | .[] | select(.name != null) | .name' 2>/dev/null
+}
+
+# Model IDs the RUNNING gateway serves. Namespaced as `<provider>/<model>` for a custom
+# provider, bare for the default one, so the provider segment is what identifies liveness.
+live_catalog_model_ids() {
+  local port="$1"
+  [ -n "$port" ] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  curl -fsS --max-time 5 "http://127.0.0.1:${port}/v1/models" 2>/dev/null \
+    | jq -r '(.data // []) | .[] | select(.id != null) | .id' 2>/dev/null
+}
+
+# Names with at least one model served under `<name>/`. The default provider serves bare IDs,
+# so it is reported live whenever the catalog answers at all -- its own liveness is already the
+# health probe's subject and misreporting it as NOT-LIVE would be the false alarm this check
+# exists to avoid.
+live_provider_names() {
+  local port="$1" catalog
+  catalog="$(live_catalog_model_ids "$port")" || return 1
+  [ -n "$catalog" ] || return 1
+  printf '%s\n' "$catalog" | sed -n 's|^\([^/][^/]*\)/.*|\1|p' | sort -u
+}
+
+# Prints one `<name>` per configured-but-not-served provider. Exit 1 means the comparison could
+# not be made (missing tool, gateway down, unparseable payload) -- deliberately distinct from
+# exit 0 with no output, which means every configured provider is live.
+not_live_providers() {
+  local port="$1" configured live default_name name
+  configured="$(configured_provider_names)" || return 1
+  [ -n "$configured" ] || return 1
+  live="$(live_provider_names "$port")" || return 1
+  default_name="$(command -v jq >/dev/null 2>&1 \
+    && ocx provider list --json 2>/dev/null \
+      | jq -r '(.configured // []) | map(select(.isDefault == true)) | (first | .name) // ""' 2>/dev/null || true)"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$name" = "$default_name" ] && continue
+    printf '%s\n' "$live" | grep -qxF "$name" || printf '%s\n' "$name"
+  done <<<"$configured"
+}
+
+# Printed after every admitted provider mutation. The sequence is NOT run for the operator:
+# `ocx sync` rewrites shared ~/.codex state and a restart interrupts in-flight turns, so each
+# is its own authorized operation rather than a side effect of a configuration edit.
+print_sync_required_notice() {
+  local route="$1"
+  cat <<EOF
+
+NOT LIVE YET: \`ocx $route\` wrote the provider to the config file. It is NOT in the running
+gateway's routing table until BOTH of these run:
+
+  mise -C $root exec -- ocx sync
+  scripts/opencodex-claude.sh restart
+
+Until then a request naming this provider's model does NOT fail closed. It is classified
+\`routeKind: "default-provider"\` and forwarded to the DEFAULT provider, so it is attempted and
+billed against the wrong upstream while the attribution log records the wrong provider.
+
+Neither step is run for you: \`ocx sync\` rewrites shared ~/.codex config and a restart
+interrupts in-flight turns, so both are separately authorized operations.
+
+Confirm the provider went live before dispatching anything to it:
+  scripts/opencodex-claude.sh status
+EOF
 }
 
 wait_for_health() {
@@ -389,6 +495,22 @@ cmd_status() {
   printf '\n== configured providers ==\n'
   ocx provider list 2>/dev/null | sed -n '1,/^Available from registry/p' | sed '$d' || printf 'provider list unavailable\n'
 
+  printf '\n== configured vs LIVE catalog ==\n'
+  local stale stale_status=0
+  stale="$(not_live_providers "${port:-}")" || stale_status=$?
+  if [ "$stale_status" -ne 0 ]; then
+    printf '  unknown : could not compare (gateway down, or jq/curl unavailable). A configured\n'
+    printf '            provider is NOT proven live by appearing in the list above.\n'
+  elif [ -z "$stale" ]; then
+    printf '  ok      : every configured provider is served by the running gateway\n'
+  else
+    printf '  NOT-LIVE: configured but NOT in the running gateway catalog:\n'
+    printf '            %s\n' $stale
+    printf '            A request naming one of these does NOT fail closed -- it is classified\n'
+    printf '            routeKind: "default-provider" and billed against the DEFAULT provider.\n'
+    printf '            Fix: mise -C %s exec -- ocx sync, then this script'"'"'s restart.\n' "$root"
+  fi
+
   printf '\n== attribution log stream ==\n'
   printf '  mise -C %s exec -- ocx observe logs --follow --jsonl\n' "$root"
   printf '  (requires a running gateway; it prints "Proxy is not running" and exits 0 otherwise)\n'
@@ -515,6 +637,35 @@ refuse_configuration() {
   refuse "opencodex configuration route refused ($1); this split plane admits only reviewed non-Anthropic provider operations"
 }
 
+# `ocx provider add` accepts `--api-key <value>`, and argv is world-readable via `ps` for the
+# life of the call -- on a shared host any other user can read the key. This WARNS rather than
+# refuses, because upstream `provider add` has no stdin or env alternative for the key (verified:
+# no --api-key-stdin flag and no apiKeyEnv field exist), so refusing would block the only
+# non-interactive way to register a key-authenticated provider. The warning names the two-step
+# alternative instead. The flag NAME is printed; the value never is.
+warn_argv_credential() {
+  local argument
+  for argument in "$@"; do
+    case "$(normalize_identifier "$argument")" in
+      --api-key|--api-key=*|--auth-token|--auth-token=*|--token|--token=*)
+        cat >&2 <<'EOF'
+WARNING: a credential passed on the command line is readable by every process on this host via
+`ps` for the life of the call, and may be recorded in your shell history.
+
+Prefer the two-step form, which reads the key ONLY from piped stdin:
+  scripts/opencodex-claude.sh configure provider add <name> --adapter <a> --base-url <url>
+  printf '%s\n' "$YOUR_KEY_ENV_VAR" | mise exec -- ocx account add-key <name>
+
+Continuing, because upstream `provider add` offers no stdin or environment alternative for
+--api-key. The value is not printed or logged by this wrapper.
+
+EOF
+        return 0
+        ;;
+    esac
+  done
+}
+
 # An unrecognized route is not a credential-boundary event. Printing the ADR-0003 notice for
 # a typo teaches the reader that the boundary fires at random, so it gets its own message that
 # names the admitted routes instead.
@@ -534,6 +685,7 @@ Reviewed mutations (non-Anthropic providers only):
   login <provider> | logout <provider>
   account login|reauth|code|cancel|use|remove|add-key <provider> ...
   provider add|edit|update|remove|set-default <provider> ...
+  provider test <provider>        (read-only reachability check)
 
 Inspect the full upstream surface without running it:
   mise exec -- ocx help <verb>
@@ -548,11 +700,17 @@ cmd_configure() {
     printf 'Supported: inspected non-Anthropic login/account/provider mutations and masked\n'
     printf 'provider/account/config inspection. Interactive setup, GUI, arbitrary config\n'
     printf 'mutation/import/export, and unknown future routes fail closed.\n\n'
+    printf 'A provider add/edit/remove writes the CONFIG FILE only. It is not in the running\n'
+    printf 'gateway until `ocx sync` plus a restart; until then requests naming it fall through\n'
+    printf 'to the DEFAULT provider. This route prints that sequence after a successful\n'
+    printf 'mutation, and `status` reports any configured-but-NOT-LIVE provider.\n\n'
+    printf 'Pass a key via piped stdin (`ocx account add-key <name>`) rather than --api-key\n'
+    printf 'where possible: argv is readable by every process on this host via ps.\n\n'
     printf 'Run `mise -C %s exec -- ocx help <verb>` to inspect the upstream surface.\n' "$root"
     return 0
   fi
 
-  local verb subcommand provider route
+  local verb subcommand provider route mutates_providers=false
   verb="$(normalize_identifier "${1:-}")"
   subcommand="$(normalize_identifier "${2:-}")"
   route="$verb${subcommand:+ $subcommand}"
@@ -576,11 +734,20 @@ cmd_configure() {
       anthropic_endpoint_argument "${@:4}" && refuse_configuration "anthropic-endpoint"
       provider_allowed_for_mutation "$provider" || explicit_non_anthropic_endpoint_argument "${@:4}" \
         || refuse_configuration "anthropic-or-unclassifiable-provider"
+      mutates_providers=true
       ;;
-    "provider edit"|"provider update"|"provider remove"|"provider set-default"|"provider selected")
+    "provider edit"|"provider update"|"provider remove"|"provider set-default")
       provider="${3:-}"
       provider_allowed_for_mutation "$provider" || refuse_configuration "anthropic-or-unclassifiable-provider"
       anthropic_endpoint_argument "${@:4}" && refuse_configuration "anthropic-endpoint"
+      mutates_providers=true
+      ;;
+    # `provider test` reads a provider's reachability and writes nothing, so it takes no sync
+    # notice. It is admitted for non-Anthropic providers only, on the same rule as the
+    # mutations, because it makes a live call using that provider's stored credential.
+    "provider test")
+      provider="${3:-}"
+      provider_allowed_for_mutation "$provider" || refuse_configuration "anthropic-or-unclassifiable-provider"
       ;;
     "account login"|"account reauth"|"account code"|"account cancel"|"account use"|"account remove"|"account add-key"|"account alias"|"account rename")
       provider="${3:-}"
@@ -588,8 +755,16 @@ cmd_configure() {
       ;;
     *) refuse_unknown_route "$route" ;;
   esac
+  warn_argv_credential "$@"
   printf 'about to run an approved opencodex configuration route (%s)\n\n' "$route"
-  ocx "$@"
+  local status=0
+  ocx "$@" || status=$?
+  # The notice is printed on success only. After a failed mutation there may be nothing to sync,
+  # and telling an operator to sync a write that did not land would be a false instruction.
+  if [ "$status" -eq 0 ] && $mutates_providers; then
+    print_sync_required_notice "$route"
+  fi
+  return "$status"
 }
 
 case "${1:-}" in
