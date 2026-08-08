@@ -403,7 +403,12 @@ installed as thin aliases for existing muscle memory.
 ccodex launch                       # supervised gateway launch (ccodex ocx launch also works)
 ccodex launch --model muse/muse-spark-1.2
 ccodex ultracode                    # session Ultracode; never a permission bypass
-ccodex status                       # gateway health, configured-vs-live providers, env policy
+ccodex launch --help                # this verb's own help; prepares nothing, launches nothing
+ccodex launch -- --help             # `--` forwards verbatim: Claude Code's OWN help
+ccodex status                       # gateway health, configured-vs-live providers, env policy,
+                                    # and how many session entries are actually shared
+ccodex session status               # per-entry session inheritance; read-only
+ccodex session adopt                # print what a migration would move; moves nothing
 ccodex providers                    # what is configured, and which providers are LIVE
 ccodex models                       # the running gateway's flat live catalog
 ccodex configure provider add muse --adapter openai-responses \
@@ -485,6 +490,30 @@ records which half is which. Inert per-session data — prompt history, project 
 todos, shell snapshots, file history — is SHARED with `~/.claude` by symlink, so a launched
 session shows your real history and projects instead of opening blank, and one realpath'd
 history lock serializes both planes rather than letting two copies diverge.
+
+**An entry that already holds this plane's own data is NOT inherited, and that state is
+permanent until you migrate it.** A launch never moves, deletes, or overwrites plane data to make
+room for a link — so on a plane that accumulated data before this feature existed, inheritance is
+simply off. It says so per entry, and `ccodex status` reports `session inheritance: N of M
+inheritable entries shared` so the state is visible without a special command. The remedy is
+explicit and reviewable:
+
+```bash
+ccodex session status               # per-entry: shared, not-inherited, or absent
+ccodex session adopt                # print exactly what would move; moves NOTHING
+ccodex session adopt --migrate      # move the blocking copy to a timestamped backup, then link
+```
+
+Nothing is ever deleted: the blocking copy is **moved** into
+`pre-inheritance-backup-<stamp>/` inside the plane and the path is printed, so an unwanted
+migration is undone by moving it back. A missing global source is a refusal rather than a skip,
+because hiding the plane's only copy would deliver nothing. After a migration the launched session
+shows the **global** history and projects, so the plane's own past prompts stop appearing in it.
+
+**Help is never a side-effecting operation.** `ccodex <verb> --help` prints that verb's own help
+and prepares nothing — no session inheritance, no constructed `settings.json`, no gateway. To reach
+the help of the tool *behind* a launch verb, end the wrapper's options with `--`
+(`ccodex launch -- --help`), which prepares a real session and forwards the argument verbatim.
 
 Changing your global Claude settings still requires explicit operation-specific approval for
 that exact settings file, and this launcher never does it. The plane-local

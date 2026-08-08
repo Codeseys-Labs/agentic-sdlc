@@ -803,7 +803,265 @@ class OpenCodexClaudeTests(unittest.TestCase):
         projects = self.isolated / "projects"
         self.assertFalse(projects.is_symlink())
         self.assertIn("plane-local", (projects / "local" / "session.jsonl").read_text())
-        self.assertIn("already has its own data", result.stdout)
+        self.assertIn("NOT INHERITED", result.stdout)
+
+    def test_a_skipped_entry_says_inheritance_is_off_and_names_the_remedy(self) -> None:
+        # The defect: on the operator's host every entry already held pre-feature data, so
+        # inheritance was a permanent no-op, and the old wording ("isolated copy already has its
+        # own data") read as a benign implementation note rather than "the feature is off". The
+        # message must now be unmistakable AND name the fix in the same breath, because a true
+        # statement nobody registers as important is the failure being corrected.
+        result, _ = self.run_launcher(
+            "launch",
+            global_session_entries=True,
+            preset_isolated_projects=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("projects NOT INHERITED", result.stdout)
+        self.assertIn("inheritance is OFF", result.stdout)
+        self.assertIn("ccodex session adopt", result.stdout)
+        self.assertIn("never deletes", result.stdout)
+        # The old softening wording is gone, not merely supplemented.
+        self.assertNotIn("already has its own data", result.stdout)
+
+    def test_launch_never_migrates_plane_data_by_itself(self) -> None:
+        # The remedy must be an operation the operator names. A launch that quietly moved their
+        # data aside to deliver inheritance would be the opposite failure.
+        result, _ = self.run_launcher(
+            "launch",
+            global_session_entries=True,
+            preset_isolated_projects=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("plane-local", (self.isolated / "projects" / "local" / "session.jsonl").read_text())
+        self.assertFalse(list(self.isolated.glob("pre-inheritance-backup-*")))
+
+    def test_status_surfaces_how_many_entries_are_actually_shared(self) -> None:
+        # A plane whose inheritance never took effect looks identical to one where it did, until
+        # the operator notices their history is missing. The count makes it visible without
+        # running a special command.
+        result, _ = self.run_launcher(
+            "status", global_session_entries=True, preset_isolated_projects=True
+        )
+
+        self.assertIn("session inheritance:", result.stdout)
+        self.assertIn("entries shared", result.stdout)
+        self.assertIn("projects", result.stdout)
+        self.assertIn("NOT INHERITED", result.stdout)
+
+    # --- session status / adopt: the explicit, reviewable remedy ---------------------------
+
+    def test_session_status_reports_each_entry_and_changes_nothing(self) -> None:
+        launched, _ = self.run_launcher(
+            "launch", global_session_entries=True, preset_isolated_projects=True
+        )
+        self.assertEqual(launched.returncode, 0, launched.stderr)
+        before = sorted(path.name for path in self.isolated.iterdir())
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "session", "status"],
+            text=True, capture_output=True, check=False, env={**self.launch_env},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("session inheritance:", result.stdout)
+        # history.jsonl linked on the first launch; projects blocked by its own data.
+        self.assertIn("history.jsonl    SHARED", result.stdout)
+        self.assertIn("projects         NOT INHERITED", result.stdout)
+        # Read-only: no entry appeared, disappeared, or was migrated.
+        self.assertEqual(before, sorted(path.name for path in self.isolated.iterdir()))
+        self.assertFalse(list(self.isolated.glob("pre-inheritance-backup-*")))
+
+    def test_session_adopt_without_the_flag_moves_nothing(self) -> None:
+        launched, _ = self.run_launcher(
+            "launch", global_session_entries=True, preset_isolated_projects=True
+        )
+        self.assertEqual(launched.returncode, 0, launched.stderr)
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "session", "adopt"],
+            text=True, capture_output=True, check=False, env={**self.launch_env},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PLAN ONLY", result.stdout)
+        self.assertIn("would MOVE", result.stdout)
+        self.assertIn("NOTHING WAS MOVED", result.stdout)
+        # The plan names the exact source and destination before anything is authorized.
+        self.assertIn(str(self.isolated / "projects"), result.stdout)
+        self.assertIn("pre-inheritance-backup-", result.stdout)
+        self.assertFalse((self.isolated / "projects").is_symlink())
+        self.assertFalse(list(self.isolated.glob("pre-inheritance-backup-*")))
+        self.assertIn("plane-local", (self.isolated / "projects" / "local" / "session.jsonl").read_text())
+
+    def test_session_adopt_migrate_backs_up_then_links_and_deletes_nothing(self) -> None:
+        launched, _ = self.run_launcher(
+            "launch", global_session_entries=True, preset_isolated_projects=True
+        )
+        self.assertEqual(launched.returncode, 0, launched.stderr)
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "session", "adopt", "--migrate"],
+            text=True, capture_output=True, check=False, env={**self.launch_env},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        projects = self.isolated / "projects"
+        self.assertTrue(projects.is_symlink())
+        self.assertEqual(projects.resolve(), (self.global_claude / "projects").resolve())
+        # The plane's own data was MOVED, never deleted, and the path is printed.
+        backups = list(self.isolated.glob("pre-inheritance-backup-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertIn(
+            "plane-local",
+            (backups[0] / "projects" / "local" / "session.jsonl").read_text(),
+        )
+        self.assertIn(str(backups[0]), result.stdout)
+        # The consequence is stated rather than left to be discovered.
+        self.assertIn("no longer appear", result.stdout)
+
+    def test_session_adopt_refuses_when_the_global_source_is_missing(self) -> None:
+        # Moving the plane's only copy aside with nothing to link to would hide the operator's
+        # data to deliver nothing, so this is a refusal rather than a skip.
+        launched, _ = self.run_launcher("launch", preset_isolated_projects=True)
+        self.assertEqual(launched.returncode, 0, launched.stderr)
+        shutil.rmtree(self.global_claude, ignore_errors=True)
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "session", "adopt", "--migrate"],
+            text=True, capture_output=True, check=False, env={**self.launch_env},
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("REFUSED", result.stderr)
+        self.assertIn("plane-local", (self.isolated / "projects" / "local" / "session.jsonl").read_text())
+        self.assertFalse(list(self.isolated.glob("pre-inheritance-backup-*")))
+
+    def test_session_adopt_refuses_a_named_entry_with_no_global_counterpart(self) -> None:
+        launched, _ = self.run_launcher(
+            "launch", global_session_entries=True, preset_isolated_projects=True
+        )
+        self.assertEqual(launched.returncode, 0, launched.stderr)
+        # todos/ exists in this plane but not in the fake global install.
+        (self.isolated / "todos").mkdir(parents=True, exist_ok=True)
+        (self.isolated / "todos" / "t.json").write_text("plane-todo\n")
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "session", "adopt", "--migrate", "todos"],
+            text=True, capture_output=True, check=False, env={**self.launch_env},
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("REFUSED", result.stderr)
+        self.assertEqual((self.isolated / "todos" / "t.json").read_text(), "plane-todo\n")
+        # A named entry restricts the operation: the unrelated blocked entry is untouched.
+        self.assertFalse((self.isolated / "projects").is_symlink())
+
+    def test_session_routes_need_no_gateway_and_no_ocx(self) -> None:
+        # "Why is my history missing" must be answerable exactly when the gateway is down.
+        launched, _ = self.run_launcher("launch", global_session_entries=True)
+        self.assertEqual(launched.returncode, 0, launched.stderr)
+        without_mise = {**self.launch_env, "PATH": "/usr/bin:/bin"}
+
+        for arguments in (["session", "status"], ["session", "adopt"]):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [BASH, str(SCRIPT), *arguments],
+                    text=True, capture_output=True, check=False, env=without_mise,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("mise is required", result.stderr)
+
+    def test_unknown_session_verb_and_flag_exit_usage(self) -> None:
+        for arguments in (
+            ("session", "bogus"),
+            ("session", "adopt", "--force"),
+            ("session", "status", "extra"),
+            ("session",),
+        ):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher(*arguments, global_session_entries=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertFalse(log.exists(), "a usage error must invoke no ocx route")
+
+    # --- help is not a side-effecting operation ------------------------------------------
+    #
+    # The defect: `launch --help` ran the whole launch preparation -- mounted session
+    # inheritance, constructed settings.json in the isolated dir, and against a healthy gateway
+    # would have launched -- before handing --help to Claude Code. These assert on OUTPUT, never
+    # on exit status alone: with a stubbed `claude` that exits 0, an exit code cannot distinguish
+    # "printed usage" from "launched Claude Code, which then exited cleanly".
+
+    SIDE_EFFECT_MARKER = "preparing gateway-routed Claude Code"
+
+    def test_verb_level_help_prints_usage_and_prepares_nothing(self) -> None:
+        for arguments in (
+            ["launch", "--help"],
+            ["launch", "-h"],
+            ["launch", "help"],
+            ["launch-ultracode", "--help"],
+            ["launch-ultracode", "-h"],
+            ["status", "--help"],
+            ["restart", "--help"],
+            ["session", "--help"],
+            ["configure", "--help"],
+        ):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher(*arguments, global_session_entries=True)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("usage:", result.stdout)
+                # Nothing was prepared, nothing was linked, nothing was written, and the
+                # gateway was never contacted.
+                self.assertNotIn(self.SIDE_EFFECT_MARKER, result.stdout)
+                self.assertFalse(log.exists(), "help must not invoke any ocx route")
+                self.assertFalse((self.isolated / "settings.json").exists())
+                self.assertFalse((self.isolated / "history.jsonl").exists())
+
+    def test_verb_help_names_how_to_reach_the_wrapped_tools_help(self) -> None:
+        # A wrapper that intercepts an argument must say how to forward it, or the interception
+        # is itself a capability removal.
+        result, _ = self.run_launcher("launch", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("-- --help", result.stdout)
+        self.assertIn("claude --help", result.stdout)
+
+    def test_the_forwarding_separator_reaches_claude_code(self) -> None:
+        # The escape hatch must actually work: `launch -- --help` prepares a real session and
+        # forwards --help verbatim, which is the pass-through form the help text promises.
+        result, log = self.run_launcher("launch", "--", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(self.SIDE_EFFECT_MARKER, result.stdout)
+        self.assertIn("<ocx><claude><--help>", log.read_text())
+
+    def test_a_later_help_argument_is_still_forwarded(self) -> None:
+        # Only the FIRST argument is inspected. A --help appearing after other arguments may be
+        # a forwarded flag or a flag's value, and guessing would swallow an operator's argument.
+        result, log = self.run_launcher("launch", "--model", "gpt-5.6-sol", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude><--model><gpt-5.6-sol><--help>", log.read_text())
+
+    def test_ultracode_help_does_not_trip_its_own_settings_refusal(self) -> None:
+        result, log = self.run_launcher("launch-ultracode", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("REFUSED", result.stderr)
+        self.assertIn("ultracode", result.stdout)
+        self.assertFalse(log.exists())
+
+    def test_configure_help_verb_still_reaches_the_upstream_surface(self) -> None:
+        # `ocx help <verb>` is the documented way to inspect upstream and is already an admitted
+        # read-only route. Intercepting the bare word `help` there would remove the only route
+        # that answers "what can upstream actually do".
+        result, log = self.run_launcher("configure", "help", "provider")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><help><provider>", log.read_text())
 
 
 if __name__ == "__main__":

@@ -293,9 +293,109 @@ any part of the retired subscription-passthrough design is ever proposed for rev
 reopened — the second case would additionally require ADR-0003's own reversal condition to be met
 first, and a new record rather than an amendment here.
 
+## Amendment — 2026-08-07: help is not a side-effecting operation, and inheritance is opt-in-migratable rather than silently skipped
+
+Two defects in the shipped surface, both **reproduced against the installed command** rather than
+read out of the source. Neither changes the credential conclusion; both change what the operator
+is told and what a help request is allowed to do.
+
+### D. A help request must not prepare a plane
+
+**The defect.** `ccodex launch --help` ran the *entire* launch preparation before handing `--help`
+to Claude Code: it mounted session inheritance, constructed `settings.json` inside the isolated
+dir, and against a healthy gateway would have ensured the gateway and launched. Top-level `help`,
+`-h`, and `--help` were already correct; the verb level was not. `ccodex ocx --help` was worse in
+a smaller way — it errored with `unknown ccodex ocx verb: --help` and exited 2, answering a
+reasonable spelling of a question with a failure.
+
+**Why it survived a verification pass, which is the more useful half of this record.** The check
+that cleared it compared exit codes with output discarded. Against a launch path that ends in a
+`claude` process which exits 0, `exit=0` cannot distinguish *printed usage* from *launched Claude
+Code, which then exited cleanly*. **An exit code is not an observation of behavior when the
+success and failure paths share it.** Every assertion added here reads stdout, and the
+side-effect assertions are negative and specific: the string `preparing gateway-routed Claude
+Code` must be absent, and the isolated config dir must not exist afterwards.
+
+**The semantic, chosen deliberately.** A bare `-h`/`--help` in the **first** position after a verb
+means "explain this command". It does not mean "prepare a gateway plane, mount session state, and
+then ask Claude Code for its help text" — nobody types the second thing, and a help request that
+writes into a config dir is a defect no matter how good the text it eventually prints. So the
+first-position form is intercepted, prints the wrapper's own per-verb help, and exits 0 having
+touched nothing.
+
+**Pass-through remains possible, because a wrapper that can never forward an argument is its own
+defect.** `--` ends the wrapper's options in the ordinary POSIX sense: `ccodex launch -- --help`
+prepares a real session and forwards `--help` verbatim (verified: the child receives exactly
+`--help`; under `ultracode` it receives `--settings {"ultracode":true} --help`). Only the first
+argument is inspected, so `launch --model x --help` still forwards — a heuristic that tried to
+guess which later `--help` was "really" for Claude Code would have to tell a flag from a flag's
+value, and guessing wrong either swallows an operator's argument or launches when they asked a
+question. The intercepted help text names both escapes (`-- --help`, and `claude --help` inside a
+session), because an interception that does not say how to forward is a silent capability removal.
+
+One exception, and it is not cosmetic: under `configure`, the bare word `help` is **not**
+intercepted. `ocx help <verb>` is the documented way to inspect the upstream surface and is
+already an admitted read-only route; swallowing it would remove the only route that answers "what
+can upstream actually do". The flag spellings are still intercepted there.
+
+### E. Silently never inheriting is not the feature the operator asked for
+
+**The defect.** Decision item 7 above — never delete or overwrite plane data to make room for a
+link — was implemented correctly and reported dishonestly. Every entry that already existed was
+skipped with `not shared (isolated copy already has its own data)`, which reads as a benign note
+about an implementation detail. On the operator's own host, verified 2026-08-07, **every entry in
+the shared set already held real data from launches predating this feature** (`history.jsonl`,
+`projects/`, `shell-snapshots/`, `file-history/`, all dated earlier), so inheritance was a
+**permanent no-op** and the transcript never said so. Measured after the fix on that same host:
+`0 of 4 inheritable entries shared`.
+
+**The tension, stated rather than resolved by preference.** Refusing to clobber the operator's
+data is right. Silently never delivering the feature they asked for is also wrong. Both horns are
+real, so the resolution splits them by *who decides*:
+
+- **A launch still refuses, and now says so unmistakably.** The per-entry line reads `NOT
+  INHERITED -- this plane has its own pre-existing data`, followed by a summary that names the
+  count, states that the state is permanent until migrated, and prints the exact remedy commands.
+  The old wording is removed, not supplemented.
+- **The remedy is a separate operation the operator names,** `ccodex session <status|adopt>`.
+  `status` is read-only and classifies every entry (shared / not-inherited / linked-elsewhere /
+  absent / nothing-to-inherit / refused-because-the-global-entry-is-a-link). `adopt` **prints a
+  plan and moves nothing**; `adopt --migrate` performs exactly that plan.
+- **Nothing is ever deleted.** A blocking plane copy is `mv`d into
+  `<plane>/pre-inheritance-backup-<UTC stamp>/` and only then linked. The move is checked before
+  the link, because a link created after a failed move would point the plane at the global copy
+  while its own data still sat in the way — the one intermediate state that could look like a
+  successful migration and be a loss. An unwanted migration is undone by moving the entry back,
+  which is why no `--force` exists.
+- **A missing global source is a refusal (exit 3), not a skip.** Moving the plane's only copy
+  aside when there is nothing to link to would hide the operator's data to deliver nothing.
+- **`status` surfaces `session inheritance: N of M inheritable entries shared`.** A plane whose
+  inheritance never took effect is indistinguishable from one where it did until someone notices
+  their history is missing, so the count belongs in the ordinary status view rather than behind a
+  special command. Both session routes work with the gateway down and without `mise`: "why is my
+  history missing" must be answerable exactly when the gateway is not.
+
+**The consequence is stated rather than discovered.** After a migration the launched session shows
+the **global** history and projects, so the plane's own past prompts stop appearing in it. They
+are on disk in the printed backup path. Item 7's guarantee is unchanged for launches — no launch
+moves anything — and this record does **not** authorize migrating any operator's data; the
+migration is an operation they run.
+
+**The credential boundary was re-proven by execution, not by reading.** The constructed
+`settings.json` was built through the real launch path in a throwaway `HOME` whose global
+`settings.json` carried a planted `AWS_BEARER_TOKEN_BEDROCK` next to a `statusLine` stanza. The
+result contains the `statusLine` (inherited by value, `padding` included) and none of:
+the planted value, `AWS_BEARER_TOKEN_BEDROCK`, `env`, `apiKeyHelper`, `AWS_REGION`,
+`CLAUDE_CODE_USE_BEDROCK`, the global `model`, or `permissions`. It is a regular file at mode 600,
+neither a link nor a copy of the source.
+
 ## Reversal condition
 
 Reopen this record if any of the following becomes true.
+
+An operator wants the *plane's* history to win a migration rather than the global one. The
+migration is deliberately one-directional (plane data aside, global linked in) because a merge of
+two append-only histories has no defined order; a two-way merge would need its own record.
 
 Claude Code stops locking history appends, changes `proper-lockfile`'s `realpath` default, or
 begins passing `lockfilePath` explicitly — any of these breaks the shared-lock property that

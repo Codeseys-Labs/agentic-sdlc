@@ -241,7 +241,13 @@ carry a live credential and copying it would also re-point the child away from
 its verified route. Credentials never cross: the constructed document is asserted credential-free
 before it is written, credential and plane-owned stores stay private, inheritance runs only after
 every credential assertion, and it is fail-soft and never destructive. Do not cite config-dir
-isolation as evidence that no session data is shared.
+isolation as evidence that no session data is shared. An entry whose plane copy already holds its
+own data is NOT inherited, and that is permanent until an operator migrates it: a launch never
+moves plane data, `status` reports how many entries are actually shared, and `ccodex session
+adopt --migrate` moves the blocking copy to a timestamped in-plane backup before linking. Never
+run that migration on an operator's behalf without explicit operation-specific approval, and do
+not read a skipped entry as inheritance working. Verb-level `--help` prints the launcher's own
+help and prepares nothing; `--` forwards the remaining arguments verbatim to the wrapped tool.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim

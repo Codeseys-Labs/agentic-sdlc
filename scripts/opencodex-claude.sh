@@ -124,9 +124,177 @@ session_inheritance="$root/assets/claude/session-inheritance.sh"
 readiness_timeout_seconds=15
 readiness_poll_seconds=1
 
+# --- help is not a side-effecting operation ------------------------------------------------
+#
+# THE DEFECT (2026-08-07, reproduced against the INSTALLED command by reading its stdout rather
+# than its exit code -- an earlier check that discarded output could not tell "printed usage"
+# from "launched Claude Code, which then exited 0"). `launch --help` ran the ENTIRE launch
+# preparation before handing `--help` to Claude Code: it mounted session inheritance, constructed
+# settings.json inside the isolated dir, and against a healthy gateway would have ensured and
+# launched. Top-level `-h`/`--help`/`help` were already correct; the verb level was not.
+#
+# THE SEMANTIC, chosen deliberately rather than inherited from argument order. A bare `-h` or
+# `--help` in the FIRST position after a verb means "explain this command". It does not mean
+# "prepare a gateway plane, mount session state, and then ask Claude Code for its help text" --
+# nobody types the second thing, and a help request that mutates a config dir is a defect no
+# matter how good the text it eventually prints. So the first-position form is intercepted, prints
+# this wrapper's own verb help, and exits 0 having touched nothing.
+#
+# PASS-THROUGH REMAINS POSSIBLE, because a wrapper that can never forward an argument is its own
+# defect. `--` ends this wrapper's options in the ordinary POSIX sense: everything after it is
+# forwarded verbatim, so `launch -- --help` reaches Claude Code's own help through a real prepared
+# session. Only the FIRST argument is inspected, so `launch --model x -- --help` also forwards.
+#
+# The escape is the leading `--` and nothing else: a heuristic that tried to guess which later
+# `--help` was "really" for Claude Code would have to distinguish a flag from a flag's VALUE, and
+# guessing wrong either swallows an argument or launches when the operator asked a question.
+#
+# `configure` is the one route where the bare word `help` is NOT a request for this text: `ocx help
+# <verb>` is the documented way to inspect the upstream surface, and it is already an admitted
+# read-only route. Intercepting it would break the only route that answers "what can upstream
+# actually do", so only the flag spellings are intercepted there.
+verb_help_requested() {
+  local route="$1" argument="${2:-}"
+  case "$argument" in
+    -h|--help) return 0 ;;
+    help) [ "$route" = configure ] && return 1; return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Strip a single leading `--`. Callers apply it AFTER the help check, so `--` is the thing that
+# disables interception rather than something interception has to reason about.
+strip_forwarding_separator() {
+  [ "${1:-}" = "--" ] && return 0
+  return 1
+}
+
+# Per-verb help. Names the operator-facing `ccodex` spelling first because that is the installed
+# command, then the direct and alias forms, all three of which reach this same code.
+verb_usage() {
+  case "$1" in
+    launch|launch-ultracode)
+      local operator_verb=ultracode alias_name=ocx-ultracode ultra=$'\nSession Ultracode is applied. '
+      if [ "$1" = launch ]; then
+        operator_verb=launch; alias_name=ocx-launch; ultra=$'\n'
+      fi
+      cat <<EOF
+usage: ccodex $operator_verb [claude args...]
+       opencodex-claude.sh $1 [claude args...]
+       $alias_name [claude args...]
+
+Ensure the gateway is healthy (start it if down, restart once if half-up), then launch a
+second Claude Code process through it, with an isolated CLAUDE_CONFIG_DIR and no Anthropic
+subscription credential in scope.${ultra}Fails closed if the gateway never becomes healthy.
+EOF
+      [ "$1" = launch-ultracode ] && cat <<'EOF'
+
+This route owns the session --settings value, so it refuses a competing --settings argument,
+and it never bypasses permissions.
+EOF
+      cat <<'EOF'
+
+Common arguments, all forwarded to Claude Code:
+  --model <id>              Any id in the running gateway's live catalog, including a
+                            namespaced one: --model muse/muse-spark-1.2. See `ccodex models`.
+
+Session data (ADR-0010): inert per-session data is shared with ~/.claude by symlink; auth,
+roster agents, and the model cache stay private to this plane. An entry that already holds
+this plane's own data is NOT inherited -- report and migrate it with `ccodex session status`
+and `ccodex session adopt`.
+
+THIS TEXT IS THIS WRAPPER'S. To reach Claude Code's OWN --help, end this wrapper's options
+with `--`, which prepares a real session and forwards everything after it verbatim:
+  ccodex launch -- --help
+Or run `claude --help` inside a launched session.
+
+exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (a boundary declined it)
+EOF
+      ;;
+    status)
+      cat <<'EOF'
+usage: ccodex status
+       opencodex-claude.sh status
+
+Supervision view, read-only: pid, port, uptime, healthy/down, log location, configured
+providers, each configured provider compared against the running gateway's LIVE catalog,
+the environment-variable policy for THIS shell, session-inheritance coverage, and the
+attribution log stream command. Takes no arguments.
+
+Exit 0 means the gateway answered an identity-checked health probe at that moment. That is
+evidence, not authorization, and it says nothing about which model serves a request.
+EOF
+      ;;
+    restart)
+      cat <<'EOF'
+usage: ccodex restart
+       opencodex-claude.sh restart
+
+Stop the gateway cleanly if it is running, then ensure it is back up and healthy. Fails
+closed on an unclean stop rather than racing opencodex's own guard. Takes no arguments.
+
+A restart interrupts in-flight turns in every session routed through the gateway, and
+`ocx` rewrites shared ~/.codex configuration as part of its lifecycle.
+EOF
+      ;;
+    session)
+      cat <<'EOF'
+usage: ccodex session status
+       ccodex session adopt [--migrate] [entry...]
+       opencodex-claude.sh session <status|adopt> [...]
+
+Report and repair session inheritance (ADR-0010) for the gateway plane.
+
+  status                    Per-entry state: SHARED (linked at the global copy), NOT
+                            INHERITED (this plane has its own data), or absent. Read-only.
+  adopt                     Print exactly what a migration WOULD move. Moves nothing.
+  adopt --migrate           Move each blocking plane copy into a timestamped backup INSIDE
+                            the plane, then link to the global copy. Nothing is deleted, and
+                            it refuses when the global source is missing.
+
+Why this is a separate command: a launch refuses to clobber this plane's existing data to
+make room for a link, so inheritance stays OFF for those entries until the data is moved
+aside. That refusal is right, but silently never inheriting is not what was asked for, so
+the remedy is an operation you name explicitly after reading the plan.
+
+After a migration the launched session shows the GLOBAL history and projects; this plane's
+own past prompts stop appearing in it. They are not gone -- the backup path is printed.
+
+Named entries restrict the operation. An entry with no global counterpart is refused rather
+than moved, because hiding this plane's only copy would deliver nothing.
+EOF
+      ;;
+    configure)
+      cat <<'EOF'
+usage: ccodex configure [ocx args...]
+       opencodex-claude.sh configure [ocx args...]
+
+Reviewed passthrough to opencodex's own provider login/config commands. A bare `configure`
+with no arguments prints the admitted surface in detail; this text explains the route.
+
+Admitted: inspected non-Anthropic login/account/provider mutations, and masked
+provider/account/config inspection. Interactive setup, GUI, arbitrary config
+mutation/import/export, and unknown future upstream routes fail closed with exit 3.
+
+A provider add/edit/remove writes the CONFIG FILE only. It is NOT in the running gateway
+until `ocx sync` plus a restart, and until then a request naming it falls through to the
+DEFAULT provider. This route prints that sequence after a successful mutation and never
+runs it for you: `ocx sync` rewrites shared ~/.codex config and a restart interrupts
+in-flight turns, so each is separately authorized.
+
+Pass a key via piped stdin (`ocx account add-key <name>`) rather than --api-key where
+possible: argv is readable by every process on this host via `ps`.
+
+To inspect the UPSTREAM surface without running it:
+  ccodex configure help <verb>
+EOF
+      ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
-usage: opencodex-claude.sh <launch|launch-ultracode|status|restart|configure> [args...]
+usage: opencodex-claude.sh <launch|launch-ultracode|status|restart|session|configure> [args...]
 
   launch [claude args...]   Ensure the gateway is healthy (start it if down, restart once if
                             half-up), then launch a second Claude Code process through it
@@ -143,12 +311,21 @@ usage: opencodex-claude.sh <launch|launch-ultracode|status|restart|configure> [a
                             healthy.
   restart                   Stop the gateway cleanly if running, then ensure it is back up
                             and healthy. Fails closed on an unclean stop.
+  session <status|adopt>    Report session inheritance per entry, and migrate pre-existing
+                            plane data aside (explicitly, with --migrate) so inheritance can
+                            take effect. A launch never moves plane data by itself.
   configure [ocx args...]   Interactive passthrough to opencodex's own provider
                             login/config commands. Prints the command before running it. After
                             an admitted provider add/edit/remove it prints the required
                             `ocx sync` + restart sequence, because a configured provider is NOT
                             live until then and requests fall through to the default provider
                             in the meantime.
+
+Per-verb help prints this wrapper's own text and runs nothing:
+  opencodex-claude.sh launch --help
+To reach Claude Code's own --help through a real prepared session, end this wrapper's
+options with `--`:
+  opencodex-claude.sh launch -- --help
 
 exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (subscription-OAuth boundary)
 EOF
@@ -455,6 +632,11 @@ assert_isolated_dir_has_no_subscription() {
 # top level would define these functions for routes that must not use them. A missing helper
 # degrades to no inheritance -- the launch proceeds with a fully private config dir, which is
 # exactly the pre-ADR-0010 behavior and is never a reason to refuse a launch.
+# Named for the helper, so an entry it declines to inherit can point at the exact command that
+# fixes it. Set here rather than inside the helper because only a launcher knows which plane it
+# is and which operator-facing spelling reaches this state; the muse launcher names its own.
+session_remedy_command="ccodex session"
+
 inherit_session_state_if_available() {
   if [ ! -f "$session_inheritance" ] || [ -L "$session_inheritance" ]; then
     printf '  session   : not inherited (helper missing at %s)\n' "$session_inheritance"
@@ -466,6 +648,25 @@ inherit_session_state_if_available() {
     return 0
   }
   inherit_session_state "$isolated_config_dir" "$HOME/.claude"
+}
+
+# Sourced for the read-only report and for the migration route. Unlike the launch path, a missing
+# helper here is a FAILURE rather than a degraded launch: `session status` exists only to answer a
+# question about the helper's own policy, and answering it from nothing would be a guess.
+require_session_helper() {
+  if [ ! -f "$session_inheritance" ] || [ -L "$session_inheritance" ]; then
+    printf 'error: the session-inheritance helper is missing: %s\n' "$session_inheritance" >&2
+    exit 1
+  fi
+  # shellcheck source=../assets/claude/session-inheritance.sh
+  . "$session_inheritance" || {
+    printf 'error: the session-inheritance helper could not be sourced: %s\n' "$session_inheritance" >&2
+    exit 1
+  }
+  command -v report_session_inheritance >/dev/null 2>&1 || {
+    printf 'error: the session-inheritance helper does not define the reporting functions\n' >&2
+    exit 1
+  }
 }
 
 assert_proxy_marker_mode() {
@@ -560,6 +761,45 @@ cmd_launch_ultracode() {
   cmd_launch --settings '{"ultracode":true}' "$@"
 }
 
+# Neither route requires ocx, mise, or a healthy gateway: both are questions about local files in
+# this plane. Requiring the gateway would make "why is my history missing" unanswerable exactly
+# when the gateway is down.
+cmd_session() {
+  local verb="${1:-}"
+  shift || true
+  case "$verb" in
+    status)
+      [ "$#" -eq 0 ] || { printf 'error: `session status` takes no arguments\n' >&2; return 2; }
+      require_session_helper
+      printf '== session inheritance (ADR-0010) ==\n'
+      printf '  plane   : %s\n' "$isolated_config_dir"
+      printf '  global  : %s\n\n' "$HOME/.claude"
+      report_session_inheritance "$isolated_config_dir" "$HOME/.claude"
+      ;;
+    adopt)
+      local migrate=false argument entries=()
+      for argument in "$@"; do
+        case "$argument" in
+          --migrate) migrate=true ;;
+          --*) printf 'error: unknown `session adopt` flag: %s\n' "$argument" >&2; return 2 ;;
+          *) entries+=("$argument") ;;
+        esac
+      done
+      require_session_helper
+      if $migrate; then
+        printf 'migrating plane session data aside so inheritance can take effect\n'
+      else
+        printf 'PLAN ONLY -- nothing will be moved or linked. Add --migrate to perform it.\n'
+      fi
+      printf '  plane   : %s\n' "$isolated_config_dir"
+      printf '  global  : %s\n\n' "$HOME/.claude"
+      adopt_session_state "$isolated_config_dir" "$HOME/.claude" "$migrate" "${entries[@]+"${entries[@]}"}"
+      ;;
+    ""|-h|--help|help) verb_usage session; [ -n "$verb" ] || return 2 ;;
+    *) printf 'error: unknown session verb: %s\n\n' "$verb" >&2; verb_usage session >&2; return 2 ;;
+  esac
+}
+
 cmd_status() {
   require_ocx
   local json ok pid port uptime
@@ -608,6 +848,19 @@ cmd_status() {
     printf '            A request naming one of these does NOT fail closed -- it is classified\n'
     printf '            routeKind: "default-provider" and billed against the DEFAULT provider.\n'
     printf '            Fix: mise -C %s exec -- ocx sync, then this script'"'"'s restart.\n' "$root"
+  fi
+
+  # Surfaced here, not only under `session status`, because the failure it reports is invisible:
+  # a plane whose inheritance never took effect looks exactly like one where it did until the
+  # operator notices their history is missing. A count in the ordinary status view is what makes
+  # "N of M shared" a fact they see rather than one they have to go asking for.
+  printf '\n== session inheritance (ADR-0010) ==\n'
+  if [ -f "$session_inheritance" ] && [ ! -L "$session_inheritance" ] \
+     && . "$session_inheritance" 2>/dev/null \
+     && command -v report_session_inheritance >/dev/null 2>&1; then
+    report_session_inheritance "$isolated_config_dir" "$HOME/.claude"
+  else
+    printf '  unknown : the inheritance helper is unavailable (%s)\n' "$session_inheritance"
   fi
 
   printf '\n== environment-variable policy (this shell, per ADR-0010) ==\n'
@@ -904,13 +1157,31 @@ cmd_configure() {
   return "$status"
 }
 
-case "${1:-}" in
-  launch) shift; cmd_launch "$@" ;;
-  launch-ultracode) shift; cmd_launch_ultracode "$@" ;;
-  status) shift; cmd_status "$@" ;;
-  restart) shift; cmd_restart "$@" ;;
-  configure) shift; cmd_configure "$@" ;;
+route="${1:-}"
+case "$route" in
+  launch|launch-ultracode|status|restart|configure)
+    shift
+    # Help before anything else, so an intercepted help request has provably run no assertion,
+    # started no gateway, and written nothing. Only the FIRST argument is inspected: a later
+    # `--help` may be a forwarded argument or a flag's value, and guessing which would either
+    # swallow an operator's argument or launch when they asked a question.
+    if verb_help_requested "$route" "${1:-}"; then
+      verb_usage "$route"
+      exit 0
+    fi
+    # `--` ends this wrapper's options. Dropping it here is what makes `launch -- --help` reach
+    # Claude Code's own help rather than this text.
+    strip_forwarding_separator "${1:-}" && shift
+    case "$route" in
+      launch) cmd_launch "$@" ;;
+      launch-ultracode) cmd_launch_ultracode "$@" ;;
+      status) cmd_status "$@" ;;
+      restart) cmd_restart "$@" ;;
+      configure) cmd_configure "$@" ;;
+    esac
+    ;;
+  session) shift; cmd_session "$@" ;;
   -h|--help|help) usage ;;
   "") usage >&2; exit 2 ;;
-  *) printf 'error: unknown subcommand %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  *) printf 'error: unknown subcommand %s\n\n' "$route" >&2; usage >&2; exit 2 ;;
 esac

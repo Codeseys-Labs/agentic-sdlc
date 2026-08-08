@@ -231,6 +231,143 @@ class OperatorToolsTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 2)
 
+    # --- help is not a side-effecting operation ------------------------------------------
+    #
+    # Asserted against the RENDERED dispatcher, driven end to end with stub `mise`/`claude` on
+    # PATH, and asserted on OUTPUT rather than exit status. An exit code cannot distinguish
+    # "printed usage" from "launched Claude Code, which then exited 0" -- that ambiguity is
+    # exactly how `ccodex launch --help` was previously believed to be correct while it was in
+    # fact mounting session inheritance and constructing settings.json in the isolated dir.
+    SIDE_EFFECT_MARKER = "preparing gateway-routed Claude Code"
+
+    def stub_environment(self, root: Path, bin_dir: Path) -> dict[str, str]:
+        """A PATH whose `mise`/`claude` record their argv instead of running anything real."""
+        stubs = root / "stubs"
+        stubs.mkdir(parents=True, exist_ok=True)
+        mise = stubs / "mise"
+        mise.write_text(
+            "#!/bin/sh\n"
+            'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done\n'
+            '[ "${1:-}" = -- ] && shift\n'
+            'case "${1:-} ${2:-} ${3:-}" in\n'
+            "  'ocx --version ') exit 0 ;;\n"
+            "  'ocx health ') exit 0 ;;\n"
+            "  'ocx health --json') printf '{\"ok\":true,\"pid\":1,\"port\":10100}\\n'; exit 0 ;;\n"
+            "  'ocx config get') exit 0 ;;\n"
+            "esac\n"
+            'if [ "${1:-} ${2:-}" = "ocx claude" ]; then shift 2; exec claude "$@"; fi\n'
+            'printf "STUB-OCX:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"\n'
+            "exit 0\n"
+        )
+        mise.chmod(0o755)
+        claude = stubs / "claude"
+        claude.write_text(
+            "#!/bin/sh\n"
+            'printf "STUB-CLAUDE:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"\n'
+            "exit 0\n"
+        )
+        claude.chmod(0o755)
+        home = root / "operator-home"
+        (home / ".claude").mkdir(parents=True, exist_ok=True)
+        (home / ".claude" / "history.jsonl").write_text('{"display":"global"}\n')
+        return {
+            "HOME": str(home),
+            "XDG_STATE_HOME": str(root / "operator-state"),
+            "PATH": f"{stubs}:{bin_dir}:/usr/bin:/bin",
+        }
+
+    def test_every_help_form_prints_usage_and_prepares_nothing(self) -> None:
+        # Top-level help was already correct; the verb level was not, and `ocx --help` errored
+        # with "unknown ccodex ocx verb: --help". All eight forms are asserted together because
+        # the defect was a per-route inconsistency, not a single wrong branch.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
+            environment = self.stub_environment(root, config.bin_dir)
+            isolated = Path(environment["XDG_STATE_HOME"]) / "agentic-sdlc" / "ocx-claude"
+
+            for arguments in (
+                ["help"],
+                ["-h"],
+                ["--help"],
+                ["launch", "--help"],
+                ["launch", "-h"],
+                ["ultracode", "--help"],
+                ["ocx", "--help"],
+                ["ocx", "launch", "--help"],
+            ):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [str(dispatcher), *arguments],
+                        capture_output=True, text=True, env=environment, check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("usage:", result.stdout)
+                    self.assertNotIn(self.SIDE_EFFECT_MARKER, result.stdout)
+                    self.assertNotIn("unknown", result.stderr)
+                    # A help request neither creates the isolated plane nor writes into it.
+                    self.assertFalse(
+                        isolated.exists(), f"{arguments} created {isolated}"
+                    )
+
+    def test_verb_help_is_the_verbs_own_text_not_the_top_level_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "launch", "--help"],
+                capture_output=True, text=True, env=environment, check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("usage: ccodex launch", result.stdout)
+            # And it says how to reach the wrapped tool's own help, so the interception does not
+            # silently remove a capability.
+            self.assertIn("-- --help", result.stdout)
+
+    def test_the_forwarding_separator_reaches_claude_code_through_the_dispatcher(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+
+            for arguments, expected in (
+                (["launch", "--", "--help"], "STUB-CLAUDE:<--help>"),
+                (["ocx", "launch", "--", "--help"], "STUB-CLAUDE:<--help>"),
+                (
+                    ["ultracode", "--", "--help"],
+                    'STUB-CLAUDE:<--settings><{"ultracode":true}><--help>',
+                ),
+            ):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [str(config.bin_dir / "ccodex"), *arguments],
+                        capture_output=True, text=True, env=environment, check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    # A real session WAS prepared -- that is the point of the escape hatch.
+                    self.assertIn(self.SIDE_EFFECT_MARKER, result.stdout)
+                    self.assertIn(expected, result.stdout)
+
+    def test_dispatcher_routes_the_session_verb(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "session", "status"],
+                capture_output=True, text=True, env=environment, check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("session inheritance:", result.stdout)
+
     def test_status_says_absent_for_a_file_that_was_never_installed(self) -> None:
         # `unmanaged` for a nonexistent file sent an operator hunting for a conflict to
         # resolve. A missing file is `absent`, and the report names the install command.

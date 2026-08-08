@@ -91,15 +91,27 @@ CLAUDE_INHERITED_SETTINGS_KEYS="statusLine"
 # overwrites existing plane data to make room for a link (the ocx plane already held 102MB of
 # projects/ on this host), so a pre-existing real entry keeps its data and simply stays
 # private. Only a link this function itself created is re-pointed.
+#
+# THE DEFECT IN HOW THAT WAS REPORTED (2026-08-07, found by reading the launch transcript on the
+# operator's own host rather than the code). Every entry in the shared set already held real data
+# from launches that predate this feature -- history.jsonl, projects/, shell-snapshots/, and
+# file-history/ were all present and all dated earlier. So the feature the operator asked for was
+# a permanent no-op for them, and the old wording, "not shared (isolated copy already has its own
+# data)", read as a benign note about an implementation detail rather than as "inheritance is OFF
+# and will stay off". Refusing to clobber their data is still right; reporting that refusal as
+# though nothing were wrong was not. The message now says inheritance is OFF, and names the
+# explicit, reviewable migration that turns it on -- see adopt_session_state.
 link_shared_session_state() {
   local isolated="$1" global="$2" entry source target
+  local attempted=0 blocked=0
   [ -d "$global" ] || return 0
   for entry in $CLAUDE_SHARED_SESSION_ENTRIES; do
     source="$global/$entry"
     target="$isolated/$entry"
     # Only share what the global install actually has. A missing entry is not created: an
     # empty file or dir invented here would be indistinguishable from real emptiness.
-    [ -e "$source" ] || continue
+    [ -e "$source" ] || [ -L "$source" ] || continue
+    attempted=$((attempted + 1))
     # A global entry that is itself a link is not followed. It could point anywhere, including
     # at a credential store, and this function must not launder that indirection.
     [ -L "$source" ] && { printf '  session   : %s not shared (global entry is a link)\n' "$entry"; continue; }
@@ -107,16 +119,236 @@ link_shared_session_state() {
       # Already ours. Re-point it, so an edited allowlist or a moved HOME takes effect.
       [ "$(readlink "$target" 2>/dev/null || true)" = "$source" ] && continue
       ln -sfn "$source" "$target" 2>/dev/null \
-        || printf '  session   : %s not shared (could not update link)\n' "$entry"
+        || { blocked=$((blocked + 1)); printf '  session   : %s not shared (could not update link)\n' "$entry"; }
       continue
     fi
     if [ -e "$target" ]; then
-      printf '  session   : %s not shared (isolated copy already has its own data)\n' "$entry"
+      blocked=$((blocked + 1))
+      printf '  session   : %s NOT INHERITED -- this plane has its own pre-existing data\n' "$entry"
       continue
     fi
     ln -s "$source" "$target" 2>/dev/null \
-      || printf '  session   : %s not shared (could not create link)\n' "$entry"
+      || { blocked=$((blocked + 1)); printf '  session   : %s not shared (could not create link)\n' "$entry"; }
   done
+  [ "$blocked" -gt 0 ] || return 0
+  printf '  session   : inheritance is OFF for %s of %s inheritable entries. Not a benign note:\n' \
+    "$blocked" "$attempted"
+  printf '              those entries stay plane-private every launch until the plane data is\n'
+  if [ -n "${session_remedy_command:-}" ]; then
+    printf '              migrated aside. Nothing here was changed. To see and fix it:\n'
+    printf '                %s status\n' "$session_remedy_command"
+    printf '                %s adopt            (prints exactly what it would move)\n' "$session_remedy_command"
+    printf '                %s adopt --migrate  (moves it to a timestamped backup, then links)\n' "$session_remedy_command"
+    printf '              A migration never deletes anything.\n'
+  else
+    # Named by the sourcing launcher, because only it knows which plane and which
+    # operator-facing command reaches this state. Unset means this launcher has no migrate
+    # route, and saying so is better than naming a command that does not exist for its plane.
+    printf '              migrated aside. This launcher has no migrate route; the data is untouched.\n'
+  fi
+}
+
+# --- inheritance state: reporting, and the explicit migration that turns it on ---------------
+#
+# Classify ONE entry of the shared set without changing anything. One word on stdout:
+#   shared        the isolated entry is our link at the global copy -- inheritance is ON
+#   plane-data    the isolated entry holds its own data -- inheritance is OFF for it
+#   other-link    the isolated entry is a link somewhere else; the next launch re-points it
+#   linkable      nothing blocks a link; the next launch creates it
+#   no-global     the global install has no such entry, so there is nothing to inherit
+#   global-link   the global entry is itself a link, which is never followed
+#
+# Read-only by construction: it runs no ln, no mv, and no mkdir. A status route and the migration
+# planner share it, so what the report says and what the migration does cannot disagree.
+session_entry_state() {
+  local isolated="$1" global="$2" entry="$3" source target
+  source="$global/$entry"
+  target="$isolated/$entry"
+  if [ -L "$source" ]; then printf 'global-link'; return 0; fi
+  if [ ! -e "$source" ]; then printf 'no-global'; return 0; fi
+  if [ -L "$target" ]; then
+    if [ "$(readlink "$target" 2>/dev/null || true)" = "$source" ]; then printf 'shared'; else printf 'other-link'; fi
+    return 0
+  fi
+  [ -e "$target" ] && { printf 'plane-data'; return 0; }
+  printf 'linkable'
+}
+
+# Per-entry inheritance report, plus the one-line count a launcher's `status` route surfaces.
+# Read-only. Prints the count FIRST so it is visible without reading the table, because the
+# defect this fixes was precisely a true statement that nobody registered as important.
+report_session_inheritance() {
+  local isolated="$1" global="$2" entry state shared=0 inheritable=0 blocked=0
+  for entry in $CLAUDE_SHARED_SESSION_ENTRIES; do
+    state="$(session_entry_state "$isolated" "$global" "$entry")"
+    case "$state" in
+      shared) shared=$((shared + 1)); inheritable=$((inheritable + 1)) ;;
+      plane-data) blocked=$((blocked + 1)); inheritable=$((inheritable + 1)) ;;
+      linkable|other-link) inheritable=$((inheritable + 1)) ;;
+    esac
+  done
+  printf '  session inheritance: %s of %s inheritable entries shared\n' "$shared" "$inheritable"
+  if [ ! -d "$global" ]; then
+    printf '  (the global install has no config dir at %s; nothing is inheritable)\n' "$global"
+    return 0
+  fi
+  for entry in $CLAUDE_SHARED_SESSION_ENTRIES; do
+    state="$(session_entry_state "$isolated" "$global" "$entry")"
+    case "$state" in
+      shared)      printf '  %-16s SHARED (linked at the global copy)\n' "$entry" ;;
+      plane-data)  printf '  %-16s NOT INHERITED -- this plane has its own data\n' "$entry" ;;
+      other-link)  printf '  %-16s LINKED ELSEWHERE (the next launch re-points it)\n' "$entry" ;;
+      linkable)    printf '  %-16s absent here; the next launch links it\n' "$entry" ;;
+      no-global)   printf '  %-16s nothing to inherit (the global install has no such entry)\n' "$entry" ;;
+      global-link) printf '  %-16s REFUSED (the global entry is a link; never followed)\n' "$entry" ;;
+    esac
+  done
+  [ "$blocked" -gt 0 ] || return 0
+  printf '\n  %s entries are NOT INHERITED. That state is permanent until migrated: a launch never\n' "$blocked"
+  printf '  moves, deletes, or overwrites plane data to make room for a link.\n'
+  if [ -n "${session_remedy_command:-}" ]; then
+    printf '  Preview the migration : %s adopt\n' "$session_remedy_command"
+    printf '  Perform it            : %s adopt --migrate\n' "$session_remedy_command"
+  fi
+}
+
+# Turn inheritance ON for entries whose plane copy currently blocks it, by moving that copy to a
+# timestamped backup INSIDE the plane and then linking to the global one.
+#
+# WHY THIS IS A SEPARATE, FLAGGED OPERATION AND NEVER PART OF A LAUNCH. The tension here is real
+# and both horns are bad: silently never inheriting is not the feature the operator asked for,
+# and silently clobbering their plane data to deliver it would destroy data they never offered.
+# So the launch keeps refusing, and the remedy is an operation the operator names explicitly,
+# after reading exactly which paths move where. Three properties make that safe to run:
+#   * NOTHING IS EVER DELETED. The plane copy is MOVED (mv, same filesystem, so the data is
+#     never rewritten) into <plane>/pre-inheritance-backup-<UTC stamp>/. A wrong call is undone
+#     by moving it back, which is why no verification flag or --force exists.
+#   * A BARE CALL MOVES NOTHING. Without --migrate it prints the exact plan and stops, so the
+#     destructive-looking word in the transcript is always preceded by a reviewable list.
+#   * A MISSING GLOBAL SOURCE IS A REFUSAL, not a skip. Moving the plane's only copy aside when
+#     there is nothing to link to would hide the operator's data to deliver nothing.
+# The consequence that must be stated rather than discovered: after a migration the launched
+# session shows the GLOBAL history and projects, so the plane's own past prompts stop appearing
+# in it. They are still on disk, in the backup, and the path is printed.
+adopt_session_state() {
+  local isolated="$1" global="$2" migrate="$3"
+  shift 3
+  local entry state selected wanted source target stamp backup
+  local planned=0 moved=0 refused=0 failed=0
+  if [ ! -d "$isolated" ]; then
+    printf 'error: this plane has no config dir yet: %s\n' "$isolated" >&2
+    printf 'Launch once first; there is no plane data to migrate and nothing to report.\n' >&2
+    return 1
+  fi
+  if [ ! -d "$global" ]; then
+    printf 'REFUSED: the global install has no config dir at %s\n' "$global" >&2
+    printf 'There is nothing to inherit FROM, so moving this plane data aside would only hide it.\n' >&2
+    return 3
+  fi
+  stamp="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || printf 'undated')"
+  backup="$isolated/pre-inheritance-backup-$stamp"
+  for entry in $CLAUDE_SHARED_SESSION_ENTRIES; do
+    if [ "$#" -gt 0 ]; then
+      wanted=false
+      for selected in "$@"; do [ "$selected" = "$entry" ] && wanted=true; done
+      $wanted || continue
+    fi
+    source="$global/$entry"
+    target="$isolated/$entry"
+    state="$(session_entry_state "$isolated" "$global" "$entry")"
+    case "$state" in
+      shared)
+        printf '  %-16s already shared; nothing to do\n' "$entry"
+        continue
+        ;;
+      no-global)
+        # A refusal only when the operator NAMED this entry. Asking to migrate an entry that has
+        # no global counterpart is a request this cannot honestly satisfy; sweeping the whole set
+        # and finding one absent is just an absence.
+        if [ "$#" -gt 0 ]; then
+          refused=$((refused + 1))
+          printf '  %-16s REFUSED: the global install has no %s to link to; nothing moved\n' "$entry" "$entry" >&2
+        else
+          printf '  %-16s nothing to inherit (the global install has no such entry)\n' "$entry"
+        fi
+        continue
+        ;;
+      global-link)
+        refused=$((refused + 1))
+        printf '  %-16s REFUSED: the global entry is a link and is never followed; nothing moved\n' "$entry" >&2
+        continue
+        ;;
+      linkable|other-link)
+        # No data to move: the link itself is the whole operation.
+        if [ "$migrate" = true ]; then
+          if ln -sfn "$source" "$target" 2>/dev/null; then
+            moved=$((moved + 1))
+            printf '  %-16s LINKED -> %s (nothing to move)\n' "$entry" "$source"
+          else
+            failed=$((failed + 1))
+            printf '  %-16s FAILED to link -> %s\n' "$entry" "$source" >&2
+          fi
+        else
+          planned=$((planned + 1))
+          printf '  %-16s would LINK -> %s (nothing to move)\n' "$entry" "$source"
+        fi
+        continue
+        ;;
+      plane-data) ;;
+    esac
+    if [ "$migrate" != true ]; then
+      planned=$((planned + 1))
+      printf '  %-16s would MOVE %s\n' "$entry" "$target"
+      printf '  %-16s        to %s/%s   (%s)\n' "" "$backup" "$entry" "$(entry_size "$target")"
+      printf '  %-16s   then LINK -> %s\n' "" "$source"
+      continue
+    fi
+    mkdir -p "$backup" 2>/dev/null || {
+      failed=$((failed + 1))
+      printf '  %-16s FAILED: could not create the backup directory %s\n' "$entry" "$backup" >&2
+      continue
+    }
+    # mv FIRST and check it, then link. A link created before a failed move would point the plane
+    # at the global copy while its own data still sat in the way, which is the one intermediate
+    # state that could look like a successful migration and be a loss.
+    if ! mv -n "$target" "$backup/$entry" 2>/dev/null || [ -e "$target" ] || [ -L "$target" ]; then
+      failed=$((failed + 1))
+      printf '  %-16s FAILED: could not move %s aside; nothing was linked\n' "$entry" "$target" >&2
+      continue
+    fi
+    if ln -s "$source" "$target" 2>/dev/null; then
+      moved=$((moved + 1))
+      printf '  %-16s MOVED to %s/%s, then LINKED -> %s\n' "$entry" "$backup" "$entry" "$source"
+    else
+      failed=$((failed + 1))
+      printf '  %-16s moved to %s/%s but the LINK FAILED; move it back to restore\n' "$entry" "$backup" "$entry" >&2
+    fi
+  done
+  if [ "$migrate" != true ]; then
+    if [ "$planned" -eq 0 ]; then
+      printf '\nnothing to migrate: no entry is blocked by this plane having its own data.\n'
+    else
+      printf '\nNOTHING WAS MOVED. This was a plan. Re-run with --migrate to perform exactly the\n'
+      printf 'moves above; the backup directory is created only then, and nothing is ever deleted.\n'
+    fi
+  elif [ "$moved" -gt 0 ]; then
+    printf '\nmigrated %s entries. The launched session now shows the GLOBAL history and projects,\n' "$moved"
+    printf 'so this plane'"'"'s own past prompts no longer appear in it. They are not gone:\n'
+    printf '  %s\n' "$backup"
+    printf 'Move an entry back out of there to undo this.\n'
+  fi
+  [ "$failed" -eq 0 ] || return 1
+  [ "$refused" -eq 0 ] || return 3
+  return 0
+}
+
+# Human-readable size of an entry, for the migration plan. Best-effort: an unavailable or failing
+# `du` degrades the plan to "size unknown" and never blocks it, because the size is a courtesy
+# and the PATHS are the load-bearing part of the plan.
+entry_size() {
+  local path="$1" size=""
+  command -v du >/dev/null 2>&1 && size="$(du -sh "$path" 2>/dev/null | cut -f1 || true)"
+  printf '%s' "${size:-size unknown}"
 }
 
 # True when a JSON blob carries anything credential-shaped. Applied to the CONSTRUCTED

@@ -47,8 +47,11 @@ Gateway plane (the common case; \`ccodex ocx <verb>\` also works as the long for
                               through it. Select any catalog model with --model, including a
                               muse one: --model muse/muse-spark-1.2
   ultracode [claude args...]  Same fail-closed launch path with session Ultracode.
-  status                      Gateway supervision, configured-vs-live providers, env policy.
+  status                      Gateway supervision, configured-vs-live providers, env policy,
+                              and how many session entries are actually shared.
   restart                     Stop cleanly, then ensure the gateway is back up.
+  session <status|adopt>      Report session inheritance per entry, and migrate pre-existing
+                              plane data aside (with --migrate) so inheritance takes effect.
 
 Providers and models (what a launched session can actually pick):
   providers                   Configured providers, and which are LIVE in the running gateway.
@@ -64,6 +67,11 @@ Installed-bundle lifecycle:
   statusline <status|activate|deactivate> [args...]
 
   version                     Report this command's resolved repository root and dependencies.
+
+Help is never a side-effecting operation. \`ccodex <verb> --help\` prints that verb's own help
+and runs nothing -- it starts no gateway and writes no session state. To reach the help of the
+tool BEHIND a launch verb, end this command's options with \`--\`:
+  ccodex launch -- --help     Claude Code's own help, through a prepared session
 
 Maintenance tasks (test, validate, check, secrets, mermaid, hooks) are deliberately absent:
 they belong to working ON the repository, not to using what it installed. Run them with
@@ -120,13 +128,25 @@ run_ocx() {
   exec mise -C "$root" exec -- ocx "$@"
 }
 
+# Long-form verb name for the supervised launcher, or empty for a spelling it does not serve.
+# `ultracode` is this command's operator-facing spelling of the launcher's `launch-ultracode`.
+launcher_verb() {
+  case "$1" in
+    launch|status|restart|configure|session|launch-ultracode) printf '%s' "$1" ;;
+    ultracode) printf 'launch-ultracode' ;;
+    *) return 1 ;;
+  esac
+}
+
 route="${1:-}"
 case "$route" in
-  launch|ultracode|status|restart|configure)
+  launch|ultracode|status|restart|configure|session)
     require_launcher
-    verb="$route"
-    [ "$verb" = ultracode ] && verb=launch-ultracode
+    verb="$(launcher_verb "$route")"
     shift
+    # Verb-level help and the `--` escape are BOTH the launcher's decisions, not this file's: it
+    # owns the per-verb text and the forwarding rule, so duplicating either here would create a
+    # second help surface that can drift out of agreement with the one the launcher prints.
     exec "$launcher" "$verb" "$@"
     ;;
   # Explicit long form. Kept alongside the shorthand above because `ccodex ocx launch` is what a
@@ -136,15 +156,18 @@ case "$route" in
     require_launcher
     shift
     verb="${1:-}"
-    [ -n "$verb" ] || { printf 'error: ccodex ocx needs a verb (launch|ultracode|status|restart|configure)\n\n' >&2; usage >&2; exit 2; }
-    shift
+    # `ccodex ocx --help` is a reasonable spelling of "explain the ocx routes" and used to error
+    # with `unknown ccodex ocx verb: --help` and exit 2. A help request answered with an error is
+    # a defect regardless of the usage text printed underneath it, so the help spellings are
+    # handled before the verb table rather than falling through it.
     case "$verb" in
-      launch|status|restart|configure) ;;
-      ultracode) verb=launch-ultracode ;;
-      launch-ultracode) ;;
-      *) printf 'error: unknown ccodex ocx verb: %s\n\n' "$verb" >&2; usage >&2; exit 2 ;;
+      -h|--help|help) usage; exit 0 ;;
+      "") printf 'error: ccodex ocx needs a verb (launch|ultracode|status|restart|session|configure)\n\n' >&2; usage >&2; exit 2 ;;
     esac
-    exec "$launcher" "$verb" "$@"
+    shift
+    resolved="$(launcher_verb "$verb")" \
+      || { printf 'error: unknown ccodex ocx verb: %s\n\n' "$verb" >&2; usage >&2; exit 2 ; }
+    exec "$launcher" "$resolved" "$@"
     ;;
   providers)
     shift
