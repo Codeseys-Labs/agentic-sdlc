@@ -138,6 +138,19 @@ launcher_verb() {
   esac
 }
 
+# A sub-dispatcher's help request must not be an error.
+#
+# `ccodex bundle --help` used to print `error: ccodex bundle needs install|status|uninstall` on
+# stderr and exit 2 -- the same defect class fixed for the launch verbs on 2026-08-07, surviving
+# in the routes that fix did not touch. A help request answered with a usage error is a defect
+# regardless of how good the text underneath it is. A BARE verb still exits 2, because that is a
+# genuine invocation error rather than a question.
+sub_dispatch_help() {
+  printf 'usage: ccodex %s <%s>\n\n' "$1" "$2"
+  printf 'Run `ccodex --help` for what each does, or pass a subcommand'"'"'s own --help.\n'
+  exit 0
+}
+
 route="${1:-}"
 case "$route" in
   launch|ultracode|status|restart|configure|session)
@@ -211,6 +224,7 @@ case "$route" in
     verb="${1:-}"
     case "$verb" in
       install|status|uninstall) shift; run_python install_skill_bundle.py "$verb" "$@" ;;
+      -h|--help|help) sub_dispatch_help bundle 'install|status|uninstall' ;;
       *) printf 'error: ccodex bundle needs install|status|uninstall\n' >&2; exit 2 ;;
     esac
     ;;
@@ -219,6 +233,7 @@ case "$route" in
     verb="${1:-}"
     case "$verb" in
       list|status|install|migrate|uninstall) shift; run_python install_external_libraries.py "$verb" "$@" ;;
+      -h|--help|help) sub_dispatch_help libraries 'list|status|install|migrate|uninstall' ;;
       *) printf 'error: ccodex libraries needs list|status|install|migrate|uninstall\n' >&2; exit 2 ;;
     esac
     ;;
@@ -227,6 +242,7 @@ case "$route" in
     verb="${1:-}"
     case "$verb" in
       status|activate|deactivate) shift; run_python manage_claude_statusline.py "$verb" "$@" ;;
+      -h|--help|help) sub_dispatch_help statusline 'status|activate|deactivate' ;;
       *) printf 'error: ccodex statusline needs status|activate|deactivate\n' >&2; exit 2 ;;
     esac
     ;;

@@ -4,6 +4,24 @@ Reusable, provider-native operating kit for project-scale agentic software deliv
 Codex, Claude Code, and other skill-capable hosts. cmux is an optional view/event layer;
 tmux is never a baseline requirement.
 
+**Install it.** [mise](https://mise.jdx.dev) is the only bootstrap prerequisite. Read
+`mise.toml` before step 2 — that step authorizes whatever it says at that moment:
+
+```bash
+git clone https://github.com/Codeseys-Labs/agentic-sdlc.git && cd agentic-sdlc
+mise trust ./mise.toml          # persistent, per-path, and needs your explicit approval
+mise --locked install           # 12 pinned tools, ~1.3 GB
+mise run bundle:install         # skills, agents, and commands for this host
+mise run operator-tools:install # optional: puts `ccodex` on your PATH
+```
+
+Then `mise run bundle:status` should report `N ok, 0 conflict, 0 absent`. Full walkthrough with
+the reasoning behind each step: [Quickstart from a clean clone](#quickstart-from-a-clean-clone).
+Every command with what it does: [`ccodex` — the operator dispatcher](#ccodex-the-operator-dispatcher)
+and [the task table](#install-and-run-the-bundle). Verified from nothing on a fresh
+`ubuntu:24.04` container against the public remote — `docs/research/2026-08-08-fresh-host-install-verification.md`
+records the transcript, including two defects it found.
+
 **Architecture: an open plugin — the multi-host pattern, since no unified plugin standard
 exists (verified 2026-07).** The portable layer is the `skills/` tree (the
 [Agent Skills](https://agentskills.io) format, natively read by Claude Code, Codex, Gemini
@@ -246,9 +264,10 @@ replaces step 1 only.
    exits with `config files are not trusted`. To validate without persisting anything, use
    `mise --no-config --cd . exec ...` instead of trusting.
 
-4. Resolve the locked toolchain. The first run downloads roughly 1.3 GB across the 13 pinned
-   tools and takes about 30 seconds on a warm network. mise ships `auto_install` enabled.
-   Skipping this step does not avoid the cost: the first `mise run <task>` installs all 13
+4. Resolve the locked toolchain. `mise.lock` pins **12 tools** — `uv`, `node`, `npm`, `bun`,
+   `lefthook`, `jq`, `ripgrep`, `fd`, `gh`, `betterleaks`, `opencodex`, and `seeds-cli` — for
+   roughly 1.3 GB and about 30 seconds on a warm network. mise ships `auto_install` enabled, so
+   skipping this step does not avoid the cost: the first `mise run <task>` installs all 12
    without prompting.
 
    ```bash
@@ -259,6 +278,15 @@ replaces step 1 only.
 
    ```bash
    mise run bundle:install
+   ```
+
+6. Optional, and a separate approval: put the `ccodex` dispatcher on your `PATH`, so the
+   installed bundle is usable without `mise` in front of every command. This writes into
+   `${XDG_BIN_HOME:-$HOME/.local/bin}` and only when that directory already exists and is on
+   `PATH` — see [the dispatcher section](#ccodex-the-operator-dispatcher):
+
+   ```bash
+   mise run operator-tools:install
    ```
 
 Then `mise run bundle:status` reports ownership as either `no owned entries for this host` or an
@@ -355,7 +383,7 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 | `test` | Run the installer test suite. |
 | `self-test` | Exercise install/status/uninstall in an isolated home. |
 | `secrets` | Scan the working tree with the pinned scanner and the tracked extend-only config. History scanning stays a separate consented step. |
-| `check` | Run the authoritative validation, tests, self-test, and secrets gate. Last measured on Linux: the `test` leaf ran 654 tests in 814s (`OK (skipped=13)`), while `validate` and `secrets` each finished in under 2s, so the suite dominates and 15 minutes is a reasonable budget — more on a loaded host, since gate runs contend for CPU and I/O. Treat both numbers as stale-by-design: the count grows with the suite, the clock varies by host, and the gate's verdict is the evidence. |
+| `check` | Run the authoritative validation, tests, self-test, and secrets gate. Last measured on Linux: the `test` leaf ran 765 tests in 322s (`OK (skipped=13)`), while `validate` and `secrets` each finished in under 2s, so the suite dominates and 15 minutes is a reasonable budget — more on a loaded host, since gate runs contend for CPU and I/O. Treat both numbers as stale-by-design: the count grows with the suite, the clock varies by host, and the gate's verdict is the evidence. |
 | `hooks:install` | Install the checked-in lefthook hooks. |
 | `setup` | Bootstrap the pinned toolchain and repository setup (`bundle:install` plus `hooks:install`). |
 
@@ -397,32 +425,74 @@ mise run operator-tools:status
 ### `ccodex` — the operator dispatcher
 
 `ccodex` is the whole use surface without mise in the way. `ocx-launch` and `ocx-ultracode` stay
-installed as thin aliases for existing muscle memory.
+installed as thin aliases for existing muscle memory. Every command below is also reachable as
+`ccodex ocx <verb>`, which is the long form; `ccodex --help` prints the same surface at any time.
+
+**Gateway plane** — running a Claude Code session against a non-Anthropic model:
+
+| Command | What it does |
+|---|---|
+| `ccodex launch [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch a Claude Code process through it with an isolated `CLAUDE_CONFIG_DIR` and no Anthropic subscription credential in scope. Fails closed if the gateway never becomes healthy. Arguments are forwarded to Claude Code. |
+| `ccodex launch --model <id>` | Pick any id in the running gateway's live catalog, including a namespaced one: `--model muse/muse-spark-1.2`. Run `ccodex models` for the list. |
+| `ccodex ultracode [claude args...]` | The same fail-closed launch path with session Ultracode applied. It owns the session `--settings` value, so it refuses a competing `--settings`, and it **never** bypasses permissions. |
+| `ccodex status` | Read-only supervision view: pid, port, uptime, healthy/down, log location, configured providers each compared against the LIVE catalog, this shell's environment-variable policy, session-inheritance coverage, and the attribution log command. Exit 0 means the gateway answered an identity-checked probe at that moment — evidence, not authorization. |
+| `ccodex restart` | Stop the gateway cleanly, then ensure it is back up. Fails closed on an unclean stop. Interrupts in-flight turns in every routed session, and `ocx` rewrites shared `~/.codex` config as part of its lifecycle. |
+| `ccodex session status` | Per-entry session inheritance: `SHARED`, `NOT INHERITED`, or absent, with an `N of M` count. Read-only, and works with the gateway down. |
+| `ccodex session adopt` | Print exactly what a migration would move. **Moves nothing.** |
+| `ccodex session adopt --migrate` | Move each blocking plane copy into a timestamped in-plane backup, then link to the global copy. Nothing is deleted; refuses when the global source is missing. |
+
+**Providers and models** — what a launched session can actually pick:
+
+| Command | What it does |
+|---|---|
+| `ccodex providers` | Configured providers, and which are LIVE in the running gateway. A provider in the config file is **not** live until synced and restarted — check here rather than trusting an add's success message. |
+| `ccodex models` | The running gateway's flat live catalog. Muse models appear as ordinary namespaced entries, not as a separate plane. |
+| `ccodex configure` | With no arguments, print the admitted configuration surface in detail. |
+| `ccodex configure provider add\|edit\|remove\|set-default <name> ...` | Reviewed provider mutation for non-Anthropic providers. Writes the **config file only** — see [the key sequence below](#adding-a-provider-that-needs-an-api-key). |
+| `ccodex configure account add-key <name>` | Store a provider API key, read **only** from piped stdin. |
+| `ccodex configure account list\|current <name>` | Masked credential inspection. |
+| `ccodex configure help <verb>` | Inspect the upstream `ocx` surface without running it. |
+
+**Installed-bundle lifecycle** — managing what is installed, without mise:
+
+| Command | What it does |
+|---|---|
+| `ccodex bundle install\|status\|uninstall` | Install, inspect, or remove this host's bundle entries. `status` always ends in one terminal line: `no owned entries for this host`, or `N ok, M conflict, K absent`. |
+| `ccodex libraries list\|status` | List installable external skill libraries with their front doors and surface cost, or report which are already in this home. Read-only. |
+| `ccodex libraries install <name> [--yes]` | Install a named external library through **its own** front door. Dry run unless `--yes`; vendors nothing into this tree. |
+| `ccodex libraries migrate <name> [--yes]` | Retire another channel's copies of the same upstream through that channel's own removal path, then install. Dry run unless `--yes`. |
+| `ccodex statusline status\|activate\|deactivate` | Inspect or explicitly manage only Claude Code's `statusLine` fields. Inactive until you activate it. |
+| `ccodex version` | This command's resolved repository root and runtime dependencies. |
+
+**Help, and how to reach the wrapped tool's help.** `ccodex <verb> --help` prints that verb's own
+help and **runs nothing** — no gateway, no session state, no constructed settings. To reach the
+help of the tool *behind* a launch verb, end this command's options with `--`:
 
 ```bash
-ccodex launch                       # supervised gateway launch (ccodex ocx launch also works)
-ccodex launch --model muse/muse-spark-1.2
-ccodex ultracode                    # session Ultracode; never a permission bypass
-ccodex launch --help                # this verb's own help; prepares nothing, launches nothing
+ccodex launch --help                # this verb's help; prepares nothing, launches nothing
 ccodex launch -- --help             # `--` forwards verbatim: Claude Code's OWN help
-ccodex status                       # gateway health, configured-vs-live providers, env policy,
-                                    # and how many session entries are actually shared
-ccodex session status               # per-entry session inheritance; read-only
-ccodex session adopt                # print what a migration would move; moves nothing
-ccodex providers                    # what is configured, and which providers are LIVE
-ccodex models                       # the running gateway's flat live catalog
-ccodex configure provider add muse --adapter openai-responses \
-  --base-url https://api.meta.ai/v1 --default-model muse-spark-1.2
-ccodex bundle status
-ccodex libraries install ecc --yes
-ccodex version                      # resolved repository root and runtime dependencies
+ccodex launch -- --print "prompt"   # any Claude Code argument, through a prepared session
 ```
+
+`providers` and `models` are the two exceptions: they take no options of their own, so they run
+the query rather than printing a help page, and `models` exits 1 when the gateway is down because
+an unanswerable query is a failure rather than a refusal.
+
+**Exit codes**, uniform across every route: `0` ok · `1` failure or unhealthy · `2` usage ·
+`3` refused, meaning a boundary declined the operation rather than failing at it.
 
 Only the **use** surface is installed. The maintenance tasks — `test`, `validate`, `check`,
 `secrets`, `self-test`, `mermaid:*`, `hooks:install` — are deliberately absent, because they
 belong to working *on* this repository rather than to using what it installed; run those with
 `mise run <task>` inside the checkout. One owned dispatcher rather than a dozen named commands
 means one ownership record, one place a new verb appears, and no PATH namespace land-grab.
+
+**A shell function or alias named `ccodex` will shadow this command.** Bash resolves functions
+and aliases before `PATH`, so a leftover definition silently wins and the installed dispatcher is
+never reached — the symptom is `ccodex --help` printing the *wrapped tool's* help instead of the
+table above. Diagnose with `type ccodex`: it must report a **file** under
+`${XDG_BIN_HOME:-$HOME/.local/bin}`, not a function or alias. `which ccodex` is not enough, since
+it reports the file that a function is hiding.
 
 ### Adding a provider that needs an API key
 

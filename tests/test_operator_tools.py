@@ -312,6 +312,37 @@ class OperatorToolsTests(unittest.TestCase):
                         isolated.exists(), f"{arguments} created {isolated}"
                     )
 
+    def test_sub_dispatcher_help_is_not_a_usage_error(self) -> None:
+        # `ccodex bundle --help` printed `error: ccodex bundle needs install|status|uninstall` on
+        # STDERR and exited 2 -- the same defect fixed for the launch verbs on 2026-08-07,
+        # surviving in the three routes that fix did not touch. Found while writing the README
+        # command reference, by running every documented verb rather than reading the source.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
+            environment = self.stub_environment(root, config.bin_dir)
+
+            for route in ("bundle", "libraries", "statusline"):
+                for form in ("--help", "-h", "help"):
+                    with self.subTest(route=route, form=form):
+                        result = subprocess.run(
+                            [str(dispatcher), route, form],
+                            capture_output=True, text=True, env=environment, check=False,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn(f"usage: ccodex {route}", result.stdout)
+                        self.assertNotIn("error:", result.stderr)
+
+                # A BARE verb is still a usage error, because it is a genuine invocation
+                # mistake rather than a question. The fix must not blur the two.
+                bare = subprocess.run(
+                    [str(dispatcher), route],
+                    capture_output=True, text=True, env=environment, check=False,
+                )
+                self.assertEqual(bare.returncode, 2, f"{route} bare should stay a usage error")
+                self.assertIn("error:", bare.stderr)
+
     def test_verb_help_is_the_verbs_own_text_not_the_top_level_usage(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
