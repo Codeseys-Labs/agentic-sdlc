@@ -44,17 +44,26 @@ depends = ["node"]
 [tools."github:betterleaks/betterleaks"]
 version = "1.7.3"
 
-# npm backend locks version+backend only, with no per-platform checksum, exactly like the
-# Seeds pin above. Rendering is advisory; no gate consumes mmdc.
-[tools."npm:@mermaid-js/mermaid-cli"]
-version = "11.16.0"
-depends = ["node"]
+# `npm:@mermaid-js/mermaid-cli` is deliberately NOT pinned here (docs/adr/0002, 2026-08-07
+# amendment). It was, and it was redundant AND actively harmful. Redundant: the renderer
+# resolves mmdc out of this repo's own digest-pinned node_modules, never through mise —
+# scripts/provision_mermaid_linux.py resolves only node and npm via `mise where`. Harmful:
+# the pin pulled puppeteer transitively, whose postinstall downloads a browser, so on an
+# image without a zip archiver `mise --locked install` exited 1 and took the other 12 tools
+# with it. It also resolved puppeteer 25.5.0 and chrome 151.0.7922.71 into ~/.cache/puppeteer,
+# outside every digest this repo reviews. Screening rule for the next pin: a pin whose
+# install runs a postinstall that extracts an archive or downloads a browser is a bootstrap
+# prerequisite regardless of whether any gate consumes it.
 
 # Installed by default as of 2026-08-06 by explicit operator decision (docs/adr/0005). The
 # boundary is usage-level, not packaging-level: per docs/adr/0003 this gateway may route to
 # NON-Anthropic models through each provider's own credential (API key, Codex OAuth), and
 # Claude subscription OAuth is never routed through it. scripts/opencodex-claude.sh enforces
-# that in code. npm backend locks version+backend only, exactly like the two pins above.
+# that in code. npm backend locks version+backend only, exactly like the Seeds and npm pins
+# above. This pin DOES run a transitive postinstall — `bun` 1.3.14 lays down an 89MB binary —
+# but it extracts with Node's built-in `zlib.unzipSync`, so unlike the removed mermaid pin it
+# adds no system-package prerequisite. Postinstall alone is not the defect; needing a tool
+# mise did not install is (docs/adr/0002, 2026-08-07 amendment).
 [tools."npm:@bitkyc08/opencodex"]
 version = "2.10.2"
 depends = ["node"]
@@ -222,17 +231,14 @@ run = "scripts/opencodex-claude.sh restart"
 description = "Configure opencodex providers through their own login flows"
 run = "scripts/opencodex-claude.sh configure"
 
-[tasks."muse:launch"]
-description = "Launch Claude Code on the Muse Spark FALLBACK direct route (primary is ocx:launch --model muse/muse-spark-1.2)"
-run = "scripts/muse-claude.sh launch"
-
-[tasks."muse:status"]
-description = "Report Muse Spark fallback-route configuration, credential source, and live reachability"
-run = "scripts/muse-claude.sh status"
-
-[tasks."muse:probe"]
-description = "Verify the Muse Spark fallback route's catalog and one tiny completion without launching Claude"
-run = "scripts/muse-claude.sh probe"
+# Muse Spark has NO tasks of its own, deliberately (ADR-0007 amendment, ADR-0010). It is one
+# provider registered in the gateway, not a plane: the running gateway serves a single flat
+# catalog in which its models appear as ordinary namespaced ids (verified 2026-08-07 --
+# `GET /v1/models` returned seven gpt ids plus muse/muse-spark-{1.1,1.2,1.2-contributor}). A
+# session launched through `ocx:launch` selects one the same way it selects a gpt one:
+#   mise run ocx:launch -- --model muse/muse-spark-1.2
+# Registering a provider goes through the reviewed configure route, with muse as the worked
+# example; nothing about it is special-cased in code. `ccodex models` prints the live catalog.
 
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"

@@ -73,8 +73,11 @@ JQ_VERSION = "1.8.2"
 GH_VERSION = "2.97.0"
 BETTERLEAKS_VERSION = "1.7.3"
 BETTERLEAKS_TOOL = "github:betterleaks/betterleaks"
+# The renderer's mmdc version. It is pinned by package-lock.json digest below, NOT by a mise
+# [tools] entry: that entry was removed 2026-08-07 (docs/adr/0002 amendment) because puppeteer's
+# postinstall came with it and needed a zip archiver mise does not install, failing the whole
+# `mise --locked install`. Nothing resolves mmdc through mise, so there is no lock/tool pin here.
 MERMAID_VERSION = "11.16.0"
-MERMAID_TOOL = "npm:@mermaid-js/mermaid-cli"
 # Installed by default per docs/adr/0005. The packaging pin is convenience tier like the two
 # npm pins above; the boundary that matters is usage-level and lives in the launcher script,
 # not here (docs/adr/0003: non-Anthropic routing only, never subscription OAuth).
@@ -93,13 +96,13 @@ MERMAID_PACKAGE_LOCK_SHA256 = "939c3abe521d3e2075cf757f2761fa1d3103daf270be778ea
 MERMAID_POLICY_SHA256 = "ee669a8ee36c085713071e91cb1b2b38c75f28dec9a0cfbbc1cd86559ca6ecce"
 MERMAID_POLICY_SCHEMA = "mermaid-renderer-linux/v1"
 MERMAID_PACKAGE_PINS = {
-    "@mermaid-js/mermaid-cli": "11.16.0",
+    "@mermaid-js/mermaid-cli": MERMAID_VERSION,
     "@puppeteer/browsers": "3.0.6",
     "mermaid": "11.16.0",
     "puppeteer": "25.3.0",
 }
 MERMAID_LOCK_RESOLUTIONS = {
-    "node_modules/@mermaid-js/mermaid-cli": "11.16.0",
+    "node_modules/@mermaid-js/mermaid-cli": MERMAID_VERSION,
     "node_modules/@mermaid-js/parser": "1.2.0",
     "node_modules/@puppeteer/browsers": "3.0.6",
     "node_modules/mermaid": "11.16.0",
@@ -113,6 +116,10 @@ MERMAID_BROWSER_IDENTITY = {
 OPERATOR_TOOL_ARTIFACTS = frozenset(
     {
         "assets/claude/statusline-command.sh",
+        # Sourced by both launchers (ADR-0010). Registered here so the gate parses it: it lives
+        # under assets/, which the scripts/*.sh syntax glob does not reach.
+        "assets/claude/session-inheritance.sh",
+        "assets/launchers/ccodex.in",
         "assets/launchers/ocx-launch.in",
         "assets/launchers/ocx-ultracode.in",
         "scripts/install_operator_tools.py",
@@ -137,7 +144,12 @@ MERMAID_REQUIRED_ARTIFACTS = frozenset(
 # Generated trees that are provisioned, not reviewed. Walking them would make the secret scan
 # and the gate-graph copy depend on whether a host has run provisioning.
 UNREVIEWED_TREES = frozenset({".git", "node_modules", ".mermaid-runtime", "__pycache__"})
-NPM_BACKED_TOOLS = frozenset({SEEDS_TOOL, MERMAID_TOOL, OPENCODEX_TOOL, MERMAID_NPM_TOOL})
+NPM_BACKED_TOOLS = frozenset({SEEDS_TOOL, OPENCODEX_TOOL, MERMAID_NPM_TOOL})
+# Every npm-backend pin resolves an arbitrary dependency tree whose postinstall scripts run on
+# install, so this is the reviewed allowlist for that backend, screened per docs/adr/0002's
+# 2026-08-07 amendment: a pin may not require a tool mise itself does not install. Reviewed
+# 2026-08-07 — Seeds runs no install script; opencodex runs one (transitive bun 1.3.14) that
+# extracts with Node's built-in zlib; bare npm is npm itself.
 # A pinned backend is part of the contract: it fixes WHERE a tool comes from, so a registry
 # alias cannot be silently repointed at a different upstream.
 EXPECTED_LOCK_BACKENDS = {
@@ -151,11 +163,10 @@ EXPECTED_LOCK_BACKENDS = {
     "gh": "aqua:cli/cli",
     SEEDS_TOOL: SEEDS_TOOL,
     BETTERLEAKS_TOOL: BETTERLEAKS_TOOL,
-    MERMAID_TOOL: MERMAID_TOOL,
     OPENCODEX_TOOL: OPENCODEX_TOOL,
     MERMAID_NPM_TOOL: MERMAID_NPM_BACKEND,
 }
-MISE_LOCK_SHA256 = "6859c0558b4729e95c07fd9bc39e0b41a2d3ea22f866b8a40da9911e6aad8a5d"
+MISE_LOCK_SHA256 = "f36865fa4afe05b01835932ced2177974e6fd23af4d5499bad436da8c65042d5"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -1300,6 +1311,8 @@ def validate_operator_tools(root: Path, result: Validation) -> None:
         return
     for relative in (
         "assets/claude/statusline-command.sh",
+        "assets/claude/session-inheritance.sh",
+        "assets/launchers/ccodex.in",
         "assets/launchers/ocx-launch.in",
         "assets/launchers/ocx-ultracode.in",
         "scripts/opencodex-claude.sh",
@@ -1346,11 +1359,24 @@ def validate_mise(root: Path, result: Validation) -> None:
         "gh": GH_VERSION,
         SEEDS_TOOL: {"version": SEEDS_VERSION, "depends": ["node"]},
         BETTERLEAKS_TOOL: {"version": BETTERLEAKS_VERSION},
-        MERMAID_TOOL: {"version": MERMAID_VERSION, "depends": ["node"]},
         OPENCODEX_TOOL: {"version": OPENCODEX_VERSION, "depends": ["node"]},
     }
     if config.get("tools") != expected_tools:
         result.error(f"mise.toml tools must equal {expected_tools}")
+    # Every npm-backend pin drags in a transitive dependency tree whose install scripts run
+    # during `mise --locked install`, so each one is reviewed by name against docs/adr/0002's
+    # 2026-08-07 screening rule before it is allowed. This catches an UNREVIEWED npm pin being
+    # added; it cannot detect that an already-listed pin's upstream added a hostile postinstall.
+    unreviewed = sorted(
+        name
+        for name in config.get("tools", {})
+        if name.startswith("npm:") and name not in NPM_BACKED_TOOLS
+    )
+    if unreviewed:
+        result.error(
+            "mise.toml npm-backend pins must be reviewed for install-script prerequisites "
+            f"per docs/adr/0002 before use: {unreviewed}"
+        )
     seeds = config.get("tools", {}).get(SEEDS_TOOL, {})
     if seeds.get("depends") != ["node"]:
         result.error("mise.toml Seeds tool must depend on node")
@@ -1447,7 +1473,6 @@ def validate_mise(root: Path, result: Validation) -> None:
         "gh": GH_VERSION,
         SEEDS_TOOL: SEEDS_VERSION,
         BETTERLEAKS_TOOL: BETTERLEAKS_VERSION,
-        MERMAID_TOOL: MERMAID_VERSION,
         OPENCODEX_TOOL: OPENCODEX_VERSION,
     }
     if set(locked_tools) != set(expected_versions):

@@ -380,10 +380,6 @@ backend = "npm:npm"
 version = "2.10.2"
 backend = "npm:@bitkyc08/opencodex"
 
-[[tools."npm:@mermaid-js/mermaid-cli"]]
-version = "11.16.0"
-backend = "npm:@mermaid-js/mermaid-cli"
-
 [[tools."npm:@os-eco/seeds-cli"]]
 version = "0.5.14"
 backend = "npm:@os-eco/seeds-cli"

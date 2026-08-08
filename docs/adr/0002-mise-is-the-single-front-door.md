@@ -44,7 +44,8 @@ stays unpinned; check `mise backends` first.
 
 1. **mise is the single front door for install, gates, and tasks.** No
    second bootstrap prerequisite (a second package manager, a required
-   environment token, a required network credential) may be introduced by
+   environment token, a required network credential, or — added by the
+   2026-08-07 amendment below — a required system package) may be introduced by
    any tool pin, task, or hook in this bundle.
 2. **A pin must not smuggle in a second prerequisite.** Before committing any
    new `[tools]` entry, the install path must be verified on a machine with
@@ -80,6 +81,88 @@ stays unpinned; check `mise backends` first.
 - **Confirmation:** run `mise run check` — the four-task dependency chain
   (`validate`, `test`, `self-test`, `secrets`) it enforces is a real command in
   this repository, not a hypothetical fitness function.
+
+## Amendment — 2026-08-07: a pin's blast radius is the install command, not the gate
+
+A second bootstrap prerequisite had already crept in under this ADR's nose, and
+this record's silence is what let it stay. The decision above screens pins for
+credentials and package managers; it never said anything about a **system
+package**, so the reviewer who added `[tools."npm:@mermaid-js/mermaid-cli"]`
+had no rule to fail.
+
+**Evidence.** `docs/research/2026-08-07-clone-free-install.md` §4 records a
+container run on `debian:13-slim` *without* `unzip`, where `mise --locked
+install` exited **1** on both the first and the second run:
+
+```
+npm error Failed to set up chrome v151.0.7922.71!
+npm error - DefaultProvider: Extraction failed: no zip archiver is available.
+npm error   Install `unzip` ... or add the optional `yauzl` dependency.
+mise ERROR Failed to install npm:@mermaid-js/mermaid-cli@11.16.0
+```
+
+This was **not** the npm-ordering bug that `depends = ["node"]` already fixed:
+npm installed cleanly in the first pass and 12 of 13 tools resolved. It was
+puppeteer's postinstall, pulled in transitively by the mermaid pin, requiring a
+zip archiver the slim image lacks. Adding `unzip` took the same single run to
+exit 0.
+
+**The rule this implies.** An "advisory, gate-irrelevant" pin is a
+contradiction in terms. `mise --locked install` installs every `[tools]` entry
+in one operation, and one entry's failure exits the whole command non-zero — so
+a pin's blast radius is the documented bootstrap command, not the gate graph.
+Reasoning "no gate consumes `mmdc`, therefore this pin is advisory" measured the
+wrong surface. Convenience tier describes what a tool's *absence* costs, never
+what its *installation* can break.
+
+**Fix taken: the pin was removed, not accommodated.** Two independent facts made
+removal correct rather than a trade-off:
+
+1. **It was redundant.** Nothing resolves `mmdc` through mise.
+   `scripts/render_mermaid_linux.py` resolves the renderer out of this repo's own
+   `node_modules/@mermaid-js/mermaid-cli`, provisioned by the explicit
+   `mermaid:provision` step and digest-pinned via `MERMAID_PACKAGE_LOCK_SHA256`.
+   `scripts/provision_mermaid_linux.py` calls `mise --no-config where` for
+   exactly two tools — `node` and `npm` — and never for mermaid.
+2. **It was actively harmful to provenance.** The removed pin resolved
+   puppeteer **25.5.0** and downloaded chrome **151.0.7922.71** into
+   `~/.cache/puppeteer`, while the reviewed supply chain pins puppeteer 25.3.0
+   and browser build `150.0.7871.24` inside the repo-local
+   `.mermaid-runtime/cache`. So the pin was writing an unreviewed 420MB tree,
+   including a browser, outside every digest this repo checks. The provisioner
+   avoids exactly this with `npm ci --ignore-scripts` and
+   `PUPPETEER_SKIP_DOWNLOAD=1`; the mise pin had no such control available —
+   mise exposes no setting to suppress npm install scripts (verified against
+   `mise settings --all` on 2026.4.27).
+
+Removing it therefore deletes the `unzip` dependency at its source, keeps the
+renderer working unchanged, and makes this ADR's claim true again instead of
+aspirational.
+
+**How the next pin is screened.** Added to the decision as a fourth prerequisite
+class: **a required system package**. Concretely — a pin whose install runs a
+postinstall/preinstall script that extracts an archive or downloads a browser is
+suspect and must be verified on a minimal image before it is committed, whatever
+the gate graph says about it. Postinstall by itself is not disqualifying: the
+retained `npm:@bitkyc08/opencodex` pin runs a transitive `bun` 1.3.14 postinstall
+that lays down an 89MB binary, but it extracts using Node's built-in
+`zlib.unzipSync` and so needs nothing mise did not already install. The
+disqualifying property is **needing a tool mise does not provide**, not running
+code at install time.
+
+Enforcement is a named allowlist rather than prose:
+`scripts/validate_bundle.py` fails the gate on any `npm:`-backend entry in
+`mise.toml` absent from the reviewed `NPM_BACKED_TOOLS` set, and
+`tests/test_gate_graph.py` pins both re-adding the mermaid pin and adding an
+arbitrary unscreened npm pin as must-fail mutations. Stated honestly: that
+enforcement catches an **unreviewed pin being added**; it does not detect an
+already-reviewed pin's upstream growing a hostile postinstall in a later
+version, and it does not execute an install on a minimal image. The
+minimal-image check remains a human step this record mandates.
+
+Note for the reader: `docs/adr/0011` records the `unzip` caveat as a live
+operational requirement. As of this amendment that caveat is historical — the
+cause is removed — and ADR-0011 needs a pointer here.
 
 ## Reversal condition
 

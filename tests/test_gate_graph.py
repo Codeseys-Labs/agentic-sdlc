@@ -42,8 +42,25 @@ class GateGraphTests(unittest.TestCase):
         ("mise.toml", 'jq = "1.8.2"', 'jq = "1.8.1"', "mise.toml tools must equal"),
         ("mise.toml", 'gh = "2.97.0"', 'gh = "2.96.0"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "1.7.3"', 'version = "1.7.2"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "11.16.0"', 'version = "11.15.0"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "2.10.2"', 'version = "2.10.1"', "mise.toml tools must equal"),
+        # Re-adding the mermaid pin must fail. It was removed 2026-08-07 (docs/adr/0002
+        # amendment): puppeteer's postinstall needs a zip archiver mise does not install, so
+        # `mise --locked install` exited 1 on a slim image and took the other 12 tools with it.
+        # The renderer never used this pin — it resolves mmdc from the repo's own node_modules.
+        (
+            "mise.toml",
+            '[tools."npm:@bitkyc08/opencodex"]',
+            '[tools."npm:@mermaid-js/mermaid-cli"]\nversion = "11.16.0"\ndepends = ["node"]\n\n[tools."npm:@bitkyc08/opencodex"]',
+            "mise.toml tools must equal",
+        ),
+        # Any OTHER unreviewed npm pin is refused by name, not just the one that already bit us:
+        # the npm backend runs arbitrary transitive install scripts, so each pin is screened.
+        (
+            "mise.toml",
+            '[tools."npm:@bitkyc08/opencodex"]',
+            '[tools."npm:some-unscreened-package"]\nversion = "1.0.0"\ndepends = ["node"]\n\n[tools."npm:@bitkyc08/opencodex"]',
+            "npm-backend pins must be reviewed for install-script prerequisites",
+        ),
         # The betterleaks backend must stay github: — ubi: is deprecated in mise 2027.1.0 and
         # locks version+backend only, losing per-platform checksums and attestation.
         (
@@ -142,10 +159,6 @@ class GateGraphTests(unittest.TestCase):
         # exactly like the scoped npm pins below.
         "npm": {"version": "10.8.1", "backend": "npm:npm"},
         "npm:@os-eco/seeds-cli": {"version": "0.5.14", "backend": "npm:@os-eco/seeds-cli"},
-        "npm:@mermaid-js/mermaid-cli": {
-            "version": "11.16.0",
-            "backend": "npm:@mermaid-js/mermaid-cli",
-        },
         "npm:@bitkyc08/opencodex": {
             "version": "2.10.2",
             "backend": "npm:@bitkyc08/opencodex",
@@ -164,7 +177,6 @@ class GateGraphTests(unittest.TestCase):
     NPM_BACKED_LOCK_TOOLS = {
         "npm",
         "npm:@os-eco/seeds-cli",
-        "npm:@mermaid-js/mermaid-cli",
         "npm:@bitkyc08/opencodex",
     }
 
