@@ -41,6 +41,58 @@
 #     only. `ocx ensure`/`start` also rewrite ~/.codex (pointing Codex's openai provider at the
 #     proxy) and `ocx stop` restores it — an upstream side effect this wrapper surfaces rather
 #     than hides, because a supervision call therefore mutates shared Codex config.
+# ENVIRONMENT-VARIABLE POLICY (ADR-0010). Claude Code resolves CLI flags > SHELL ENVIRONMENT >
+# settings.json env > dedicated settings keys > defaults, so BOTH the process environment and the
+# constructed settings.json must be sanitized; closing only one leaves the other open. Per class:
+#
+#   CLASS               EXAMPLES                                     WHAT HAPPENS
+#   credential          AWS_BEARER_TOKEN_BEDROCK, ANTHROPIC_API_KEY, DENIED, always. Never
+#                       ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_CLIENT_KEY  inherited from either source.
+#   provider routing    CLAUDE_CODE_USE_BEDROCK, ANTHROPIC_BASE_URL,  DENIED, then SET FRESH by the
+#                       ANTHROPIC_BEDROCK_*/VERTEX_*/FOUNDRY_*        gateway (ocx claude points
+#                                                                    ANTHROPIC_BASE_URL at the
+#                                                                    proxy). Inheriting one would
+#                                                                    send this plane's traffic
+#                                                                    somewhere else entirely.
+#   model pin           ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_*_MODEL    DENIED. These name Anthropic
+#                       (+ _NAME/_DESCRIPTION/_SUPPORTED_CAPABILITIES) models, which this plane is
+#                       ANTHROPIC_CUSTOM_MODEL_OPTION*                not permitted to route
+#                                                                    (ADR-0003). A launched session
+#                                                                    picks from the gateway's own
+#                                                                    catalog instead -- see
+#                                                                    `ccodex models`.
+#   forced fallback     FALLBACK_FOR_ALL_PRIMARY_MODELS               DENIED. Silent substitution
+#                                                                    against a restricted catalog
+#                                                                    is the canary's C1 hazard.
+#   TLS downgrade       NODE_TLS_REJECT_UNAUTHORIZED                  DENIED.
+#   inert preference    DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING,   INHERITED. These are the
+#                       DO_NOT_TRACK, CLAUDE_CODE_ACCESSIBILITY,      operator's deliberate
+#                       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,         privacy/behavior choices.
+#                       compaction/bash/UI flags                     Note SET-TO-ACTIVATE: any
+#                                                                    non-empty value enables, so
+#                                                                    DROPPING a set DISABLE_TELEMETRY
+#                                                                    would RE-ENABLE telemetry. It
+#                                                                    is preserved explicitly.
+#   host-owned          CLAUDE_CODE_REMOTE, CLAUDE_CODE_ACCOUNT_UUID, NEITHER. Claude Code ignores
+#                       CLAUDE_CODE_MESSAGING_SOCKET                  these from an env block.
+#
+# The ANTHROPIC_*/AWS_* namespaces are denied BY PREFIX (nothing in them is an inert preference,
+# so a new upstream name fails closed). CLAUDE_* is denied by default and allowed BY NAME, because
+# that namespace genuinely mixes routing flags with inert preferences and only an enumeration is
+# honest. Docs: code.claude.com/docs/en/env-vars.md, .../settings.md, .../network-config.md.
+# The settings env block is read once at session start, so the constructed document is a
+# launch-time artifact: editing it mid-session does nothing.
+#
+#   * The isolated config dir is NOT isolated in every respect, and saying so would now be
+#     false. Per ADR-0010 the dir is split into two classes: inert per-session DATA (prompt
+#     history, project transcripts, todos, shell snapshots, file history) is SHARED with the
+#     global install by symlink so a launched session is not blank, and the isolated
+#     settings.json is CONSTRUCTED with the global statusLine stanza only. Credentials never
+#     cross in either direction: the global settings.json is never copied or linked because its
+#     `env` block is a credential carrier on a real host (a live AWS_BEARER_TOKEN_BEDROCK was
+#     found there on 2026-08-07), the constructed document is asserted credential-free before
+#     it is written, and .credentials.json / ../.claude.json / sessions / session-env / plugins
+#     / agents stay private. See assets/claude/session-inheritance.sh.
 #   * No credential is read, written, printed, or forwarded by this script. `configure` hands
 #     off to ocx's own interactive login flows; this script never handles the secret. It does
 #     WARN when a key is passed as `--api-key` on the command line, because argv is
@@ -62,6 +114,10 @@ root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
 isolated_config_dir="$state_home/agentic-sdlc/ocx-claude"
 log_dir="$state_home/agentic-sdlc/ocx-logs"
+# Selective session inheritance (ADR-0010), shared with scripts/muse-claude.sh so the two
+# launchers cannot diverge on what crosses the boundary. Sourced, not executed: it defines
+# functions and runs nothing until `launch` calls inherit_session_state after the scrub.
+session_inheritance="$root/assets/claude/session-inheritance.sh"
 # Bound on how long a just-started gateway may take to answer an identity-checked probe.
 # `ocx ensure` already waits internally (8s); this is the wrapper's own outer bound, so a
 # hung or half-up start is capped rather than inherited.
@@ -344,16 +400,31 @@ subscription_shaped_env() {
   return 1
 }
 
+# Environment scrub, delegated to the shared helper (ADR-0010) so the policy is defined once for
+# both launchers. It denies ANTHROPIC_*/CLAUDE_*/AWS_* by prefix plus named unprefixed hazards,
+# and restores an enumerated set of inert CLAUDE_* preferences afterwards.
+#
+# The previous rule here matched `^(ANTHROPIC|CLAUDE)` only, and that was a real defect in both
+# directions: `AWS_BEARER_TOKEN_BEDROCK` exported in the operator's shell reached the child
+# intact (verified by running this launcher under a planted parent environment), while
+# `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and the operator's privacy flags were needlessly
+# discarded. Scrubbing BOTH the process environment and the constructed settings.json is
+# required because Claude Code resolves shell environment ABOVE settings.json env.
+#
+# A missing helper falls back to the old prefix scrub PLUS AWS_*: the credential half of the
+# boundary must not depend on an optional file being present.
 scrub_anthropic_env() {
   local name
-  # Prefix scrub, not an enumerated list: the parent session exports credential slots,
-  # per-tier model slots, capability strings, and routing flags (CLAUDE_CODE_USE_BEDROCK
-  # among them). Any one of them leaking into the child either re-routes it away from the
-  # gateway or carries parent-session identity into it. opencodex re-injects exactly the
-  # slots it needs via its own defaults.
-  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE)' || true); do
+  if [ -f "$session_inheritance" ] && [ ! -L "$session_inheritance" ] \
+     && . "$session_inheritance" 2>/dev/null \
+     && command -v scrub_and_restore_claude_env >/dev/null 2>&1; then
+    scrub_and_restore_claude_env
+    return 0
+  fi
+  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true); do
     unset "$name" || true
   done
+  unset NODE_TLS_REJECT_UNAUTHORIZED FALLBACK_FOR_ALL_PRIMARY_MODELS API_TIMEOUT_MS || true
 }
 
 # Fail closed against the same sources opencodex's auth detector reads, in the isolated
@@ -375,6 +446,26 @@ assert_isolated_dir_has_no_subscription() {
     grep -q "$key" "$path" 2>/dev/null \
       && refuse "the isolated Claude state carries a subscription OAuth marker ($path)"
   done
+}
+
+# --- selective session inheritance (ADR-0010) ---------------------------------------------
+#
+# The helper is sourced lazily, inside the launch path, rather than at the top of this script:
+# `status`, `restart`, and `configure` have no business linking session state, and sourcing at
+# top level would define these functions for routes that must not use them. A missing helper
+# degrades to no inheritance -- the launch proceeds with a fully private config dir, which is
+# exactly the pre-ADR-0010 behavior and is never a reason to refuse a launch.
+inherit_session_state_if_available() {
+  if [ ! -f "$session_inheritance" ] || [ -L "$session_inheritance" ]; then
+    printf '  session   : not inherited (helper missing at %s)\n' "$session_inheritance"
+    return 0
+  fi
+  # shellcheck source=../assets/claude/session-inheritance.sh
+  . "$session_inheritance" || {
+    printf '  session   : not inherited (helper could not be sourced)\n'
+    return 0
+  }
+  inherit_session_state "$isolated_config_dir" "$HOME/.claude"
 }
 
 assert_proxy_marker_mode() {
@@ -422,12 +513,20 @@ cmd_launch() {
   fi
 
   printf 'preparing gateway-routed Claude Code\n'
+  # Ordered deliberately: inheritance runs AFTER every credential assertion and after the
+  # env scrub, so a refused launch never links anything, and the helper can never re-introduce
+  # a variable the scrub just removed. It only ever links inert data and writes a constructed
+  # settings.json; it is fail-soft, so no inheritance failure aborts a launch.
+  inherit_session_state_if_available
   ensure_gateway_up
   local json port
   json="$(gateway_health_json)"
   port="$(health_field port "$json")"
-  printf '  config dir: %s (isolated; your native ~/.claude is untouched)\n' "$isolated_config_dir"
+  printf '  config dir: %s\n' "$isolated_config_dir"
+  printf '              (auth, roster agents, and model cache are private to this plane; inert\n'
+  printf '               session data is SHARED with ~/.claude by symlink -- see ADR-0010)\n'
   printf '  auth      : opencodex proxy owns authentication; no Anthropic subscription credential in scope\n'
+  printf '              your ~/.claude credentials never cross: settings.json is constructed, never copied\n'
   printf '  routed at : http://127.0.0.1:%s\n' "${port:-unknown}"
   # Forwarded Claude arguments can contain inline settings and secrets. Never echo raw argv.
   printf '  command   : mise -C %s exec -- ocx claude [forwarded arguments withheld]\n\n' "$root"
@@ -509,6 +608,18 @@ cmd_status() {
     printf '            A request naming one of these does NOT fail closed -- it is classified\n'
     printf '            routeKind: "default-provider" and billed against the DEFAULT provider.\n'
     printf '            Fix: mise -C %s exec -- ocx sync, then this script'"'"'s restart.\n' "$root"
+  fi
+
+  printf '\n== environment-variable policy (this shell, per ADR-0010) ==\n'
+  # Reports what WOULD happen to each variable currently set, without applying it. `status` must
+  # not mutate its own environment, and an operator debugging a wrong model or a leaked
+  # credential needs to see the classification before launching, not after.
+  if [ -f "$session_inheritance" ] && [ ! -L "$session_inheritance" ] \
+     && . "$session_inheritance" 2>/dev/null \
+     && command -v report_env_policy >/dev/null 2>&1; then
+    report_env_policy
+  else
+    printf '  unknown : the policy helper is unavailable (%s)\n' "$session_inheritance"
   fi
 
   printf '\n== attribution log stream ==\n'
@@ -637,6 +748,31 @@ refuse_configuration() {
   refuse "opencodex configuration route refused ($1); this split plane admits only reviewed non-Anthropic provider operations"
 }
 
+# HARVESTED from the retired muse direct-route launcher (ADR-0007 amendment): refuse to read a
+# credential from a path inside this repository. A key file under a tracked tree is one `git add`
+# away from being committed, so the refusal is structural rather than advisory. The retired
+# launcher applied this to its own key file; here it applies to any configure argument that names
+# a file, which is the same hazard reached through a different route.
+refuse_in_repo_credential_path() {
+  local argument value resolved
+  for argument in "$@"; do
+    case "$argument" in
+      --*=*) value="${argument#*=}" ;;
+      /*|./*|../*) value="$argument" ;;
+      *) continue ;;
+    esac
+    case "$value" in /*|./*|../*) ;; *) continue ;; esac
+    resolved="$(CDPATH= cd -- "$(dirname -- "$value")" 2>/dev/null && pwd)" || continue
+    case "$resolved/" in
+      "$root"/*)
+        printf 'REFUSED: a credential or config path inside the repository is not accepted (%s)\n' "$value" >&2
+        printf 'A credential must never live in a tracked tree. Move it outside %s\n' "$root" >&2
+        exit 3
+        ;;
+    esac
+  done
+}
+
 # `ocx provider add` accepts `--api-key <value>`, and argv is world-readable via `ps` for the
 # life of the call -- on a shared host any other user can read the key. This WARNS rather than
 # refuses, because upstream `provider add` has no stdin or env alternative for the key (verified:
@@ -755,6 +891,7 @@ cmd_configure() {
       ;;
     *) refuse_unknown_route "$route" ;;
   esac
+  refuse_in_repo_credential_path "$@"
   warn_argv_credential "$@"
   printf 'about to run an approved opencodex configuration route (%s)\n\n' "$route"
   local status=0

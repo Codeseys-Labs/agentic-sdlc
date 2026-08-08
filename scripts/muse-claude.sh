@@ -65,6 +65,14 @@
 #     per the qualification memo the route is tier-UNPROVEN.
 #   * No tier is pinned into any provider-neutral role. The model slots here configure one
 #     operator-launched client process; they are not a role definition.
+#   * The isolated config dir is NOT isolated in every respect. Per ADR-0010, and identically
+#     to the ocx launcher (both call the same assets/claude/session-inheritance.sh, so the two
+#     cannot drift): inert per-session DATA is SHARED with ~/.claude by symlink, and the
+#     isolated settings.json is CONSTRUCTED with the global statusLine stanza only. The global
+#     settings.json is never copied or linked, because its `env` block is a credential carrier
+#     on a real host (a live AWS_BEARER_TOKEN_BEDROCK was found there on 2026-08-07) and
+#     copying it would ALSO re-point this process away from Meta's endpoint, silently undoing
+#     the model slots below. Credentials never cross in either direction.
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -72,6 +80,9 @@ root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # its own session state, and sharing ~/.claude would mutate the operator's live session.
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
 isolated_config_dir="$state_home/agentic-sdlc/muse-claude"
+# Selective session inheritance (ADR-0010). The SAME helper the ocx launcher sources, so what
+# crosses the credential boundary is defined in exactly one place for both routes.
+session_inheritance="$root/assets/claude/session-inheritance.sh"
 
 # Base URL WITHOUT the /v1 suffix. Claude Code appends /v1/messages itself; see the header.
 # NOTE the inversion: the gateway route's provider baseUrl KEEPS the /v1 suffix, because the
@@ -269,6 +280,24 @@ assert_no_keychain_subscription() {
   fi
 }
 
+# --- selective session inheritance (ADR-0010) ---------------------------------------------
+#
+# Sourced lazily inside the launch path, not at top level: `status` and `probe` have no
+# business linking session state. A missing helper degrades to no inheritance and never
+# refuses a launch -- that is just the pre-ADR-0010 fully-private behavior.
+inherit_session_state_if_available() {
+  if [ ! -f "$session_inheritance" ] || [ -L "$session_inheritance" ]; then
+    printf '  session   : not inherited (helper missing at %s)\n' "$session_inheritance"
+    return 0
+  fi
+  # shellcheck source=../assets/claude/session-inheritance.sh
+  . "$session_inheritance" || {
+    printf '  session   : not inherited (helper could not be sourced)\n'
+    return 0
+  }
+  inherit_session_state "$isolated_config_dir" "$HOME/.claude"
+}
+
 # --- route verification -------------------------------------------------------------------
 #
 # Two checks, in this order, because the first localizes the failure the second cannot. The
@@ -378,8 +407,14 @@ cmd_launch() {
   fi
 
   verify_route
-  printf '  config dir: %s (isolated; your native ~/.claude is untouched)\n' "$isolated_config_dir"
+  # Runs after every credential assertion, after the scrub, and after the route is verified, so
+  # a refused or unreachable launch links nothing. Fail-soft: never aborts the launch.
+  inherit_session_state_if_available
+  printf '  config dir: %s\n' "$isolated_config_dir"
+  printf '              (auth and plane state are private; inert session data is SHARED with\n'
+  printf '               ~/.claude by symlink -- see ADR-0010)\n'
   printf '  auth      : Meta API key in this process only; no Anthropic subscription credential in scope\n'
+  printf '              your ~/.claude credentials never cross: settings.json is constructed, never copied\n'
   printf '  models    : %s (main), %s (small/fast)\n' "$muse_default_model" "$muse_default_small_model"
   # Forwarded Claude arguments can contain inline settings and secrets. Never echo raw argv.
   printf '  command   : claude [forwarded arguments withheld]\n\n'

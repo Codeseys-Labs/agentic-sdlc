@@ -62,12 +62,26 @@ class MuseClaudeTests(unittest.TestCase):
         key_file: str | None = None,
         extra_env: dict[str, str] | None = None,
         with_claude: bool = True,
+        global_settings: object | None = None,
+        global_session_entries: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         bin_dir = root / "bin"
         bin_dir.mkdir()
+        # Fake global ~/.claude for selective session inheritance (ADR-0010). The real
+        # operator config dir is never read or written by any test.
+        self.global_claude = root / "home" / ".claude"
+        self.isolated = root / "state" / "agentic-sdlc" / "muse-claude"
+        if global_settings is not None:
+            self.global_claude.mkdir(parents=True, exist_ok=True)
+            (self.global_claude / "settings.json").write_text(json.dumps(global_settings))
+        if global_session_entries:
+            self.global_claude.mkdir(parents=True, exist_ok=True)
+            (self.global_claude / "history.jsonl").write_text('{"display":"real prompt"}\n')
+            (self.global_claude / "projects" / "demo").mkdir(parents=True, exist_ok=True)
+            (self.global_claude / "projects" / "demo" / "session.jsonl").write_text("{}\n")
         curl_log = root / "curl.log"
         claude_log = root / "claude.log"
 
@@ -413,6 +427,100 @@ class MuseClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("FALLBACK", result.stdout)
         self.assertIn("opencodex-claude.sh launch", result.stdout)
+
+    # --- selective session inheritance (ADR-0010) -----------------------------------------
+    #
+    # This route shares the ocx launcher's helper, so the boundary cannot drift between them.
+    # These tests assert the same two halves HERE, because a shared helper is only as good as
+    # the call site: this launcher re-exports ANTHROPIC_* slots after the scrub, so a copied
+    # global `env` block would silently re-point it away from Meta.
+
+    CREDENTIAL_BEARING_GLOBAL_SETTINGS = {
+        "env": {
+            "AWS_BEARER_TOKEN_BEDROCK": "planted-bedrock-bearer-value",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "ANTHROPIC_BASE_URL": "https://planted.bedrock.example",
+        },
+        "statusLine": {"type": "command", "command": "/global/statusline-command.sh"},
+        "apiKeyHelper": "/global/print-my-key.sh",
+    }
+
+    def test_statusline_is_inherited_without_the_credential(self) -> None:
+        result, _, _ = self.run_launcher(
+            "launch", global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        raw = (self.isolated / "settings.json").read_text()
+        document = json.loads(raw)
+        self.assertEqual(document["statusLine"]["command"], "/global/statusline-command.sh")
+        self.assertNotIn("planted-bedrock-bearer-value", raw)
+        self.assertNotIn("env", document)
+        self.assertNotIn("apiKeyHelper", document)
+        self.assertNotIn("planted-bedrock-bearer-value", result.stdout + result.stderr)
+
+    def test_inherited_settings_never_repoint_the_route_away_from_meta(self) -> None:
+        # The concrete hazard for THIS launcher: a copied global env block carries
+        # ANTHROPIC_BASE_URL and CLAUDE_CODE_USE_BEDROCK, which would send the process to
+        # Bedrock while the probe reported Meta as healthy.
+        result, _, claude_log = self.run_launcher(
+            "launch", global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recorded = claude_log.read_text()
+        self.assertIn("ANTHROPIC_BASE_URL=https://api.meta.ai", recorded)
+        self.assertNotIn("planted.bedrock.example", recorded)
+        self.assertNotIn("CLAUDE_CODE_USE_BEDROCK", recorded)
+
+    def test_inert_session_entries_are_shared_by_symlink(self) -> None:
+        result, _, _ = self.run_launcher("launch", global_session_entries=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for entry in ("history.jsonl", "projects"):
+            with self.subTest(entry=entry):
+                target = self.isolated / entry
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(target.resolve(), (self.global_claude / entry).resolve())
+        self.assertIn("real prompt", (self.isolated / "history.jsonl").read_text())
+
+    def test_credential_stores_are_never_shared(self) -> None:
+        result, _, _ = self.run_launcher(
+            "launch",
+            global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS,
+            global_session_entries=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for entry in (".credentials.json", "sessions", "session-env", "plugins", "agents"):
+            with self.subTest(entry=entry):
+                self.assertFalse((self.isolated / entry).is_symlink())
+
+    def test_nothing_is_inherited_when_the_route_fails_closed(self) -> None:
+        # Inheritance runs after route verification, so an unreachable endpoint links nothing.
+        result, _, _ = self.run_launcher(
+            "launch",
+            catalog_status="401",
+            catalog_body="{}",
+            global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS,
+            global_session_entries=True,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((self.isolated / "settings.json").exists())
+        self.assertFalse((self.isolated / "history.jsonl").is_symlink())
+
+    def test_subscription_refusal_links_nothing(self) -> None:
+        result, _, _ = self.run_launcher(
+            "launch",
+            extra_env={"ANTHROPIC_AUTH_TOKEN": "sk-ant-oat-planted"},
+            global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS,
+            global_session_entries=True,
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertFalse((self.isolated / "settings.json").exists())
+        self.assertFalse((self.isolated / "history.jsonl").is_symlink())
 
 
 if __name__ == "__main__":

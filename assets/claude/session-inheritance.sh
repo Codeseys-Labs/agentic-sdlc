@@ -1,0 +1,402 @@
+# session-inheritance.sh — shared by scripts/opencodex-claude.sh and scripts/muse-claude.sh.
+#
+# Sourced, never executed. It defines two functions and runs nothing at source time, so a
+# launcher chooses when the inheritance happens (after the credential scrub, before exec).
+#
+# WHAT THIS SOLVES. Both launchers point a SECOND Claude Code process at an isolated
+# CLAUDE_CONFIG_DIR so the gateway/direct plane never mutates the operator's ~/.claude auth,
+# roster agents, or model cache. Full isolation also cost the operator their prompt history,
+# their project list, and their statusline -- the launched session opened blank. ADR-0010 splits
+# the config dir into two classes instead of treating it as one indivisible thing:
+#
+#   INERT SESSION DATA  -- shared with the global install by symlink, so the launched session
+#                          shows the operator's real history and projects.
+#   CREDENTIAL-BEARING  -- never shared, never copied, never linked.
+#
+# WHY settings.json IS CONSTRUCTED AND NEVER COPIED. The global ~/.claude/settings.json `env`
+# block is a credential carrier on a real host: verified 2026-08-07, this operator's file
+# holds a live AWS_BEARER_TOKEN_BEDROCK alongside CLAUDE_CODE_USE_BEDROCK, AWS_REGION, and
+# ANTHROPIC_DEFAULT_*_MODEL pins. Copying or symlinking the file would hand that credential to
+# the gateway plane and would ALSO re-point the child at Bedrock, defeating the scrub that
+# every ANTHROPIC*/CLAUDE* variable just performed. So the isolated settings.json is built
+# key-by-key from an allowlist of exactly one stanza (statusLine), and the constructed result
+# is asserted credential-free before it is written. An allowlist, not a denylist: a new
+# credential-shaped key upstream is excluded by default rather than by having been predicted.
+#
+# WHY statusLine IS INHERITED BY VALUE. The stanza is read from whatever the global settings
+# declare rather than hardcoded, so an operator who changes their statusline changes both
+# planes. On this host it resolves to a `command` type naming an absolute script in the global
+# config dir. That script therefore executes in the launched session -- accepted deliberately:
+# it is the operator's own script, already trusted by their own primary session, and it is
+# strictly less privileged there than here. A missing or non-command statusLine is not a
+# failure; the launched session simply has none.
+
+# Entries shared with the global install. Every one is inert per-session DATA that Claude Code
+# reads and appends; none is an auth, permission, or routing input:
+#   history.jsonl    prompt history across all projects   (the operator's actual reason for this)
+#   projects/        per-project session transcripts      (resumable sessions, /resume list)
+#   todos/           per-session todo lists
+#   shell-snapshots/ captured shell functions and aliases
+#   file-history/    edit undo history
+# Verified on this host: shell-snapshots hold functions/aliases only -- zero credential-shaped
+# variable names across all 11 present, and none contains AWS_BEARER_TOKEN_BEDROCK. They are
+# re-verified per entry at link time rather than trusted from that one observation.
+#
+# DELIBERATELY NOT SHARED, and why each would breach the boundary rather than merely leak data:
+#   .credentials.json  the subscription OAuth credential itself -- the exact thing ADR-0003
+#                      forbids reaching the gateway, and what the launcher REFUSES over.
+#   ../.claude.json    holds `oauthAccount` and `primaryApiKey` (verified present on this
+#                      host), plus per-project trust decisions. Sharing it would carry both a
+#                      credential marker and trust state across.
+#   settings.json      constructed, never linked -- see the header.
+#   sessions/          live pid/session registry. Two planes writing one registry would make
+#                      each plane's process list report the other's sessions as its own.
+#   session-env/       per-session captured environment. The scrub exists precisely so the
+#                      child's environment differs from the parent's; sharing this would
+#                      reintroduce the parent's.
+#   plugins/, agents/  roster and plugin state that ocx REWRITES in the plane it owns. This is
+#                      the original reason the config dir is isolated at all.
+#   statsig/, cache/   install-scoped identity and model cache.
+CLAUDE_SHARED_SESSION_ENTRIES="history.jsonl projects todos shell-snapshots file-history"
+
+# Keys copied into the constructed settings.json. Exactly one stanza. `env` is not here and
+# must never be: it is the credential carrier.
+CLAUDE_INHERITED_SETTINGS_KEYS="statusLine"
+
+# Link each shared entry from the isolated dir at the global install's copy.
+#
+# CONCURRENCY (the load-bearing conclusion, verified against the installed CLI 2.1.224 rather
+# than assumed). Claude Code appends prompt history under a proper-lockfile mutex: the save
+# path calls its lock with {stale:1e4, retries:{retries:3,minTimeout:50}} and distinguishes
+# `history_save_lock_failed` from `history_save_write_failed`. The bundled proper-lockfile
+# defaults `realpath:!0` and canonicalizes the target with fs.realpath BEFORE deriving the
+# lock path as `${resolved}.lock`. So both planes -- one opening the real path, one opening a
+# symlink to it -- resolve to the SAME lock directory and serialize against each other. Two
+# concurrent appends do not interleave or truncate; the loser retries, and a lock held past
+# the 10s stale threshold is broken rather than deadlocking. That is why SYMLINKS are chosen
+# over copies: a copy would need a merge-back that has no such mutex, and would diverge or
+# clobber the operator's real history the moment both planes ran. Verified empirically: an
+# append through the symlink lands in the global file, leaves the link intact, and a second
+# acquirer of the same lock directory gets EEXIST.
+#
+# What is NOT claimed: history is append-and-lock, so it is safe; projects/ transcripts are
+# per-session files under distinct session IDs, so two planes do not contend for one file.
+# This is not a claim that every future store Claude Code adds under these names is
+# concurrency-safe -- a new store lands OUTSIDE the allowlist and stays unshared by default.
+#
+# FAIL-SOFT BY DESIGN. Inheritance is a convenience, never a gate. Any entry that cannot be
+# linked is skipped with a named reason and the launch continues against a private copy: an
+# unwritable link, a global entry that is itself a symlink, or -- the case that actually
+# occurs -- an isolated entry that already holds REAL data. This launcher never deletes or
+# overwrites existing plane data to make room for a link (the ocx plane already held 102MB of
+# projects/ on this host), so a pre-existing real entry keeps its data and simply stays
+# private. Only a link this function itself created is re-pointed.
+link_shared_session_state() {
+  local isolated="$1" global="$2" entry source target
+  [ -d "$global" ] || return 0
+  for entry in $CLAUDE_SHARED_SESSION_ENTRIES; do
+    source="$global/$entry"
+    target="$isolated/$entry"
+    # Only share what the global install actually has. A missing entry is not created: an
+    # empty file or dir invented here would be indistinguishable from real emptiness.
+    [ -e "$source" ] || continue
+    # A global entry that is itself a link is not followed. It could point anywhere, including
+    # at a credential store, and this function must not launder that indirection.
+    [ -L "$source" ] && { printf '  session   : %s not shared (global entry is a link)\n' "$entry"; continue; }
+    if [ -L "$target" ]; then
+      # Already ours. Re-point it, so an edited allowlist or a moved HOME takes effect.
+      [ "$(readlink "$target" 2>/dev/null || true)" = "$source" ] && continue
+      ln -sfn "$source" "$target" 2>/dev/null \
+        || printf '  session   : %s not shared (could not update link)\n' "$entry"
+      continue
+    fi
+    if [ -e "$target" ]; then
+      printf '  session   : %s not shared (isolated copy already has its own data)\n' "$entry"
+      continue
+    fi
+    ln -s "$source" "$target" 2>/dev/null \
+      || printf '  session   : %s not shared (could not create link)\n' "$entry"
+  done
+}
+
+# True when a JSON blob carries anything credential-shaped. Applied to the CONSTRUCTED
+# settings document as a post-condition, so the allowlist is proven to have held rather than
+# trusted to have held. Matching is on KEY NAMES and never prints a value.
+#
+# Deliberately broad: any `env` block at all, plus any key containing token/key/secret/
+# password/credential/auth, plus any AWS_*. `apiKeyHelper` and `awsAuthRefresh` are named
+# because they are settings.json keys that name a credential-producing command.
+settings_document_has_credential_shape() {
+  local document="$1"
+  printf '%s' "$document" | grep -qiE '"(env|apiKeyHelper|awsAuthRefresh|awsCredentialExport)"[[:space:]]*:' && return 0
+  printf '%s' "$document" | grep -qiE '"[A-Za-z0-9_.-]*(token|secret|password|credential|bearer|apikey|api_key)[A-Za-z0-9_.-]*"[[:space:]]*:' && return 0
+  printf '%s' "$document" | grep -qE '"(AWS|ANTHROPIC)_[A-Za-z0-9_]*"[[:space:]]*:' && return 0
+  printf '%s' "$document" | grep -qiE '"[A-Za-z0-9_.-]*_key"[[:space:]]*:' && return 0
+  return 1
+}
+
+# Build the isolated settings.json from the allowlist and write it.
+#
+# Requires python3 for a real JSON parse. A regex lift of a nested stanza out of a 60-key
+# document would be a guess, and a wrong guess here writes the wrong keys into a file that is
+# supposed to be the credential boundary. No python3 means no inheritance, not a partial one.
+#
+# The child's OWN keys are preserved: Claude Code writes theme and model into this file itself
+# (verified: the ocx plane's settings.json holds {"theme","model"} it chose), so a blind
+# overwrite would discard in-plane choices every launch. Inherited keys are merged OVER the
+# existing document, and any key the launcher previously inherited but the global no longer
+# declares is dropped, so removing a global statusLine removes it from the plane too.
+write_inherited_settings() {
+  local isolated="$1" global_settings="$2" document status=0
+  command -v python3 >/dev/null 2>&1 || {
+    printf '  settings  : not constructed (python3 unavailable; no statusline inherited)\n'
+    return 0
+  }
+  document="$(CLAUDE_ISOLATED_DIR="$isolated" CLAUDE_GLOBAL_SETTINGS="$global_settings" \
+    CLAUDE_INHERITED_KEYS="$CLAUDE_INHERITED_SETTINGS_KEYS" python3 -c '
+import json, os, sys
+
+isolated = os.path.join(os.environ["CLAUDE_ISOLATED_DIR"], "settings.json")
+allowed = os.environ["CLAUDE_INHERITED_KEYS"].split()
+marker = "_agenticSdlcInherited"
+
+
+def load(path, *, reject_link):
+    # A settings file that is a link is not read. On the global side it could point at
+    # anything; on the isolated side a link is not a document this plane owns.
+    if reject_link and os.path.islink(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+source = load(os.environ["CLAUDE_GLOBAL_SETTINGS"], reject_link=True) or {}
+target = load(isolated, reject_link=True) or {}
+
+# Drop what a previous run inherited, so a key removed globally is removed here. Recorded as
+# a list of names only -- never the values, which would re-persist an inherited value even
+# after the global file stopped declaring it.
+for name in target.pop(marker, []) if isinstance(target.get(marker), list) else []:
+    if name in allowed:
+        target.pop(name, None)
+
+inherited = []
+for key in allowed:
+    value = source.get(key)
+    if value is None:
+        continue
+    # statusLine is only meaningful as an object. Anything else is malformed upstream and is
+    # skipped rather than propagated into a document this launcher vouches for.
+    if key == "statusLine" and not isinstance(value, dict):
+        continue
+    target[key] = value
+    inherited.append(key)
+
+if inherited:
+    target[marker] = inherited
+json.dump(target, sys.stdout, indent=2, sort_keys=True)
+' 2>/dev/null)" || status=$?
+
+  if [ "$status" -ne 0 ] || [ -z "$document" ]; then
+    printf '  settings  : not constructed (global settings unreadable or unparseable)\n'
+    return 0
+  fi
+  # POST-CONDITION, checked before the write and never after. If the constructed document is
+  # credential-shaped at all, nothing is written: an unwritten settings.json costs a statusline,
+  # while a written one that smuggled a credential is the failure this whole file exists to
+  # prevent. Refusing here rather than in the allowlist means a future allowlist edit that
+  # admitted `env` would fail loudly instead of silently shipping the token.
+  if settings_document_has_credential_shape "$document"; then
+    printf '  settings  : REFUSED to write -- the constructed document is credential-shaped\n' >&2
+    printf '              (nothing was written; the launch continues without an inherited statusline)\n' >&2
+    return 0
+  fi
+  local settings_path="$isolated/settings.json"
+  [ -L "$settings_path" ] && {
+    printf '  settings  : not constructed (isolated settings.json is a link)\n'
+    return 0
+  }
+  local temporary
+  temporary="$(mktemp "$isolated/.settings.json.XXXXXX")" || {
+    printf '  settings  : not constructed (could not create a temporary file)\n'
+    return 0
+  }
+  printf '%s\n' "$document" > "$temporary" \
+    && chmod 600 "$temporary" 2>/dev/null \
+    && mv -f "$temporary" "$settings_path" 2>/dev/null \
+    || { rm -f "$temporary"; printf '  settings  : not constructed (write failed)\n'; return 0; }
+  if printf '%s' "$document" | grep -q '"statusLine"'; then
+    printf '  settings  : constructed; statusLine inherited from the global install\n'
+  else
+    printf '  settings  : constructed; the global install declares no statusLine (none inherited)\n'
+  fi
+}
+
+# One call for a launcher to make. The global config dir is derived from HOME rather than from
+# CLAUDE_CONFIG_DIR, which by this point already names the ISOLATED dir.
+inherit_session_state() {
+  local isolated="$1" global="${2:-$HOME/.claude}"
+  link_shared_session_state "$isolated" "$global"
+  write_inherited_settings "$isolated" "$global/settings.json"
+}
+
+# --- environment-variable policy -----------------------------------------------------------
+#
+# The settings.json allowlist above is only half the boundary. Claude Code's precedence is
+# CLI flags > SHELL ENVIRONMENT > settings.json env > dedicated settings keys > defaults
+# (code.claude.com/docs/en/settings.md), so a variable kept out of the constructed document
+# can still arrive from the parent process environment. Both paths must be closed.
+#
+# THE DEFECT THIS REPLACES, found by running the launcher under a planted parent environment:
+# the old scrub matched `^(ANTHROPIC|CLAUDE)` only, so `AWS_BEARER_TOKEN_BEDROCK=<value>`
+# exported in the operator's shell reached the child intact — a live Bedrock credential in the
+# gateway plane, which is exactly what ADR-0003 and ADR-0010 forbid. The same prefix rule was
+# simultaneously too COARSE at the other end: it deleted `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`
+# and would delete `DISABLE_*`-style preferences if they were prefixed, discarding the
+# operator's deliberate privacy and behavior choices.
+#
+# THE DESIGN TENSION, and how it is resolved. A prefix rule broad enough to catch every model
+# pin (`ANTHROPIC_DEFAULT_*_MODEL`, `*_NAME`, `*_DESCRIPTION`, `*_SUPPORTED_CAPABILITIES`,
+# `ANTHROPIC_CUSTOM_MODEL_OPTION*` — about twenty names) would also swallow inert `CLAUDE_*`
+# preferences. The two namespaces are resolved by OPPOSITE rules, because their contents differ:
+#
+#   ANTHROPIC_* and AWS_*  -> DENY BY PREFIX, no exceptions. Every documented variable in these
+#                             namespaces is a credential, a destination, a workspace/project
+#                             identifier, or a model pin. None is an inert preference, so a
+#                             prefix rule loses nothing and a new upstream name is denied by
+#                             default rather than by having been predicted.
+#   CLAUDE_*               -> DENY BY DEFAULT, ALLOW BY NAME. This namespace genuinely mixes
+#                             routing/auth flags (CLAUDE_CODE_USE_BEDROCK, the client-cert
+#                             trio) with inert preferences (accessibility, compaction, bash
+#                             limits). Only an enumeration is honest here, so an unrecognized
+#                             new CLAUDE_* variable is dropped rather than guessed at.
+#   unprefixed             -> DENY BY NAME. `DISABLE_*`/`DO_NOT_TRACK`/`BASH_*` are already
+#                             untouched by any scrub and stay that way; only the named hazards
+#                             below are removed.
+#
+# Doc references for the classification:
+#   code.claude.com/docs/en/env-vars.md       (the variable inventory and set-to-activate rule)
+#   code.claude.com/docs/en/settings.md      (precedence, and the env block read once at startup)
+#   code.claude.com/docs/en/network-config.md (proxy and client-certificate variables)
+
+# Inert CLAUDE_* preferences preserved across the scrub. Each is the operator's deliberate
+# choice and dropping it is a silent regression, most sharply for the privacy flags: Claude Code
+# treats these as SET-TO-ACTIVATE (any non-empty value enables, unset/empty disables), so
+# turning a set DISABLE_TELEMETRY into an unset one RE-ENABLES telemetry in the launched plane.
+# That is a privacy regression the operator never asked for, which is why preservation is
+# implemented as capture-then-restore rather than left to chance.
+#
+# Deliberately NOT here: CLAUDE_CODE_REMOTE, CLAUDE_CODE_ACCOUNT_UUID, and
+# CLAUDE_CODE_MESSAGING_SOCKET are owned by Claude Code and always ignored from an env block,
+# so forwarding them would be theater. CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY and
+# CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST are omitted because `ocx claude` sets both itself with
+# "user wins" semantics; inheriting a stale value would override the gateway's own choice.
+CLAUDE_INHERITED_ENV_VARS="
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+CLAUDE_CODE_AUTO_COMPACT_WINDOW
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+CLAUDE_CODE_DISABLE_1M_CONTEXT
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+CLAUDE_CODE_BASH_MAINTAIN_PROJECT_WORKING_DIR
+CLAUDE_CODE_AUTO_BACKGROUND_TASKS
+CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS
+CLAUDE_CODE_ACCESSIBILITY
+CLAUDE_CODE_AX_SCREEN_READER
+CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT
+CLAUDE_CODE_TMUX_TRUECOLOR
+CLAUDE_CODE_ARTIFACT_AUTO_OPEN
+CLAUDE_CODE_ALWAYS_ENABLE_EFFORT
+CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD
+"
+
+# Unprefixed hazards removed by name. Neither is a credential in the ordinary sense, and both
+# are worse than one in effect:
+#   NODE_TLS_REJECT_UNAUTHORIZED      disables TLS verification process-wide.
+#   FALLBACK_FOR_ALL_PRIMARY_MODELS   forces silent model substitution. In a plane whose catalog
+#                                     is restricted, a substitution is precisely the
+#                                     unattributable-response failure the gateway canary's C1
+#                                     finding is about, so it must never be inherited.
+# API_TIMEOUT_MS and the stream-watchdog family are deliberately NOT inherited either: they are
+# inert, but a timeout tuned for a direct Anthropic endpoint is the wrong number for a loopback
+# gateway, and a wrong timeout reads as a hung model rather than as a misconfiguration.
+CLAUDE_DENIED_ENV_VARS="
+NODE_TLS_REJECT_UNAUTHORIZED
+FALLBACK_FOR_ALL_PRIMARY_MODELS
+API_TIMEOUT_MS
+"
+
+# Replaces a bare `^(ANTHROPIC|CLAUDE)` prefix scrub. Capture-then-restore, because the inert
+# CLAUDE_* preferences have to survive a scrub that must otherwise be broad.
+#
+# Callers must invoke this INSTEAD of their own scrub, and only after the subscription refusal
+# has already fired: this function's job is to sanitize, never to decide admissibility.
+scrub_and_restore_claude_env() {
+  # The policy lists are copied to locals FIRST. They are themselves named CLAUDE_*, so the
+  # prefix scrub below would unset the very lists it is iterating — which under `set -u` aborted
+  # the launch with `CLAUDE_DENIED_ENV_VARS: unbound variable` (caught by running the launcher,
+  # not by reading it). Locals are immune to the scrub and to a caller's exported name.
+  local name value preserved="" entry
+  local allowed="$CLAUDE_INHERITED_ENV_VARS"
+  local denied="$CLAUDE_DENIED_ENV_VARS"
+  # Capture the allowlisted values first; the scrub below cannot distinguish them.
+  for name in $allowed; do
+    value="${!name:-}"
+    [ -n "$value" ] || continue
+    preserved="$preserved$name=$value"$'\n'
+  done
+  # ANTHROPIC_*, CLAUDE_*, and AWS_* all go. AWS_* is the half the previous rule missed, and it
+  # is the half that carried the live Bedrock bearer token.
+  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true); do
+    unset "$name" || true
+  done
+  for name in $denied; do
+    unset "$name" || true
+  done
+  # Restore the operator's inert preferences. Exported, not merely set, so the child receives
+  # them; a preference the parent did not set stays unset rather than becoming an empty string,
+  # which under set-to-activate semantics would be indistinguishable from disabled anyway.
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    name="${entry%%=*}"
+    export "$name=${entry#*=}"
+  done <<<"$preserved"
+}
+
+# Report the policy without applying it, for a launcher's status route. Prints the CLASS of each
+# variable actually present in this environment, never a value.
+report_env_policy() {
+  local name shown=0
+  local allowed="$CLAUDE_INHERITED_ENV_VARS" denied="$CLAUDE_DENIED_ENV_VARS"
+  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true) $denied; do
+    # This helper's own configuration is CLAUDE_*-named, so it shows up in the prefix sweep of
+    # the very process doing the sweeping. It is launcher state, not operator environment, and
+    # reporting it as "a denied variable you set" would be a false statement about the shell.
+    case "$name" in CLAUDE_INHERITED_ENV_VARS|CLAUDE_DENIED_ENV_VARS|CLAUDE_INHERITED_SETTINGS_KEYS|CLAUDE_SHARED_SESSION_ENTRIES) continue ;; esac
+    [ -n "${!name:-}" ] || continue
+    shown=1
+    case "$name" in
+      AWS_*|*_TOKEN|*_API_KEY|*_KEY|*_SECRET|*CLIENT_CERT*|*PASSPHRASE*)
+        printf '  %-46s DENIED (credential class; value never printed)\n' "$name" ;;
+      ANTHROPIC_*BASE_URL|ANTHROPIC_*RESOURCE|CLAUDE_CODE_USE_*)
+        printf '  %-46s DENIED (provider routing; the launcher sets its own destination)\n' "$name" ;;
+      ANTHROPIC_*MODEL*|ANTHROPIC_CUSTOM_MODEL_OPTION*|FALLBACK_FOR_ALL_PRIMARY_MODELS)
+        printf '  %-46s DENIED (model pin or forced fallback; this plane serves its own catalog)\n' "$name" ;;
+      NODE_TLS_REJECT_UNAUTHORIZED)
+        printf '  %-46s DENIED (TLS verification downgrade)\n' "$name" ;;
+      API_TIMEOUT_MS)
+        printf '  %-46s DENIED (tuned for a direct endpoint, wrong for a loopback gateway)\n' "$name" ;;
+      *)
+        if printf '%s' "$allowed" | grep -qxF "$name"; then
+          printf '  %-46s INHERITED (inert preference)\n' "$name"
+        else
+          printf '  %-46s DENIED (unrecognized in the CLAUDE_* namespace)\n' "$name"
+        fi
+        ;;
+    esac
+  done
+  [ "$shown" -eq 1 ] || printf '  (no ANTHROPIC_*/CLAUDE_*/AWS_* variable is set in this environment)\n'
+}

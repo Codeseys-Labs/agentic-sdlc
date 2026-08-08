@@ -353,6 +353,59 @@ appends only `/responses`, so the provider's `baseUrl` there must **keep** the
   a pre-existing `pipefail` bug that aborted the whole `status` report whenever the
   gateway was down.
 
+## Amendment — 2026-08-07: the standalone direct route is retired as a COMMAND SURFACE; Muse Spark ships as a gateway provider only
+
+**Operator decision, stated explicitly:** "because muse is also a provider it shouldn't have a
+separate command entry it should just show up as options available through ccodex command in
+configuration or even claude-code model selection usage."
+
+This amends Decision item 3 and narrows item 2. **Nothing in the qualification evidence changes**,
+and neither does the tier verdict: Muse Spark remains route-probed and tier-UNPROVEN. What changes
+is the shipped shape.
+
+**The enabling fact, verified against the running gateway on 2026-08-07.** `GET /v1/models` on the
+live proxy returns **one flat catalog of ten ids** — `gpt-5.6-sol`, `gpt-5.6-terra`,
+`gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`,
+`muse/muse-spark-1.1`, `muse/muse-spark-1.2`, `muse/muse-spark-1.2-contributor`. Muse models are
+ordinary namespaced entries in the same catalog as the gpt ones. A session launched through the
+gateway therefore selects a muse model exactly as it selects a gpt one, per request or through the
+`/model` picker, with no muse-specific launcher, task, or code path.
+
+**What was verified versus inferred.** Verified: the ten-entry catalog above, read directly from
+the running gateway; that `ocx claude` sets `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` with
+"user wins" semantics, read from the installed package's `src/cli/claude.ts` (line 143); and that
+`ocx models list` reports the **configured** models rather than the live catalog, which is why the
+dispatcher's `models` route reads `/v1/models` instead. Inferred, not verified: that Claude Code's
+`/model` picker renders those ten entries in a real session — asserting that would require
+launching a live session against the gateway, which was out of scope. The catalog the launched
+process would read is confirmed; its rendering is not.
+
+**Decision.**
+
+1. **Muse Spark is a provider, not a plane.** The `muse:launch`/`muse:status`/`muse:probe` tasks
+   are removed. There is one plane (the gateway) with N providers and M models, reached by one
+   dispatcher, rather than one dispatcher per provider. Muse is a row in a provider list.
+
+2. **The standalone direct route is retired as a command surface and preserved as PROSE.** The
+   gateway-free recipe still works and still needs no running process, no port, and no sync step,
+   so it is kept as a documented fallback recipe in the qualification memo rather than as a
+   shipped command. Item 3's *technical* claims stand; only its "and `scripts/muse-claude.sh` is
+   kept" clause is retired.
+
+3. **The credential and boundary logic is harvested, not lost.** The retired launcher's
+   in-repository credential-path refusal moved into `scripts/opencodex-claude.sh`'s configure
+   route, where it now covers any path argument rather than only that launcher's key file. The
+   ADR-0003 subscription refusal, the environment scrub, and the catalog-membership admission
+   check already existed on the gateway path or were strengthened there.
+
+4. **Adding a provider stays the documented, unspecial-cased path.** `ccodex configure provider
+   add muse ...` flows through the existing reviewed allowlist and the `NOT LIVE YET` sequencing
+   guard from item 4 above, with muse as the worked example. Nothing about muse is hardcoded.
+
+**Consequence.** A reader who cites item 3 as authority for a shipped muse launcher is citing a
+retired clause. The evidence in §1–§7 remains the dated record of what the direct route *does*;
+it is no longer a record of what this bundle *ships*.
+
 ## Reversal condition
 
 Reopened by either direction of measured change, and the two routes have different

@@ -24,10 +24,35 @@ class OpenCodexClaudeTests(unittest.TestCase):
         ocx_exit: int = 0,
         provider_list_json: object | None = None,
         catalog_json: object | None = None,
+        global_settings: object | None = None,
+        global_session_entries: bool = False,
+        preset_isolated_settings: object | None = None,
+        preset_isolated_projects: bool = False,
+        parent_env: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
+        # A fake global ~/.claude, so selective session inheritance (ADR-0010) can be exercised
+        # without ever reading or touching the real operator's config dir.
+        self.home = root / "home"
+        self.global_claude = self.home / ".claude"
+        self.isolated = root / "state" / "agentic-sdlc" / "ocx-claude"
+        if global_settings is not None:
+            self.global_claude.mkdir(parents=True, exist_ok=True)
+            (self.global_claude / "settings.json").write_text(json.dumps(global_settings))
+        if global_session_entries:
+            self.global_claude.mkdir(parents=True, exist_ok=True)
+            (self.global_claude / "history.jsonl").write_text('{"display":"real prompt"}\n')
+            (self.global_claude / "projects" / "demo").mkdir(parents=True, exist_ok=True)
+            (self.global_claude / "projects" / "demo" / "session.jsonl").write_text("{}\n")
+            (self.global_claude / "shell-snapshots").mkdir(exist_ok=True)
+        if preset_isolated_settings is not None:
+            self.isolated.mkdir(parents=True, exist_ok=True)
+            (self.isolated / "settings.json").write_text(json.dumps(preset_isolated_settings))
+        if preset_isolated_projects:
+            (self.isolated / "projects" / "local").mkdir(parents=True, exist_ok=True)
+            (self.isolated / "projects" / "local" / "session.jsonl").write_text("plane-local\n")
         bin_dir = root / "bin"
         bin_dir.mkdir()
         log = root / "calls.log"
@@ -53,6 +78,9 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "esac\n"
             "printf '<%s>' \"$@\" >> \"$CALL_LOG\"\n"
             "printf '\\n' >> \"$CALL_LOG\"\n"
+            # Forward the launch route to the stub `claude` so the child environment is
+            # observable. Recording argv alone could not prove what the child received.
+            "if [ \"${1:-} ${2:-}\" = 'ocx claude' ]; then shift 2; exec claude \"$@\"; fi\n"
             "exit ${OCX_EXIT:-0}\n"
         )
         mise.chmod(0o755)
@@ -75,8 +103,19 @@ class OpenCodexClaudeTests(unittest.TestCase):
         if jq:
             (bin_dir / "jq").symlink_to(jq)
         claude = bin_dir / "claude"
-        claude.write_text("#!/bin/sh\nexit 0\n")
+        # Records the environment it actually received, so the ADR-0010 env policy can be
+        # asserted per class against the REAL child environment rather than against the script's
+        # source. The log variable is deliberately not named CLAUDE_*/ANTHROPIC_*/AWS_*: the
+        # scrub would take a stub's own log path with it.
+        claude.write_text(
+            "#!/bin/sh\n"
+            'if [ -n "${OCX_TEST_ENV_LOG:-}" ]; then env | sort > "$OCX_TEST_ENV_LOG"; fi\n'
+            "exit 0\n"
+        )
         claude.chmod(0o755)
+        # `ocx claude ...` must reach the stub `claude` for the env log to exist, so the mise stub
+        # forwards that one route instead of only recording it.
+        self.env_log = root / "child-env.txt"
         env = {
             "HOME": str(root / "home"),
             "XDG_STATE_HOME": str(root / "state"),
@@ -89,7 +128,13 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 provider_list_json if provider_list_json is not None else {"configured": []}
             ),
             "CATALOG_JSON": "" if catalog_json is None else json.dumps(catalog_json),
+            "OCX_TEST_ENV_LOG": str(self.env_log),
         }
+        if parent_env:
+            env.update(parent_env)
+        # Kept so a test can launch a SECOND time against the same home and state root, which
+        # is how "a stanza removed globally is dropped from the plane" is exercised.
+        self.launch_env = env
         result = subprocess.run(
             [BASH, str(SCRIPT), *arguments],
             input=stdin,
@@ -416,6 +461,349 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("unknown", result.stdout)
         self.assertNotIn("NOT-LIVE", result.stdout)
+
+    # --- selective session inheritance (ADR-0010) ---------------------------------------
+    #
+    # The operator's requirement is asymmetric: inert session DATA and the statusLine stanza
+    # cross the plane boundary, credentials never do. These tests assert both halves, and the
+    # credential half is asserted POSITIVELY -- a credential is planted in a fake global
+    # settings.json and the constructed isolated file is proven not to contain it.
+
+    # A global settings.json shaped like a real one: the statusLine to inherit, next to an
+    # `env` block carrying a live-shaped Bedrock bearer token plus routing and model pins.
+    CREDENTIAL_BEARING_GLOBAL_SETTINGS = {
+        "env": {
+            "AWS_BEARER_TOKEN_BEDROCK": "planted-bedrock-bearer-value",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_REGION": "us-west-2",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "planted-model-pin",
+        },
+        "statusLine": {"type": "command", "command": "/global/statusline-command.sh"},
+        "model": "planted-global-model",
+        "apiKeyHelper": "/global/print-my-key.sh",
+        "permissions": {"allow": ["Bash"]},
+    }
+
+    def test_statusline_is_inherited_into_a_constructed_settings_document(self) -> None:
+        result, _ = self.run_launcher(
+            "launch", global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((self.isolated / "settings.json").read_text())
+        self.assertEqual(
+            document["statusLine"],
+            {"type": "command", "command": "/global/statusline-command.sh"},
+        )
+        self.assertIn("statusLine", result.stdout)
+
+    def test_planted_credential_never_reaches_the_isolated_settings(self) -> None:
+        result, _ = self.run_launcher(
+            "launch", global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        raw = (self.isolated / "settings.json").read_text()
+        document = json.loads(raw)
+        # The credential VALUE is absent, and so is every credential-shaped carrier key.
+        self.assertNotIn("planted-bedrock-bearer-value", raw)
+        self.assertNotIn("AWS_BEARER_TOKEN_BEDROCK", raw)
+        self.assertNotIn("env", document)
+        self.assertNotIn("apiKeyHelper", document)
+        # Non-credential keys outside the allowlist are excluded too: this is an allowlist, so
+        # a global `model` or `permissions` does not silently become plane policy.
+        self.assertNotIn("permissions", document)
+        self.assertNotIn("planted-global-model", raw)
+        # Nor did it leak to the terminal.
+        self.assertNotIn("planted-bedrock-bearer-value", result.stdout + result.stderr)
+
+    def test_global_settings_file_is_never_copied_or_linked(self) -> None:
+        result, _ = self.run_launcher(
+            "launch", global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        isolated_settings = self.isolated / "settings.json"
+        self.assertFalse(isolated_settings.is_symlink())
+        self.assertNotEqual(
+            isolated_settings.read_bytes(),
+            (self.global_claude / "settings.json").read_bytes(),
+        )
+
+    def test_inert_session_entries_are_shared_by_symlink(self) -> None:
+        result, _ = self.run_launcher("launch", global_session_entries=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for entry in ("history.jsonl", "projects", "shell-snapshots"):
+            with self.subTest(entry=entry):
+                target = self.isolated / entry
+                self.assertTrue(target.is_symlink(), f"{entry} should be shared by symlink")
+                self.assertEqual(target.resolve(), (self.global_claude / entry).resolve())
+        # The operator's real history is visible through the link, which is the whole point.
+        self.assertIn("real prompt", (self.isolated / "history.jsonl").read_text())
+
+    def test_a_write_through_the_shared_link_lands_in_the_global_store(self) -> None:
+        # This is the "no divergence, no stale duplicate" property that made symlinks the
+        # choice over copies. Concurrency safety comes from Claude Code's own realpath'd
+        # history lock, which both planes therefore share; see ADR-0010.
+        result, _ = self.run_launcher("launch", global_session_entries=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        with (self.isolated / "history.jsonl").open("a") as handle:
+            handle.write('{"display":"written in the gateway plane"}\n')
+
+        self.assertIn(
+            "written in the gateway plane",
+            (self.global_claude / "history.jsonl").read_text(),
+        )
+        self.assertTrue((self.isolated / "history.jsonl").is_symlink())
+
+    def test_credential_stores_are_never_shared(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS,
+            global_session_entries=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for entry in (".credentials.json", "sessions", "session-env", "plugins", "agents"):
+            with self.subTest(entry=entry):
+                self.assertFalse((self.isolated / entry).is_symlink())
+
+    def test_missing_global_statusline_is_not_a_failure(self) -> None:
+        result, _ = self.run_launcher("launch", global_settings={"model": "only-a-model"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((self.isolated / "settings.json").read_text())
+        self.assertNotIn("statusLine", document)
+        self.assertIn("no statusLine", result.stdout)
+
+    def test_a_statusline_removed_globally_is_dropped_from_the_plane(self) -> None:
+        result, _ = self.run_launcher(
+            "launch", global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("statusLine", json.loads((self.isolated / "settings.json").read_text()))
+
+        # Second launch against the SAME state root, with the stanza gone from the global file.
+        (self.global_claude / "settings.json").write_text(json.dumps({"model": "m"}))
+        again = subprocess.run(
+            [BASH, str(SCRIPT), "launch"],
+            text=True, capture_output=True, check=False,
+            env={**self.launch_env},
+        )
+
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertNotIn("statusLine", json.loads((self.isolated / "settings.json").read_text()))
+
+    def test_settings_written_by_the_plane_itself_survive_inheritance(self) -> None:
+        # Claude Code writes theme/model into the isolated settings.json itself. Inheritance
+        # merges over that document rather than clobbering the plane's own choices.
+        self.isolated_preset = True
+        result, _ = self.run_launcher(
+            "launch",
+            global_settings=self.CREDENTIAL_BEARING_GLOBAL_SETTINGS,
+            preset_isolated_settings={"theme": "dark", "model": "plane-chosen-model"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((self.isolated / "settings.json").read_text())
+        self.assertEqual(document["theme"], "dark")
+        self.assertEqual(document["model"], "plane-chosen-model")
+        self.assertIn("statusLine", document)
+
+    # --- environment-variable policy (ADR-0010) -------------------------------------------
+    #
+    # Claude Code resolves shell environment ABOVE settings.json env, so the settings allowlist
+    # alone does not close the boundary. These assert the REAL child environment, per class.
+
+    def child_env(self) -> dict[str, str]:
+        recorded = self.env_log.read_text().splitlines()
+        return dict(line.split("=", 1) for line in recorded if "=" in line)
+
+    def test_credential_exported_in_the_parent_shell_never_reaches_the_child(self) -> None:
+        # The defect this replaces: the old scrub matched ^(ANTHROPIC|CLAUDE) only, so an
+        # AWS_* credential exported in the operator's shell reached the child intact.
+        result, _ = self.run_launcher(
+            "launch",
+            parent_env={
+                "AWS_BEARER_TOKEN_BEDROCK": "leak-canary-bedrock",
+                "AWS_REGION": "us-west-2",
+                "ANTHROPIC_API_KEY": "sk-ant-api-planted",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        child = self.child_env()
+        for name in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION", "ANTHROPIC_API_KEY"):
+            self.assertNotIn(name, child)
+        self.assertNotIn("leak-canary-bedrock", "\n".join(child.values()))
+        self.assertNotIn("leak-canary-bedrock", result.stdout + result.stderr)
+
+    def test_provider_routing_variables_never_reach_the_child(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            parent_env={
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "ANTHROPIC_BASE_URL": "https://planted.bedrock.example",
+                "ANTHROPIC_BEDROCK_BASE_URL": "https://planted.two.example",
+                "ANTHROPIC_VERTEX_PROJECT_ID": "planted-project",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        child = self.child_env()
+        for name in (
+            "CLAUDE_CODE_USE_BEDROCK",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_BEDROCK_BASE_URL",
+            "ANTHROPIC_VERTEX_PROJECT_ID",
+        ):
+            self.assertNotIn(name, child)
+        self.assertNotIn("planted.bedrock.example", "\n".join(child.values()))
+
+    def test_model_pins_and_forced_fallback_never_reach_the_child(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            parent_env={
+                "ANTHROPIC_MODEL": "planted-model",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "planted-opus",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES": "planted-caps",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION": "planted-custom",
+                "ANTHROPIC_SMALL_FAST_MODEL": "planted-small",
+                "FALLBACK_FOR_ALL_PRIMARY_MODELS": "planted-fallback",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        child = self.child_env()
+        for name in (
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES",
+            "ANTHROPIC_CUSTOM_MODEL_OPTION",
+            "ANTHROPIC_SMALL_FAST_MODEL",
+            "FALLBACK_FOR_ALL_PRIMARY_MODELS",
+        ):
+            self.assertNotIn(name, child)
+
+    def test_inert_preferences_are_inherited_including_the_privacy_flags(self) -> None:
+        # Set-to-activate semantics: dropping a SET DISABLE_TELEMETRY re-enables telemetry in the
+        # launched plane, which is a privacy regression the operator never asked for.
+        preferences = {
+            "DISABLE_TELEMETRY": "1",
+            "DISABLE_ERROR_REPORTING": "1",
+            "DO_NOT_TRACK": "1",
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+            "CLAUDE_CODE_ACCESSIBILITY": "1",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "5000",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }
+        result, _ = self.run_launcher("launch", parent_env=preferences)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        child = self.child_env()
+        for name, value in preferences.items():
+            with self.subTest(variable=name):
+                self.assertEqual(child.get(name), value)
+
+    def test_tls_downgrade_and_timeout_are_not_inherited(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            parent_env={"NODE_TLS_REJECT_UNAUTHORIZED": "0", "API_TIMEOUT_MS": "99"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        child = self.child_env()
+        self.assertNotIn("NODE_TLS_REJECT_UNAUTHORIZED", child)
+        self.assertNotIn("API_TIMEOUT_MS", child)
+
+    def test_unrecognized_claude_variable_is_dropped_rather_than_guessed_at(self) -> None:
+        result, _ = self.run_launcher(
+            "launch", parent_env={"CLAUDE_CODE_SOME_FUTURE_ROUTING_FLAG": "1"}
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("CLAUDE_CODE_SOME_FUTURE_ROUTING_FLAG", self.child_env())
+
+    def test_config_dir_is_still_exported_to_the_child(self) -> None:
+        # CLAUDE_CONFIG_DIR is CLAUDE_*-prefixed and is set by the launcher AFTER the scrub. If
+        # the scrub ordering regressed, the child would silently use the operator's real
+        # ~/.claude, which is the failure the whole split plane exists to prevent.
+        result, _ = self.run_launcher("launch")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.child_env().get("CLAUDE_CONFIG_DIR"), str(self.isolated))
+
+    def test_status_reports_the_policy_class_without_printing_values(self) -> None:
+        result, _ = self.run_launcher(
+            "status",
+            parent_env={
+                "AWS_BEARER_TOKEN_BEDROCK": "leak-canary-bedrock",
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "planted-opus",
+                "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+            },
+        )
+
+        self.assertIn("environment-variable policy", result.stdout)
+        self.assertIn("AWS_BEARER_TOKEN_BEDROCK", result.stdout)
+        self.assertIn("credential class", result.stdout)
+        self.assertIn("provider routing", result.stdout)
+        self.assertIn("model pin", result.stdout)
+        self.assertIn("INHERITED", result.stdout)
+        # The classification is printed; no value ever is.
+        self.assertNotIn("leak-canary-bedrock", result.stdout + result.stderr)
+        self.assertNotIn("planted-opus", result.stdout + result.stderr)
+        # The helper's own configuration is launcher state, not the operator's environment.
+        self.assertNotIn("CLAUDE_SHARED_SESSION_ENTRIES", result.stdout)
+        self.assertNotIn("CLAUDE_INHERITED_ENV_VARS", result.stdout)
+
+    def test_post_condition_blocks_a_credential_even_if_the_allowlist_is_widened(self) -> None:
+        # Defense in depth, and the reason the check is a post-condition on the CONSTRUCTED
+        # document rather than a property of the allowlist: if a future edit admitted `env`,
+        # the write must fail loudly instead of silently shipping the token.
+        helper = Path(__file__).parents[1] / "assets" / "claude" / "session-inheritance.sh"
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        global_claude = root / "home" / ".claude"
+        isolated = root / "iso"
+        global_claude.mkdir(parents=True)
+        isolated.mkdir()
+        (global_claude / "settings.json").write_text(
+            json.dumps({
+                "env": {"AWS_BEARER_TOKEN_BEDROCK": "widened-allowlist-secret"},
+                "statusLine": {"type": "command", "command": "/x.sh"},
+            })
+        )
+        script = (
+            f'. "{helper}"\n'
+            'CLAUDE_INHERITED_SETTINGS_KEYS="statusLine env"\n'
+            f'inherit_session_state "{isolated}" "{global_claude}"\n'
+        )
+        result = subprocess.run(
+            [BASH, "-c", script], text=True, capture_output=True, check=False
+        )
+
+        self.assertIn("REFUSED to write", result.stdout + result.stderr)
+        self.assertFalse((isolated / "settings.json").exists())
+        self.assertNotIn("widened-allowlist-secret", result.stdout + result.stderr)
+
+    def test_pre_existing_real_session_data_is_never_destroyed(self) -> None:
+        # The ocx plane already held 102MB of real projects/ on the operator's host. A launch
+        # must not delete or replace it to make room for a link.
+        result, _ = self.run_launcher(
+            "launch",
+            global_session_entries=True,
+            preset_isolated_projects=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        projects = self.isolated / "projects"
+        self.assertFalse(projects.is_symlink())
+        self.assertIn("plane-local", (projects / "local" / "session.jsonl").read_text())
+        self.assertIn("already has its own data", result.stdout)
 
 
 if __name__ == "__main__":

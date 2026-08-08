@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# ccodex — the Agentic SDLC operator dispatcher for the USE surface.
+#
+# Installed by scripts/install_operator_tools.py into an existing user-owned PATH directory.
+# @CANONICAL_ROOT@ is substituted at install time with the repository root this command was
+# installed from; @CANONICAL_LAUNCHER@ with the supervised opencodex launcher inside it.
+#
+# WHY ONE DISPATCHER RATHER THAN N COMMANDS (ADR-0010). There are 36 mise tasks and most are
+# repository maintenance -- test, validate, check, secrets, self-test, mermaid:*, hooks:install.
+# Those belong to someone working ON this repo, not to an operator USING what it installed, and
+# putting them on PATH would present a maintenance surface as a product surface. The USE surface
+# is small and stable, so it is reached through subcommands of one owned command: one file to own,
+# refresh, and uninstall, one place where a new verb appears, and no PATH namespace land-grab.
+# The alternative -- a dozen named commands -- loses on exactly that: every added verb becomes a
+# new PATH entry, a new ownership record, and a new collision risk against a name the operator
+# may already use.
+#
+# RUNTIME DEPENDENCIES, stated plainly because they are the operator's real question:
+#   * THE REPOSITORY CLONE IS REQUIRED. Every route below executes code inside @CANONICAL_ROOT@.
+#     This command is a thin, owned entry point, NOT a self-contained copy of the bundle, so if
+#     that directory is moved or deleted every route fails with the named error below rather than
+#     misbehaving. The root is resolved at run time (env override, then the installed default),
+#     not baked into an exec line, so a managed clone at a stable path can be pointed at without
+#     reinstalling this file.
+#   * mise is required for the `ocx` routes only. The pinned opencodex build is resolved through
+#     `mise exec`, and `ocx` is not on PATH by itself (verified: only mise's install dir has it).
+#   * uv is required for the python routes (libraries, bundle, statusline). It does NOT need mise:
+#     `uv run --python 3.12.11 --script ...` works from a bare PATH (verified).
+set -euo pipefail
+
+# Repository root. AGENTIC_SDLC_ROOT wins, so an operator or a managed-clone installer can move
+# the checkout without reinstalling this command; the install-time path is the fallback.
+#
+# The default is assigned on its own line rather than inside a `${VAR:-@SUBST@}` expansion: the
+# installer shell-quotes the substituted path so a root containing a space still parses, and
+# quotes inside a `:-` word would be taken literally.
+installed_root=@CANONICAL_ROOT@
+root="${AGENTIC_SDLC_ROOT:-$installed_root}"
+launcher="$root/scripts/opencodex-claude.sh"
+
+usage() {
+  cat <<EOF
+usage: ccodex <command> [args...]
+
+Gateway plane (the common case; \`ccodex ocx <verb>\` also works as the long form):
+  launch [claude args...]     Ensure the gateway is healthy, then launch a Claude Code session
+                              through it. Select any catalog model with --model, including a
+                              muse one: --model muse/muse-spark-1.2
+  ultracode [claude args...]  Same fail-closed launch path with session Ultracode.
+  status                      Gateway supervision, configured-vs-live providers, env policy.
+  restart                     Stop cleanly, then ensure the gateway is back up.
+
+Providers and models (what a launched session can actually pick):
+  providers                   Configured providers, and which are LIVE in the running gateway.
+  models                      The running gateway's flat live catalog. Muse models appear here
+                              as ordinary namespaced entries, not as a separate plane.
+  configure [args...]         Reviewed provider configuration. Adding a provider:
+                              ccodex configure provider add muse --adapter openai-responses \\
+                                --base-url https://api.meta.ai/v1 --default-model muse-spark-1.2
+
+Installed-bundle lifecycle:
+  bundle <install|status|uninstall>
+  libraries <list|status|install|migrate|uninstall> [args...]
+  statusline <status|activate|deactivate> [args...]
+
+  version                     Report this command's resolved repository root and dependencies.
+
+Maintenance tasks (test, validate, check, secrets, mermaid, hooks) are deliberately absent:
+they belong to working ON the repository, not to using what it installed. Run them with
+\`mise run <task>\` inside $root
+
+exit codes: 0 ok - 1 failure - 2 usage - 3 refused (a boundary declined the operation)
+EOF
+}
+
+# Every route runs code inside the clone, so its absence is reported once, by name, rather than
+# surfacing as an obscure "no such file" from whichever route was attempted.
+require_root() {
+  if [ ! -d "$root" ]; then
+    printf 'error: the agentic-sdlc repository root is missing: %s\n' "$root" >&2
+    printf 'This command is a thin entry point, not a self-contained copy of the bundle.\n' >&2
+    printf 'Point it at an existing checkout with AGENTIC_SDLC_ROOT=/path/to/agentic-sdlc,\n' >&2
+    printf 'or reinstall the operator tools from the checkout you want it to use.\n' >&2
+    exit 1
+  fi
+}
+
+require_launcher() {
+  require_root
+  [ -f "$launcher" ] || {
+    printf 'error: the supervised launcher is missing: %s\n' "$launcher" >&2
+    exit 1
+  }
+}
+
+require_tool() {
+  command -v "$1" >/dev/null 2>&1 || {
+    printf 'error: %s is required for `ccodex %s` and is not on PATH\n' "$1" "$2" >&2
+    [ "$1" = mise ] && printf 'The pinned opencodex build is resolved through mise; ocx is not on PATH by itself.\n' >&2
+    exit 1
+  }
+}
+
+# uv-backed python route. Never mise: these scripts declare their own interpreter and run from a
+# bare PATH, so requiring mise here would add a dependency the route does not have.
+run_python() {
+  local script="$1"
+  shift
+  require_root
+  require_tool uv "$route"
+  exec uv run --python 3.12.11 --script "$root/scripts/$script" "$@"
+}
+
+# ocx passthrough for the read-only provider/model views. These reuse opencodex's own verbs
+# rather than reimplementing a catalog reader: a second implementation would be a second thing
+# that can disagree with the gateway about what is served.
+run_ocx() {
+  require_root
+  require_tool mise "$route"
+  exec mise -C "$root" exec -- ocx "$@"
+}
+
+route="${1:-}"
+case "$route" in
+  launch|ultracode|status|restart|configure)
+    require_launcher
+    verb="$route"
+    [ "$verb" = ultracode ] && verb=launch-ultracode
+    shift
+    exec "$launcher" "$verb" "$@"
+    ;;
+  # Explicit long form. Kept alongside the shorthand above because `ccodex ocx launch` is what a
+  # reader guesses from `ccodex muse ...`-shaped documentation, and silently failing a reasonable
+  # guess is worse than accepting both spellings.
+  ocx)
+    require_launcher
+    shift
+    verb="${1:-}"
+    [ -n "$verb" ] || { printf 'error: ccodex ocx needs a verb (launch|ultracode|status|restart|configure)\n\n' >&2; usage >&2; exit 2; }
+    shift
+    case "$verb" in
+      launch|status|restart|configure) ;;
+      ultracode) verb=launch-ultracode ;;
+      launch-ultracode) ;;
+      *) printf 'error: unknown ccodex ocx verb: %s\n\n' "$verb" >&2; usage >&2; exit 2 ;;
+    esac
+    exec "$launcher" "$verb" "$@"
+    ;;
+  providers)
+    shift
+    run_ocx provider list "$@"
+    ;;
+  # The LIVE catalog, read from the running gateway's own `GET /v1/models` -- deliberately NOT
+  # `ocx models list`, which reports the CONFIGURED models from the config file. The two
+  # disagree, and the disagreement is the whole point: verified 2026-08-07, `ocx models list`
+  # showed one muse entry while the running gateway served ten ids (seven gpt plus three
+  # namespaced muse). Only the live catalog answers "what can a launched session pick", so a
+  # configured-only view here would be a confidently wrong answer to the operator's question.
+  models)
+    shift
+    require_root
+    require_tool mise models
+    port="$(mise -C "$root" exec -- ocx config get port 2>/dev/null | tr -d '[:space:]' | grep -E '^[0-9]+$' || true)"
+    if [ -z "$port" ] || ! command -v curl >/dev/null 2>&1; then
+      printf 'error: cannot read the live catalog (no configured port, or curl is unavailable)\n' >&2
+      printf 'Configured (NOT proof of what is served): ccodex providers\n' >&2
+      exit 1
+    fi
+    catalog="$(curl -fsS --max-time 6 "http://127.0.0.1:${port}/v1/models" 2>/dev/null || true)"
+    if [ -z "$catalog" ]; then
+      printf 'error: the gateway at 127.0.0.1:%s did not serve a catalog. It may be down.\n' "$port" >&2
+      printf 'Start it and re-check:  ccodex status\n' >&2
+      exit 1
+    fi
+    printf 'live catalog served by the gateway at 127.0.0.1:%s\n' "$port"
+    printf '(any id below can be selected with `ccodex launch --model <id>` or the /model picker)\n\n'
+    if command -v jq >/dev/null 2>&1; then
+      printf '%s' "$catalog" | jq -r '(.data // []) | .[] | select(.id != null) | "  " + .id'
+    else
+      printf '%s' "$catalog" | grep -o '"id":"[^"]*"' | sed 's/"id":"/  /;s/"$//'
+    fi
+    printf '\nA namespaced id (provider/model) is an ordinary catalog entry: a provider such as\n'
+    printf 'muse is one row in `ccodex providers`, never a separate plane or launcher.\n'
+    printf '\nThis is reachability, not authorization, and it is not a capability claim.\n'
+    ;;
+  bundle)
+    shift
+    verb="${1:-}"
+    case "$verb" in
+      install|status|uninstall) shift; run_python install_skill_bundle.py "$verb" "$@" ;;
+      *) printf 'error: ccodex bundle needs install|status|uninstall\n' >&2; exit 2 ;;
+    esac
+    ;;
+  libraries)
+    shift
+    verb="${1:-}"
+    case "$verb" in
+      list|status|install|migrate|uninstall) shift; run_python install_external_libraries.py "$verb" "$@" ;;
+      *) printf 'error: ccodex libraries needs list|status|install|migrate|uninstall\n' >&2; exit 2 ;;
+    esac
+    ;;
+  statusline)
+    shift
+    verb="${1:-}"
+    case "$verb" in
+      status|activate|deactivate) shift; run_python manage_claude_statusline.py "$verb" "$@" ;;
+      *) printf 'error: ccodex statusline needs status|activate|deactivate\n' >&2; exit 2 ;;
+    esac
+    ;;
+  version)
+    printf 'ccodex (agentic-sdlc operator dispatcher)\n'
+    printf '  repository root : %s%s\n' "$root" "$([ -d "$root" ] || printf ' (MISSING)')"
+    printf '  root source     : %s\n' "$([ -n "${AGENTIC_SDLC_ROOT:-}" ] && printf 'AGENTIC_SDLC_ROOT' || printf 'install-time default')"
+    printf '  mise (ocx routes)      : %s\n' "$(command -v mise 2>/dev/null || printf 'NOT on PATH')"
+    printf '  uv (python routes)     : %s\n' "$(command -v uv 2>/dev/null || printf 'NOT on PATH')"
+    printf '\nThe clone is required: this command executes code inside the root above.\n'
+    ;;
+  -h|--help|help) usage ;;
+  "") usage >&2; exit 2 ;;
+  *) printf 'error: unknown command %s\n\n' "$route" >&2; usage >&2; exit 2 ;;
+esac

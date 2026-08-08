@@ -22,7 +22,12 @@ from typing import Any, Iterator
 
 STATE_VERSION = 2
 LEGACY_STATE_VERSION = 1
-COMMANDS = ("agentic-sdlc-statusline", "ocx-launch", "ocx-ultracode")
+# `ccodex` is the dispatcher for the whole USE surface (ADR-0010). The two ocx-* commands are
+# retained as thin aliases for existing muscle memory: they cost one template line each and
+# removing them would break an operator's shell history for no gain. Maintenance tasks (test,
+# validate, check, secrets, mermaid, hooks) are deliberately NOT installed -- they belong to
+# working on the repository, not to using what it installed.
+COMMANDS = ("agentic-sdlc-statusline", "ccodex", "ocx-launch", "ocx-ultracode")
 
 
 class OperatorToolsError(RuntimeError):
@@ -99,16 +104,38 @@ def validate_bin_dir(config: Config) -> None:
             raise OperatorToolsError(f"operator-tools bin is not owned by the current user: {bin_dir}")
 
 
+def shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
 def desired_files(config: Config) -> dict[str, bytes]:
     statusline = config.repo_root / "assets" / "claude" / "statusline-command.sh"
     launcher = config.repo_root / "scripts" / "opencodex-claude.sh"
     templates = config.repo_root / "assets" / "launchers"
-    for path in (statusline, launcher, templates / "ocx-launch.in", templates / "ocx-ultracode.in"):
+    sources = (
+        statusline,
+        launcher,
+        templates / "ccodex.in",
+        templates / "ocx-launch.in",
+        templates / "ocx-ultracode.in",
+    )
+    for path in sources:
         if not path.is_file():
             raise OperatorToolsError(f"required operator-tools source is missing: {path}")
-    quoted_launcher = "'" + str(launcher).replace("'", "'\\''") + "'"
+    quoted_launcher = shell_quote(str(launcher))
+    # The dispatcher resolves its root at run time from AGENTIC_SDLC_ROOT, falling back to this
+    # install-time value, so a clone that later moves to a managed path can be pointed at with an
+    # environment variable instead of a reinstall. The path is shell-quoted because a repo root
+    # containing a space or a quote would otherwise produce a script that does not parse.
+    dispatcher = (
+        (templates / "ccodex.in")
+        .read_text(encoding="utf-8")
+        .replace("@CANONICAL_LAUNCHER@", quoted_launcher)
+        .replace("@CANONICAL_ROOT@", shell_quote(str(config.repo_root)))
+    )
     return {
         "agentic-sdlc-statusline": statusline.read_bytes(),
+        "ccodex": dispatcher.encode(),
         "ocx-launch": (templates / "ocx-launch.in").read_text(encoding="utf-8").replace("@CANONICAL_LAUNCHER@", quoted_launcher).encode(),
         "ocx-ultracode": (templates / "ocx-ultracode.in").read_text(encoding="utf-8").replace("@CANONICAL_LAUNCHER@", quoted_launcher).encode(),
     }
@@ -402,7 +429,16 @@ def _status(config: Config) -> tuple[int, list[str]]:
         path = config.bin_dir / name
         record = entries.get(str(path))
         if record is None:
-            partial = True; messages.append(f"unmanaged: {path}")
+            # `unmanaged` and `absent` are different facts and were previously reported with the
+            # same word. Unmanaged says "a file is there but this lifecycle does not own it",
+            # which sends an operator looking for a conflict to resolve; for a file that simply
+            # was never installed the honest report is `absent` plus the command that installs
+            # it. Both still exit 1, because neither is an installed owned tool.
+            partial = True
+            if path.exists() or path.is_symlink():
+                messages.append(f"unmanaged: {path}")
+            else:
+                messages.append(f"absent: {path} (not installed; run `mise run operator-tools:install`)")
         elif not live_matches(path, record):
             partial = True; messages.append(f"conflict: {path}")
         else:

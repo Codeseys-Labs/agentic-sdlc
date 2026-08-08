@@ -3,6 +3,14 @@
 Status: design reference, researched 2026-07-22 — **PARTIALLY SUPERSEDED** by
 `2026-08-05-gateway-selection-memo.md` (read it first).
 
+**Name-reuse note (2026-08-07).** The `ccodex` command name used by the design below now names
+this bundle's operator dispatcher for the opencodex gateway plane — see
+`docs/adr/0010-gateway-plane-inherits-inert-session-data-and-the-statusline-stanza.md`
+(Amendment C). **Only the name is reused. The subscription-passthrough premise described in this
+document was not adopted**; ADR-0003 declared it ToS-blocked, and the retired implementation's
+state and cache were removed before the name was claimed. Do not read the shipped `ccodex` as an
+implementation of anything below.
+
 What the newer memo supersedes here, and why:
 
 - **Gateway choice.** This document names CLIProxyAPI the preferred lightweight
