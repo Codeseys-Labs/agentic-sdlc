@@ -335,6 +335,43 @@ ocx() {
   mise -C "$root" exec -- ocx "$@"
 }
 
+# `jq` resolved the same way `ocx` is, and for the same reason.
+#
+# THE DEFECT THIS FIXES (2026-08-08, found by a fresh-host container install). Every caller here
+# used a bare `jq`, which is absent from the operator's PATH: this command is explicitly designed
+# to run WITHOUT mise on PATH, and `jq` arrives only through mise's pinned toolchain
+# (`mise.toml`, jq = 1.8.2). A missing `jq` made `configured_provider_class` return
+# "unclassifiable", which made every `configure` mutation refuse with
+# `anthropic-or-unclassifiable-provider` -- on a host where the provider was correctly configured
+# as non-Anthropic. The refusal named the wrong cause, so it sent the operator to inspect a
+# provider config that was already right.
+#
+# Every `configure` route already calls require_ocx, which requires mise, so the pinned `jq` is
+# reachable wherever classification runs. A bare `jq` is preferred when present, because an
+# operator who installed their own has a working tool and a mise round-trip per call is pure
+# latency; the pinned copy is the fallback rather than the first choice.
+jq() {
+  if [ -z "${resolved_jq:-}" ]; then
+    # `type -P` searches the PATH only. `command -v jq` would find THIS FUNCTION and recurse,
+    # because a function shadows the name it is probing -- the same shadowing class of bug that
+    # made a stale shell function hide the installed `ccodex`.
+    resolved_jq="$(type -P jq 2>/dev/null || true)"
+    [ -n "$resolved_jq" ] || resolved_jq="mise"
+  fi
+  if [ "$resolved_jq" = mise ]; then
+    mise -C "$root" exec -- jq "$@"
+  else
+    "$resolved_jq" "$@"
+  fi
+}
+
+# True when jq is usable at all, by either route. Callers use this instead of `command -v jq`,
+# which now always succeeds (the function above shadows it) and so no longer answers the
+# question. A host with neither a PATH jq nor a resolvable pinned one still degrades honestly.
+jq_available() {
+  jq --version >/dev/null 2>&1
+}
+
 require_ocx() {
   if ! command -v mise >/dev/null 2>&1; then
     printf 'error: mise is required to resolve the pinned opencodex build\n' >&2
@@ -432,7 +469,7 @@ gateway_half_up() {
 # unparseable payload yields "unknown", never "live" and never "NOT-LIVE".
 
 configured_provider_names() {
-  command -v jq >/dev/null 2>&1 || return 1
+  jq_available || return 1
   ocx provider list --json 2>/dev/null \
     | jq -r '(.configured // []) | .[] | select(.name != null) | .name' 2>/dev/null
 }
@@ -443,7 +480,7 @@ live_catalog_model_ids() {
   local port="$1"
   [ -n "$port" ] || return 1
   command -v curl >/dev/null 2>&1 || return 1
-  command -v jq >/dev/null 2>&1 || return 1
+  jq_available || return 1
   curl -fsS --max-time 5 "http://127.0.0.1:${port}/v1/models" 2>/dev/null \
     | jq -r '(.data // []) | .[] | select(.id != null) | .id' 2>/dev/null
 }
@@ -467,7 +504,7 @@ not_live_providers() {
   configured="$(configured_provider_names)" || return 1
   [ -n "$configured" ] || return 1
   live="$(live_provider_names "$port")" || return 1
-  default_name="$(command -v jq >/dev/null 2>&1 \
+  default_name="$(jq_available \
     && ocx provider list --json 2>/dev/null \
       | jq -r '(.configured // []) | map(select(.isDefault == true)) | (first | .name) // ""' 2>/dev/null || true)"
   while IFS= read -r name; do
@@ -969,10 +1006,15 @@ known_non_anthropic_provider() {
   esac
 }
 
+# Exit status: 0 anthropic · 1 other · 2 cannot-classify · 3 absent-from-config · 4 no-jq.
+# 4 is separated from 2 because the two demand different messages: 2 means the config could not
+# be read or parsed, which is genuinely about the provider; 4 means this HOST lacks a tool, which
+# is about the installation and is fixable. Collapsing them is what made a missing `jq` report
+# itself as an unclassifiable provider.
 configured_provider_class() {
   local provider="$1" config result
   config="$(ocx config show --json 2>/dev/null)" || return 2
-  command -v jq >/dev/null 2>&1 || return 2
+  jq_available || return 4
   result="$(jq -r --arg provider "$provider" '
     ($provider | ascii_downcase) as $wanted
     | (.providers // {} | to_entries | map(select((.key | ascii_downcase) == $wanted)) | first | .value) as $p
@@ -985,6 +1027,10 @@ configured_provider_class() {
   case "$result" in anthropic) return 0 ;; other) return 1 ;; absent) return 3 ;; *) return 2 ;; esac
 }
 
+# Still fail-closed on every genuinely-unclassifiable case. The one behavior change is that a
+# missing `jq` now REFUSES BY ITS OWN NAME (exit 4 -> refuse_missing_jq) instead of being reported
+# as an unclassifiable provider, which sent operators to inspect a provider config that was
+# already correct.
 provider_allowed_for_mutation() {
   local provider="$1" status
   anthropic_identifier "$provider" && return 1
@@ -993,8 +1039,29 @@ provider_allowed_for_mutation() {
     0|2) return 1 ;;
     1) return 0 ;;
     3) known_non_anthropic_provider "$provider" ;;
+    4) refuse_missing_jq ;;
     *) return 1 ;;
   esac
+}
+
+# A tool this host cannot resolve is not a policy refusal, so it does not borrow the
+# subscription-boundary notice. It names the tool, the reason it is normally present, and the fix.
+refuse_missing_jq() {
+  printf '\nREFUSED: cannot classify this provider because `jq` is unavailable on this host.\n\n' >&2
+  cat >&2 <<EOF
+This is a MISSING TOOL, not a rejected provider. Classification decides whether a configure
+mutation targets a non-Anthropic provider (admitted) or an Anthropic one (refused under
+ADR-0003), and it cannot be decided without reading the provider config.
+
+\`jq\` is pinned by this repository (mise.toml, jq = 1.8.2) and is normally resolved through it,
+so seeing this means neither a PATH \`jq\` nor the pinned copy could be reached. Fix either:
+
+  mise -C $root --locked install     # resolve the pinned toolchain
+  # or install jq through your own package manager
+
+Then re-run the same command. Nothing was changed.
+EOF
+  exit 3
 }
 
 refuse_configuration() {

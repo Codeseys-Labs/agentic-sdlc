@@ -76,6 +76,11 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "    fi\n"
             "    printf 'Configured providers:\\n\\nAvailable from registry\\n'; exit 0 ;;\n"
             "esac\n"
+            # Real mise resolves the pinned `jq` (mise.toml, jq = 1.8.2), so the stub must too.
+            # The launcher deliberately falls back to `mise exec -- jq` when jq is absent from
+            # PATH -- exactly the fresh-host case -- and a stub that could not serve it would
+            # make that supported path look broken.
+            "if [ \"${1:-}\" = jq ]; then shift; exec \"${TEST_REAL_JQ:-jq}\" \"$@\"; fi\n"
             "printf '<%s>' \"$@\" >> \"$CALL_LOG\"\n"
             "printf '\\n' >> \"$CALL_LOG\"\n"
             # Forward the launch route to the stub `claude` so the child environment is
@@ -129,6 +134,9 @@ class OpenCodexClaudeTests(unittest.TestCase):
             ),
             "CATALOG_JSON": "" if catalog_json is None else json.dumps(catalog_json),
             "OCX_TEST_ENV_LOG": str(self.env_log),
+            # Absolute path, so the mise stub can serve `mise exec -- jq` even from a PATH that
+            # deliberately has no jq on it.
+            "TEST_REAL_JQ": shutil.which("jq") or "jq",
         }
         if parent_env:
             env.update(parent_env)
@@ -973,6 +981,91 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("mise is required", result.stderr)
+
+    # --- jq is resolved, not assumed (the 2026-08-08 fresh-host defect) -------------------
+    #
+    # WHY NO EXISTING TEST CAUGHT THIS. The harness above symlinks the HOST's `jq` into the stub
+    # bin dir, so every other test in this file runs with `jq` on PATH. That made the suite agree
+    # with the developer's machine and disagree with a fresh install, where `jq` arrives only
+    # through mise's pinned toolchain and is absent from the operator PATH that `ccodex` is
+    # explicitly designed to use. These tests delete the stub `jq` to reproduce the real host.
+
+    def jq_free_environment(self) -> dict[str, str]:
+        """The stub environment with `jq` genuinely unreachable.
+
+        Deleting the stub symlink is NOT enough: the harness PATH ends in `/usr/bin:/bin`, which
+        supplies the developer's own `/usr/bin/jq`. A first attempt at these tests did exactly
+        that and passed against the UNFIXED launcher, which is the same
+        agree-with-this-machine failure the tests below exist to prevent. So the PATH is narrowed
+        to the stub dir alone, and the handful of binaries the script genuinely needs are linked
+        in from the real system by absolute path.
+        """
+        stub_bin = Path(self.launch_env["PATH"].split(":")[0])
+        stub_jq = stub_bin / "jq"
+        if stub_jq.exists() or stub_jq.is_symlink():
+            stub_jq.unlink()
+        for utility in (
+            "sed", "tr", "cut", "grep", "date", "du", "mv", "ln", "mkdir", "cat", "rm",
+            "dirname", "basename", "head", "tail", "sort", "wc", "readlink", "stat",
+            "chmod", "cp", "id", "pgrep", "sleep", "env", "uname", "awk", "find", "ls",
+        ):
+            resolved = shutil.which(utility)
+            target = stub_bin / utility
+            if resolved and not target.exists() and not target.is_symlink():
+                target.symlink_to(resolved)
+        return {**self.launch_env, "PATH": str(stub_bin)}
+
+    def test_a_configure_mutation_is_admitted_without_jq_on_path(self) -> None:
+        # The defect: `configure account add-key muse` was REFUSED with
+        # `anthropic-or-unclassifiable-provider` on a fresh host where muse was correctly
+        # configured as a non-Anthropic provider, because classification could not run without
+        # `jq`. A missing tool was reported as a rejected provider, sending the operator to
+        # inspect a config that was already right.
+        self.run_launcher(
+            "status",
+            config={"providers": {"muse": {"baseUrl": "https://api.meta.ai/v1"}}},
+        )
+        environment = self.jq_free_environment()
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "configure", "account", "add-key", "muse"],
+            text=True, capture_output=True, check=False, env=environment, input="",
+        )
+
+        self.assertNotIn("anthropic-or-unclassifiable-provider", result.stderr)
+        self.assertIn("approved opencodex configuration route", result.stdout)
+
+    def test_an_anthropic_provider_is_still_refused_without_jq(self) -> None:
+        # The fix must not become a bypass: with `jq` reachable through mise, an Anthropic
+        # provider is still classified and still refused under ADR-0003.
+        self.run_launcher(
+            "status",
+            config={"providers": {"sneaky": {"baseUrl": "https://api.anthropic.com"}}},
+        )
+        environment = self.jq_free_environment()
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "configure", "account", "add-key", "sneaky"],
+            text=True, capture_output=True, check=False, env=environment, input="",
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("REFUSED", result.stderr)
+        self.assertNotIn("approved opencodex configuration route", result.stdout)
+
+    def test_the_jq_resolver_does_not_recurse_into_itself(self) -> None:
+        # The resolver is a shell function NAMED `jq`, so probing with `command -v jq` would find
+        # the function and recurse until the shell died. `type -P` searches PATH only. This is the
+        # same shadowing class that let a stale `ccodex` shell function hide the installed binary.
+        self.run_launcher("status", config={"providers": {}})
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "status"],
+            text=True, capture_output=True, check=False, env=self.jq_free_environment(),
+        )
+
+        self.assertNotIn("too many levels", result.stderr.lower())
+        self.assertNotIn("recursion", result.stderr.lower())
+        self.assertLess(result.returncode, 126, result.stderr)
 
     def test_unknown_session_verb_and_flag_exit_usage(self) -> None:
         for arguments in (

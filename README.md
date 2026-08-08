@@ -424,6 +424,48 @@ belong to working *on* this repository rather than to using what it installed; r
 `mise run <task>` inside the checkout. One owned dispatcher rather than a dozen named commands
 means one ownership record, one place a new verb appears, and no PATH namespace land-grab.
 
+### Adding a provider that needs an API key
+
+`provider add` writes the provider's SHAPE only. **It accepts no key** — it has no `--api-key`
+flag and it does not read stdin, so a key piped to it is silently dropped and every later request
+fails with `401 invalid_api_key` while the routing itself looks correct in the attribution log.
+The key goes in through a different verb, and the gateway must already be running when it does.
+Verified end to end on a fresh host (2026-08-08):
+
+```bash
+# 1. the provider's shape. No key here.
+ccodex configure provider add muse --adapter openai-responses \
+  --base-url https://api.meta.ai/v1 --default-model muse-spark-1.2
+
+# 2. the gateway must be UP before a key can be stored.
+mise exec -- ocx ensure
+
+# 3. the key, read only from piped stdin -- never argv, which `ps` exposes host-wide.
+printf '%s' "$YOUR_KEY" | ccodex configure account add-key muse --label my-key
+
+# 4. a restart puts the key into the running routing table.
+ccodex restart
+
+# 5. confirm, then use it.
+ccodex providers                    # muse should be LIVE, not merely configured
+ccodex launch --model muse/muse-spark-1.2
+```
+
+After step 3 the provider carries `apiKey` and `apiKeyPool`; before it, only `adapter`, `baseUrl`,
+and `defaultModel`. Check with `ccodex providers` rather than trusting step 1's success message.
+
+Two upstream notes. `ocx sync` — which the post-mutation notice names — needs Codex installed and
+reports `Codex config not found` on a host without it; the gateway still starts and still routes,
+so the restart path above is sufficient. And `ocx ensure` may log
+`Provider model discovery ... failed with HTTP 401 [fallback=configured]` for a key-authenticated
+provider: that is ocx not sending the key on its discovery probe, it is harmless, and the
+configured model id is used instead.
+
+**Reasoning models need a real token budget.** `muse-spark-1.2` spent 163 of 176 completion tokens
+on reasoning for a two-word answer. A `max_tokens` that looks generous for the visible reply
+returns `content: null` with `finish_reason: "length"` — which reads exactly like a broken
+credential and is not. Size the budget for the reasoning trace.
+
 **The repository clone is required.** `ccodex` is a thin, owned entry point, not a self-contained
 copy of the bundle: every route executes code inside the checkout, so a moved or deleted clone
 makes each route fail with a named error rather than misbehave. The root is resolved at run time —
