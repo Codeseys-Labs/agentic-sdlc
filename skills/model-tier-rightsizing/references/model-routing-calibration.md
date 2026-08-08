@@ -216,6 +216,76 @@ operator-settable, while natively-pinned model windows are compiled into the gat
 not correctable from configuration. Record the operating number here regardless of which case
 applies, so the doctrine does not depend on which lever happened to be available.
 
+### The adopted session floor, and the rule that derives it
+
+The adopted session floor is **272000** tokens.
+
+**The derivation rule matters more than the number, because the number expires when the model
+set changes.** The floor is the *smallest real window among the models the operator actually
+selects*. It was derived for a selected set of the 5.6 family, Claude 5, and muse 1.2, whose
+smallest real window is the 5.6 family's provider-served 272000. Adding a smaller model to that
+set obliges lowering the floor: a reader who adds a 100000-token model must lower it, not
+inherit 272000. Re-derive on any change to the selected set.
+
+The lower number was chosen over the gateway's compiled 372000 deliberately. At 372000 the
+compaction net sits **behind** the model's real ceiling, so the failure mode becomes
+provider-side truncation instead of a clean local compaction. 272000 sits inside the real limit
+for both the 5.6 family and `gpt-5.5`, and because the client applies `min(believed window,
+env)`, a smaller model such as `gpt-5.3-codex-spark` stays accounted at its own 100000 rather
+than being pulled up to the floor.
+
+**This floor under-uses `gpt-5.4` and the muse models by design.** Both carry roughly 1M, so a
+272000 floor leaves most of their window unreachable. That is the accepted cost of one process-
+wide value serving a mixed set, not an oversight. The pressure valve is the deliberate
+single-model opt-in: a session that will genuinely stay on one large model may raise the value
+to that model's own window, accepting that mid-size models go unmarked for the duration. Raising
+it as a global default is the error the floor exists to prevent.
+
+The proactive-compaction percentage is deliberately **left unset**. It is one-directional —
+it can only compact earlier, and a value above the default is silently ignored — and the default
+percentage is undocumented, so any chosen value is either correct or a no-op with no way to tell
+which from documentation alone. Do not set it without measurement; the procedure that would
+settle it is recorded in the research memo cited below.
+
+### Output budget interacts with the window, and on a shared pool the trade is exact
+
+The client defaults its maximum output tokens to **32000 for model IDs it does not recognize**,
+which includes every gateway-served name here, and its own documentation states that raising
+that value **reduces the context available before auto-compaction triggers**. So output budget
+and input capacity are not independent settings even on a separate-reservation model.
+
+On a shared-pool model the trade is not approximate but arithmetic: input and output draw on one
+1048576-token budget, so a long conversation mechanically starves the output allowance. This is
+the measured cause of the first shared-pool probe returning empty output with an incomplete
+status — the budget was consumed by reasoning tokens before any visible text. For a
+shared-pool-heavy session, set the output ceiling explicitly rather than accepting the 32000
+default: high enough to clear the observed reasoning floor of roughly 600 tokens plus the task's
+expected output, and low enough that it does not eat the input capacity the task needs. Never
+raise it toward the window's size on a shared pool; that starves input directly.
+
+### Recording a window the gateway does not know
+
+Four served models have no gateway-computed window: `gpt-5.4-mini` and all three muse entries.
+For a routed provider the gateway is still the right home for the fact, through the provider's
+per-model window map. The recorded form for the muse provider is:
+
+```json
+"modelContextWindows": {
+  "muse-spark-1.2": 1048576,
+  "muse-spark-1.1": 1048576,
+  "muse-spark-1.2-contributor": 1048576
+}
+```
+
+Two conditions. The value must be the measured 1048576 and not a rounded 1000000, because the
+rounded figure is both wrong and changes whether the extended-context marking predicate fires.
+And because the pool is shared, recording the window without also setting the output ceiling
+reintroduces the starvation hazard above.
+
+This is a documented step, not an applied one: no such map is configured, so a reader must treat
+it as a deliberate action requiring the operator's own authorization rather than as current
+state.
+
 ### Requested context form is a request, never proof of the served window
 
 `requested_context_form` in a `RuntimeAssignment` is a **request**, exactly as

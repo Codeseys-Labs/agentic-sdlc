@@ -53,6 +53,22 @@ SHARED_POOL = ("muse-spark-1.2", "muse-spark-1.2-contributor")
 SMALLEST_GATEWAY_WINDOW = 100_000
 CLIENT_CLAMP_FLOOR = 100_000
 
+# The adopted session floor (ADR-0012 Decision item 2). The number is derived from the smallest
+# real window among the operator's SELECTED models, so it is pinned here together with that
+# smallest window: the floor may never exceed the window it claims to protect.
+ADOPTED_FLOOR = 272_000
+SMALLEST_SELECTED_REAL_WINDOW = 272_000
+
+# The gateway's compiled window for the 5.6 family, rejected as the floor because it sits above
+# the provider-served ceiling. Pinned so a future edit cannot quietly adopt it.
+REJECTED_FLOOR = 372_000
+
+# Deferred pending measurement (ADR-0012 Decision item 4).
+DEFERRED_KNOB = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
+
+# Default output ceiling for model IDs the client does not recognize (every gateway-served name).
+UNRECOGNIZED_OUTPUT_DEFAULT = 32_000
+
 
 def _table(text: str, heading: str) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
     """Parse the pipe table immediately below a heading.
@@ -182,6 +198,138 @@ class ContextWindowTableTests(unittest.TestCase):
                 text,
                 r"(?is)\bsmallest\b.{0,120}\bnever the largest\b",
                 f"{name} lost the smallest-not-largest floor rule",
+            )
+
+    def test_adopted_floor_never_exceeds_the_smallest_window_it_protects(self) -> None:
+        # The whole point of the floor is that the compaction net sits INSIDE the real ceiling.
+        # A floor above the smallest selected window puts it behind that ceiling, which converts
+        # a clean local compaction into provider-side truncation.
+        self.assertLessEqual(
+            ADOPTED_FLOOR,
+            SMALLEST_SELECTED_REAL_WINDOW,
+            "the floor must not exceed the smallest real window among the selected models",
+        )
+        self.assertLess(
+            ADOPTED_FLOOR,
+            REJECTED_FLOOR,
+            "the rejected gateway-compiled value must remain above the adopted floor",
+        )
+        self.assertIn(str(ADOPTED_FLOOR), self.calibration)
+        self.assertNotRegex(
+            self.calibration,
+            rf"(?is)adopted session floor is\D{{0,40}}{REJECTED_FLOOR}",
+            "the rejected value must never become the adopted floor",
+        )
+
+    def test_calibration_records_the_derivation_rule_not_only_the_number(self) -> None:
+        # The number expires when the selected model set changes; the rule is what survives.
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bsmallest real window\b.{0,120}\bmodels\b.{0,80}\b(?:actually\s+)?selects?\b",
+            "the derivation rule must be stated, or the number rots silently",
+        )
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bre-derive\b",
+            "a reader must be told to re-derive when the selected set changes",
+        )
+        # A reader who adds a smaller model must be told to LOWER the floor.
+        self.assertRegex(
+            self.calibration,
+            rf"(?is)\b{SMALLEST_GATEWAY_WINDOW}\b.{{0,120}}\blower\b|\blower\b.{{0,120}}\b{SMALLEST_GATEWAY_WINDOW}\b",
+            "the lower-it-if-you-add-a-smaller-model obligation must be explicit",
+        )
+
+    def test_under_use_of_the_large_models_is_documented_as_deliberate(self) -> None:
+        # Silence here would read as an oversight and invite someone to "fix" it by raising the
+        # floor globally, which is the exact error the floor prevents.
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bunder-uses?\b.{0,200}\bby design\b",
+            "the accepted cost must be labelled deliberate",
+        )
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bsingle-model\b.{0,160}\b(?:opt-in|raise)\b",
+            "the single-model opt-in is the pressure valve and must be named",
+        )
+
+    def test_deferred_percentage_override_stays_unset_until_measured(self) -> None:
+        # ADR-0012 Decision item 4: one-directional knob, undocumented default. Shipping a value
+        # on documentation alone is the failure this pins against.
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bleft \*\*unset\*\*|\bdeliberately \*\*?left unset",
+            "the calibration must record the knob as unset",
+        )
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bone-directional\b",
+            "the reason for deferral must travel with the deferral",
+        )
+        # No concrete percentage may be prescribed anywhere until it is measured.
+        for text, name in (
+            (self.calibration, "calibration"),
+            (ADR.read_text(encoding="utf-8"), "adr"),
+        ):
+            self.assertNotRegex(
+                text,
+                rf"(?is)\b{DEFERRED_KNOB}\s*[=:]\s*\d+",
+                f"{name} prescribes a percentage that has not been measured",
+            )
+        research = RESEARCH.read_text(encoding="utf-8")
+        # The research memo may name 70 only as the deferred proposal / A-B test value, and must
+        # carry the procedure that would settle it.
+        self.assertIn("claude_code.compaction", research)
+        self.assertIn("pre_tokens", research)
+        self.assertRegex(
+            research,
+            r"(?is)\bPreCompact\b",
+            "the measurement procedure must name the boundary-marking hook",
+        )
+        self.assertRegex(
+            research,
+            r"(?is)\bA/B\b|\bidentical run\b",
+            "the decisive confirmation is an A/B; it must be spelled out",
+        )
+
+    def test_shared_pool_output_budget_interaction_is_stated_where_routing_is_read(self) -> None:
+        self.assertIn(str(UNRECOGNIZED_OUTPUT_DEFAULT), self.calibration)
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\breduces the context available\b|\breduces the effective context\b",
+            "the output-vs-input coupling must be stated, not implied",
+        )
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bshared\b.{0,200}\barithmetic\b|\barithmetic\b.{0,200}\bshared\b",
+            "on a shared pool the trade is exact, not approximate",
+        )
+        # The recorded per-model map must use the measured value, never the rounded one.
+        self.assertIn('"muse-spark-1.2": 1048576', self.calibration)
+        self.assertRegex(
+            self.calibration,
+            r"(?is)\bnot a rounded 1000000\b",
+            "the rounded value changes the marking predicate and must be warned against",
+        )
+
+    def test_live_config_is_documented_as_untouched_rather_than_applied(self) -> None:
+        research = RESEARCH.read_text(encoding="utf-8")
+        self.assertRegex(
+            research,
+            r"(?is)\blive config\b.{0,120}\buntouched\b",
+            "a recipe must not read as a description of current state",
+        )
+        self.assertRegex(
+            research,
+            r"(?is)\babsent\b",
+            "the verification that the map is absent must be recorded",
+        )
+        for text, name in ((research, "research"), (ADR.read_text(encoding="utf-8"), "adr")):
+            self.assertRegex(
+                text,
+                r"(?is)\b(?:operator's own|operation-specific)\b.{0,60}\bauthoriz",
+                f"{name} must route the mutation through the operator's own authorization",
             )
 
     def test_calibration_keeps_context_as_request_never_proof_of_served_window(self) -> None:

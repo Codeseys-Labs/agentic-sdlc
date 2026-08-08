@@ -558,6 +558,15 @@ The design follows from one fact: Claude Code cannot hold a per-model number (§
 can (§3.1, §3.4). So **the gateway owns the per-model number and the session owns a
 conservative floor.**
 
+As adopted by the operator on 2026-08-07, the concrete settings are:
+
+| Setting | Value | Why |
+|---|---|---|
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | **272000** | smallest real window in the selected model set (§8.2) |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | **unset** — measure first | one-directional against an undocumented default; procedure in §8.2.1 |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | set explicitly for shared-pool sessions | defaults to 32000 on unrecognized IDs and trades against input (§8.2.2) |
+| provider `modelContextWindows` | recorded for the four unknown models | the gateway is the right home for the fact (§8.3) |
+
 ### 8.1 Layer ownership
 
 | Fact | Owning layer | Why |
@@ -573,33 +582,126 @@ A gateway setting applies to every client and survives a new terminal; an env va
 one process and is easy to forget. Env vars are reserved for the one thing the gateway
 genuinely cannot express — the single per-session floor.
 
-### 8.2 Conservative by default
+### 8.2 The adopted floor: `CLAUDE_CODE_AUTO_COMPACT_WINDOW=272000`
 
-The default must be safe for the smallest model reachable in a session, **never the largest**.
-Across the served catalog the smallest known window is `gpt-5.3-codex-spark` at 100,000,
-which is also `CLAUDE_CODE_AUTO_COMPACT_WINDOW`'s documented clamp floor — so it cannot be
-matched by that variable and `/compact` is its only recovery. Excluding it, the smallest is
-`gpt-5.5` at 272,000.
+**Operator decision, 2026-08-07.** The proposal on the table was 372,000 — ocx's compiled 5.6
+number. The finding in §5.1 decided against it: 372,000 sits roughly 100,000 tokens *above*
+what the provider's current subscription catalog serves for that family, so at 372,000 the
+compaction net sits **behind** the model's real ceiling and the failure mode becomes
+provider-side truncation rather than a clean local compaction. The verified floor was chosen
+instead.
 
-The recommended default is therefore to **leave `autoContext` on and leave the compact window
-at its 350,000 default** — with one correction and one caveat:
+272,000 is inside the real limit for both the 5.6 family and `gpt-5.5`. Because Claude Code
+applies `min(believed window, env)` (§4.2), a smaller model is unaffected: `gpt-5.3-codex-spark`
+stays accounted at its own 100,000 rather than being pulled up to the floor.
 
-- ocx's 372,000 for the 5.6 family is above OpenAI's current 272,000 (§5.1). A compact window
-  of 350,000 is below ocx's belief but *above* the real ceiling, so it does not protect a 5.6
-  session. An operator who routes 5.6 work should set the compact window to **272000** to
-  match the provider's current catalog. This is the single highest-value change in this
-  document.
-- Anything at or below the 100,000 floor (Spark) is not protectable by this variable. Keep
-  Spark work to bounded packets and treat `/compact` as its recovery.
+**Record the derivation rule, not just the number.** The floor is *the smallest real window
+among the models the operator actually selects* — sized for the smallest model reachable in the
+session, **never the largest**. It was derived from a selected set of the
+gpt-5.6 family, Claude 5, and muse 1.2, whose smallest real window is 272,000. The number
+therefore expires when the set changes: **a reader who adds a 100,000-token model must lower
+the floor to match it, not inherit 272,000.** Re-derive on any change to the selected set.
 
-Because raising the compact window unmarks mid-size models (§6a), the default should not be
-raised globally to accommodate one large model. That is what the opt-in is for.
+Two consequences to state plainly rather than bury:
+
+- **This under-uses `gpt-5.4` and muse, by design.** Both carry roughly 1M, so a 272,000 floor
+  leaves most of their window unreachable. That is the accepted cost of one process-wide value
+  serving a mixed model set.
+- **The pressure valve is the single-model opt-in, not a workaround.** A session that will
+  genuinely stay on one large model may raise the value to that model's own window, accepting
+  that mid-size models go unmarked for the duration (§6a). Raising it as a global default is
+  precisely the error the floor exists to prevent.
+
+Anything at or below 100,000 is not protectable by this variable at all — that is the
+documented clamp floor (§4.2, §4.7) — so Spark work stays in bounded packets with `/compact` as
+its recovery.
+
+### 8.2.1 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is deliberately left UNSET, pending measurement
+
+**Operator decision, 2026-08-07.** The request was 70%. It is deferred, and §4.3 is why: the
+override is **one-directional** — it can only compact earlier, and "values above the default
+percentage are ignored" — while **the default percentage is not documented anywhere**. So `70`
+is either a real change or a silent no-op, and documentation alone cannot distinguish those two
+outcomes. A setting whose effect is unknown does not ship.
+
+What makes this settleable in one pass is that the arithmetic needed is
+`default_pct = pre_tokens / effective_window`, and both terms are observable.
+
+**The surfaces that carry the signal.** Of everything checked, exactly one gives a token count
+for the main conversation at the compaction boundary:
+
+| Surface | Carries | Use |
+|---|---|---|
+| OpenTelemetry `claude_code.compaction` event | `trigger` (`auto`/`manual`), `pre_tokens`, `post_tokens`, `success`, `duration_ms` | **the measurement** — the only main-thread source of `pre_tokens` |
+| `PreCompact` / `PostCompact` hooks | `trigger`, `custom_instructions` / `compact_summary` | unambiguous auto-vs-manual boundary marker; **no token count** |
+| `/autocompact` with no argument | the current window in tokens (v2.1.221+) | reads the denominator |
+| Statusline `context_window.*` | `used_percentage`, `total_input_tokens`, `context_window_size` | last usage before the boundary; see caveats |
+| `SessionStart` `source: "compact"` | that a compaction occurred | weaker — does not distinguish auto from manual |
+| Subagent transcript `compact_boundary` | `compactMetadata.preTokens` | secondary source, but a different conversation and window |
+
+No surface reports the effective *percentage*. `/context` shows usage by category and an
+over-limit warning, but not the threshold in force.
+
+**The procedure.** Before launching, export `CLAUDE_CODE_ENABLE_TELEMETRY=1` with
+`OTEL_LOGS_EXPORTER=console` (the compaction event is a log/event, not a metric — a metrics-only
+exporter will not show it) and redirect output to a file. Register a `PreCompact`/`PostCompact`
+pair that logs `trigger` with a timestamp. Then:
+
+1. Put the session into a mode that compacts *before* the model's limit — the override "applies
+   only in sessions that compact before the model's context limit." Launching with
+   `--autocompact 200000` is the deterministic way, and the flag is not preempted by a
+   higher-priority settings scope.
+2. Run `/autocompact` with no argument and record the window **W**.
+3. Grow context naturally until auto-compaction fires. Do not run `/compact`.
+4. In the telemetry log find `claude_code.compaction` with `trigger: "auto"` and record
+   `pre_tokens`.
+5. Compute `pre_tokens / W`. If it is at or below 0.70, then `70` is at or above the default and
+   would be **ignored**. If it is near 1.0, the default is near 100% and `70` would materially
+   change behavior.
+
+**The decisive confirmation is an A/B, and it is cheaper than trusting the arithmetic:** repeat
+the identical run with `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70` and compare `pre_tokens`. Dropping
+to roughly `0.70 × W` means it took effect; unchanged means it was ignored and buys nothing.
+
+**Four caveats that will invalidate a careless reading.** `pre_tokens` is documented as
+"approximate," so a two-point difference is not resolvable. Auto-compaction has two causes —
+proactive-before-limit and recovery-from-a-context-limit-error — only the first is governed by a
+percentage, a recovery compaction reads as ~100% regardless, and **no field distinguishes them**
+(`trigger` is `"auto"` for both). Auto-compaction may pre-compute a summary in the background,
+so a summarization request appearing is not evidence the threshold was crossed — use the
+compaction event, not a `query_source: "compact"` request. And once
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` is set, the statusline's `used_percentage` "no longer
+indicates when compaction will run" because it always measures against the model's *full*
+window, so it cannot substitute for the telemetry reading.
+
+One collection trap: Claude Code strips `OTEL_*` exporter variables from every subprocess it
+spawns, including hooks, so a hook cannot re-read the telemetry configuration.
+
+### 8.2.2 The output budget must be set for a shared-pool session
+
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS` defaults to **32,000 for model IDs Claude Code does not
+recognize** — which is every gateway-served name here — and the docs state that raising it
+"reduces the effective context window available before auto-compaction triggers" (§4.5). So
+output budget and input capacity are coupled even on a separate-reservation model.
+
+On muse the coupling is exact rather than approximate, because the 1,048,576 tokens are one
+shared pool (§5.2). A long conversation mechanically starves the output allowance, and that is
+the **measured cause of the very first muse probe returning empty output with
+`status: incomplete`** — the budget was consumed by reasoning tokens before any visible text
+(§6.1 of the muse memo).
+
+For a muse-heavy session, set the ceiling explicitly rather than accepting the default: above
+the observed reasoning floor of roughly 600 tokens plus the task's expected output, and low
+enough that it does not consume the input capacity the task needs. Do not raise it toward the
+window's size on a shared pool — that starves input directly.
 
 ### 8.3 The per-model override recipe
 
 **For a routed provider (muse), record the real window in the gateway.** This is the durable
-fix and it is the one that unlocks muse's measured window. Because there is no CLI flag
-(§3.3), it is a config edit adding to the `muse` provider block:
+fix and it is the one that unlocks muse's measured window, and it is also where the four models
+ocx does not know (`gpt-5.4-mini` plus all three muse entries) belong. Because there is no CLI
+flag (§3.3), it is a config edit adding to the `muse` provider block in
+`~/.opencodex/config.json`:
 
 ```json
 "modelContextWindows": {
@@ -612,21 +714,24 @@ fix and it is the one that unlocks muse's measured window. Because there is no C
 After which ocx knows the window, `shouldMarkOneMillion` marks those selectors (1048576 ≥
 1000000, so it marks unconditionally), and Claude Code accounts 1M for them while compacting
 at the session floor. Two hard conditions on doing it: the number must be the **measured**
-1048576 from §5.2 and not a rounded 1000000, and because the pool is **shared**,
-`CLAUDE_CODE_MAX_OUTPUT_TOKENS` must be set deliberately — the docs say raising it reduces
-available context, and on a shared pool that is exact. Given the empty-200 hazard, keep the
-output budget comfortably above the ~600-token reasoning floor.
+1048576 from §5.2 and not a rounded 1000000 — the rounded figure is both wrong and changes
+whether the marking predicate fires — and because the pool is **shared**, the output ceiling
+must be set deliberately per §8.2.2.
 
-This is a mutation of the operator's live config and is therefore **not** applied by this
-memo. It is a recipe requiring the operator's own authorization.
+**The operator's live config is currently untouched, and that is verified rather than assumed.**
+Re-checked at implementation time: both the `openai` and `muse` provider blocks have
+`modelContextWindows` **absent** and `contextWindow` absent, there is no `claudeCode` block, and
+`contextCapValue` is unset. So this snippet is a documented, deliberate step requiring the
+operator's own authorization — not a description of current state, and not something already
+applied by this memo.
 
 **For the native gpt models, the gateway cannot be corrected from config** (§3.3) — the
-window is compiled in. The only session-level lever is the compact window, so an operator who
-knows they are staying on one model for the whole session can pin it:
+window is compiled in. The only lever is the compact window, and the adopted floor (§8.2) is
+set through the gateway's own persistent setting rather than a per-shell export:
 
 ```
-ocx claude config set --compact-window 272000    # match OpenAI's current 5.6/5.5 catalog
-ocx claude config set --compact-window default   # restore the 350000 default
+ocx claude config set --compact-window 272000    # the adopted floor, per 8.2
+ocx claude config set --compact-window default   # restore ocx's 350000 default
 ```
 
 That is a persistent gateway-side setting (it writes `claudeCode.autoCompactWindow`), so it
@@ -644,9 +749,11 @@ you will not switch models, and it is not something the tooling can verify for y
 
 `skills/model-tier-rightsizing/references/model-routing-calibration.md` gains a **Context
 windows** section carrying the §5 table, the shared-versus-separate column, the layer
-ownership rule, and the requested-versus-served distinction. `tests/test_context_windows.py`
-pins that table's internal consistency and its agreement with the conservative default, so
-the documented number and the recommended default cannot silently diverge (§9).
+ownership rule, the adopted floor with its derivation rule, and the requested-versus-served
+distinction. `tests/test_context_windows.py` pins that table's internal consistency and its
+agreement with the adopted floor, so the documented windows and the configured number cannot
+silently diverge — including a pin that the floor never exceeds the smallest window it claims
+to protect, and that the deferred percentage override stays unset until measured (§9).
 
 `skills/agentic-sdlc/references/tiered-orchestration.md` points at that table rather than
 restating it. One owner per fact.

@@ -111,25 +111,55 @@ least usable.
    gateway cannot express, which is the per-session floor. The general rule: configure the
    gateway, not the session, whenever the gateway can hold the fact.
 
-2. **The session floor is conservative by default and must suit the smallest model reachable
-   in that session, never the largest.** The gateway's auto-context mechanism stays on, and
-   the floor stays at its existing default except where a lower provider-documented ceiling
-   applies, in which case the lower number is the operating limit. A route whose window is at
-   or below the client's documented minimum floor cannot be protected by the floor variable at
-   all and is kept to bounded packets with manual compaction as its recovery.
+2. **The session floor is 272000 tokens, and it is derived rather than picked.** The rule is:
+   the floor is the smallest real window among the models the operator actually selects. For
+   the selected set of the gpt-5.6 family, Claude 5, and muse 1.2, that smallest real window is
+   the 5.6 family's provider-served 272000. The rule outranks the number — **the floor must be
+   re-derived whenever the selected set changes**, and a reader who adds a smaller model is
+   obliged to lower it rather than inherit 272000.
 
-3. **A larger window is an explicit, per-session opt-in for a knowingly single-model session.**
-   Raising the floor is permitted when the operator is deliberately staying on one model,
-   accepting that mid-size models are unmarked for the duration. It is never a global default,
-   because it cannot be verified for the operator that no model switch will occur.
+   The gateway's compiled 372000 was considered and rejected: at 372000 the compaction net
+   sits *behind* the model's real ceiling, so the failure mode becomes provider-side truncation
+   instead of a clean local compaction. Because the client applies the minimum of its believed
+   window and the environment value, a smaller model stays accounted at its own window rather
+   than being pulled up to the floor. A route whose window is at or below the client's
+   documented minimum floor cannot be protected by this variable at all and is kept to bounded
+   packets with manual compaction as its recovery.
 
-4. **Per-model truth is recorded in
+   This floor **under-uses the two roughly-1M models by design**. That is the accepted cost of
+   one process-wide value serving a mixed model set, recorded as a known consequence rather
+   than discovered later.
+
+3. **A larger window is an explicit, per-session opt-in for a knowingly single-model session,
+   and that opt-in is the pressure valve rather than a workaround.** Raising the floor is
+   permitted when the operator is deliberately staying on one model, accepting that mid-size
+   models are unmarked for the duration. It is never a global default, because it cannot be
+   verified for the operator that no model switch will occur.
+
+4. **The proactive-compaction percentage stays unset until it is measured.** The override is
+   one-directional — it can only compact earlier, and a value above the default is silently
+   ignored — while the default percentage is undocumented. Any chosen value is therefore either
+   correct or a silent no-op with no way to distinguish them from documentation, so no value
+   ships on documentation alone. The research memo records the measurement procedure and the
+   surfaces that carry the signal; the decisive test is an A/B on the compaction event's
+   pre-compaction token count. A future session may set the value **with** that evidence, and
+   doing so is an adjustment under this record rather than a reversal of it.
+
+5. **The output ceiling is set explicitly for shared-pool sessions.** The client defaults its
+   output maximum to 32000 for model IDs it does not recognize, which includes every
+   gateway-served name, and raising that value reduces the context available before compaction.
+   On a shared-pool model the trade is arithmetic rather than approximate, and an insufficient
+   budget returns a successful status with empty content. Accepting the default silently on a
+   shared-pool route is therefore a defect, not a neutral choice.
+
+6. **Per-model truth is recorded in
    `skills/model-tier-rightsizing/references/model-routing-calibration.md`**, in a Context
    windows section that is the sole owner of the per-model numbers, the shared-versus-separate
-   input/output shape, and the layer-ownership rule. `skills/agentic-sdlc/references/tiered-orchestration.md`
+   input/output shape, the adopted floor and its derivation rule, and the layer-ownership rule.
+   `skills/agentic-sdlc/references/tiered-orchestration.md`
    points at that section rather than restating any number. One owner per fact.
 
-5. **A requested context form is a request and never proof of the served window.** This
+7. **A requested context form is a request and never proof of the served window.** This
    applies the existing requested-versus-readback boundary to context, on specific evidence:
    extended-context request forms read back the base model ID, the gateway's own computed
    window for one family disagrees with the provider's catalog, four models have no known
@@ -137,14 +167,17 @@ least usable.
    recorded as unavailable unless transport telemetry independently exposes effective context
    behavior, and a requested value is never copied into a resolved or readback field.
 
-6. **An unknown window is recorded as unknown.** No window is inferred from a sibling model,
+8. **An unknown window is recorded as unknown.** No window is inferred from a sibling model,
    a family pattern, or a third-party aggregator. A model with no sourced window gets no
-   marker, which is conservative and correct.
+   marker, which is conservative and correct. The four models the gateway does not know are
+   recorded through the routed provider's per-model window map, using the measured value rather
+   than a rounded one.
 
-7. **No configuration mutation is authorized by this record.** The recipes for recording a
+9. **No configuration mutation is authorized by this record.** The recipes for recording a
    routed provider's per-model window and for pinning a session floor are written as recipes.
-   Applying either to the operator's live gateway requires the operator's own
-   operation-specific authorization.
+   The operator's live gateway configuration was verified untouched at the time of writing —
+   no per-model window map on either provider, no client-settings block, no context cap — so
+   applying any of these requires the operator's own operation-specific authorization.
 
 ## Consequences
 
