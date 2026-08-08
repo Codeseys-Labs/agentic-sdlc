@@ -135,6 +135,112 @@ assignments; otherwise prefer bounded disk-backed artifacts. Exact Claude `[1m]`
 were not separately certified, so keep Claude work to compact packets and immutable deltas
 until those request forms pass.
 
+## Context windows
+
+Served models have genuinely different context windows, and no single layer both knows every
+window and can apply it per model. This section is the sole owner of the per-model numbers;
+other references point here rather than restating them.
+
+### Per-model windows and their shared-versus-separate shape
+
+| Exact model ID | Gateway-computed | Provider-documented | Input/output shape | Source status |
+|---|---:|---:|---|---|
+| `gpt-5.6-sol` | 372000 | 1050000 API / 272000 subscription | separate: 922000 in + 128000 out | provider-documented; gateway value disagrees |
+| `gpt-5.6-terra` | 372000 | 1050000 API / 272000 subscription | separate: 922000 in + 128000 out | provider-documented; gateway value disagrees |
+| `gpt-5.6-luna` | 372000 | 1050000 API / 272000 subscription | separate: 922000 in + 128000 out | provider-documented; gateway value disagrees |
+| `gpt-5.5` | 272000 | 1050000 API / 272000 subscription | total and output published; input unknown | provider-documented, partial |
+| `gpt-5.4` | 1000000 | 1050000 API / 272000 subscription default | total and output published; input unknown | provider-documented, partial |
+| `gpt-5.4-mini` | unknown | 400000 API | separate: 272000 in + 128000 out | provider-documented; gateway has no value |
+| `gpt-5.3-codex-spark` | 100000 | 128000 announcement only | unknown | announcement only; no API model page |
+| `muse-spark-1.2` | unknown | 1048576 measured | **shared** input+output pool | measured by bisection |
+| `muse-spark-1.2-contributor` | unknown | 1048576 measured | **shared** input+output pool | measured by bisection |
+| `muse-spark-1.1` | unknown | unknown | presumed shared, unmeasured | unknown |
+
+A blank is recorded as `unknown`, never inferred from a sibling model. Four served models
+have no gateway-computed window at all, which is conservative for compaction and also means
+no per-model floor can be computed for them.
+
+The gateway-computed value for the 5.6 family is **above** the provider's current
+subscription catalog. That direction is the dangerous one: it aims a session past the real
+ceiling rather than short of it. Treat the lower provider number as the operating limit for
+5.6 work until the two agree.
+
+### The shared input/output hazard
+
+Two provider shapes are in play and they are not interchangeable. The GPT family publishes an
+input window plus a **separate** output reservation that sums to the advertised total. Muse
+Spark has **one shared pool** of exactly 1048576 tokens, measured by bisection: for a given
+input, `max_output_tokens = 1048576 − counted_input` is admitted and one more is refused.
+
+On a shared pool, input and output compete directly, so a large input silently shrinks the
+output allowance. Starvation there is not an error: an insufficient output budget returns a
+successful HTTP status with empty content while reasoning tokens are still billed, because
+reasoning is charged before any visible text. Consequences for dispatch:
+
+- A liveness or health check that asserts only a successful status is worthless on a shared-
+  pool route. Assert non-empty output text.
+- The distinguishing signal is the response's own completion/stop field, not the status code.
+- Reasoning consumption on trivial prompts was observed spanning roughly 48–499 tokens, so an
+  output budget below roughly 600 risks an empty completion for a one-word answer. A real task
+  needs its expected output plus that reasoning allowance.
+- Above the window the failure class can change to throttling rather than an invalid-request
+  refusal, so a retry-on-throttle client can retry a request that can never succeed.
+
+### Layer ownership: the gateway owns the number, the session owns a floor
+
+The client's context and compaction controls are **per session, process-wide** — one value
+for the whole process regardless of which model answers a given request. Agent and subagent
+definitions carry no context field, and no settings key maps a model to a window. So a session
+that switches models, or fans out subagents across models in one process, cannot hold a
+per-model window at the session layer.
+
+The gateway can. Therefore:
+
+- **Configure the gateway, not the session, whenever the gateway can hold the fact.** A
+  gateway setting applies to every client and survives a new process; a session variable
+  applies to one process and is easy to forget.
+- **The session-level compaction floor must be safe for the smallest model reachable in that
+  session**, never the largest. Tuning a floor upward for one large model both wastes nothing
+  and breaks nothing only when the session is genuinely single-model; otherwise it pushes the
+  compaction net behind a smaller model's real limit.
+- **Raising the floor can silently disqualify mid-size models** from extended-context marking,
+  because marking requires the model's window to be at least the floor. A floor is two-sided.
+- An over-window request can surface as an opaque upstream refusal rather than a recoverable
+  one, because a gateway that rewrites the upstream error text defeats wording-matched
+  automatic compact-and-retry. Manual compaction is then the only recovery.
+- A window at or below the client's documented minimum floor cannot be matched by the floor
+  variable at all. Keep such routes to bounded packets.
+
+Where per-model editability exists it is uneven: a routed provider's per-model window map is
+operator-settable, while natively-pinned model windows are compiled into the gateway and are
+not correctable from configuration. Record the operating number here regardless of which case
+applies, so the doctrine does not depend on which lever happened to be available.
+
+### Requested context form is a request, never proof of the served window
+
+`requested_context_form` in a `RuntimeAssignment` is a **request**, exactly as
+`requested_model_id` and `requested_effort` are. It never proves the served window. This is
+the same requested-versus-readback boundary recorded above for effort, applied to context, and
+the evidence for it is specific rather than formal:
+
+- extended-context request forms read back the base model ID and prove nothing about the
+  upstream window;
+- the gateway's own computed window for one model family disagrees with the provider's current
+  catalog, so even the gateway's number is a belief;
+- four served models have no known window at all; and
+- the discovery catalog returns a null window for nearly every entry, so discovery supplies no
+  window fact either.
+
+Record `context_readback_status: unavailable` unless transport telemetry independently exposes
+effective context behavior, and never copy a requested form into a resolved or readback field.
+Reclassify only on independently observed effective context behavior.
+
+Executed evidence and the full probe record:
+`docs/research/2026-08-07-context-window-accommodation.md`; the measured shared-pool window is
+`docs/research/2026-08-07-muse-spark-qualification.md` §5.8 with the starvation hazard at §6.1.
+The decision is `docs/adr/0012-context-window-accommodation.md`. None of these authorizes a
+route, a configuration mutation, or any other outward effect.
+
 ## Deterministic smoke evidence: 80 / 10 / 0
 
 Receipt `agentic-sdlc-six-tier-smoke/v1` preserves 90 cells: six models, five requested
@@ -240,12 +346,19 @@ A third model family is admitted alongside Codex-OAuth-via-gateway and Bedrock: 
 Spark. It is reachable on **two** routes with **different evidence properties**, and a
 `RuntimeAssignment` must record which one was used, because the identity rules differ:
 
-1. **Via the opencodex gateway (PRIMARY).** Muse registered as an ordinary provider
+1. **Via the opencodex gateway — the SHIPPED route.** Muse registered as an ordinary provider
    (`ocx provider add muse --adapter openai-responses --base-url https://api.meta.ai/v1
    --default-model muse-spark-1.2`), reached through the existing gateway and launcher.
-   Conditions **G1–G7**, plus the canary's C1–C8 which it inherits.
-2. **Directly, with no gateway (FALLBACK).** `ANTHROPIC_BASE_URL` pointed at
-   `https://api.meta.ai`, via `scripts/muse-claude.sh`. Conditions **M1–M8**.
+   Conditions **G1–G7**, plus the canary's C1–C8 which it inherits. Muse is a **provider, not a
+   plane**: verified 2026-08-07, the running gateway serves one flat catalog in which its models
+   appear as namespaced ids (`muse/muse-spark-1.1`, `muse/muse-spark-1.2`,
+   `muse/muse-spark-1.2-contributor`) alongside seven `gpt-*` ids, so a session selects one
+   per-request or through the `/model` picker. `ccodex models` prints that live catalog.
+2. **Directly, with no gateway — a DOCUMENTED RECIPE, no longer a shipped command.**
+   `ANTHROPIC_BASE_URL` pointed at `https://api.meta.ai`. Conditions **M1–M8** still describe it,
+   and the recipe still works, but the standalone launcher and its `muse:*` tasks were retired as
+   a command surface (ADR-0007 Amendment 2026-08-07). A `RuntimeAssignment` recording this route
+   is recording an operator-assembled environment, not a bundle entry point.
 
 Evidence is the executed qualification in
 `docs/research/2026-08-07-muse-spark-qualification.md` — §1–§7 for the direct route (verdict

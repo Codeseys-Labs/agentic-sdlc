@@ -134,6 +134,21 @@ installs all 13 without prompting. `mise run check` last measured 654 tests in 8
 minutes and expect longer on a loaded host. Both figures go stale by design — the count grows
 with the suite and the clock varies by host — and the gate's verdict is the evidence.
 
+`scripts/bootstrap-agentic-sdlc.sh` replaces the clone step only, for an operator who would rather
+not choose or track a directory. It fetches into
+`${XDG_DATA_HOME:-$HOME/.local/share}/agentic-sdlc` (override `AGENTIC_SDLC_HOME`, discover with
+`--print-path`), records remote/ref/resolved-commit in a receipt under `XDG_STATE_HOME` outside the
+clone, then stops and prints the remaining commands. It requires mise and git, installs neither, and
+so adds no bootstrap prerequisite. It never trusts a config, resolves a toolchain, or installs
+bundle entries; `--dry-run` creates nothing; an unexpected remote, dirty tree, ref mismatch, or
+non-fast-forward each refuse by name at exit 3 rather than clobbering. The clone is managed, not
+eliminated: every task command and installed symlink resolves against a tree on disk, so do not
+describe this as a clone-free bundle install. HTTPS authenticates the transport, not the contents,
+and no signature over the fetched commit is verified. See `docs/adr/0011` and
+`docs/research/2026-08-07-clone-free-install.md`, which record that mise's experimental `git::`
+task includes cannot serve this repository: they clone into a cache anyway, parse targets against
+the task-file schema, carry no `[tools]`, and run tasks in the caller's directory.
+
 To acquire Seeds from an exact clean Git distribution root, run the installed flagship
 `tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.22.3.
 Bootstrap and inspect both reject any other executing Node. Bootstrap rejects nested, staged,
@@ -188,8 +203,10 @@ model selection as policy.
 - `operator-tools:install`, `operator-tools:status`, `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
-- `muse:launch`, `muse:status`, `muse:probe` — the Muse Spark fallback direct route; the primary
-  route stays `ocx:launch`
+  Muse Spark has no tasks of its own: it is one provider registered in the gateway, whose models
+  appear in the single flat live catalog as namespaced ids, so
+  `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a
+  row in a provider list, never a plane (ADR-0007 amendment, ADR-0010)
 - `mermaid:provision`, `mermaid:linux-test` — explicit Linux x64 renderer steps, never gate leaves
 - `libraries:list`, `libraries:status`, `libraries:install`, `libraries:migrate` — external skill
   libraries through their own front doors, opt-in and dry-run without `--yes`; `migrate` retires
@@ -211,7 +228,20 @@ startup files or PATH. The statusline remains inactive until the operation-speci
 preserves conflicts. Both anywhere opencodex commands delegate to the canonical supervised
 launcher. `ocx-ultracode` enables session Ultracode without bypassing permissions and refuses
 competing settings or bypass flags. Native Windows statusline/operator-tool activation is not
-certified and fails closed.
+certified and fails closed. `operator-tools:status` reports a never-installed command as
+`absent` and reserves `unmanaged` for a file that exists but is not owned; both exit nonzero.
+
+Both launchers' Claude config dir is selectively separate, not isolated in every respect
+(ADR-0010). Inert per-session data — history, project transcripts, todos, shell snapshots, file
+history — is shared with `~/.claude` by symlink. Mutating global Claude settings still requires
+explicit operation-specific approval and no launcher does it: the plane-local `settings.json` a
+launcher constructs lives in its own state directory, and the global file is read, never written,
+copied, or linked. Only the global `statusLine` stanza is inherited, because that `env` block can
+carry a live credential and copying it would also re-point the child away from
+its verified route. Credentials never cross: the constructed document is asserted credential-free
+before it is written, credential and plane-owned stores stay private, inheritance runs only after
+every credential assertion, and it is fail-soft and never destructive. Do not cite config-dir
+isolation as evidence that no session data is shared.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim

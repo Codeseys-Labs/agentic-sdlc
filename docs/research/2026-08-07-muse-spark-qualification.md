@@ -771,8 +771,35 @@ authorizes nothing.**
 - Probe bodies are quoted inline above; substitute `$MODEL_API_KEY` from the environment. No
   credential value appears in this memo or anywhere else in this repository, and the §5.4
   bearers are literal placeholder strings, not redactions.
-- Re-verify the direct route without launching a client:
-  `mise run muse:probe` (or `scripts/muse-claude.sh probe`).
+- Re-verify the direct route without launching a client. **The `muse:probe` task and
+  `scripts/muse-claude.sh` were retired as a command surface on 2026-08-07** (ADR-0007
+  Amendment; muse ships as a gateway provider). The route itself still works and needs no
+  running process, no port, and no sync step, so the recipe is preserved here as prose:
+
+  ```bash
+  # Catalog membership is the admission check; a non-catalog id answers 404 model_not_found.
+  # The key is passed via a curl config file on stdin, never in argv (ps is world-readable).
+  printf 'header = "Authorization: Bearer %s"\n' "$MODEL_API_KEY" \
+    | curl -sS --config - https://api.meta.ai/v1/models
+
+  # One tiny real completion on the exact surface Claude Code uses. Assert NON-EMPTY text, not
+  # merely HTTP 200: reasoning tokens are billed against max_tokens before any visible text, so
+  # a small budget yields a 200 with an empty content array (observed at both 32 and 128).
+  printf 'header = "Authorization: Bearer %s"\n' "$MODEL_API_KEY" \
+    | curl -sS --config - https://api.meta.ai/v1/messages \
+        -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+        --data-binary '{"model":"muse-spark-1.2","max_tokens":600,
+          "messages":[{"role":"user","content":"Reply with only the word ready."}]}'
+  ```
+
+  To drive a client on this route, export `ANTHROPIC_BASE_URL=https://api.meta.ai` (**no** `/v1`
+  suffix — Claude Code appends `/v1/messages` itself; the gateway provider's `baseUrl` keeps the
+  suffix, and the two forms are opposites), `ANTHROPIC_AUTH_TOKEN=$MODEL_API_KEY`, and both model
+  slots (`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`) — Claude Code's own `claude-*` defaults
+  404 here. Keep the key outside any repository, and note this route has **no** independent
+  attribution channel: the response body echoes the request, so a match cannot distinguish a
+  truthful report from an unchecked echo (§6.2). Prefer the gateway route when attribution
+  matters.
 - Scratch probe artifacts were written under `/tmp/muse-probe/` and are ephemeral, not
   committed.
 

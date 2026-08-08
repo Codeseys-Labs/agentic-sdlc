@@ -34,9 +34,18 @@ recommendation, gate, or route never authorizes an outward action.
 
 Context footprint is a second scheduling axis alongside model tier: a route's admitted
 context, compaction behavior, and inheritance across fresh-versus-forked agents constrain
-which work an assignment can carry, independent of intelligence tier. The dated design
-notes docs/research/2026-07-22-claude-code-multi-model-routing.md and
-docs/research/2026-08-05-gateway-selection-memo.md in this repository record that
+which work an assignment can carry, independent of intelligence tier. Served models have
+genuinely different windows, some provider windows are a shared input/output pool rather than
+separate reservations, and client-side context and compaction controls are per session rather
+than per model — so a mixed-model process carries one floor that must suit its smallest
+reachable window. The
+[canonical calibration](../../model-tier-rightsizing/references/model-routing-calibration.md)
+Context windows section is the sole owner of the per-model numbers, the shared-pool hazard,
+and the layer-ownership rule; consult it before sizing a context-heavy assignment rather than
+carrying a window number here. A requested context form is a request and never proof of the
+served window. The dated design notes
+docs/research/2026-07-22-claude-code-multi-model-routing.md and
+docs/research/2026-08-05-gateway-selection-memo.md in this repository record earlier
 material; they are not installed with this skill and authorize no route.
 
 ## Mission integration

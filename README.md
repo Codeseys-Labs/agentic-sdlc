@@ -184,10 +184,43 @@ no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
 
 ## Install and run the bundle
 
+### Managed fetch, without cloning by hand
+
+If you would rather not choose a directory or track where the tree lives,
+`scripts/bootstrap-agentic-sdlc.sh` fetches this repository into a managed location and then
+stops, printing the remaining commands instead of running them. Download it, read it, then run
+it — in that order, because it is a script that clones:
+
+```bash
+curl -fsSL -o bootstrap-agentic-sdlc.sh \
+  https://raw.githubusercontent.com/Codeseys-Labs/agentic-sdlc/main/scripts/bootstrap-agentic-sdlc.sh
+less bootstrap-agentic-sdlc.sh
+bash bootstrap-agentic-sdlc.sh --dry-run
+bash bootstrap-agentic-sdlc.sh
+```
+
+`--dry-run` prints the exact `git clone` it would run and creates nothing. The managed clone
+lands in `${XDG_DATA_HOME:-$HOME/.local/share}/agentic-sdlc`, reported by `--print-path` and
+overridable with `AGENTIC_SDLC_HOME`; the resolved commit is recorded in
+`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-sdlc/bootstrap-receipt.json`. Removing both
+paths removes everything the script created. Re-running is idempotent: it reports the existing
+clone's ref and commit, refuses rather than clobbering an unexpected remote, a dirty tree, or a
+ref mismatch, and fetches only under `--update`.
+
+The script requires mise and git and installs neither, so it adds no bootstrap prerequisite. It
+deliberately does not trust the config, resolve the toolchain, or install bundle entries: those
+stay separate approvals against a tree you have read, and it prints them as steps 2 through 5
+below. HTTPS authenticates the transport, not the contents — nothing here verifies a signature
+over the fetched commit, so read the tree before trusting it. `docs/adr/0011` records why the
+clone is managed rather than eliminated: the tasks still come from a tree on disk, because every
+task command and installed symlink resolves against one. For a genuinely tree-free install of the
+plugin payload alone, see the marketplace plane below.
+
 ### Quickstart from a clean clone
 
 Five steps, in order, from an empty directory. Step 3 is a persistent mutation with its own
-approval gate; steps 2 and 3 are what a fresh clone otherwise fails on.
+approval gate; steps 2 and 3 are what a fresh clone otherwise fails on. The managed fetch above
+replaces step 1 only.
 
 1. Clone the repository and enter it. Obtaining the source needs Git, which stays a
    runtime-readiness capability rather than a second bootstrap prerequisite:
@@ -313,7 +346,6 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 | `claude:statusline:status` / `claude:statusline:activate` / `claude:statusline:deactivate` | Inspect or explicitly manage only Claude Code's `statusLine` fields. |
 | `ocx:launch` / `ocx:ultracode` | Launch the supervised split plane normally or with session-only Ultracode and ordinary permissions. |
 | `ocx:status` / `ocx:restart` / `ocx:configure` | Report opencodex gateway reachability, restart it cleanly, or configure providers through their own login flows. |
-| `muse:launch` / `muse:status` / `muse:probe` | Drive the Muse Spark fallback direct route: launch it, report its configuration and reachability, or probe its catalog plus one tiny completion without launching. The primary route stays `ocx:launch`. |
 | `libraries:list` / `libraries:status` | List the installable external skill libraries with their front doors and surface cost, or report which are already present in this home. Read-only. |
 | `libraries:install` | Install explicitly named external skill libraries through their own front doors; dry run unless `--yes`. Vendors nothing into this tree, and no gate leaf or `setup` path reaches it. |
 | `libraries:migrate` | De-duplicate a name another channel holds for the same upstream: retire that channel's copies through its own removal path, then install. Dry run unless `--yes`; names at least one library, never migrates everything. |
@@ -353,23 +385,118 @@ summaries remain separate, and the native task's arguments and exit code are pre
 The Claude/Codex bundle installer and the plugin do not own shell aliases, PATH, or global
 Claude settings. Installing into a PATH directory is a persistent user-environment mutation.
 It requires explicit operation-specific approval for that exact directory; a general install
-approval never covers it. A separate Unix operator-tools plane can then install three executable
+approval never covers it. A separate Unix operator-tools plane can then install four executable
 copies into `${XDG_BIN_HOME:-$HOME/.local/bin}`, and only when that physical user-owned
 directory is already on `PATH`:
 
 ```bash
 mise run operator-tools:install
-ocx-launch                 # supervised ordinary split-plane launch
-ocx-ultracode              # supervised launch with session Ultracode; no permission bypass
 mise run operator-tools:status
 ```
 
-No shell startup file or PATH value is edited. Both launch commands delegate to
-`scripts/opencodex-claude.sh`, so ADR-0005 credential refusal, environment scrubbing, isolated
-Claude config, and identity-checked supervision remain mandatory. `ocx-ultracode` refuses
-competing `--settings` and permission-bypass flags instead of silently copying a dangerous
-alias. Launch/restart still carries opencodex's documented shared `~/.codex` configuration side
-effect.
+### `ccodex` — the operator dispatcher
+
+`ccodex` is the whole use surface without mise in the way. `ocx-launch` and `ocx-ultracode` stay
+installed as thin aliases for existing muscle memory.
+
+```bash
+ccodex launch                       # supervised gateway launch (ccodex ocx launch also works)
+ccodex launch --model muse/muse-spark-1.2
+ccodex ultracode                    # session Ultracode; never a permission bypass
+ccodex status                       # gateway health, configured-vs-live providers, env policy
+ccodex providers                    # what is configured, and which providers are LIVE
+ccodex models                       # the running gateway's flat live catalog
+ccodex configure provider add muse --adapter openai-responses \
+  --base-url https://api.meta.ai/v1 --default-model muse-spark-1.2
+ccodex bundle status
+ccodex libraries install ecc --yes
+ccodex version                      # resolved repository root and runtime dependencies
+```
+
+Only the **use** surface is installed. The maintenance tasks — `test`, `validate`, `check`,
+`secrets`, `self-test`, `mermaid:*`, `hooks:install` — are deliberately absent, because they
+belong to working *on* this repository rather than to using what it installed; run those with
+`mise run <task>` inside the checkout. One owned dispatcher rather than a dozen named commands
+means one ownership record, one place a new verb appears, and no PATH namespace land-grab.
+
+**The repository clone is required.** `ccodex` is a thin, owned entry point, not a self-contained
+copy of the bundle: every route executes code inside the checkout, so a moved or deleted clone
+makes each route fail with a named error rather than misbehave. The root is resolved at run time —
+`AGENTIC_SDLC_ROOT` overrides the install-time path — so a clone that later moves to a managed
+location can be pointed at with an environment variable instead of a reinstall. `mise` is needed
+for the `ocx` routes only (the pinned opencodex build is resolved through `mise exec`, and `ocx`
+is not on `PATH` by itself); `uv` is needed for the Python routes and works from a bare `PATH`.
+
+No shell startup file or PATH value is edited. Every launch route delegates to
+`scripts/opencodex-claude.sh`, so ADR-0005 credential refusal, environment scrubbing, the
+separate Claude config dir, and identity-checked supervision remain mandatory. `ocx-ultracode`
+refuses competing `--settings` and permission-bypass flags instead of silently copying a
+dangerous alias. Launch/restart still carries opencodex's documented shared `~/.codex`
+configuration side effect.
+
+### Muse Spark is a provider, not a plane
+
+There is no muse launcher and no `muse:*` task. Muse Spark is one provider registered in the
+gateway, exactly like the openai/codex provider, and the running gateway serves a **single flat
+catalog** in which its models appear as ordinary namespaced ids. Verified 2026-08-07 against the
+live gateway: `GET /v1/models` returned ten entries — seven `gpt-*` ids plus
+`muse/muse-spark-1.1`, `muse/muse-spark-1.2`, and `muse/muse-spark-1.2-contributor`. So a session
+launched with `ccodex launch` selects a muse model the same way it selects a gpt one, per request
+or through the `/model` picker. Run `ccodex models` to see exactly what a launched session can
+pick; that view reads the gateway's live catalog rather than the configured list, because the two
+disagree and only the live one answers the question. Adding a provider goes through the reviewed
+configure route with muse as the worked example — nothing about it is special-cased in code.
+
+### Environment-variable policy
+
+Mutating your global Claude settings requires explicit operation-specific approval and no launcher
+does it; the policy below governs the plane-local document the launcher constructs and the child
+process environment it builds. Claude Code resolves CLI flags > shell environment > settings `env`
+> dedicated settings keys > defaults
+([settings](https://code.claude.com/docs/en/settings.md)), so the launcher sanitizes **both** the
+process environment and that constructed document; closing one and not the other leaves the
+boundary open. Per class
+([env-vars](https://code.claude.com/docs/en/env-vars.md),
+[network-config](https://code.claude.com/docs/en/network-config.md)):
+
+| Class | Examples | What happens |
+|---|---|---|
+| Credential | `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_CLIENT_KEY` | **Denied**, always, from both sources |
+| Provider routing | `CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_*`/`VERTEX_*`/`FOUNDRY_*` | **Denied, then set fresh** by the gateway; an inherited value would send this plane's traffic elsewhere |
+| Model pin | `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL` and its `_NAME`/`_DESCRIPTION`/`_SUPPORTED_CAPABILITIES` variants, `ANTHROPIC_CUSTOM_MODEL_OPTION*` | **Denied** — these name Anthropic models this plane may not route (ADR-0003); a session picks from the gateway catalog instead |
+| Forced fallback | `FALLBACK_FOR_ALL_PRIMARY_MODELS` | **Denied** — silent substitution against a restricted catalog is the canary's C1 hazard |
+| TLS downgrade | `NODE_TLS_REJECT_UNAUTHORIZED` | **Denied** |
+| Inert preference | `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`, `DO_NOT_TRACK`, `CLAUDE_CODE_ACCESSIBILITY`, `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, compaction/bash/UI flags | **Inherited** — the operator's deliberate choices |
+| Host-owned | `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_ACCOUNT_UUID`, `CLAUDE_CODE_MESSAGING_SOCKET` | **Neither** — Claude Code ignores these from an env block |
+
+`ANTHROPIC_*` and `AWS_*` are denied **by prefix**, since nothing in those namespaces is an inert
+preference and a new upstream name should fail closed. `CLAUDE_*` is denied by default and allowed
+**by name**, because that namespace genuinely mixes routing flags with inert preferences and only
+an enumeration is honest; an unrecognized new `CLAUDE_*` variable is dropped rather than guessed
+at. The privacy flags are **set-to-activate** (any non-empty value enables), so dropping a set
+`DISABLE_TELEMETRY` would silently re-enable telemetry in the launched plane — it is preserved
+explicitly rather than by accident. `ccodex status` prints the classification of every such
+variable in the current shell, never a value. The settings `env` block is read once at session
+start, so the constructed document is a launch-time artifact and editing it mid-session does
+nothing.
+
+That config dir is **selectively** separate rather than isolated in every respect, and ADR-0010
+records which half is which. Inert per-session data — prompt history, project transcripts,
+todos, shell snapshots, file history — is SHARED with `~/.claude` by symlink, so a launched
+session shows your real history and projects instead of opening blank, and one realpath'd
+history lock serializes both planes rather than letting two copies diverge.
+
+Changing your global Claude settings still requires explicit operation-specific approval for
+that exact settings file, and this launcher never does it. The plane-local
+`settings.json` it CONSTRUCTS lives inside the launcher's own state directory: the global file is
+read and never written, copied, or linked. Only the global `statusLine` stanza is inherited,
+because that `env` block can carry a live credential (verified on a real host) and copying it
+would also re-point the child away from the gateway. Credentials never cross in either direction: the constructed document is asserted
+credential-free before it is written, and `.credentials.json`, the sibling `.claude.json`,
+`sessions/`, `session-env/`, `plugins/`, and `agents/` stay private. Inheritance runs only after
+every credential assertion, so a refused launch links nothing, and it is fail-soft — it never
+deletes existing plane data and never blocks a launch. `scripts/muse-claude.sh` shares the same
+`assets/claude/session-inheritance.sh`, so the two launchers cannot drift.
 
 The packaged statusline is offline, uses approximate built-in model-family prices only for its
 advisory subagent breakdown, and is not activated by installation. Changing global Claude

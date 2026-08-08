@@ -170,7 +170,8 @@ verifiable artifacts.
 
 Load the [canonical calibration](references/model-routing-calibration.md) before dispatch.
 It is the sole human reference for current exact IDs, requested effort bands, alias
-behavior, context boundaries, smoke evidence, quotas, roadmap-family lanes, vendor
+behavior, context boundaries, per-model context windows and their shared-versus-separate
+input/output shape, smoke evidence, quotas, roadmap-family lanes, vendor
 complements, fallbacks, rerun triggers, and auditable receipts. Do not copy its matrices
 here; recalibrate the reference when transport, lineup, telemetry, or representative results
 change.
