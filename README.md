@@ -167,14 +167,19 @@ no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
 - `agents/codex/research/`: the 17-role research-team TOMLs (repo-scoped reference
   copies — NOT globally installed; see its README; scaffolded per-repo by
   codex-research-os).
-- `commands/sdlc-{init,frame,wave,mission}.md`: Claude Code slash commands —
+- `commands/sdlc-{init,frame,wave,mission,rightsize}.md`: Claude Code slash commands —
   `/sdlc-init` activates Agentic SDLC inside a repository without reinstalling global
   capabilities. It establishes a reviewed tracked Git baseline, Seeds queue,
   mise/lefthook/betterleaks gate stack, per-worktree trust policy, cross-host `AGENTS.md`
   guidance, and CI parity. It is a reviewed runbook: claims of idempotence or Git-wave readiness
   require observed evidence; it preserves existing project policy and stops on ambiguity. `/sdlc-frame` frames one run,
-  `/sdlc-wave` runs one Seeds-backed Git-worktree wave, and `/sdlc-mission` runs an
-  autonomous backlog-zero mission with concurrent critique and bounded backflow.
+  `/sdlc-wave` runs one Seeds-backed Git-worktree wave, `/sdlc-mission` runs an
+  autonomous backlog-zero mission with concurrent critique and bounded backflow, and
+  `/sdlc-rightsize` probes live routing evidence and produces a regenerable
+  `.agentic-sdlc/model-task-map.json` + `.md` pair that downstream `Workflow()` DAG nodes
+  consult for certified `RuntimeAssignment` dispatch (see
+  `skills/model-tier-rightsizing/references/model-task-map-schema.md` and
+  `skills/model-tier-rightsizing/references/workflow-prompt-budget.md`).
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
   `claude plugin install agentic-sdlc@agentic-sdlc` is an alternative to
