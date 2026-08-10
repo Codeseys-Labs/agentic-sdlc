@@ -2160,6 +2160,44 @@ class InstallSkillBundleTests(unittest.TestCase):
                 "no owned entries for this host (run: mise run bundle:install)",
             )
 
+    def test_unmanaged_codex_skill_is_found_by_install_dry_run_not_owned_status(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            codex_home = root / "codex"
+            destination = codex_home / "skills" / "example"
+            external = root / "external-example"
+            external.mkdir()
+            (external / "SKILL.md").write_text("foreign\n")
+            destination.parent.mkdir(parents=True)
+            destination.symlink_to(external, target_is_directory=True)
+            config = installer.Config(
+                root, root / "home", codex_home, "link", False, "codex", root / "state"
+            )
+            dry = installer.Config(
+                root, root / "home", codex_home, "link", True, "codex", root / "state"
+            )
+
+            checked = installer.status(config)
+            previewed = self.install_only(dry, self.only_entry(root, "codex"))
+
+            self.assertEqual(checked.exit_code, 0)
+            self.assertEqual(
+                checked.messages[-1],
+                "no owned entries for this host (run: mise run bundle:install)",
+            )
+            self.assertEqual(previewed.exit_code, 1)
+            self.assertIn(f"conflict: {destination}", previewed.messages)
+            self.assertIn(
+                f"preserved: {destination} (a non-bundle entry already exists; inspect and resolve it before retrying)",
+                previewed.messages,
+            )
+            self.assertTrue(destination.is_symlink())
+            self.assertEqual(destination.resolve(), external.resolve())
+            self.assertFalse(config.state_path.exists())
+
     def test_status_always_ends_with_a_counted_summary_line(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -345,11 +345,15 @@ replaces step 1 only.
    mise run operator-tools:install
    ```
 
-Each bundle lifecycle action ends in a terminal summary. `mise run bundle:status` reports either
-`no owned entries for this host` or an `N ok, M conflict, K absent` summary; install and uninstall
-summaries separately name installed/removed, preserved, planned, and conflict counts. `mise run
-check` runs the authoritative gate. Each command's exit code and output are evidence about that
-run only; neither authorizes any outward effect.
+Each bundle lifecycle action ends in a terminal summary. `mise run bundle:status` reports only
+entries already present in the lifecycle ownership record: either `no owned entries for this host`
+or an `N ok, M conflict, K absent` summary. It does not inventory unowned names in a configured
+collection. Before installation, or when a path may have been installed through another checkout,
+use `mise run bundle:install -- --agent <claude|codex> --dry-run`; that read-only preview discovers
+an occupied unowned destination, reports it as preserved, and never adopts, overwrites, or removes
+it. Install and uninstall summaries separately name installed/removed, preserved, planned, and
+conflict counts. `mise run check` runs the authoritative gate. Each command's exit code and output
+are evidence about that run only; neither authorizes any outward effect.
 
 **Mise 2026.4.27 or newer is the only bootstrap prerequisite.** It is the managed-tool bootstrap,
 not the sole readiness prerequisite. The checked-in `mise.toml` pins `uv`. `mise.lock` records
@@ -745,10 +749,13 @@ known v1 document is outstanding. `--migrate-state --dry-run` validates every re
 operator state path and the configured home's distinct legacy path without changing files or
 state. The write-enabled command converts all exact, structurally valid records—including
 mixed-agent and historical-home records—into one central v2 document. Migration is state-only:
-it does not install, refresh, or otherwise reconcile current bundle entries. A distinct legacy
-source is retired only after the central v2 write is durable and the source is rechecked. Retry
-is idempotent if retirement was interrupted. Migration fails closed on changed object types,
-conflicting records, changed sources, or unsafe roots.
+it does not install, refresh, otherwise reconcile current bundle entries, or adopt an unrecorded
+file or link already occupying a configured collection. Diagnose that unowned destination with
+`bundle:install -- --agent <claude|codex> --dry-run`; resolve its ownership deliberately rather
+than using `--migrate-state` as a repair. A distinct legacy source is retired only after the central
+v2 write is durable and the source is rechecked. Retry is idempotent if retirement was interrupted.
+Migration fails closed on changed object types, conflicting records, changed sources, or unsafe
+roots.
 
 Linux and macOS require their supported filesystem durability barriers; failures stop the
 operation. macOS uses `F_FULLFSYNC` for file content and directory fsync for namespace changes.

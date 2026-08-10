@@ -134,9 +134,9 @@ selected `--claude-home` plus `.claude`; Codex's is `--codex-home` or `CODEX_HOM
 `--dry-run`, and `--help` are read-only. A Claude marketplace overlap is reported once per Claude
 plane and blocks only direct Claude installation, so a selected Codex plane still proceeds.
 Without the trust step every later `mise` command in the repository exits with `config files are not trusted`. Resolving the lock downloads
-roughly 1.3 GB across the 13 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
+roughly 1.3 GB across the 12 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
 so skipping the explicit install step does not avoid the cost — the first `mise run <task>`
-installs all 13 without prompting. `mise run check` last measured 654 tests in 814s with
+installs all 12 without prompting. `mise run check` last measured 654 tests in 814s with
 `OK (skipped=13)` on Linux, its `validate` and `secrets` leaves each under 2s, so budget about 15
 minutes and expect longer on a loaded host. Both figures go stale by design — the count grows
 with the suite and the clock varies by host — and the gate's verdict is the evidence.
@@ -233,7 +233,10 @@ That list is every task `mise tasks` reports; re-run `mise tasks` and re-diff it
 list whenever a task is added or renamed, because a stale list here reads as an authoritative
 inventory. `mise run bundle:status` always ends with one
 terminal line — either `no owned entries for this host` or an `N ok, M conflict, K absent`
-summary — so a silent exit 0 is a defect, not a clean host.
+summary — so a silent exit 0 is a defect, not a clean host. Status inventories lifecycle-owned
+records, not every unowned name in a configured collection. Use `bundle:install -- --agent
+<claude|codex> --dry-run` to detect an occupied unowned destination without adopting, overwriting,
+or deleting it.
 
 Operator tools are an explicit Unix lifecycle plane, not part of plugin or ordinary bundle
 installation. They install only `ccodex` plus its packaged statusline support command into an
@@ -280,9 +283,11 @@ unavailable; Linux lifecycle mutation requires glibc 2.28+ and `statx` birth-tim
 inspects every known v1 document without rewriting it, and ordinary lifecycle commands block
 while one is outstanding. `bundle:install -- --migrate-state --dry-run` previews an exact,
 state-only conversion; `bundle:install -- --migrate-state` merges all exact records from the
-operator and configured-home legacy paths into central v2 without installing or refreshing
-bundle entries. A distinct legacy source is retired only after durable v2 persistence and an
-exact recheck. Linux/macOS persistence-barrier failures stop mutation; native Windows provides
+operator and configured-home legacy paths into central v2 without installing, refreshing, or
+adopting an unrecorded file or link. Diagnose unowned destinations with an install dry run;
+`--migrate-state` is not a repair path for them. A distinct legacy source is retired only after
+durable v2 persistence and an exact recheck. Linux/macOS persistence-barrier failures stop
+mutation; native Windows provides
 handle-bound process-crash recovery but does not claim sudden-power-loss durability for namespace
 transitions. Concurrent external mutation of managed paths during a write command is unsupported.
 Exact legacy links and byte-identical copies can be adopted; foreign, retargeted, and modified
