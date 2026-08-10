@@ -74,9 +74,12 @@ library's own installer on explicit request.**
   bundle did not author onto its own selection surface. Foreign *ideas* enter here by exactly
   one path: an adapted `references/*.md` file with a root `NOTICE` donor entry landed in the
   same change, re-expressed in this bundle's own prose rather than copied.
-- **Installable on request.** `libraries:list`, `libraries:status`, and `libraries:install`
-  run a named library's *own* front door — `mattpocock/skills`, ECC (`affaan-m/ECC`), and
-  hyperresearch. Running a third party's installer copies nothing here: the bytes land in the
+- **Installable on request, from a closed catalog.** `libraries:list`, `libraries:status`, and
+  `libraries:install` support exactly `mattpocock/skills`, ECC (`affaan-m/ECC`), and
+  hyperresearch through each library's *own* front door. Unlisted libraries—including gstack—are
+  operator-owned foreign state until separately verified and onboarded; these tasks do not adopt,
+  inspect for ownership, migrate, or remove them. Running a supported third party's installer
+  copies nothing here: the bytes land in the
   operator's home, written by the library's own code, under its own name and licence, exactly
   as if the operator had typed the command. So no donor obligation attaches. These tasks are
   opt-in and collision-checked, and **no gate leaf, `contributor:setup`, deprecated `setup`,

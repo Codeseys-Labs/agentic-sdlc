@@ -2,7 +2,10 @@
 
 Use this file when installing, updating, or removing one of the three third-party skill
 libraries this bundle knows how to reach, or when a recorded fact about one needs
-re-verifying. Every invocation below was read out of the library's own README or registry
+re-verifying. These three rows are the complete supported catalog: `mattpocock/skills`,
+`affaan-m/ECC`, and hyperresearch. Unlisted libraries—including gstack—remain operator-owned
+foreign state; this bundle has no install, status, migration, uninstall, adoption, or ownership
+claim over them. Every invocation below was read out of the library's own README or registry
 metadata rather than inferred — **a guessed flag is worse than a gap, because a guess runs.**
 Re-read the upstream doc before editing any row here.
 

@@ -363,9 +363,11 @@ HYPERRESEARCH = Library(
     ),
 )
 
-LIBRARIES: dict[str, Library] = {
-    library.key: library for library in (MATTPOCOCK, ECC, HYPERRESEARCH)
-}
+# Closed reviewed catalog. A new row is an onboarding decision, not ordinary data entry: ADR-0009
+# requires the front door, licence, surface, collision/ownership, credential, and uninstall claims
+# to land with coordinated docs and tests. Unknown libraries stay outside every lifecycle verb.
+SUPPORTED_LIBRARIES: tuple[Library, ...] = (MATTPOCOCK, ECC, HYPERRESEARCH)
+LIBRARIES: dict[str, Library] = {library.key: library for library in SUPPORTED_LIBRARIES}
 
 
 @dataclass(frozen=True)

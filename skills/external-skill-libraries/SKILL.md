@@ -21,7 +21,11 @@ Install a third party's skill library by running **that library's own installer*
 explicit operator step. Read this when a library is wanted, when a name collides, or when
 someone asks whether a catalog is worth its cost.
 
-The tool is `scripts/install_external_libraries.py`, wired as four mise tasks:
+The tool is `scripts/install_external_libraries.py`, wired as four mise tasks. Its supported
+catalog is closed and exhaustive: `mattpocock/skills`, ECC (`affaan-m/ECC`), and hyperresearch.
+An unlisted library—including gstack—is operator-owned foreign state until a separate verified
+onboarding change lands; these tasks do not adopt, inspect for ownership, migrate, or remove it.
+
 
 ```bash
 mise run libraries:list      # what is available, its front door, its cost, what is detected

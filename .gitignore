@@ -13,5 +13,4 @@ dist/
 build/
 *.log
 .worktrees/
-.gstack/
 .claude/worktrees/

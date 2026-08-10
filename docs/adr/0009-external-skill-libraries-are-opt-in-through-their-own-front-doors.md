@@ -379,6 +379,29 @@ interest is a **message** hides semantic changes. Tool presence is now stubbed r
 inferred from the environment, verified green under both a genuinely clean PATH and the developer
 host, and confirmed to fail when the old conflated behaviour is reintroduced.
 
+## Amendment — 2026-08-10: the supported catalog is closed
+
+The reachable catalog is exactly `mattpocock/skills`, ECC (`affaan-m/ECC`), and hyperresearch.
+This list is exhaustive, not illustrative. An unlisted library—including gstack—is outside every
+`libraries:list`, `libraries:status`, `libraries:install`, `libraries:migrate`, and
+`libraries:uninstall` ownership or support claim. Operators remain free to install one through its
+own independent path, but this bundle treats the resulting files as foreign state: it does not
+adopt them, inspect them to infer ownership, migrate them, or remove them. This exclusion is not a
+finding that gstack or another unlisted library is unsafe; it means the project has not verified
+and onboarded it.
+
+Adding a fourth row is a new onboarding decision, not routine table maintenance. The same change
+must establish and coordinate evidence for the upstream licence, published-artifact front door,
+selection-surface cost, name-collision and ownership behavior, credential behavior, removal
+semantics, user/agent documentation, and executable tests. `SUPPORTED_LIBRARIES` in
+`scripts/install_external_libraries.py` is the code-level closed set, and the tests pin each row's
+key and exact upstream origin so neither a fourth library nor a substituted repository can enter
+silently.
+
+The repository-local `.gstack/` ignore accommodation is removed with this amendment. Existing
+repo-local or global gstack files remain independently owned foreign state and are deliberately
+not read, deleted, migrated, staged, or otherwise mutated by this change.
+
 ## Reversal condition
 
 Reopened by an observable change in either direction.
