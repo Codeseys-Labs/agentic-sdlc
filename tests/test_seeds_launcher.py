@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 LAUNCHER = ROOT / "skills" / "agentic-sdlc" / "tools" / "seeds-launcher.mjs"
-SEEDS_PACKAGE_FIXTURE = ROOT / "tests" / "fixtures" / "seeds-cli-0.5.14" / "package.json"
+SEEDS_PACKAGE_FIXTURE = ROOT / "tests" / "fixtures" / "seeds-cli-0.5.15" / "package.json"
 HOST_NODE = shutil.which("node")
 HOSTILE_NODE = next(
     (
@@ -69,7 +69,7 @@ class LauncherFixture:
         self.queue_writer = self.root / "queue-writer"
         self.node_root = self.root / "installs" / "node" / "22.22.3"
         self.bun_root = self.root / "installs" / "bun" / "1.3.10"
-        self.seeds_root = self.root / "installs" / "npm-os-eco-seeds-cli" / "0.5.14"
+        self.seeds_root = self.root / "installs" / "npm-os-eco-seeds-cli" / "0.5.15"
         self._make_tool_layout()
         git = shutil.which("git.exe" if os.name == "nt" else "git")
         if not git:
@@ -140,7 +140,7 @@ class LauncherFixture:
             "  case \"${3:-}\" in\n"
             f"    node@22.22.3) printf '%s\\n' {self._quote(str(self.node_root))} ;;\n"
             f"    bun@1.3.10) printf '%s\\n' {self._quote(str(self.bun_root))} ;;\n"
-            f"    npm:@os-eco/seeds-cli@0.5.14) printf '%s\\n' {self._quote(str(self.seeds_root))} ;;\n"
+            f"    npm:@os-eco/seeds-cli@0.5.15) printf '%s\\n' {self._quote(str(self.seeds_root))} ;;\n"
             "    *) exit 2 ;;\n"
             "  esac\n"
             "  exit 0\n"
@@ -215,7 +215,7 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self.assertEqual(calls[1:], [
             "--no-config where node@22.22.3",
             "--no-config where bun@1.3.10",
-            "--no-config where npm:@os-eco/seeds-cli@0.5.14",
+            "--no-config where npm:@os-eco/seeds-cli@0.5.15",
         ])
         active = self.active_receipt_path()
         receipt = json.loads(active.read_text(encoding="utf-8"))
@@ -421,11 +421,15 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self.assertEqual(adapter.parent, self.active_receipt_path().parent)
         self.assertNotEqual(adapter.parent, Path(receipt["tuple"]["git"]["path"]).parent)
 
-        for argv in (("rev-parse", "--git-dir"), ("rev-parse", "--git-common-dir")):
+        for argv in (
+            ("rev-parse", "--git-dir"),
+            ("rev-parse", "--git-common-dir"),
+            ("rev-parse", "--verify", "HEAD^{commit}"),
+        ):
             with self.subTest(argv=argv):
                 allowed = subprocess.run([adapter, *argv], cwd=self.distribution, text=True, capture_output=True, check=False)
                 self.assertEqual(allowed.returncode, 0, allowed.stderr)
-        for argv in (("status",), ("rev-parse", "HEAD"), ("rev-parse", "--show-toplevel"), ("rev-parse", "--git-dir", "extra")):
+        for argv in (("status",), ("rev-parse", "HEAD"), ("rev-parse", "--verify", "HEAD^{tree}"), ("rev-parse", "--show-toplevel"), ("rev-parse", "--git-dir", "extra")):
             with self.subTest(argv=argv):
                 denied = subprocess.run([adapter, *argv], cwd=self.distribution, text=True, capture_output=True, check=False)
                 self.assertNotEqual(denied.returncode, 0)
@@ -560,8 +564,15 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self.queue = self.root / "queue target"
+        self.queue.mkdir()
+        self._run(["git", "init", "-q"], cwd=self.queue)
+        self._run(["git", "config", "user.email", "fixture@example.invalid"], cwd=self.queue)
+        self._run(["git", "config", "user.name", "Fixture"], cwd=self.queue)
+        (self.queue / ".gitkeep").write_text("queue root\n", encoding="utf-8")
+        self._run(["git", "add", ".gitkeep"], cwd=self.queue)
+        self._run(["git", "commit", "-qm", "queue root"], cwd=self.queue)
         self.seeds = self.queue / ".seeds"
-        self.seeds.mkdir(parents=True)
+        self.seeds.mkdir()
         (self.seeds / "config.yaml").write_text("project: fixture\nversion: '1'\n", encoding="utf-8")
         (self.seeds / ".gitignore").write_text("*.lock\n", encoding="utf-8")
         self.issues = self.seeds / "issues.jsonl"
@@ -604,7 +615,7 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
             self.skipTest("python3 is required for the queue-writer fixture")
         script = self.root / "queue-writer.py"
         script.write_text(
-            "import json, sys\n"
+            "import json, os, sys\n"
             "from pathlib import Path\n"
             f"issues = Path({str(self.issues)!r})\n"
             f"plans = Path({str(self.plans)!r})\n"
@@ -688,6 +699,326 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
             expect if expect is not None else self.digest(),
             *args,
         )
+
+    def install_exact_initializer(self) -> None:
+        self.install_queue_writer(
+            "target = Path.cwd()\n"
+            "seeds = target / '.seeds'\n"
+            "seeds.mkdir()\n"
+            "(seeds / 'config.yaml').write_text(f'project: \"{target.name}\"\\nversion: \"1\"\\nmax_plan_depth: 3\\n')\n"
+            "for name in ('issues.jsonl', 'templates.jsonl', 'plans.jsonl'):\n"
+            "    (seeds / name).write_text('')\n"
+            "(seeds / '.gitignore').write_text('*.lock\\n')\n"
+            "attributes = target / '.gitattributes'\n"
+            "existing = attributes.read_text() if attributes.exists() else ''\n"
+            "lines = ['.seeds/issues.jsonl merge=union', '.seeds/templates.jsonl merge=union', '.seeds/plans.jsonl merge=union']\n"
+            "existing_lines = set(existing.split('\\n'))\n"
+            "missing = [line for line in lines if line not in existing_lines]\n"
+            "if missing:\n"
+            "    separator = '' if not existing or existing.endswith('\\n') else '\\n'\n"
+            "    attributes.write_text(existing + separator + '\\n'.join(missing) + '\\n')\n"
+            "print(json.dumps({'success': True, 'command': 'init', 'dir': str(seeds)}))\n"
+        )
+
+    def init(self, *, target: Path | None = None, writer: str = "conductor", expect: str = "absent", extra: tuple[str, ...] = ()) -> subprocess.CompletedProcess[str]:
+        self.bun_log.unlink(missing_ok=True)
+        return self.launcher(
+            "record",
+            "--target",
+            str(target or self.queue),
+            "--queue-writer",
+            writer,
+            "--expect-queue",
+            expect,
+            "init",
+            *extra,
+        )
+
+    def test_lawful_init_creates_only_the_closed_surface_and_precise_gitattributes_append(self) -> None:
+        shutil.rmtree(self.seeds)
+        attributes = self.queue / ".gitattributes"
+        attributes.write_text("*.generated linguist-generated\nlocal.dat merge=ours", encoding="utf-8")
+        original = attributes.read_bytes()
+        self.install_exact_initializer()
+
+        result = self.init()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("recorded conductor queue initialization", result.stdout)
+        self.assertEqual(
+            {path.name for path in self.seeds.iterdir()},
+            {".gitignore", "config.yaml", "issues.jsonl", "templates.jsonl", "plans.jsonl"},
+        )
+        self.assertEqual((self.seeds / ".gitignore").read_bytes(), b"*.lock\n")
+        self.assertEqual(
+            (self.seeds / "config.yaml").read_text(encoding="utf-8"),
+            f'project: "{self.queue.name}"\nversion: "1"\nmax_plan_depth: 3\n',
+        )
+        for name in ("issues.jsonl", "templates.jsonl", "plans.jsonl"):
+            self.assertEqual((self.seeds / name).read_bytes(), b"")
+        self.assertEqual(
+            attributes.read_bytes(),
+            original
+            + b"\n.seeds/issues.jsonl merge=union\n"
+            + b".seeds/templates.jsonl merge=union\n"
+            + b".seeds/plans.jsonl merge=union\n",
+        )
+
+    def test_init_requires_conductor_absent_shape_before_the_writer_starts(self) -> None:
+        shutil.rmtree(self.seeds)
+        self.install_exact_initializer()
+        for name, kwargs in {
+            "wrong writer": {"writer": "worker"},
+            "digest expectation": {"expect": sha256(b"").hexdigest()},
+            "extra argument": {"extra": ("--force",)},
+        }.items():
+            with self.subTest(request=name):
+                refused = self.init(**kwargs)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertFalse(self.bun_log.exists())
+                self.assertFalse(self.seeds.exists())
+
+    def test_init_rejects_every_existing_or_redirected_seeds_surface(self) -> None:
+        cases = {
+            "empty directory": lambda: self.seeds.mkdir(),
+            "partial directory": lambda: (self.seeds.mkdir(), (self.seeds / "issues.jsonl").write_text("")),
+            "regular file": lambda: self.seeds.write_text("partial"),
+            "symlink": lambda: os.symlink(self.root, self.seeds),
+        }
+        for name, mutation in cases.items():
+            with self.subTest(surface=name):
+                shutil.rmtree(self.seeds, ignore_errors=True)
+                self.seeds.unlink(missing_ok=True)
+                mutation()
+                self.install_exact_initializer()
+                refused = self.init()
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("absent .seeds", refused.stderr)
+                self.assertFalse(self.bun_log.exists())
+
+        shutil.rmtree(self.seeds, ignore_errors=True)
+        self.seeds.unlink(missing_ok=True)
+        shutil.rmtree(self.queue / ".git")
+        (self.queue / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+        refused = self.init()
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("linked worktree", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+
+    def test_init_requires_the_queue_owning_repository_root(self) -> None:
+        shutil.rmtree(self.seeds)
+        shutil.rmtree(self.queue / ".git")
+        (self.queue / ".git").mkdir()
+        self.install_exact_initializer()
+
+        refused = self.init()
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("valid queue-owning Git repository root", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse(self.seeds.exists())
+
+    def test_init_rejects_a_repository_subdirectory_with_a_spoofed_git_directory(self) -> None:
+        shutil.rmtree(self.seeds)
+        nested = self.queue / "nested"
+        nested.mkdir()
+        (nested / ".git").mkdir()
+        self.install_exact_initializer()
+
+        refused = self.init(target=nested)
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("not its queue-owning Git repository root", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse((nested / ".seeds").exists())
+
+    def test_init_rejects_a_structural_git_spoof_without_an_exact_head_commit(self) -> None:
+        shutil.rmtree(self.seeds)
+        shutil.rmtree(self.queue / ".git")
+        (self.queue / ".git" / "objects").mkdir(parents=True)
+        (self.queue / ".git" / "refs" / "heads").mkdir(parents=True)
+        (self.queue / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        self.install_exact_initializer()
+
+        refused = self.init()
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("exact HEAD commit", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse(self.seeds.exists())
+
+    def test_init_rejects_a_git_common_directory_redirect(self) -> None:
+        shutil.rmtree(self.seeds)
+        external = self.root / "external repository"
+        self._run(["git", "clone", "-q", "--shared", str(self.queue), str(external)])
+        redirected = self.root / "redirected queue root"
+        redirected.mkdir()
+        shutil.copytree(external / ".git", redirected / ".git")
+        (redirected / ".git" / "commondir").write_text(
+            str(self.queue / ".git") + "\n",
+            encoding="utf-8",
+        )
+        self.install_exact_initializer()
+
+        refused = self.init(target=redirected)
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("common Git directory redirects", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse((redirected / ".seeds").exists())
+
+    def test_init_refuses_upstream_substring_matching_before_mutation(self) -> None:
+        shutil.rmtree(self.seeds)
+        attributes = self.queue / ".gitattributes"
+        attributes.write_text(
+            "# .seeds/issues.jsonl merge=union\n"
+            ".seeds/templates.jsonl merge=union-extra\n",
+            encoding="utf-8",
+        )
+        original = attributes.read_bytes()
+        self.install_exact_initializer()
+
+        refused = self.init()
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("substring-match", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse(self.seeds.exists())
+        self.assertEqual(attributes.read_bytes(), original)
+
+    def test_init_refuses_crlf_merge_rules_before_mutation(self) -> None:
+        shutil.rmtree(self.seeds)
+        attributes = self.queue / ".gitattributes"
+        attributes.write_bytes(
+            b".seeds/issues.jsonl merge=union\r\n"
+            b".seeds/templates.jsonl merge=union\r\n"
+            b".seeds/plans.jsonl merge=union\r\n"
+        )
+        original = attributes.read_bytes()
+        self.install_exact_initializer()
+
+        refused = self.init()
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("substring-match", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse(self.seeds.exists())
+        self.assertEqual(attributes.read_bytes(), original)
+
+    def test_init_refuses_non_utf8_gitattributes_before_mutation(self) -> None:
+        shutil.rmtree(self.seeds)
+        attributes = self.queue / ".gitattributes"
+        attributes.write_bytes(b"binary-attribute=\xff\n")
+        original = attributes.read_bytes()
+        self.install_exact_initializer()
+
+        refused = self.init()
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("non-UTF-8", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse(self.seeds.exists())
+        self.assertEqual(attributes.read_bytes(), original)
+
+    def test_init_rejects_non_regular_gitattributes_before_the_writer_starts(self) -> None:
+        shutil.rmtree(self.seeds)
+        for kind in ("directory", "symlink"):
+            with self.subTest(kind=kind):
+                attributes = self.queue / ".gitattributes"
+                if attributes.is_symlink() or attributes.is_file():
+                    attributes.unlink()
+                elif attributes.is_dir():
+                    attributes.rmdir()
+                if kind == "directory":
+                    attributes.mkdir()
+                else:
+                    elsewhere = self.root / "elsewhere-attributes"
+                    elsewhere.write_text("foreign\n", encoding="utf-8")
+                    os.symlink(elsewhere, attributes)
+                self.install_exact_initializer()
+                refused = self.init()
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("must be absent or a regular file", refused.stderr)
+                self.assertFalse(self.bun_log.exists())
+
+    def test_init_inherits_receipt_hash_and_environment_admissions(self) -> None:
+        shutil.rmtree(self.seeds)
+        self.install_exact_initializer()
+        before = self.calls.read_text(encoding="utf-8")
+        result = self.init()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls.read_text(encoding="utf-8"), before)
+        contents = self.bun_log.read_text(encoding="utf-8")
+        self.assertIn("init --json", contents)
+        self.assertIn(f"PWD={self.queue}", contents)
+        self.assertIn("GIT_CONFIG_NOSYSTEM=1", contents)
+        for hostile in ("BUN_OPTIONS=", "NODE_OPTIONS=", "NPM_CONFIG_REGISTRY=", "MISE_DATA_DIR=", "SEEDS_DEBUG="):
+            self.assertNotIn(hostile, contents)
+
+        shutil.rmtree(self.seeds)
+        entry = self.seeds_root / "lib" / "node_modules" / "@os-eco" / "seeds-cli" / "src" / "index.ts"
+        entry.write_text("drifted\n", encoding="utf-8")
+        refused = self.init()
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("drift", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse(self.seeds.exists())
+
+    def test_init_reports_unknown_effect_for_failed_movement_and_clean_refusal_without_it(self) -> None:
+        shutil.rmtree(self.seeds)
+        self.install_queue_writer(
+            "target = Path.cwd()\n"
+            "(target / '.seeds').mkdir()\n"
+            "(target / '.seeds' / 'partial').write_text('moved')\n"
+            "sys.exit(7)\n"
+        )
+        unknown = self.init()
+        self.assertNotEqual(unknown.returncode, 0)
+        self.assertIn("effect is unknown", unknown.stderr)
+
+        shutil.rmtree(self.seeds)
+        attributes = self.queue / ".gitattributes"
+        attributes.write_text("existing merge=ours\n", encoding="utf-8")
+        original_attributes = attributes.read_bytes()
+        self.install_queue_writer("sys.exit(7)\n")
+        clean = self.init()
+        self.assertNotEqual(clean.returncode, 0)
+        self.assertIn("left .seeds and .gitattributes unchanged", clean.stderr)
+        self.assertNotIn("effect is unknown", clean.stderr)
+        self.assertFalse(self.seeds.exists())
+        self.assertEqual(attributes.read_bytes(), original_attributes)
+
+    def test_init_rejects_every_poststate_divergence(self) -> None:
+        cases = {
+            "extra file": "(seeds / 'smuggled').write_text('x')\n",
+            "missing file": "(seeds / 'templates.jsonl').unlink()\n",
+            "wrong config": "(seeds / 'config.yaml').write_text('project: smuggled\\nversion: \"1\"\\nmax_plan_depth: 3\\n')\n",
+            "nonempty queue": "(seeds / 'issues.jsonl').write_text('{}\\n')\n",
+            "wrong ignore": "(seeds / '.gitignore').write_text('*\\n')\n",
+            "rewritten attributes": "attributes.write_text('rewritten\\n' + attributes.read_text())\n",
+            "reported other dir": "reported = str(target / 'other')\n",
+        }
+        for name, mutation in cases.items():
+            with self.subTest(divergence=name):
+                shutil.rmtree(self.seeds, ignore_errors=True)
+                (self.queue / ".gitattributes").unlink(missing_ok=True)
+                self.install_queue_writer(
+                    "target = Path.cwd()\n"
+                    "seeds = target / '.seeds'\n"
+                    "seeds.mkdir()\n"
+                    "(seeds / 'config.yaml').write_text(f'project: \"{target.name}\"\\nversion: \"1\"\\nmax_plan_depth: 3\\n')\n"
+                    "for filename in ('issues.jsonl', 'templates.jsonl', 'plans.jsonl'):\n"
+                    "    (seeds / filename).write_text('')\n"
+                    "(seeds / '.gitignore').write_text('*.lock\\n')\n"
+                    "attributes = target / '.gitattributes'\n"
+                    "attributes.write_text('.seeds/issues.jsonl merge=union\\n.seeds/templates.jsonl merge=union\\n.seeds/plans.jsonl merge=union\\n')\n"
+                    "reported = str(seeds)\n"
+                    + mutation
+                    + "print(json.dumps({'success': True, 'command': 'init', 'dir': reported}))\n"
+                )
+                refused = self.init()
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("divergence", refused.stderr)
 
     def test_lawful_create_records_exactly_the_requested_fields(self) -> None:
         self.install_exact_queue_writer()
@@ -779,7 +1110,7 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
         self.install_exact_queue_writer()
         self.write_records(self.issues, [self.seed("fixture-0000")])
         pristine = self.issues.read_bytes()
-        for verb in ("delete", "prune", "close", "claim", "sync", "init", "disposition", "archive", "ready", "prime", ""):
+        for verb in ("delete", "prune", "close", "claim", "sync", "disposition", "archive", "ready", "prime", ""):
             with self.subTest(verb=verb):
                 refused = self.record(verb, "fixture-0000")
                 self.assertNotEqual(refused.returncode, 0)
@@ -1099,6 +1430,7 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
 
     def test_record_refuses_a_linked_worktree_whose_queue_write_redirects(self) -> None:
         self.install_exact_queue_writer()
+        shutil.rmtree(self.queue / ".git")
         (self.queue / ".git").write_text(f"gitdir: {self.root / 'main.git' / 'worktrees' / 'wt'}\n", encoding="utf-8")
         refused = self.record("create", "--title", "a finding")
         self.assertNotEqual(refused.returncode, 0)
@@ -1227,7 +1559,7 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(inspected.returncode, 0, inspected.stderr)
-            self.assertEqual(inspected.stdout.strip(), "0.5.14")
+            self.assertEqual(inspected.stdout.strip(), "0.5.15")
             receipt = json.loads(
                 (state / "agentic-sdlc" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json").read_text(encoding="utf-8")
             )

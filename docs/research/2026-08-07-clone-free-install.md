@@ -150,11 +150,11 @@ it. Source discovery globs four tree paths — `skills/*/SKILL.md`,
 tree (`:984-985`), and the ownership record stores the absolute source path
 (`:1032`), re-verified on every `status` through `os.path.samefile` (`:1069`,
 `:1076`) and `resolve(strict=False)` (`:1081`). Delete the tree and an `ok` entry
-becomes `conflict`. The PATH launchers are byte copies but hard-code an absolute
-in-tree exec target: `assets/launchers/ocx-launch.in:3` is
-`exec @CANONICAL_LAUNCHER@ launch "$@"`, substituted at
-`scripts/install_operator_tools.py:112-113` with the quoted absolute path to
-`<repo>/scripts/opencodex-claude.sh`.
+becomes `conflict`. The PATH dispatcher is a byte copy but hard-codes the
+install-time repository root and canonical launcher through placeholders in
+`assets/launchers/ccodex.in`; `scripts/install_operator_tools.py` substitutes the
+quoted absolute paths. ADR-0010's 2026-08-10 amendment retired the older dedicated
+alias templates without changing this run-time dependency.
 
 **`mise -C "$root"` re-entry.** The shell wrappers and launchers need the tree's
 *trusted* `mise.toml` at run time, not just their own bytes:
@@ -167,11 +167,11 @@ does the same.
 `scripts/sanitize_mermaid_svg.mjs` (`:517`), `node_modules/` (`:333`), and
 re-digests `package-lock.json` at render time (`:326`).
 
-**Every task is tree-coupled.** All 36 `run` strings in `mise.toml` reference a
-repo-internal path. The three without a repo path are not exceptions: `check`
-(`:142-144`) and `setup` (`:241-243`) are `depends`-only with no `run`, and
-`hooks:install` (`:239`) is `lefthook install`, which reads `lefthook.yml` from
-cwd and writes `.git/hooks` in the tree.
+**Every task is tree-coupled.** Every `run` string in `mise.toml` either names a
+repo-internal path or invokes a tool against the repository. The depends-only tasks are not
+exceptions: `check`, `contributor:setup`, and its deprecated `setup` forwarder reach tasks
+that read the tree, while `hooks:install` is `lefthook install`, which reads `lefthook.yml`
+from cwd and writes `.git/hooks` in the tree.
 
 **Genuinely clone-free surfaces — exactly two.** The installed statusline copy
 (`assets/claude/statusline-command.sh`) is self-contained: no `BASH_SOURCE`,
@@ -200,7 +200,7 @@ Rejected alternatives and the reason each lost:
 - **`curl … | bash` as the primary instruction** — executes bytes the operator
   has not read, against this repository's standing review-before-trust posture.
   Documented as a convenience only, after the verify-then-run form.
-- **A bare two-liner** (`git clone --depth 1 … && mise -C … run setup`) — honest,
+- **A bare two-liner** (`git clone --depth 1 … && mise -C … run contributor:setup`) — honest,
   but clobbers or half-updates on re-run and makes the operator hold the managed
   path themselves.
 
@@ -255,12 +255,13 @@ Run 2 — the full install chain from the managed clone:
 | `mise run check` | **0** | 326s, `Ran 694 tests in 325.447s` |
 | `mise run bundle:install` | 0 | link mode |
 | `mise run bundle:status` | 0 | `38 ok, 0 conflict, 0 absent` |
-| `mise run operator-tools:install` | 0 | installed statusline + both launchers |
+| `mise run operator-tools:install` | 0 | installed the then-current statusline + launcher set |
 
 Reachability afterwards: the installed skill symlink resolved to
 `/home/op/.local/share/agentic-sdlc/skills/agentic-sdlc` — i.e. into the managed
-clone, exactly as the coupling analysis predicts — and `ocx-launch` was reachable
-on PATH.
+clone, exactly as the coupling analysis predicts — and the then-shipped `ocx-launch`
+alias was reachable on PATH. This transcript predates ADR-0010's 2026-08-10
+alias-retirement amendment; fresh installs now expose `ccodex` instead.
 
 **One real finding, worth recording rather than smoothing over.** The first
 container attempt used `debian:13-slim` *without* `unzip`, and

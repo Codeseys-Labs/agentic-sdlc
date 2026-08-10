@@ -4,7 +4,7 @@
 #
 # Purpose: run a SECOND Claude Code process pointed at the local opencodex proxy, for
 # non-Anthropic-model work, while the operator's native Claude Code session and config are
-# left untouched. Subcommands: launch | launch-ultracode | status | restart | configure.
+# left untouched. Subcommands: ensure | launch | launch-ultracode | status | restart | configure.
 #
 # ENSURE-UP: `launch` and `restart` own the gateway lifecycle rather than merely attaching.
 # Supervision is DELEGATED to opencodex's own verbs (`ocx ensure` starts-if-down, waits, and
@@ -173,19 +173,33 @@ strip_forwarding_separator() {
 # command, then the direct and alias forms, all three of which reach this same code.
 verb_usage() {
   case "$1" in
+    ensure)
+      cat <<'EOF'
+usage: ccodex ensure
+       opencodex-claude.sh ensure
+
+Ensure the gateway is healthy without launching Claude Code: start it if down, restart once
+if half-up, and fail closed if it never becomes healthy. Takes no arguments.
+
+Plain `claude` starts the native Anthropic-routed CLI and does not use this gateway. Use
+`ccodex launch` only when you intend the separately configured non-Anthropic gateway plane.
+EOF
+      ;;
     launch|launch-ultracode)
-      local operator_verb=ultracode alias_name=ocx-ultracode ultra=$'\nSession Ultracode is applied. '
+      local operator_verb=ultracode ultra=$'\nSession Ultracode is applied. '
       if [ "$1" = launch ]; then
-        operator_verb=launch; alias_name=ocx-launch; ultra=$'\n'
+        operator_verb=launch; ultra=$'\n'
       fi
       cat <<EOF
 usage: ccodex $operator_verb [claude args...]
        opencodex-claude.sh $1 [claude args...]
-       $alias_name [claude args...]
 
 Ensure the gateway is healthy (start it if down, restart once if half-up), then launch a
 second Claude Code process through it, with an isolated CLAUDE_CONFIG_DIR and no Anthropic
 subscription credential in scope.${ultra}Fails closed if the gateway never becomes healthy.
+
+Plain \`claude\` starts the native Anthropic-routed CLI and does not use this gateway. This
+\`ccodex\` route is the explicit non-Anthropic gateway launch.
 EOF
       [ "$1" = launch-ultracode ] && cat <<'EOF'
 
@@ -294,8 +308,9 @@ EOF
 
 usage() {
   cat <<'EOF'
-usage: opencodex-claude.sh <launch|launch-ultracode|status|restart|session|configure> [args...]
+usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|session|configure> [args...]
 
+  ensure                    Ensure the gateway is healthy without launching Claude Code.
   launch [claude args...]   Ensure the gateway is healthy (start it if down, restart once if
                             half-up), then launch a second Claude Code process through it
                             with an isolated CLAUDE_CONFIG_DIR and no Anthropic subscription
@@ -392,7 +407,7 @@ use of native Anthropic applications and does not permit third parties to route 
 through Free/Pro/Max plan credentials. The mechanism works; the authorization does not.
 
 The supported path is a non-Anthropic provider authenticating with its own credential:
-  scripts/opencodex-claude.sh configure
+  ccodex configure
 EOF
   exit 3
 }
@@ -525,7 +540,7 @@ NOT LIVE YET: \`ocx $route\` wrote the provider to the config file. It is NOT in
 gateway's routing table until BOTH of these run:
 
   mise -C $root exec -- ocx sync
-  scripts/opencodex-claude.sh restart
+  ccodex restart
 
 Until then a request naming this provider's model does NOT fail closed. It is classified
 \`routeKind: "default-provider"\` and forwarded to the DEFAULT provider, so it is attempted and
@@ -535,7 +550,7 @@ Neither step is run for you: \`ocx sync\` rewrites shared ~/.codex config and a 
 interrupts in-flight turns, so both are separately authorized operations.
 
 Confirm the provider went live before dispatching anything to it:
-  scripts/opencodex-claude.sh status
+  ccodex status
 EOF
 }
 
@@ -556,7 +571,7 @@ fail_closed() {
   printf 'Claude Code was NOT launched: routing it at a dead or half-up gateway would\n' >&2
   printf 'silently produce connection errors or unattributable responses.\n\n' >&2
   printf 'Diagnose with:\n' >&2
-  printf '  scripts/opencodex-claude.sh status\n' >&2
+  printf '  ccodex status\n' >&2
   printf '  mise -C %s exec -- ocx doctor\n' "$root" >&2
   printf '  gateway start log: %s/gateway.log\n' "$log_dir" >&2
   exit 1
@@ -635,10 +650,22 @@ scrub_anthropic_env() {
     scrub_and_restore_claude_env
     return 0
   fi
+  # Fallback: preserve an installer choice across the prefix scrub so it wins over the opinionated
+  # default, exactly as the helper's capture-then-restore would.
+  local saved_pct="${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}"
   for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true); do
     unset "$name" || true
   done
   unset NODE_TLS_REJECT_UNAUTHORIZED FALLBACK_FOR_ALL_PRIMARY_MODELS API_TIMEOUT_MS || true
+  if [ -n "$saved_pct" ]; then
+    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="$saved_pct"
+  elif [ -z "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" ]; then
+    # Opinionated default (ADR-0012 amended 2026-08-08): 85% when no explicit choice exists.
+    # Mirrors the primary path in session-inheritance.sh so a missing helper does not lose the
+    # default. One-directional safe: ignored if above the (undocumented) default, earlier at
+    # ~0.85*272000≈231200 if below.
+    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
+  fi
 }
 
 # Fail closed against the same sources opencodex's auth detector reads, in the isolated
@@ -729,6 +756,13 @@ assert_no_keychain_subscription() {
 }
 
 # --- subcommands -------------------------------------------------------------------------
+
+cmd_ensure() {
+  require_ocx
+  ensure_gateway_up
+  printf '\nhealthy: the gateway answered an identity-checked health probe. That is evidence,\n'
+  printf 'not authorization, and it does not launch Claude Code.\n'
+}
 
 cmd_launch() {
   require_ocx
@@ -857,11 +891,11 @@ cmd_status() {
   elif gateway_half_up; then
     printf '  state   : HALF-UP (something is bound or a pid is alive, but no healthy identity probe)\n'
     printf '  port    : %s\n' "${port:-unknown}"
-    printf '  hint    : scripts/opencodex-claude.sh restart\n'
+    printf '  hint    : ccodex restart\n'
   else
     printf '  state   : DOWN\n'
     printf '  port    : %s (configured)\n' "${port:-unknown}"
-    printf '  hint    : scripts/opencodex-claude.sh restart   (or `launch`, which ensures it is up)\n'
+    printf '  hint    : ccodex ensure   (or `ccodex launch`, which also ensures it is up)\n'
   fi
   printf '  logs    : %s/gateway.log\n' "$log_dir"
 
@@ -884,7 +918,7 @@ cmd_status() {
     printf '            %s\n' $stale
     printf '            A request naming one of these does NOT fail closed -- it is classified\n'
     printf '            routeKind: "default-provider" and billed against the DEFAULT provider.\n'
-    printf '            Fix: mise -C %s exec -- ocx sync, then this script'"'"'s restart.\n' "$root"
+    printf '            Fix: mise -C %s exec -- ocx sync, then `ccodex restart`.\n' "$root"
   fi
 
   # Surfaced here, not only under `session status`, because the failure it reports is invisible:
@@ -1109,8 +1143,8 @@ WARNING: a credential passed on the command line is readable by every process on
 `ps` for the life of the call, and may be recorded in your shell history.
 
 Prefer the two-step form, which reads the key ONLY from piped stdin:
-  scripts/opencodex-claude.sh configure provider add <name> --adapter <a> --base-url <url>
-  printf '%s\n' "$YOUR_KEY_ENV_VAR" | mise exec -- ocx account add-key <name>
+  ccodex configure provider add <name> --adapter <a> --base-url <url>
+  printf '%s\n' "$YOUR_KEY_ENV_VAR" | ccodex configure account add-key <name>
 
 Continuing, because upstream `provider add` offers no stdin or environment alternative for
 --api-key. The value is not printed or logged by this wrapper.
@@ -1226,7 +1260,7 @@ cmd_configure() {
 
 route="${1:-}"
 case "$route" in
-  launch|launch-ultracode|status|restart|configure)
+  ensure|launch|launch-ultracode|status|restart|configure)
     shift
     # Help before anything else, so an intercepted help request has provably run no assertion,
     # started no gateway, and written nothing. Only the FIRST argument is inspected: a later
@@ -1240,6 +1274,7 @@ case "$route" in
     # Claude Code's own help rather than this text.
     strip_forwarding_separator "${1:-}" && shift
     case "$route" in
+      ensure) [ "$#" -eq 0 ] || { printf 'error: `ensure` takes no arguments\n' >&2; exit 2; }; cmd_ensure ;;
       launch) cmd_launch "$@" ;;
       launch-ultracode) cmd_launch_ultracode "$@" ;;
       status) cmd_status "$@" ;;

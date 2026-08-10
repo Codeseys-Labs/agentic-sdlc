@@ -254,44 +254,41 @@ class ContextWindowTableTests(unittest.TestCase):
             "the single-model opt-in is the pressure valve and must be named",
         )
 
-    def test_deferred_percentage_override_stays_unset_until_measured(self) -> None:
-        # ADR-0012 Decision item 4: one-directional knob, undocumented default. Shipping a value
-        # on documentation alone is the failure this pins against.
+    def test_opinionated_pct_default_is_85_and_remains_one_directional(self) -> None:
+        # ADR-0012 Decision item 4 amended 2026-08-08: opinionated 85, safe because one-directional.
+        # Before measurement the knob was deliberately left unset; now 85 ships as a safety margin.
+        for text, name in ((self.calibration, "calibration"), (ADR.read_text(encoding="utf-8"), "adr")):
+            self.assertIn("85", text, f"{name} must record the opinionated 85")
+            self.assertRegex(text, r"(?is)\bopinionated\b", f"{name} must label 85 as opinionated")
+            self.assertRegex(text, r"(?is)\bone-directional\b", f"{name} must keep the one-directional reason")
+        self.assertIn("231200", self.calibration, "effective 0.85*272000 trigger must be stated")
+        self.assertIn("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85", self.calibration)
+        self.assertRegex(self.calibration, r"(?is)amended 2026-08-08", "amendment date must travel")
         self.assertRegex(
             self.calibration,
-            r"(?is)\bleft \*\*unset\*\*|\bdeliberately \*\*?left unset",
-            "the calibration must record the knob as unset",
+            r"(?is)only when the operator has not already set it",
+            "installer-override-wins must be explicit",
         )
-        self.assertRegex(
-            self.calibration,
-            r"(?is)\bone-directional\b",
-            "the reason for deferral must travel with the deferral",
-        )
-        # No concrete percentage may be prescribed anywhere until it is measured.
-        for text, name in (
-            (self.calibration, "calibration"),
-            (ADR.read_text(encoding="utf-8"), "adr"),
-        ):
+        adr = ADR.read_text(encoding="utf-8")
+        self.assertIn("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85", adr)
+        # The only concrete shipped assignment may be 85; any other concrete percentage would be
+        # a different default. The placeholder <1-100> for installer tuning is not a concrete value.
+        for text, name in ((self.calibration, "calibration"), (adr, "adr")):
+            assignments = re.findall(rf"{DEFERRED_KNOB}\s*[=:]\s*(\d+)", text)
+            for value in assignments:
+                self.assertEqual(value, "85", f"{name} prescribes {value} instead of opinionated 85")
             self.assertNotRegex(
                 text,
-                rf"(?is)\b{DEFERRED_KNOB}\s*[=:]\s*\d+",
-                f"{name} prescribes a percentage that has not been measured",
+                r"(?is)85\s+is\s+(?:a\s+)?measured\s+optimum",
+                f"{name} must not claim 85 is a measured optimum",
             )
         research = RESEARCH.read_text(encoding="utf-8")
-        # The research memo may name 70 only as the deferred proposal / A-B test value, and must
-        # carry the procedure that would settle it.
         self.assertIn("claude_code.compaction", research)
         self.assertIn("pre_tokens", research)
-        self.assertRegex(
-            research,
-            r"(?is)\bPreCompact\b",
-            "the measurement procedure must name the boundary-marking hook",
-        )
-        self.assertRegex(
-            research,
-            r"(?is)\bA/B\b|\bidentical run\b",
-            "the decisive confirmation is an A/B; it must be spelled out",
-        )
+        self.assertRegex(research, r"(?is)\bPreCompact\b", "measurement procedure must name boundary hook")
+        self.assertRegex(research, r"(?is)\bA/B\b|\bidentical run\b", "A/B must remain decisive")
+        self.assertIn("85", research)
+        self.assertRegex(research, r"(?is)\bopinionated\b", "research table must label 85 opinionated")
 
     def test_shared_pool_output_budget_interaction_is_stated_where_routing_is_read(self) -> None:
         self.assertIn(str(UNRECOGNIZED_OUTPUT_DEFAULT), self.calibration)

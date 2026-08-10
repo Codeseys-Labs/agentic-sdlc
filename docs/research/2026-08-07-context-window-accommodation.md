@@ -563,7 +563,7 @@ As adopted by the operator on 2026-08-07, the concrete settings are:
 | Setting | Value | Why |
 |---|---|---|
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | **272000** | smallest real window in the selected model set (§8.2) |
-| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | **unset** — measure first | one-directional against an undocumented default; procedure in §8.2.1 |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | **85** opinionated (was unset pending measurement) | one-directional: safe even before measured; procedure in §8.2.1 to settle the true default |
 | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | set explicitly for shared-pool sessions | defaults to 32000 on unrecognized IDs and trades against input (§8.2.2) |
 | provider `modelContextWindows` | recorded for the four unknown models | the gateway is the right home for the fact (§8.3) |
 
@@ -616,13 +616,22 @@ Anything at or below 100,000 is not protectable by this variable at all — that
 documented clamp floor (§4.2, §4.7) — so Spark work stays in bounded packets with `/compact` as
 its recovery.
 
-### 8.2.1 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is deliberately left UNSET, pending measurement
+### 8.2.1 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` — 85 opinionated (amended 2026-08-08; was left UNSET)
 
-**Operator decision, 2026-08-07.** The request was 70%. It is deferred, and §4.3 is why: the
-override is **one-directional** — it can only compact earlier, and "values above the default
+**Operator decision, 2026-08-07.** The request was 70%. It was then deferred, and §4.3 is why:
+the override is **one-directional** — it can only compact earlier, and "values above the default
 percentage are ignored" — while **the default percentage is not documented anywhere**. So `70`
-is either a real change or a silent no-op, and documentation alone cannot distinguish those two
-outcomes. A setting whose effect is unknown does not ship.
+was either a real change or a silent no-op, and documentation alone could not distinguish those
+two outcomes. A setting whose effect is unknown does not ship — so it did not.
+
+**Operator decision, 2026-08-08.** Adopt an opinionated default of 85 and ship it via the
+launchers (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` only when not already exported:
+`assets/claude/session-inheritance.sh` with fallback in both `scripts/*-claude.sh`). Because
+the knob is one-directional this is safe even before measurement: if 85 > default it is a no-op,
+if 85 < default it compacts earlier at ~0.85×272000≈231200. An installer tunes per environment as
+`export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>` before `ccodex launch` — that value is
+capture-then-restored across the scrub and wins. ADR-0012 is amended accordingly; the procedure
+below still settles the true optimum, and whatever it finds is an adjustment, not a reversal.
 
 What makes this settleable in one pass is that the arithmetic needed is
 `default_pct = pre_tokens / effective_window`, and both terms are observable.

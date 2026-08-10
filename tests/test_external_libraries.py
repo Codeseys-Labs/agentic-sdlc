@@ -998,7 +998,14 @@ class IsolationFromInstallPathTests(unittest.TestCase):
                     reachable(dependency, seen)
             return seen
 
-        for root_task in ("setup", "check", "bundle:install", "test", "self-test"):
+        for root_task in (
+            "contributor:setup",
+            "setup",
+            "check",
+            "bundle:install",
+            "test",
+            "self-test",
+        ):
             closure = reachable(root_task, set())
             self.assertFalse(
                 {name for name in closure if name.startswith("libraries:")},

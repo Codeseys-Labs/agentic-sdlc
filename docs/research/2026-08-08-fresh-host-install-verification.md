@@ -67,7 +67,7 @@ Measured results on the fresh host:
 | `mise --locked install` | ok; `uv 0.11.17`, `node v22.22.3`, `npm 10.8.1`, `bun 1.3.10`, `ocx 2.10.2` |
 | `bundle:status` | `38 ok, 0 conflict, 0 absent` |
 | installed surface | 10 skills, 7 agents, 4 commands |
-| `operator-tools:install` | `ccodex`, `ocx-launch`, `ocx-ultracode`, `agentic-sdlc-statusline` |
+| `operator-tools:install` | historical result: `ccodex`, `ocx-launch`, `ocx-ultracode`, `agentic-sdlc-statusline`; ADR-0010's 2026-08-10 amendment makes fresh installs `ccodex` + `agentic-sdlc-statusline` only |
 | `claude plugin validate ./plugin` | `✔ Validation passed` |
 | `mise run validate` | green |
 

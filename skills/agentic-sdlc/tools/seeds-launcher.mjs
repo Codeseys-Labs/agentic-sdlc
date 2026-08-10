@@ -9,12 +9,13 @@
  *
  * Record is the conductor's queue write. It inherits every inspect admission — same
  * active receipt, same exact hashes, same exact Bun/entry, same allowlisted child
- * environment — and adds a compare-and-swap plus a post-write readback: the caller must
- * name the exact queue digest it decided against, and the observed post-state must equal
- * the pre-state plus exactly the requested delta or the launcher refuses and names what
- * diverged. The underlying queue lock is the writer's own; this seam adds none. A
- * verified record is the conductor's own durable evidence and authorizes no outward
- * effect.
+ * environment — and adds compare-and-swap plus post-write readback. Queue initialization
+ * is the sole absent-queue form: --expect-queue absent init. It requires no .seeds node,
+ * snapshots .gitattributes, and admits only the exact closed initializer surface plus its
+ * precise merge-union append. Existing queues use an exact digest and may only create or
+ * update the requested record. The underlying queue lock is the writer's own; this seam
+ * adds none. A verified record is the conductor's own durable evidence and authorizes no
+ * outward effect.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -36,13 +37,13 @@ import {
   writeFileSync,
   fsyncSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCHEMA = 2;
 const NODE_VERSION = '22.22.3';
 const BUN_VERSION = '1.3.10';
-const SEEDS_VERSION = '0.5.14';
+const SEEDS_VERSION = '0.5.15';
 const SEEDS_TOOL = `npm:@os-eco/seeds-cli@${SEEDS_VERSION}`;
 const SEEDS_PACKAGE = '@os-eco/seeds-cli';
 const SEEDS_BIN = 'sd';
@@ -66,7 +67,23 @@ const TRUSTED_KEYS = new Set(['bunfig', 'tsconfig', 'gitconfig', 'gitAdapter']);
 const SEEDS_DIRECTORY = '.seeds';
 const SEEDS_CONFIG_FILE = 'config.yaml';
 const SEEDS_ISSUES_FILE = 'issues.jsonl';
+const SEEDS_TEMPLATES_FILE = 'templates.jsonl';
 const SEEDS_PLANS_FILE = 'plans.jsonl';
+const SEEDS_GITIGNORE_FILE = '.gitignore';
+const GITATTRIBUTES_FILE = '.gitattributes';
+const INIT_EXPECTATION = 'absent';
+const INIT_SURFACE = new Set([
+  SEEDS_GITIGNORE_FILE,
+  SEEDS_CONFIG_FILE,
+  SEEDS_ISSUES_FILE,
+  SEEDS_TEMPLATES_FILE,
+  SEEDS_PLANS_FILE,
+]);
+const INIT_MERGE_UNION_LINES = Object.freeze([
+  '.seeds/issues.jsonl merge=union',
+  '.seeds/templates.jsonl merge=union',
+  '.seeds/plans.jsonl merge=union',
+]);
 // The mission doctrine's sole queue writer, named explicitly so a role agent reaching for
 // this seam casually is refused rather than quietly promoted.
 const QUEUE_WRITER = 'conductor';
@@ -75,7 +92,7 @@ const VALID_ISSUE_STATUSES = new Set(['open', 'in_progress', 'closed']);
 const PLAN_STATUSES = new Set(['draft', 'approved', 'active', 'done']);
 const CREATE_FLAGS = new Set(['--title', '--type', '--priority', '--description', '--labels']);
 const UPDATE_FLAGS = new Set(['--status', '--title', '--description', '--priority', '--set-labels', '--add-label', '--remove-label']);
-const HELP = 'usage: seeds-launcher.mjs bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json]) | record --target <repository> --queue-writer conductor --expect-queue <sha256> (create --title <text> [--type <type>] [--priority <0-4>] [--description <text>] [--labels <list>] | update <id> <recorded-field>...)';
+const HELP = 'usage: seeds-launcher.mjs bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json]) | record --target <repository> --queue-writer conductor --expect-queue (absent init | <sha256> (create --title <text> [--type <type>] [--priority <0-4>] [--description <text>] [--labels <list>] | update <id> <recorded-field>...))';
 
 class LauncherError extends Error {}
 
@@ -671,11 +688,11 @@ function trustedEmptyJsonFile(directory, name) {
 
 function posixGitAdapterContent(git) {
   const quote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
-  return `#!/bin/sh\nif [ "$#" -ne 2 ] || [ "$1" != rev-parse ]; then exit 64; fi\ncase "$2" in --git-common-dir|--git-dir) ;; *) exit 64 ;; esac\nexec ${quote(git)} -c core.fsmonitor=false -c core.hooksPath=/dev/null rev-parse "$2"\n`;
+  return `#!/bin/sh\nif [ "$1" != rev-parse ]; then exit 64; fi\nif [ "$#" -eq 2 ]; then\n  case "$2" in --git-common-dir|--git-dir) ;; *) exit 64 ;; esac\nelif [ "$#" -eq 3 ] && [ "$2" = --verify ] && [ "$3" = 'HEAD^{commit}' ]; then\n  :\nelse\n  exit 64\nfi\nshift\nexec ${quote(git)} -c core.fsmonitor=false -c core.hooksPath=/dev/null rev-parse "$@"\n`;
 }
 
 function windowsGitAdapterSource(git) {
-  return `const args = process.argv.slice(2);\nif (args.length !== 2 || args[0] !== 'rev-parse' || (args[1] !== '--git-dir' && args[1] !== '--git-common-dir')) process.exit(64);\nconst child = Bun.spawnSync([${JSON.stringify(git)}, '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=NUL', 'rev-parse', args[1]], { cwd: process.cwd(), env: process.env });\nprocess.stdout.write(child.stdout);\nprocess.stderr.write(child.stderr);\nprocess.exit(child.exitCode ?? 1);\n`;
+  return `const args = process.argv.slice(2);\nconst metadata = args.length === 2 && args[0] === 'rev-parse' && ['--git-dir', '--git-common-dir'].includes(args[1]);\nconst head = args.length === 3 && args[0] === 'rev-parse' && args[1] === '--verify' && args[2] === 'HEAD^{commit}';\nif (!metadata && !head) process.exit(64);\nconst child = Bun.spawnSync([${JSON.stringify(git)}, '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=NUL', ...args], { cwd: process.cwd(), env: process.env });\nprocess.stdout.write(child.stdout);\nprocess.stderr.write(child.stderr);\nprocess.exit(child.exitCode ?? 1);\n`;
 }
 
 function compileWindowsGitAdapter(directory, git, bun, bunfig, tsconfig) {
@@ -1018,11 +1035,63 @@ function requestedTitle(flags) {
   return trimmed;
 }
 
-function seedsDirectory(target) {
+function requireQueueOwningRepositoryRoot(target, operation, tuple) {
   const marker = join(target, '.git');
-  if (existsSync(marker) && !lstatSync(marker).isDirectory()) {
-    fail('Seeds record refuses a linked worktree or submodule target: its queue write redirects to another root, and the conductor records at the queue-owning root');
+  let node;
+  try {
+    node = lstatSync(marker);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      fail(`Seeds ${operation} requires the queue-owning Git repository root: ${target}`);
+    }
+    fail(`Seeds ${operation} cannot classify the repository marker: ${marker}`);
   }
+  if (node.isSymbolicLink() || !node.isDirectory()) {
+    fail(`Seeds ${operation} refuses a linked worktree or submodule target: its queue write redirects to another root, and the conductor records at the queue-owning root`);
+  }
+  const completed = spawnSync(tuple.gitAdapter, ['rev-parse', '--git-dir'], {
+    cwd: target,
+    encoding: 'utf8',
+    env: seedsEnvironment(tuple),
+    shell: false,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  });
+  if (completed.error || completed.status !== 0) {
+    fail(`Seeds ${operation} requires a valid queue-owning Git repository root: ${target}`);
+  }
+  const lines = completed.stdout.trimEnd().split(/\r?\n/);
+  if (lines.length !== 1 || !samePath(resolve(target, lines[0]), marker)) {
+    fail(`Seeds ${operation} refuses a target that is not its queue-owning Git repository root: ${target}`);
+  }
+  const common = spawnSync(tuple.gitAdapter, ['rev-parse', '--git-common-dir'], {
+    cwd: target,
+    encoding: 'utf8',
+    env: seedsEnvironment(tuple),
+    shell: false,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  });
+  const commonLines = common.stdout.trimEnd().split(/\r?\n/);
+  if (common.error || common.status !== 0 || commonLines.length !== 1
+    || !samePath(resolve(target, commonLines[0]), marker)) {
+    fail(`Seeds ${operation} refuses a repository whose common Git directory redirects outside the queue-owning root: ${target}`);
+  }
+  const head = spawnSync(tuple.gitAdapter, ['rev-parse', '--verify', 'HEAD^{commit}'], {
+    cwd: target,
+    encoding: 'utf8',
+    env: seedsEnvironment(tuple),
+    shell: false,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  });
+  if (head.error || head.status !== 0 || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(head.stdout.trim())) {
+    fail(`Seeds ${operation} requires a queue-owning Git repository with an exact HEAD commit: ${target}`);
+  }
+}
+
+function seedsDirectory(target, tuple) {
+  requireQueueOwningRepositoryRoot(target, 'record', tuple);
   const directory = realDirectory(join(target, SEEDS_DIRECTORY), 'target Seeds directory');
   rawRegularFile(join(directory, SEEDS_CONFIG_FILE), 'target Seeds configuration');
   return directory;
@@ -1141,6 +1210,144 @@ function childReport(completed, verb) {
   return report;
 }
 
+function optionalRegularFileSnapshot(path, label) {
+  let node;
+  try {
+    node = lstatSync(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { exists: false, bytes: null, digest: INIT_EXPECTATION };
+    fail(`cannot snapshot ${label}: ${path}`);
+  }
+  if (node.isSymbolicLink() || !node.isFile()) fail(`${label} must be absent or a regular file: ${path}`);
+  const bytes = readFileSync(path);
+  return { exists: true, bytes, digest: `file:${hashBytes(bytes)}` };
+}
+
+function surfaceNodeDigest(path) {
+  let node;
+  try {
+    node = lstatSync(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return INIT_EXPECTATION;
+    return 'unreadable';
+  }
+  if (node.isSymbolicLink()) return `symlink:${hashBytes(Buffer.from(readlinkSync(path), 'utf8'))}`;
+  if (node.isFile()) return `file:${hashFile(path)}`;
+  if (node.isDirectory()) {
+    try {
+      return `directory:${treeHash(path)}`;
+    } catch {
+      return 'unreadable';
+    }
+  }
+  return `node:${node.mode}`;
+}
+
+function admittedGitattributesText(before) {
+  if (!before.exists) return '';
+  let existing;
+  try {
+    existing = new TextDecoder('utf-8', { fatal: true }).decode(before.bytes);
+  } catch {
+    fail('Seeds init refuses non-UTF-8 .gitattributes because the pinned initializer cannot preserve its bytes');
+  }
+  const exactLines = new Set(existing.split('\n'));
+  const exactMissing = INIT_MERGE_UNION_LINES.filter((line) => !exactLines.has(line));
+  const upstreamMissing = INIT_MERGE_UNION_LINES.filter((line) => !existing.includes(line));
+  if (JSON.stringify(exactMissing) !== JSON.stringify(upstreamMissing)) {
+    fail('Seeds init refuses .gitattributes whose exact lines disagree with the pinned initializer substring-match behavior');
+  }
+  return existing;
+}
+
+function expectedGitattributes(before) {
+  const beforeBytes = before.exists ? before.bytes : Buffer.alloc(0);
+  const lineBytes = INIT_MERGE_UNION_LINES.map((line) => Buffer.from(line, 'utf8'));
+  const existing = admittedGitattributesText(before);
+  const existingLines = existing.split('\n').map((line) => Buffer.from(line, 'utf8'));
+  const missing = lineBytes.filter(
+    (line) => !existingLines.some((existing) => existing.equals(line)),
+  );
+  if (missing.length === 0) return beforeBytes;
+  const separator = beforeBytes.length === 0 || beforeBytes.at(-1) === 0x0a
+    ? Buffer.alloc(0)
+    : Buffer.from('\n');
+  return Buffer.concat([
+    beforeBytes,
+    separator,
+    ...missing.flatMap((line) => [line, Buffer.from('\n')]),
+  ]);
+}
+
+function verifyInitializedSurface(target, beforeAttributes) {
+  const directory = realDirectory(join(target, SEEDS_DIRECTORY), 'initialized Seeds directory');
+  const entries = readdirSync(directory, { withFileTypes: true });
+  const names = new Set(entries.map((entry) => entry.name));
+  for (const name of INIT_SURFACE) {
+    if (!names.has(name)) fail(`Seeds init readback divergence: initialized .seeds is missing ${name}`);
+  }
+  for (const name of names) {
+    if (!INIT_SURFACE.has(name)) fail(`Seeds init readback divergence: initialized .seeds added unrequested ${name}`);
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    const node = lstatSync(path);
+    if (node.isSymbolicLink() || !node.isFile()) fail(`Seeds init readback divergence: initialized .seeds contains non-regular ${entry.name}`);
+  }
+  const config = readFileSync(rawRegularFile(join(directory, SEEDS_CONFIG_FILE), 'initialized Seeds configuration'));
+  const expectedConfig = Buffer.from(`project: "${basename(target)}"\nversion: "1"\nmax_plan_depth: 3\n`, 'utf8');
+  if (!config.equals(expectedConfig)) fail('Seeds init readback divergence: initialized config.yaml is not the exact initializer policy');
+  for (const name of [SEEDS_ISSUES_FILE, SEEDS_TEMPLATES_FILE, SEEDS_PLANS_FILE]) {
+    const path = rawRegularFile(join(directory, name), `initialized Seeds ${name}`);
+    if (lstatSync(path).size !== 0) fail(`Seeds init readback divergence: initialized ${name} is not empty`);
+  }
+  const ignore = readFileSync(rawRegularFile(join(directory, SEEDS_GITIGNORE_FILE), 'initialized Seeds ignore file'));
+  if (!ignore.equals(Buffer.from('*.lock\n', 'utf8'))) fail('Seeds init readback divergence: initialized .gitignore is not the exact lock-only policy');
+  const attributes = optionalRegularFileSnapshot(join(target, GITATTRIBUTES_FILE), 'target .gitattributes readback');
+  if (!attributes.exists || !attributes.bytes.equals(expectedGitattributes(beforeAttributes))) {
+    fail('Seeds init readback divergence: .gitattributes is not the precise merge-union append');
+  }
+}
+
+function initialize(targetArgument) {
+  const target = realDirectory(targetArgument, 'Seeds target');
+  const tuple = checkCurrentReceipt(loadReceipt());
+  requireQueueOwningRepositoryRoot(target, 'init', tuple);
+  const seedsPath = join(target, SEEDS_DIRECTORY);
+  let seedsNode;
+  try {
+    seedsNode = lstatSync(seedsPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') fail(`Seeds init cannot classify .seeds: ${seedsPath}`);
+  }
+  if (seedsNode !== undefined) {
+    const kind = seedsNode.isSymbolicLink() ? 'symlink' : seedsNode.isDirectory() ? 'directory' : seedsNode.isFile() ? 'file' : 'filesystem node';
+    fail(`Seeds init requires --expect-queue absent and an absent .seeds; found existing ${kind}`);
+  }
+  const attributesPath = join(target, GITATTRIBUTES_FILE);
+  const attributes = optionalRegularFileSnapshot(attributesPath, 'target .gitattributes');
+  expectedGitattributes(attributes); // Prove the pinned initializer and exact verifier agree before mutation.
+  const completed = spawnSync(tuple.bun, seedsArguments(tuple, ['init', '--json']), {
+    cwd: target,
+    encoding: 'utf8',
+    env: seedsEnvironment(tuple),
+    shell: false,
+    stdio: ['ignore', 'pipe', 'inherit'],
+    windowsHide: true,
+  });
+  const afterDigest = surfaceNodeDigest(seedsPath);
+  const attributesAfterDigest = surfaceNodeDigest(attributesPath);
+  const surfaceMoved = afterDigest !== INIT_EXPECTATION || attributesAfterDigest !== attributes.digest;
+  if (completed.error || completed.status !== 0) {
+    if (surfaceMoved) fail(`Seeds init effect is unknown: the queue writer failed after moving the initialization surface to .seeds=${afterDigest}, .gitattributes=${attributesAfterDigest}`);
+    fail('Seeds init refused: the queue writer failed and left .seeds and .gitattributes unchanged');
+  }
+  const report = childReport(completed, 'init');
+  if (!text(report.dir) || !samePath(resolve(report.dir), seedsPath)) fail('Seeds init readback divergence: the queue writer reported a different directory');
+  verifyInitializedSurface(target, attributes);
+  process.stdout.write(`recorded conductor queue initialization: ${seedsPath}\nverified absent prestate, exact runtime, closed .seeds surface, and precise .gitattributes merge-union append\n`);
+}
+
 function assertUnchangedQueue(before, after, label) {
   for (const [name, digest] of before) {
     if (!after.has(name)) fail(`${label}: the queue writer removed ${name}`);
@@ -1177,7 +1384,7 @@ function record(targetArgument, expected, values) {
   if (!/^[0-9a-f]{64}$/.test(expected)) fail('Seeds record requires the exact sha256 the conductor decided against in --expect-queue');
   const target = realDirectory(targetArgument, 'Seeds target');
   const tuple = checkCurrentReceipt(loadReceipt());
-  const directory = seedsDirectory(target);
+  const directory = seedsDirectory(target, tuple);
   const surfaceBefore = queueSurface(directory);
   const plansBefore = queueFile(directory, SEEDS_PLANS_FILE, 'target Seeds plan queue').bytes;
   const queue = queueFile(directory, SEEDS_ISSUES_FILE, 'target Seeds queue');
@@ -1247,11 +1454,17 @@ function parse(argv) {
   if (argv[0] === 'bootstrap' && argv.length === 3 && argv[1] === '--distribution') return { mode: 'bootstrap', distribution: argv[2] };
   if (argv[0] === 'inspect' && argv.length >= 4 && argv[1] === '--target') return { mode: 'inspect', target: argv[2], args: argv.slice(3) };
   if (argv[0] === 'record') {
-    if (argv.length < 9 || argv[1] !== '--target' || argv[3] !== '--queue-writer' || argv[5] !== '--expect-queue') fail(HELP);
+    if (argv.length < 8 || argv[1] !== '--target' || argv[3] !== '--queue-writer' || argv[5] !== '--expect-queue') fail(HELP);
     if (argv[4] !== QUEUE_WRITER) {
       fail(`Seeds record admits only the sole queue writer: pass --queue-writer ${QUEUE_WRITER}, never ${argv[4]}`);
     }
-    return { mode: 'record', target: argv[2], expected: argv[6], args: argv.slice(7) };
+    const expected = argv[6];
+    const args = argv.slice(7);
+    if (args[0] === 'init') {
+      if (expected !== INIT_EXPECTATION || args.length !== 1) fail('Seeds init requires exactly --queue-writer conductor --expect-queue absent init');
+      return { mode: 'init', target: argv[2] };
+    }
+    return { mode: 'record', target: argv[2], expected, args };
   }
   fail(HELP);
 }
@@ -1260,6 +1473,7 @@ try {
   exactLauncherNode();
   const command = parse(process.argv.slice(2));
   if (command.mode === 'bootstrap') bootstrap(command.distribution);
+  else if (command.mode === 'init') initialize(command.target);
   else if (command.mode === 'record') record(command.target, command.expected, command.args);
   else inspect(command.target, command.args);
 } catch (error) {

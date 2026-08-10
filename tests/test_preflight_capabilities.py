@@ -20,7 +20,7 @@ BASH = None if os.name == "nt" else shutil.which("bash")
 EXACT_RUNTIMES = [
     "node@22.22.3",
     "bun@1.3.10",
-    "npm:@os-eco/seeds-cli@0.5.14",
+    "npm:@os-eco/seeds-cli@0.5.15",
 ]
 SHIPPED_TEXT_SUFFIXES = frozenset({".json", ".md", ".mjs", ".ps1", ".py", ".sh", ".toml", ".yaml", ".yml"})
 EXCLUDED_SHIPPED_SURFACE_PARTS = frozenset(
@@ -484,11 +484,7 @@ def is_actor_scoped_init_guidance(relative: Path, operation: str) -> bool:
 
 
 def is_canonical_reconciliation_guidance(relative: Path, line: str, operation: str) -> bool:
-    return (
-        relative == CANONICAL_RECONCILIATION_PATH
-        and operation == "sync"
-        and "The conductor runs `Seeds(<target>, sync)` using the exact launcher contract" in line
-    )
+    return False
 
 
 def should_enforce_seeds_authority(path: Path, root: Path) -> bool:
@@ -547,6 +543,131 @@ def shipped_surface_violations(root: Path) -> list[str]:
     return violations
 
 
+@unittest.skipIf(BASH is None or os.name == "nt", "Bash wrapper fixture requires POSIX")
+class ExactRuntimeWrapperTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.node_root = self.root / "exact node"
+        (self.node_root / "bin").mkdir(parents=True)
+        self.launcher = self.root / "installed launcher.mjs"
+        self.launcher.write_text("fixture\n", encoding="utf-8")
+        self.calls = self.root / "node-calls.jsonl"
+        self.target = self.root / "target with spaces"
+        self.target.mkdir()
+        self._write_executable(
+            self.node_root / "bin" / "node",
+            f"#!{sys.executable}\n"
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            f"with Path({str(self.calls)!r}).open('a', encoding='utf-8') as stream:\n"
+            "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "raise SystemExit(int(os.environ.get('FAKE_CHILD_STATUS', '0')))\n",
+        )
+        self._write_executable(
+            self.bin / "mise",
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            f"print({str(self.node_root)!r}) if sys.argv[1:] == ['--no-config', 'where', 'node@22.22.3'] else sys.exit(2)\n",
+        )
+        self._write_executable(self.bin / "git", "#!/bin/sh\nexit 0\n")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    @staticmethod
+    def _write_executable(path: Path, content: str) -> None:
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o755)
+
+    def environment(self, **overrides: str) -> dict[str, str]:
+        return os.environ | {
+            "PATH": str(self.bin) + os.pathsep + os.defpath,
+            "AGENTIC_SDLC_LAUNCHER": str(self.launcher),
+            "AGENTIC_SDLC_HOST_READY": "1",
+            **overrides,
+        }
+
+    def source(self, command: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [BASH, "-c", f'. "$1"; shift; {command}', "wrapper-test", str(SCRIPT), *args],
+            cwd=ROOT,
+            env=env or self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def calls_read(self) -> list[list[str]]:
+        if not self.calls.exists():
+            return []
+        return [json.loads(line) for line in self.calls.read_text(encoding="utf-8").splitlines()]
+
+    def test_front_doors_delegate_exact_inspect_init_and_record_argv(self) -> None:
+        digest = "a" * 64
+        invocations = (
+            (
+                'agentic_sdlc_seeds "$@"',
+                (str(self.target), "ready", "--format", "json"),
+                [str(self.launcher), "inspect", "--target", str(self.target), "ready", "--format", "json"],
+            ),
+            (
+                'agentic_sdlc_seeds_init "$@"',
+                (str(self.target),),
+                [str(self.launcher), "record", "--target", str(self.target), "--queue-writer", "conductor", "--expect-queue", "absent", "init"],
+            ),
+            (
+                'agentic_sdlc_seeds_record "$@"',
+                (str(self.target), digest, "update", "seed-1", "--title", "two words"),
+                [str(self.launcher), "record", "--target", str(self.target), "--queue-writer", "conductor", "--expect-queue", digest, "update", "seed-1", "--title", "two words"],
+            ),
+        )
+        for command, arguments, expected in invocations:
+            with self.subTest(command=command):
+                result = self.source(command, *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.calls_read()[-1], expected)
+
+    def test_front_doors_reject_bad_arity_without_starting_node(self) -> None:
+        for command, arguments in (
+            ('agentic_sdlc_seeds "$@"', (str(self.target),)),
+            ('agentic_sdlc_seeds_init "$@"', (str(self.target), "extra")),
+            ('agentic_sdlc_seeds_record "$@"', (str(self.target), "absent")),
+        ):
+            with self.subTest(command=command):
+                before = self.calls_read()
+                result = self.source(command, *arguments)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("usage:", result.stderr)
+                self.assertEqual(self.calls_read(), before)
+
+    def test_front_door_preserves_exact_launcher_failure_status(self) -> None:
+        result = self.source(
+            'agentic_sdlc_seeds_init "$@"',
+            str(self.target),
+            env=self.environment(FAKE_CHILD_STATUS="23"),
+        )
+        self.assertEqual(result.returncode, 23, result.stderr)
+
+    def test_executable_preflight_uses_exact_receipt_inspection_front_door(self) -> None:
+        result = subprocess.run(
+            [BASH, str(SCRIPT)],
+            cwd=self.target,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("locked Seeds 0.5.15 active receipt", result.stdout)
+        self.assertIn(
+            [str(self.launcher), "inspect", "--target", str(self.target), "--version"],
+            self.calls_read(),
+        )
+
+
 @unittest.skip("replaced by receipt-based installed launcher fixtures")
 class PreflightCapabilityTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -556,7 +677,7 @@ class PreflightCapabilityTests(unittest.TestCase):
         self.temp = Path(self.temp_dir.name)
         self.bin_dir = self.temp / "ambient-bin"
         self.bin_dir.mkdir()
-        self.exact_root = self.temp / "mise installs" / "npm-os-eco-seeds-cli" / "0.5.14"
+        self.exact_root = self.temp / "mise installs" / "npm-os-eco-seeds-cli" / "0.5.15"
         self.exact_bun_root = self.temp / "mise installs" / "bun" / "1.3.10"
         (self.exact_bun_root).mkdir(parents=True)
         (self.exact_root / "bin").mkdir(parents=True)
@@ -731,7 +852,7 @@ class PreflightCapabilityTests(unittest.TestCase):
 
     def _environment(self, *, github_required: bool, mode: str = "correct") -> dict[str, str]:
         self.fake_mise_mode.write_text(mode)
-        self.fake_sd_version.write_text("0.5.14")
+        self.fake_sd_version.write_text("0.5.15")
         self.fake_sd_status.write_text("0")
         return os.environ | {
             "PATH": str(self.bin_dir) + os.pathsep + os.defpath,
@@ -819,7 +940,7 @@ class PreflightCapabilityTests(unittest.TestCase):
         for call in exact_calls:
             self.assert_exact_contract(call)
             self.assert_neutral_npm_environment(call)
-        self.assertIn("ok:       Seeds 0.5.14", result.stdout)
+        self.assertIn("ok:       Seeds 0.5.15", result.stdout)
 
     def test_wrong_exact_version_fails_closed(self) -> None:
         result = self.run_preflight(github_required=False, mode="wrong-version")
@@ -894,7 +1015,7 @@ class PreflightCapabilityTests(unittest.TestCase):
         (self.bin_dir / "gh").unlink()
         result = self.run_preflight(github_required=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ok:       Seeds 0.5.14", result.stdout)
+        self.assertIn("ok:       Seeds 0.5.15", result.stdout)
 
     def test_selected_github_operation_requires_gh(self) -> None:
         env = self._environment(github_required=True)
@@ -1232,14 +1353,13 @@ class SeedsDocumentationContractTests(unittest.TestCase):
             "\n".join(violations),
         )
 
-    def test_sdlc_loop_restores_conductor_scoped_sync_reconciliation(self) -> None:
+    def test_sdlc_loop_forbids_standalone_sync_reconciliation(self) -> None:
         loop = (
             ROOT / "skills" / "agentic-sdlc" / "references" / "sdlc-loop.md"
         ).read_text(encoding="utf-8")
-        self.assertIn(
-            "The conductor runs `Seeds(<target>, sync)` using the exact launcher contract",
-            loop,
-        )
+        self.assertNotIn("Seeds(<target>, sync)", loop)
+        self.assertIn("Standalone sync", loop)
+        self.assertIn("compare-and-swap launcher seam", loop)
 
     def test_bare_sd_invocations_reject_posix_mise_and_powershell_wrappers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

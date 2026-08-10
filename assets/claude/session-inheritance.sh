@@ -596,6 +596,17 @@ scrub_and_restore_claude_env() {
     name="${entry%%=*}"
     export "$name=${entry#*=}"
   done <<<"$preserved"
+  # Opinionated default (ADR-0012 amended 2026-08-08): 85% if the operator did not already
+  # choose a percentage. The override is one-directional — a value above the (undocumented)
+  # default is silently ignored — so shipping 85 is safe even before it is measured: if
+  # 85 > default it is a no-op, if 85 < default it compacts earlier at ~0.85*272000≈231200.
+  # An installer-exported value preserved above wins over this default via the
+  # capture-then-restore, so the default is opinionated rather than mandatory. Exported so
+  # the child receives it; a per-installer `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>`
+  # before `ccodex launch` overrides it.
+  if [ -z "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" ]; then
+    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
+  fi
 }
 
 # Report the policy without applying it, for a launcher's status route. Prints the CLASS of each

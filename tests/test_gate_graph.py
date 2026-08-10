@@ -32,9 +32,9 @@ class GateGraphTests(unittest.TestCase):
         # The depends edge is what makes a fresh-machine install succeed in one pass; dropping it
         # reproduced the container failure, so it is pinned as its own mutation.
         ("mise.toml", 'npm = { version = "10.8.1", depends = ["node"] }', 'npm = "10.8.1"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "0.5.14"', 'version = "0.5.13"', "mise.toml tools must equal"),
+        ("mise.toml", 'version = "0.5.15"', 'version = "0.5.14"', "mise.toml tools must equal"),
         ("mise.toml", 'package_manager = "npm"', 'package_manager = "bun"', "npm.package_manager must equal npm"),
-        ("mise.toml", '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.14"\ndepends = ["node"]', '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.14"\ndepends = []', "Seeds tool must depend on node"),
+        ("mise.toml", '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.15"\ndepends = ["node"]', '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.15"\ndepends = []', "Seeds tool must depend on node"),
         # Convenience-tier drift must fail exactly like bootstrap-tier drift. These tools are
         # not gate inputs, but an unpinned version is still an unreviewed binary.
         ("mise.toml", 'ripgrep = "15.2.0"', 'ripgrep = "14.1.1"', "mise.toml tools must equal"),
@@ -42,7 +42,7 @@ class GateGraphTests(unittest.TestCase):
         ("mise.toml", 'jq = "1.8.2"', 'jq = "1.8.1"', "mise.toml tools must equal"),
         ("mise.toml", 'gh = "2.97.0"', 'gh = "2.96.0"', "mise.toml tools must equal"),
         ("mise.toml", 'version = "1.7.3"', 'version = "1.7.2"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "2.10.2"', 'version = "2.10.1"', "mise.toml tools must equal"),
+        ("mise.toml", 'version = "2.11.1"', 'version = "2.10.2"', "mise.toml tools must equal"),
         # Re-adding the mermaid pin must fail. It was removed 2026-08-07 (docs/adr/0002
         # amendment): puppeteer's postinstall needs a zip archiver mise does not install, so
         # `mise --locked install` exited 1 on a slim image and took the other 12 tools with it.
@@ -158,9 +158,9 @@ class GateGraphTests(unittest.TestCase):
         # Bare `npm` resolves through the npm backend, so it locks version+backend only,
         # exactly like the scoped npm pins below.
         "npm": {"version": "10.8.1", "backend": "npm:npm"},
-        "npm:@os-eco/seeds-cli": {"version": "0.5.14", "backend": "npm:@os-eco/seeds-cli"},
+        "npm:@os-eco/seeds-cli": {"version": "0.5.15", "backend": "npm:@os-eco/seeds-cli"},
         "npm:@bitkyc08/opencodex": {
-            "version": "2.10.2",
+            "version": "2.11.1",
             "backend": "npm:@bitkyc08/opencodex",
         },
     }
@@ -181,6 +181,22 @@ class GateGraphTests(unittest.TestCase):
     }
 
     MUTATIONS = (
+        (
+            "mise.toml",
+            'description = "Install this host\'s bundle and contributor Git hooks"\n'
+            'depends = ["bundle:install", "hooks:install"]',
+            'description = "Install this host\'s bundle and contributor Git hooks"\n'
+            'depends = ["bundle:install"]',
+            "contributor:setup must contain only",
+        ),
+        (
+            "mise.toml",
+            'description = "Deprecated: use contributor:setup"\n'
+            'depends = ["contributor:setup"]',
+            'description = "Deprecated: use contributor:setup"\n'
+            'depends = ["bundle:install", "hooks:install"]',
+            "setup must be only the one-release deprecated",
+        ),
         ("mise.toml", 'depends = ["validate", "test", "self-test", "secrets"]', 'depends = ["validate", "test"]', "check must contain only"),
         ("mise.toml", 'depends = ["validate", "test", "self-test", "secrets"]', 'depends = ["validate", "test", "self-test", "secrets"]\nrun = "python3 -c \'print(999)\'"', "check must contain only"),
         # Dropping the secrets leaf hollows the gate exactly like dropping self-test does.
@@ -403,8 +419,8 @@ class GateGraphTests(unittest.TestCase):
             (b'[[tools.node]]\nversion = "22.22.3"', b'[[tools.node]]\nversion = "22.22.2"'),
             (b'[[tools.bun]]\nversion = "1.3.10"', b'[[tools.bun]]\nversion = "1.3.9"'),
             (
+                b'[[tools."npm:@os-eco/seeds-cli"]]\nversion = "0.5.15"',
                 b'[[tools."npm:@os-eco/seeds-cli"]]\nversion = "0.5.14"',
-                b'[[tools."npm:@os-eco/seeds-cli"]]\nversion = "0.5.13"',
             ),
             (
                 b'backend = "npm:@os-eco/seeds-cli"',

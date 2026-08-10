@@ -35,7 +35,7 @@ jq = "1.8.2"
 gh = "2.97.0"
 
 [tools."npm:@os-eco/seeds-cli"]
-version = "0.5.14"
+version = "0.5.15"
 depends = ["node"]
 
 # Not in the mise registry, so the backend is named explicitly. github: locks per-platform
@@ -65,7 +65,7 @@ version = "1.7.3"
 # adds no system-package prerequisite. Postinstall alone is not the defect; needing a tool
 # mise did not install is (docs/adr/0002, 2026-08-07 amendment).
 [tools."npm:@bitkyc08/opencodex"]
-version = "2.10.2"
+version = "2.11.1"
 depends = ["node"]
 
 [tasks.validate]
@@ -74,17 +74,17 @@ run = "uv run --python 3.12.11 --script scripts/validate_bundle.py"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/validate_bundle.py"
 
 [tasks."bundle:install"]
-description = "Install the skill bundle on this host"
+description = "Install bundle entries for Claude and Codex (or select one with -- --agent)"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 
 [tasks."bundle:status"]
-description = "Report this host's skill-bundle lifecycle status"
+description = "Inspect Claude/Codex bundle ownership without writing state or entries"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 
 [tasks."bundle:uninstall"]
-description = "Uninstall skill-bundle entries owned on this host"
+description = "Remove unchanged owned bundle entries for the selected host plane"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
 
@@ -153,17 +153,22 @@ description = "Run validation, installer tests, lifecycle self-test, and the sec
 depends = ["validate", "test", "self-test", "secrets"]
 
 [tasks."operator-tools:install"]
-description = "Install statusline and opencodex launch commands into an existing user PATH"
+description = "Install the statusline and existing operator commands into a user-owned PATH directory"
 run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py install"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py install"
 
 [tasks."operator-tools:status"]
-description = "Report lifecycle status for the PATH-installed operator commands"
+description = "Inspect operator-command ownership without writing files or PATH"
 run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py status"
 
+[tasks."operator-tools:retire-aliases"]
+description = "Retire unchanged owned historical ocx command aliases"
+run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py retire-aliases"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py retire-aliases"
+
 [tasks."operator-tools:uninstall"]
-description = "Remove unchanged owned operator commands"
+description = "Remove unchanged owned operator commands and preserve conflicts"
 run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py uninstall"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py uninstall"
 
@@ -244,6 +249,10 @@ run = "scripts/opencodex-claude.sh configure"
 description = "Install this repository's lefthook hooks"
 run = "lefthook install"
 
-[tasks.setup]
-description = "Install this host's bundle and Git hooks"
+[tasks."contributor:setup"]
+description = "Install this host's bundle and contributor Git hooks"
 depends = ["bundle:install", "hooks:install"]
+
+[tasks.setup]
+description = "Deprecated: use contributor:setup"
+depends = ["contributor:setup"]

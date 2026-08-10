@@ -6,8 +6,9 @@
 """Install a named third-party skill library through that library's OWN front door.
 
 This is an explicit, separate operation. `bundle:install`, `bundle:install:claude`,
-`bundle:install:codex`, `setup`, and every gate leaf reach none of these verbs, and this
-module is imported by nothing in the install path. Adding a library to an agent's
+`bundle:install:codex`, `contributor:setup`, its deprecated `setup` forwarder, and every gate
+leaf reach none of these verbs, and this module is imported by nothing in the install path.
+Adding a library to an agent's
 always-loaded selection surface is the operator's decision, taken once, in the open.
 
 The distinction that makes this safe: **invoking a third party's own installer is not
@@ -856,7 +857,7 @@ def command_list(config: Config) -> tuple[int, list[str]]:
     occupied = present_names(config.skills_dir)
     lines = [
         "External skill libraries reachable through their own front doors.",
-        "Nothing below is installed by `bundle:install`, `setup`, or any gate.",
+        "Nothing below is installed by `bundle:install`, `contributor:setup`, its deprecated `setup` forwarder, or any gate.",
         "",
         f"this bundle installs {len(bundle)} skill(s): {', '.join(bundle)}",
         f"{config.skills_dir} currently holds {len(occupied)} entr(ies)",
@@ -1329,7 +1330,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parents=[common],
         description=(
             "Install a named third-party skill library through its own front door."
-            " Dry run by default; never invoked by bundle:install or setup."
+            " Dry run by default; never invoked by bundle:install, contributor:setup, or its deprecated setup forwarder."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

@@ -67,7 +67,7 @@ graph only by updating that test in the same commit.
   ```
 - **Install lefthook via `[tools]`, not brew/npm** — the hook manager itself is then
   version-pinned and present in CI and every worker without a separate install step.
-- **A `setup` task owns bootstrap**: `run = ["uv sync --all-extras --dev", "lefthook install"]`.
+- **A `contributor:setup` task owns contributor bootstrap**: `run = ["uv sync --all-extras --dev", "lefthook install"]`.
 - Python repos: reuse the existing uv venv via `[env] _.python.venv = {path=".venv"}` —
   never let mise create a parallel one.
 - Task args use the `usage` spec, not Tera `arg()`/`option()` (deprecated).
@@ -193,7 +193,7 @@ Two rules that outrank convenience:
 
 **A pin and the permission to use a tool a particular way are separate decisions — and the
 separation survives the pin.** As of 2026-08-06 this bundle DOES pin
-`npm:@bitkyc08/opencodex` (version 2.10.2, MIT, npm backend, `depends = ["node"]`), by
+`npm:@bitkyc08/opencodex` (version 2.11.1, MIT, npm backend, `depends = ["node"]`), by
 explicit operator decision recorded in `docs/adr/0005`. An earlier revision of this skill
 left it unpinned while the subscription-passthrough question was open; `docs/adr/0003`
 closed that question, so the packaging decision was made on its own merits — like the two

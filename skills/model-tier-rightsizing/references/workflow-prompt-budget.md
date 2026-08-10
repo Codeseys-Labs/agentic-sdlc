@@ -293,9 +293,9 @@ with `[1m]` has no defined behaviour.
 
 ## 7. Opencodex-specific levers that are not `[1m]`
 
-Grounded in the installed `2.10.2` source under
-`~/.local/share/mise/installs/npm-bitkyc08-opencodex/2.10.2/lib/node_modules/@bitkyc08/opencodex/src/`
-(the docs site is not shipped in the npm package). These levers affect token pressure
+Originally grounded in the installed `2.10.2` source, then rechecked against the active
+`2.11.1` package under its mise install root on 2026-08-09 (the docs site is not shipped in
+the npm package). These levers affect token pressure
 independent of `[1m]`.
 
 ### 7.1 `blockedSkills` elision — automatic ~136k saving on routed models

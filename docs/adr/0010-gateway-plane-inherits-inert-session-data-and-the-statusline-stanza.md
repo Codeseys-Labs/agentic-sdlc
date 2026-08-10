@@ -242,12 +242,22 @@ repository maintenance (`test`, `validate`, `check`, `secrets`, `self-test`, `me
 `hooks:install`) and belong to working *on* this repo, not to using what it installed. Shipping
 them on an operator's PATH would present a maintenance surface as a product surface.
 
-**Decision: one owned dispatcher, `ccodex <domain> <verb>`,** covering launch/ultracode/status/
-restart/configure, providers, models, bundle, libraries, and statusline. A bare `ccodex launch`
-and `ccodex status` are the shorthand for the common case; `ccodex ocx launch` is accepted as the
-explicit long form, because that is what a reader guesses and silently failing a reasonable guess
-is worse than accepting both spellings. `ocx-launch` and `ocx-ultracode` remain as thin aliases —
-they cost one template line each and removing them would break shell history for no gain.
+**Decision: one owned dispatcher, `ccodex <domain> <verb>`,** covering ensure/launch/ultracode/
+status/restart/configure, providers, models, bundle, libraries, and statusline. Plain `claude` is
+the native Anthropic-routed CLI; `ccodex launch` is the explicit separate non-Anthropic gateway
+route. A bare `ccodex launch` and `ccodex status` are the shorthand for the common case; `ccodex
+ocx launch` is accepted as the explicit long form, because that is what a reader guesses and
+silently failing a reasonable guess is worse than accepting both spellings.
+
+**Amendment (2026-08-10): stop installing historical alias files.** Fresh operator-tools installs
+own only `ccodex` and the packaged statusline support command. `ocx-launch` and `ocx-ultracode`
+remain recognized names in legacy/current ownership state and in pending install, refresh, or
+unlink transitions, so shrinking the desired set does not invalidate or strand an old lifecycle.
+They are not required and are never reported absent. `operator-tools:retire-aliases` explicitly
+unlinks only an unchanged removable owned copy using the existing crash-consistent uninstall
+transition. A changed, foreign, or adopted alias is preserved and reported. Full uninstall still
+handles an unchanged owned alias. `ocx:*` mise tasks and `ccodex ocx <verb>` remain compatibility
+surfaces; only the redundant PATH entries retire.
 
 The alternative, a dozen named commands, loses on exactly the cost the dispatcher avoids: every
 added verb becomes a new PATH entry, a new ownership record, and a new collision risk against a

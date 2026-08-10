@@ -12,6 +12,10 @@ ROOT = Path(__file__).parents[1]
 ROUTER = ROOT / "skills" / "model-tier-rightsizing" / "SKILL.md"
 CALIBRATION = ROUTER.parent / "references" / "model-routing-calibration.md"
 FLAGSHIP = ROOT / "skills" / "agentic-sdlc" / "references" / "tiered-orchestration.md"
+RIGHTSIZE_COMMAND = ROOT / "commands" / "sdlc-rightsize.md"
+RIGHTSIZE_COMMAND_DESCRIPTION = (
+    "Probe live routing evidence and produce a regenerable model-task map for certified dispatch."
+)
 
 CONSUMERS = (
     ROOT / "AGENTS.md",
@@ -537,6 +541,17 @@ def _assert_historical_evidence(text: str) -> None:
 
 
 class ModelTierRightsizingTests(unittest.TestCase):
+    def test_sdlc_rightsize_is_a_claude_command_that_loads_rightsizing_before_dispatch(self) -> None:
+        self.assertTrue(RIGHTSIZE_COMMAND.is_file())
+        text = RIGHTSIZE_COMMAND.read_text(encoding="utf-8")
+        frontmatter = _claude_frontmatter(text)
+        self.assertEqual(frontmatter.get("name"), "sdlc-rightsize")
+        self.assertEqual(frontmatter.get("description"), RIGHTSIZE_COMMAND_DESCRIPTION)
+        skill_load = text.index("skills/model-tier-rightsizing/SKILL.md")
+        dispatch_boundary = text.index("Before spawn")
+        self.assertLess(skill_load, dispatch_boundary)
+        self.assertNotIn(RIGHTSIZE_COMMAND.stem, {path.stem for path in (ROOT / "agents" / "codex").glob("*.toml")})
+
     def test_canonical_operational_matrices_allocate_pairs_with_selection_conditions(self) -> None:
         _assert_calibration(CALIBRATION.read_text(encoding="utf-8"))
 
@@ -659,7 +674,7 @@ class ModelTierRightsizingTests(unittest.TestCase):
                 self.assertIn("Seeds(<target>, ready --format json)", text)
                 self.assertIn("Seeds(<target>, blocked --format json)", text)
                 self.assertIn("MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec", text)
-                self.assertIn("node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>", text)
+                self.assertIn("node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>", text)
                 self.assertIn("Do not create, claim, update, close, sync, or disposition Seeds", text)
                 self.assertIn("exactly one typed `SeedProposal {", text)
                 for forbidden in (

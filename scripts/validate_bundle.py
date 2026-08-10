@@ -35,6 +35,7 @@ REQUIRED_TASKS = {
     "research-os:install",
     "operator-tools:install",
     "operator-tools:status",
+    "operator-tools:retire-aliases",
     "operator-tools:uninstall",
     "operator-tools:self-test",
     "claude:statusline:status",
@@ -56,6 +57,7 @@ REQUIRED_TASKS = {
     "secrets",
     "check",
     "hooks:install",
+    "contributor:setup",
     "setup",
 }
 MIN_MISE_VERSION = "2026.4.27"
@@ -64,7 +66,7 @@ PYTHON_VERSION = "3.12.11"
 LEFTHOOK_VERSION = "2.1.10"
 NODE_VERSION = "22.22.3"
 BUN_VERSION = "1.3.10"
-SEEDS_VERSION = "0.5.14"
+SEEDS_VERSION = "0.5.15"
 SEEDS_TOOL = "npm:@os-eco/seeds-cli"
 # Convenience tier. Pinned for identical resolution across hosts; no gate depends on them.
 RIPGREP_VERSION = "15.2.0"
@@ -81,7 +83,7 @@ MERMAID_VERSION = "11.16.0"
 # Installed by default per docs/adr/0005. The packaging pin is convenience tier like the two
 # npm pins above; the boundary that matters is usage-level and lives in the launcher script,
 # not here (docs/adr/0003: non-Anthropic routing only, never subscription OAuth).
-OPENCODEX_VERSION = "2.10.2"
+OPENCODEX_VERSION = "2.11.1"
 OPENCODEX_TOOL = "npm:@bitkyc08/opencodex"
 # node 22.22.3 bundles npm 10.9.8, so the M0b renderer's npm identity is pinned as its own
 # tool. scripts/provision_mermaid_linux.py resolves exactly this version through `mise where`
@@ -120,8 +122,6 @@ OPERATOR_TOOL_ARTIFACTS = frozenset(
         # under assets/, which the scripts/*.sh syntax glob does not reach.
         "assets/claude/session-inheritance.sh",
         "assets/launchers/ccodex.in",
-        "assets/launchers/ocx-launch.in",
-        "assets/launchers/ocx-ultracode.in",
         "scripts/install_operator_tools.py",
         "scripts/manage_claude_statusline.py",
         "tests/test_claude_statusline.py",
@@ -166,7 +166,7 @@ EXPECTED_LOCK_BACKENDS = {
     OPENCODEX_TOOL: OPENCODEX_TOOL,
     MERMAID_NPM_TOOL: MERMAID_NPM_BACKEND,
 }
-MISE_LOCK_SHA256 = "f36865fa4afe05b01835932ced2177974e6fd23af4d5499bad436da8c65042d5"
+MISE_LOCK_SHA256 = "3a4d510446bdbf1456ef29d976a03f0d096f58fc524b7bb4a823930e085ab9db"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -179,6 +179,7 @@ TASK_COMMANDS = {
     "research-os:install": "--script skills/codex-research-os/scripts/install_research_os.py",
     "operator-tools:install": "--script scripts/install_operator_tools.py install",
     "operator-tools:status": "--script scripts/install_operator_tools.py status",
+    "operator-tools:retire-aliases": "--script scripts/install_operator_tools.py retire-aliases",
     "operator-tools:uninstall": "--script scripts/install_operator_tools.py uninstall",
     "operator-tools:self-test": "--script scripts/install_operator_tools.py self-test",
     "claude:statusline:status": "--script scripts/manage_claude_statusline.py status",
@@ -214,11 +215,11 @@ RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsi
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
 PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
-RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f"
+RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "2ca7f36c728d324ab60f2b99d4b3fb03f064180496c0731aa33447a7dee4ba72"
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 - Research Director is Seeds-read-only.
 - Use only the exact accepted Seeds inspection contract:
-  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.14 -- sd <args>`.
+  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
 - Inspect `Seeds(<target>, prime)`, `Seeds(<target>, ready --format json)`, and `Seeds(<target>, blocked --format json)` before substantive orchestration when Seeds is available.
 - Do not create, claim, update, close, sync, or disposition Seeds.
 - For work that outlives the session, emit exactly one typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.
@@ -293,7 +294,7 @@ SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
-RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "9354550eeeef56875735201c7db273d5d65a9ad13cec2e0f1ae4787bdc1ba1fc"
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "e490284af11143c71a9a07d0e5778594c3ba99bd648220dec3268b4d5491e0b8"
 SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256 = {
     "agents/claude/sdlc-reviewer.md": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
     "agents/codex/sdlc-reviewer.toml": "816f52d896821f4d5964e0d9fc8dd412b01e27800733613ace496eeec61dd003",
@@ -1313,8 +1314,6 @@ def validate_operator_tools(root: Path, result: Validation) -> None:
         "assets/claude/statusline-command.sh",
         "assets/claude/session-inheritance.sh",
         "assets/launchers/ccodex.in",
-        "assets/launchers/ocx-launch.in",
-        "assets/launchers/ocx-ultracode.in",
         "scripts/opencodex-claude.sh",
     ):
         completed = subprocess.run(
@@ -1428,6 +1427,22 @@ def validate_mise(root: Path, result: Validation) -> None:
     for name, expected in expected_ocx_tasks.items():
         if tasks.get(name) != expected:
             result.error(f"mise.toml task {name} must contain only {expected}")
+    expected_contributor_setup = {
+        "description": "Install this host's bundle and contributor Git hooks",
+        "depends": ["bundle:install", "hooks:install"],
+    }
+    expected_setup_forwarder = {
+        "description": "Deprecated: use contributor:setup",
+        "depends": ["contributor:setup"],
+    }
+    if tasks.get("contributor:setup") != expected_contributor_setup:
+        result.error(
+            "mise.toml contributor:setup must contain only the bundle:install and hooks:install dependencies"
+        )
+    if tasks.get("setup") != expected_setup_forwarder:
+        result.error(
+            "mise.toml setup must be only the one-release deprecated contributor:setup forwarder"
+        )
     if tasks.get("mermaid:provision") != MERMAID_PROVISION_TASK:
         result.error(f"mise.toml mermaid:provision must contain only {MERMAID_PROVISION_TASK}")
     expected_check = {

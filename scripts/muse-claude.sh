@@ -245,9 +245,19 @@ scrub_anthropic_env() {
   # per-tier model slots, capability strings, and routing flags (CLAUDE_CODE_USE_BEDROCK among
   # them). Any one leaking into the child either re-routes it away from Meta or carries parent
   # session identity into it. The exact slots this route needs are re-exported afterwards.
+  # Preserve an installer choice across the scrub so it wins over the opinionated default.
+  local saved_pct="${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}"
   for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE)' || true); do
     unset "$name" || true
   done
+  if [ -n "$saved_pct" ]; then
+    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="$saved_pct"
+  elif [ -z "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" ]; then
+    # Opinionated default (ADR-0012 amended 2026-08-08): mirrors the gateway launchers so the
+    # direct muse route carries the same compaction expectation. Shared-pool sessions benefit
+    # from earlier compaction because the pool is one budget.
+    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
+  fi
 }
 
 assert_isolated_dir_has_no_subscription() {

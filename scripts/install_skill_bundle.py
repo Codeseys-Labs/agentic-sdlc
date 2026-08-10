@@ -140,6 +140,59 @@ class Result:
     messages: tuple[str, ...]
 
 
+def conflict_messages(destination: Path, reason: str, *, label: str = "conflict") -> tuple[str, str]:
+    """Name an untouched collision and give the operator a safe next step."""
+    return (
+        f"{label}: {destination}",
+        f"preserved: {destination} ({reason}; inspect and resolve it before retrying)",
+    )
+
+
+def marketplace_messages(config: Config) -> tuple[str, str]:
+    """Explain the one Claude-plane blocker without repeating it for every entry."""
+    root = config.home / ".claude"
+    return (
+        f"marketplace overlap: {root}",
+        "preserved: "
+        f"{root} (Claude direct install is blocked; use the marketplace or remove its overlap before retrying)",
+    )
+
+
+def operation_summary(operation: str, messages: tuple[str, ...]) -> str:
+    """Return the terminal, human-readable lifecycle summary for a write operation."""
+    if operation == "install":
+        installed = sum(message.startswith("installed:") or message.startswith("retargeted:") for message in messages)
+        refreshed = sum(message.startswith("refreshed:") for message in messages)
+        adopted = sum(message.startswith("adopted") or message.startswith("replaced link with copy:") for message in messages)
+        unchanged = sum(message.startswith("ok:") for message in messages)
+        planned = sum(message.startswith("would ") for message in messages)
+        conflicts = sum(
+            message.startswith(("conflict:", "interrupted conflict:", "root/collection conflict:", "marketplace overlap:", "rename conflict:"))
+            for message in messages
+        )
+        return (
+            "install summary: "
+            f"{installed} installed, {refreshed} refreshed, {adopted} adopted, "
+            f"{unchanged} unchanged, {planned} planned, {conflicts} conflict"
+        )
+    if operation == "uninstall":
+        removed = sum(message.startswith("removed:") for message in messages)
+        kept = sum(message.startswith("kept:") for message in messages)
+        absent = sum(message.startswith("absent:") for message in messages)
+        planned = sum(message.startswith("would ") for message in messages)
+        conflicts = sum(message.startswith(("conflict:", "interrupted conflict:", "root/collection conflict:")) for message in messages)
+        return (
+            "uninstall summary: "
+            f"{removed} removed, {kept} kept, {absent} absent, {planned} planned, {conflicts} conflict"
+        )
+    raise ValueError(f"unsupported lifecycle summary operation: {operation}")
+
+
+def with_operation_summary(operation: str, result: Result) -> Result:
+    """Keep lifecycle output inspectable by always ending write commands in one summary."""
+    return Result(result.exit_code, result.messages + (operation_summary(operation, result.messages),))
+
+
 @dataclass(frozen=True)
 class PrivateArtifact:
     container: Path
@@ -2269,7 +2322,9 @@ def recover_transactions(
         action = classify_recovery(tx, config)
         if action == "conflict":
             partial = True
-            messages.append(f"interrupted conflict: {tx['destination']}")
+            messages.extend(
+                conflict_messages(Path(str(tx["destination"])), "interrupted lifecycle state is no longer exact", label="interrupted conflict")
+            )
             continue
         if read_only:
             partial = True
@@ -2279,7 +2334,9 @@ def recover_transactions(
             execute_recovery(config, state, key)
         except RecoveryConflict:
             partial = True
-            messages.append(f"interrupted conflict: {tx['destination']}")
+            messages.extend(
+                conflict_messages(Path(str(tx["destination"])), "interrupted lifecycle state is no longer exact", label="interrupted conflict")
+            )
         except Exception as exc:
             try:
                 durable = load_state(config.state_path)
@@ -2611,6 +2668,9 @@ def _install(config: Config) -> Result:
     validate_state(config, state)
     messages, partial = recover_transactions(config, state, read_only=config.dry_run)
     claude_blocked = config.agent in {"all", "claude"} and marketplace_overlap(config.home)
+    if claude_blocked:
+        partial = True
+        messages.extend(marketplace_messages(config))
 
     for entry in discover_entries(config.repo_root):
         if config.agent != "all" and entry.agent != config.agent:
@@ -2619,8 +2679,6 @@ def _install(config: Config) -> Result:
         key = str(destination)
 
         if entry.agent == "claude" and claude_blocked:
-            partial = True
-            messages.append(f"marketplace overlap: {destination}")
             continue
         if key in state["transactions"]:
             partial = True
@@ -2631,11 +2689,13 @@ def _install(config: Config) -> Result:
         if isinstance(record, dict):
             if not record_authority_matches(key, record, config):
                 partial = True
-                messages.append(f"root/collection conflict: {destination}")
+                messages.extend(
+                    conflict_messages(destination, "configured root or collection changed", label="root/collection conflict")
+                )
                 continue
             if not entry_matches_record(destination, record):
                 partial = True
-                messages.append(f"conflict: {destination}")
+                messages.extend(conflict_messages(destination, "owned entry changed"))
                 continue
             if record.get("mode") == "copy":
                 if record.get("removable", True) is False:
@@ -2721,7 +2781,7 @@ def _install(config: Config) -> Result:
                 messages.append(f"adopted (preserved on uninstall): {destination}")
                 continue
             partial = True
-            messages.append(f"conflict: {destination}")
+            messages.extend(conflict_messages(destination, "a non-bundle entry already exists"))
             continue
 
         if config.dry_run:
@@ -2742,9 +2802,9 @@ def _install(config: Config) -> Result:
 
 def install(config: Config) -> Result:
     if config.dry_run:
-        return _install(config)
+        return with_operation_summary("install", _install(config))
     with installer_lock(config):
-        return _install(config)
+        return with_operation_summary("install", _install(config))
 
 
 def status_summary(counts: dict[str, int]) -> str:
@@ -2762,6 +2822,10 @@ def status(config: Config) -> Result:
     validate_state(config, state)
     messages, partial = recover_transactions(config, state, read_only=True)
     counts = {"ok": 0, "conflict": 0, "absent": 0}
+    if config.agent in {"all", "claude"} and marketplace_overlap(config.home):
+        partial = True
+        counts["conflict"] += 1
+        messages.extend(marketplace_messages(config))
     for key, record in state["entries"].items():
         if config.agent != "all" and record.get("agent") != config.agent:
             continue
@@ -2771,7 +2835,9 @@ def status(config: Config) -> Result:
         if not record_authority_matches(key, record, config):
             partial = True
             counts["conflict"] += 1
-            messages.append(f"root/collection conflict: {destination}")
+            messages.extend(
+                conflict_messages(destination, "configured root or collection changed", label="root/collection conflict")
+            )
         elif not path_present(destination):
             partial = True
             counts["absent"] += 1
@@ -2782,7 +2848,7 @@ def status(config: Config) -> Result:
         else:
             partial = True
             counts["conflict"] += 1
-            messages.append(f"conflict: {destination}")
+            messages.extend(conflict_messages(destination, "owned entry changed"))
     messages.append(status_summary(counts))
     return Result(1 if partial else 0, tuple(messages))
 
@@ -2805,20 +2871,24 @@ def _uninstall(config: Config) -> Result:
         destination = Path(key)
         if not record_authority_matches(key, record, config):
             partial = True
-            messages.append(f"root/collection conflict: {destination}")
+            messages.extend(
+                conflict_messages(destination, "configured root or collection changed", label="root/collection conflict")
+            )
             continue
         if not path_present(destination):
             if not config.dry_run:
                 if not record_authority_matches(key, record, config):
                     partial = True
-                    messages.append(f"root/collection conflict: {destination}")
+                    messages.extend(
+                        conflict_messages(destination, "configured root or collection changed", label="root/collection conflict")
+                    )
                     continue
                 persist_state(config, state, resolved_state(state, key, None))
             messages.append(f"absent: {destination}")
             continue
         if not entry_matches_record(destination, record):
             partial = True
-            messages.append(f"conflict: {destination}")
+            messages.extend(conflict_messages(destination, "owned entry changed"))
             continue
         if record.get("removable", True) is False:
             messages.append(f"kept: {destination} (adopted pre-existing entry)")
@@ -2833,9 +2903,9 @@ def _uninstall(config: Config) -> Result:
 
 def uninstall(config: Config) -> Result:
     if config.dry_run:
-        return _uninstall(config)
+        return with_operation_summary("uninstall", _uninstall(config))
     with installer_lock(config):
-        return _uninstall(config)
+        return with_operation_summary("uninstall", _uninstall(config))
 
 
 def self_test(config: Config) -> Result:
@@ -2860,25 +2930,64 @@ def self_test(config: Config) -> Result:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "Configured roots: Claude entries use --claude-home/.claude; Codex entries use "
+            "--codex-home (or CODEX_HOME). --agent limits every lifecycle operation to one plane. "
+            "Status and --dry-run never write state or bundle entries."
+        ),
+    )
     parser.add_argument(
         "command",
         choices=("install", "status", "uninstall", "self-test"),
         nargs="?",
         default="install",
+        help="lifecycle action (default: install)",
     )
-    parser.add_argument("--migrate-state", action="store_true")
-    parser.add_argument("--agent", choices=("all", "claude", "codex"), action=SingleAgentAction)
-    parser.add_argument("--mode", choices=("auto", "link", "copy"), default="auto")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--home", type=Path, default=Path.home())
-    parser.add_argument("--codex-home", type=Path)
+    parser.add_argument(
+        "--migrate-state",
+        action="store_true",
+        help="migrate exact legacy ownership records (install only)",
+    )
+    parser.add_argument(
+        "--agent",
+        choices=("all", "claude", "codex"),
+        action=SingleAgentAction,
+        help="select one configured plane; default: all",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("auto", "link", "copy"),
+        default="auto",
+        help="installation mode: auto (default), strict link, or copy",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report install or removal changes without writing",
+    )
+    parser.add_argument(
+        "--claude-home",
+        "--home",
+        dest="claude_home",
+        type=Path,
+        default=Path.home(),
+        metavar="PATH",
+        help="Claude user home; entries are placed under PATH/.claude (default: current home)",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        metavar="PATH",
+        help="Codex root; default: CODEX_HOME or --claude-home/.codex",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    home = operational_path(args.home)
+    home = operational_path(args.claude_home)
     codex_home_value = args.codex_home
     if codex_home_value is None:
         environment_value = os.environ.get("CODEX_HOME")

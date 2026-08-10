@@ -190,6 +190,32 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("<ocx><claude><--settings><{\"custom\":true}><two words>", log.read_text())
 
+    def test_ensure_checks_health_without_launching_claude(self) -> None:
+        result, log = self.run_launcher("ensure")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("healthy", result.stdout)
+        self.assertIn("does not launch Claude Code", result.stdout)
+        self.assertFalse(self.env_log.exists(), "ensure must not launch the Claude child")
+        self.assertFalse(log.exists(), "an already healthy gateway needs no mutating ocx route")
+
+    def test_ensure_rejects_arguments_before_contacting_gateway(self) -> None:
+        result, log = self.run_launcher("ensure", "unexpected")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("takes no arguments", result.stderr)
+        self.assertFalse(log.exists())
+        self.assertFalse(self.env_log.exists())
+
+    def test_launch_help_distinguishes_plain_claude_from_ccodex(self) -> None:
+        result, log = self.run_launcher("launch", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Plain `claude`", result.stdout)
+        self.assertIn("native Anthropic-routed CLI", result.stdout)
+        self.assertIn("explicit non-Anthropic gateway launch", result.stdout)
+        self.assertFalse(log.exists())
+
     def test_launch_does_not_print_forwarded_secret(self) -> None:
         secret = "OCX_TEST_SECRET"
         result, _ = self.run_launcher("launch", "--settings", f'{{"token":"{secret}"}}')
@@ -1091,6 +1117,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
 
     def test_verb_level_help_prints_usage_and_prepares_nothing(self) -> None:
         for arguments in (
+            ["ensure", "--help"],
             ["launch", "--help"],
             ["launch", "-h"],
             ["launch", "help"],

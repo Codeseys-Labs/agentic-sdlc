@@ -249,6 +249,7 @@ class InstallSkillBundleTests(unittest.TestCase):
             adopted = installer.install(config)
             self.assertIn(f"adopted (preserved on uninstall): {copy_destination}", adopted.messages)
             self.assertIn(f"replaced link with copy: {agent_destination}", adopted.messages)
+            self.assertIn("2 adopted", adopted.messages[-1])
             self.assertFalse(agent_destination.is_symlink())
 
     def test_copy_mode_replaces_exact_legacy_link(self) -> None:
@@ -384,6 +385,23 @@ class InstallSkillBundleTests(unittest.TestCase):
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
             installer.parse_args(["install", "--agent", "claude", "--agent", "codex"])
         self.assertEqual(raised.exception.code, 2)
+
+    def test_cli_help_names_configured_roots_agent_selection_and_read_only_modes(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPT), "--help"], text=True, capture_output=True, check=False
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--claude-home PATH", completed.stdout)
+        self.assertIn("--codex-home PATH", completed.stdout)
+        self.assertIn("--agent {all,claude,codex}", completed.stdout)
+        self.assertIn("Status and --dry-run never write", completed.stdout)
+
+    def test_cli_uses_explicit_claude_home_alias(self) -> None:
+        parsed = installer.parse_args(["status", "--claude-home", "/tmp/claude", "--codex-home", "/tmp/codex"])
+
+        self.assertEqual(parsed.claude_home, Path("/tmp/claude"))
+        self.assertEqual(parsed.codex_home, Path("/tmp/codex"))
 
     def test_invalid_state_is_fatal(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -566,6 +584,31 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 1)
             self.assertFalse((config.home / ".claude" / "skills" / "example").exists())
             self.assertTrue((config.codex_home / "skills" / "example").exists())
+            overlaps = [message for message in result.messages if message.startswith("marketplace overlap:")]
+            self.assertEqual(overlaps, [f"marketplace overlap: {config.home / '.claude'}"])
+            self.assertIn("preserved:", result.messages[1])
+            self.assertTrue(result.messages[-1].startswith("install summary:"))
+
+    def test_marketplace_overlap_is_visible_in_status_once_and_leaves_codex_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "all")
+            marketplace = config.home / ".claude" / "plugins" / "marketplaces" / "agentic-sdlc"
+            marketplace.mkdir(parents=True)
+            self.assertEqual(installer.install(installer.Config(root, config.home, config.codex_home, "copy", False, "codex")).exit_code, 0)
+
+            state_before = config.state_path.read_bytes()
+            result = installer.status(config)
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(
+                [message for message in result.messages if message.startswith("marketplace overlap:")],
+                [f"marketplace overlap: {config.home / '.claude'}"],
+            )
+            self.assertIn(f"ok: {config.codex_home / 'skills' / 'example'}", result.messages)
+            self.assertEqual(result.messages[-1], "2 ok, 1 conflict, 0 absent")
+            self.assertEqual(config.state_path.read_bytes(), state_before)
 
     def test_windows_prefers_junction_for_directories_and_symlink_for_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2136,6 +2179,29 @@ class InstallSkillBundleTests(unittest.TestCase):
             self.assertEqual(installed.messages[-1], "1 ok, 0 conflict, 0 absent")
             self.assertEqual(absent.exit_code, 1)
             self.assertEqual(absent.messages[-1], "0 ok, 0 conflict, 1 absent")
+
+    def test_write_lifecycle_summaries_are_terminal_and_conflicts_name_preservation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(root, root / "home", root / "codex", "copy", False, "claude")
+            destination = config.home / ".claude" / "skills" / "example"
+            destination.mkdir(parents=True)
+            (destination / "foreign.txt").write_text("preserve")
+
+            conflicted = installer.install(config)
+            removed = installer.uninstall(config)
+
+            self.assertEqual(conflicted.exit_code, 1)
+            self.assertIn(f"conflict: {destination}", conflicted.messages)
+            self.assertIn(
+                f"preserved: {destination} (a non-bundle entry already exists; inspect and resolve it before retrying)",
+                conflicted.messages,
+            )
+            self.assertTrue(conflicted.messages[-1].startswith("install summary:"))
+            self.assertEqual(removed.exit_code, 0)
+            self.assertTrue(removed.messages[-1].startswith("uninstall summary:"))
+            self.assertTrue(destination.exists())
 
     def test_status_summary_is_terminal_for_every_counted_shape(self) -> None:
         self.assertEqual(
