@@ -3,7 +3,14 @@
 - **Status:** accepted
 - **Note:** the gateway-is-optional stance stands; the subscription-routing prohibition below does
   NOT. ADR-0014 replaces it against Anthropic's current gateway and legal-and-compliance
-  documentation. This record is not a constraint on that point.
+  documentation. This record is not a constraint on that point. Decision item 5 in particular reads
+  as live normative prose about a route that no longer exists: ADR-0014 DELETED
+  `ccodex claude-subscription`, so item 5's present-tense obligations — that it "must retain that
+  warning in its help", refuse ambiguity, require one explicit full native unmapped `--model`, and
+  never start/restart/configure a gateway — bind nothing and must not be cited as current
+  requirements. Its closing citation of ADR-0013 as the complete admission contract is likewise
+  historical: ADR-0013 is itself superseded by ADR-0014. Item 5's non-reversal reasoning is
+  preserved as the record of why the escape hatch did not weaken the then-current refusals.
 - **Date:** 2026-08-06
 - **Deciders:** operator (decision), agent (evidence and drafting)
 - **Relates to:** `docs/research/2026-08-05-gateway-selection-memo.md` and its

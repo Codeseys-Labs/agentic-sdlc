@@ -101,13 +101,38 @@ restore_passthrough() {
   readback="$(ocx config get claudeCode.nativePassthrough 2>/dev/null)"
   case "$readback" in
     *true*) printf 'restored: claudeCode.nativePassthrough=true (verified)\n' ;;
-    *) printf 'VOID: restore did NOT take effect (read back: %s) — fix before any other launch through this gateway\n' "$readback" ;;
+    # `return 1` here would be invisible: a nonzero return from an EXIT trap does NOT change the
+    # script's exit status, so an unverified restore used to leave the whole run exiting 0 while
+    # printing VOID. Only an explicit `exit` makes it a failure a caller can see. Re-entry is
+    # already blocked by $restored, so the EXIT trap this fires does not loop.
+    *) printf 'VOID: restore did NOT take effect (read back: %s) — fix before any other launch through this gateway\n' "$readback"
+       exit 3 ;;
   esac
 }
 trap restore_passthrough EXIT INT TERM
 
-ocx config set claudeCode.nativePassthrough false >/dev/null 2>&1 && ocx restart >/dev/null 2>&1
+# The DISABLE is verified exactly as strictly as the restore, and BEFORE the billed call. Both
+# statuses used to be discarded to /dev/null with no readback while execution fell through to the
+# turn below, so step 5 could run against still-ENABLED passthrough and be read as a valid negative
+# control — precisely the confound the control exists to rule out. Absent is NOT disabled: 2.11.1
+# treats nativePassthrough as on unless it is === false (claude-messages.ts:106), so only a `false`
+# readback admits the turn. Stated rather than implied: this proves the CONFIG, and the restart is
+# what makes the running gateway adopt it, which is why a failed restart aborts too.
+ocx config set claudeCode.nativePassthrough false >/dev/null 2>&1 || {
+  printf 'VOID: could not disable claudeCode.nativePassthrough — no control turn is run\n'
+  exit 3
+}
+ocx restart >/dev/null 2>&1 || {
+  printf 'VOID: gateway restart failed after disabling passthrough — no control turn is run\n'
+  exit 3
+}
 sleep 3
+disabled="$(ocx config get claudeCode.nativePassthrough 2>/dev/null)"
+case "$disabled" in
+  *false*) printf 'disabled: claudeCode.nativePassthrough=false (verified)\n' ;;
+  *) printf 'VOID: passthrough is NOT disabled (read back: %s) — a billed control turn would be confounded, so it is not run\n' "$disabled"
+     exit 3 ;;
+esac
 ANTHROPIC_BASE_URL=http://127.0.0.1:10100 claude -p 'reply with the single word: control' \
   --model claude-opus-4-6 </dev/null 2>&1 | head -5
 printf '\nexpected: routed to the default provider or refused — NOT a clean native answer.\n'

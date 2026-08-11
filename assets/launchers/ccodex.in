@@ -42,7 +42,7 @@ usage() {
   cat <<EOF
 usage: ccodex <command> [args...]
 
-Gateway plane (the common case; \`ccodex ocx <verb>\` also works as the long form):
+Gateway plane -- one session, both catalogs (\`ccodex ocx <verb>\` is the long form):
   ensure                      Ensure the gateway is healthy without launching Claude Code.
   launch [claude args...]     Ensure the gateway is healthy, then launch Claude Code through it
                               with your OWN ~/.claude login. Native claude models pass through

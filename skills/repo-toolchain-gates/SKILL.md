@@ -192,7 +192,7 @@ Two rules that outrank convenience:
    unstated omission and a reasoned one look identical in a diff six months later.
 
 **A pin and the permission to use a tool a particular way are separate decisions — and the
-separation survives the pin.** As of 2026-08-06 this bundle DOES pin
+separation survives the pin.** As of 2026-08-09 this bundle DOES pin
 `npm:@bitkyc08/opencodex` (version 2.11.1, MIT, npm backend, `depends = ["node"]`), by
 explicit operator decision recorded in `docs/adr/0005`. An earlier revision of this skill
 left it unpinned while the subscription-passthrough question was open; `docs/adr/0003`

@@ -840,15 +840,27 @@ settings_document_bypassing_key_name() {
     --argjson booleans "$(json_name_array "${routing_boolean_switches[@]}")" \
     --argjson slots "$(json_name_array "${routing_endpoint_slots[@]}")" '
     (.env // {}) as $env
-    | ($booleans | map(select(
-        (($env[.] // "") | tostring | ascii_downcase | gsub("\\s"; "")) as $value
+    # ONE reader for every slot, and NOT `$env[.] // ""`. The jq `//` operator is false-OR-null,
+    # not null-coalescing, so a JSON literal `false` read as ABSENT: `{"env":{"ANTHROPIC_BASE_URL":
+    # false}}` reported CLEAN while the identical `"https://evil.example"` refused. That mattered
+    # because Claude Code does not drop or reject a non-string here -- MEASURED on 2026-08-11
+    # against 2.1.227, whose settings-env filter chain passes values through untouched and then
+    # `Object.assign(process.env, ...)` STRINGIFIES them, so `false` arrives in the session and in
+    # every child as the string "false". A probe with a blocking UserPromptSubmit hook dumped
+    # `AWS_BEARER_TOKEN_BEDROCK=false` and `ANTHROPIC_BEDROCK_BASE_URL=false` from the child
+    # environment: SET and non-empty, which is exactly the condition an endpoint slot refuses on.
+    # Only `null` is absent, so only `null` becomes "". `tostring` is kept for every present value,
+    # which is what keeps a number or boolean comparable against the string tests below.
+    | def slot($name): if $env[$name] == null then "" else ($env[$name] | tostring) end;
+      ($booleans | map(select(
+        (slot(.) | ascii_downcase | gsub("\\s"; "")) as $value
         | $value != "" and $value != "0" and $value != "false"))) as $switches
-    | ($slots | map(select((($env[.] // "") | tostring) != ""))) as $endpoints
+    | ($slots | map(select(slot(.) != ""))) as $endpoints
     | [ "ANTHROPIC_BASE_URL"
-        | select((($env[.] // "") | tostring) != "")
-        | select((($env[.] // "") | tostring | ascii_downcase) | test($loopback) | not) ] as $base
+        | select(slot(.) != "")
+        | select((slot(.) | ascii_downcase) | test($loopback) | not) ] as $base
     | [ "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"
-        | select(($env[.] // "" | tostring) | startswith("sk-ant-api")) ] as $console
+        | select(slot(.) | startswith("sk-ant-api")) ] as $console
     | (if (.apiKeyHelper // null) != null then ["apiKeyHelper"] else [] end) as $helper
     | ($switches + $endpoints + $base + $console + $helper) | first // empty
   ' "$settings" 2>/dev/null)" || status=$?
@@ -869,10 +881,48 @@ settings_document_bypassing_key_name() {
 # DEDUPLICATED, because launching from your home directory makes the project entry the global one:
 # `$PWD/.claude/settings.json` and `$HOME/.claude/settings.json` are then the same path, and a list
 # that printed it twice would read as two independent documents having been checked.
+#
+# THE DEDUPE KEY IS THE PHYSICAL SPELLING, not the string this function was handed. Comparing the
+# strings collapsed only the case where `$HOME` and `$PWD` are spelled IDENTICALLY, which is the
+# one case that needs no help. MEASURED on 2026-08-11 on plain Linux: with a trailing slash on
+# `$HOME` and the launch directory set to home, `status` printed
+# `checked: <home>//.claude/settings.json` AND `checked: <home>/.claude/settings.json` -- one file,
+# listed as two documents verified. A `$HOME` reached through a symlink to the launch directory did
+# the same. Real hosts produce both spellings without anyone trying: Fedora Silverblue/CoreOS puts
+# `/home` behind a symlink to `/var/home`, a macOS home can sit under a symlinked volume, and a
+# trailing slash survives any profile that writes `HOME="$something/"`. No key is read twice into a
+# verdict -- the first-match refusal is unaffected -- but `status` overstated the surface it
+# inspected, which this file treats as a defect rather than cosmetics.
+#
+# The two base directories are canonicalized ONCE and the documents are built from the result, so
+# the fix does not depend on a document existing. That distinction is load-bearing: the absent case
+# is the common one (a fresh machine has no `.claude` at all) and `status` names every `checked:`
+# path whether or not the file is there, so a normalisation that resolved the DOCUMENT would fall
+# back to the raw spelling exactly when the collision is invisible and list the file twice again.
+# An unresolvable base directory keeps its raw spelling, which cannot collide with a resolved one:
+# resolution fails only when the directory does not exist or cannot be searched, and such a
+# directory is not the launch directory.
+#
+# RESIDUAL, stated rather than hidden: two genuinely different physical paths that reach one file
+# through a document-level symlink, a hardlink, or a bind mount are still listed separately. Each
+# is a distinct path Claude Code consults, and listing both overstates nothing.
+canonical_directory() {
+  local directory="$1" resolved=""
+  # `CDPATH=''` so a set CDPATH cannot resolve somewhere else or make `cd` print a path, `-P` and
+  # `pwd -P` so the answer is the physical directory, and `--` so a directory named like an option
+  # is still a directory. The subshell is the command substitution's own, so nothing leaks.
+  resolved="$(CDPATH='' cd -P -- "$directory" 2>/dev/null && pwd -P)" || resolved=""
+  [ -n "$resolved" ] || resolved="$directory"
+  printf '%s' "$resolved"
+}
+
 claude_settings_documents() {
-  local document seen=""
-  for document in "$HOME/.claude/settings.json" \
-                  "$PWD/.claude/settings.json" "$PWD/.claude/settings.local.json"; do
+  local document seen="" home_directory launch_directory
+  home_directory="$(canonical_directory "$HOME")"
+  launch_directory="$(canonical_directory "$PWD")"
+  for document in "$home_directory/.claude/settings.json" \
+                  "$launch_directory/.claude/settings.json" \
+                  "$launch_directory/.claude/settings.local.json"; do
     case "$seen" in *"<$document>"*) continue ;; esac
     seen="$seen<$document>"
     printf '%s\n' "$document"
