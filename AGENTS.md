@@ -218,6 +218,21 @@ model selection as policy.
   `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
+  `ocx:launch` runs Claude Code through the gateway using the operator's OWN `~/.claude` login, so
+  ONE session serves both catalogs: a genuine `claude*`/`anthropic*` id that no alias or `modelMap`
+  claims is forwarded verbatim to `api.anthropic.com` on that subscription, while every gateway id
+  routes to its own provider on that provider's credential. Anthropic's gateway documentation
+  describes this shape — base URL set, no gateway credential, `anthropic-beta` forwarded — as
+  preserving the subscription's limits and billing. It also states that routing Claude Code to
+  NON-Claude models through any gateway is unsupported, so the routed half is
+  permitted-but-unsupported; no Anthropic credential is used for those turns. The isolated plane,
+  the environment scrub, the subscription refusals, the `session` verbs, and the separately named
+  `claude-subscription` route are all GONE (ADR-0014 supersedes ADR-0013 and amends ADR-0003).
+  `launch` still refuses (exit 3) when the route would not actually be used: a provider-routing key
+  (`CLAUDE_CODE_USE_BEDROCK`-class, exported or in the global `settings.json` `env`), an
+  `apiKeyHelper`, or an `sk-ant-api*` Console key — the first bypasses the gateway entirely, and the
+  last takes the same native branch but bills API credits. An `sk-ant-oat*` login is accepted; no
+  credential value is ever read or printed. A healthy launch is still not model-identity evidence.
   Muse Spark has no tasks of its own: it is one provider registered in the gateway, whose models
   appear in the single flat live catalog as namespaced ids, so
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a

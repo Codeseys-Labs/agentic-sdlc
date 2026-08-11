@@ -512,14 +512,11 @@ changed, foreign, and adopted copies are preserved. Every gateway command remain
 | Command | What it does |
 |---|---|
 | `ccodex ensure` | Ensure the non-Anthropic gateway is healthy without launching Claude Code. |
-| `ccodex launch [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch a Claude Code process through it with an isolated `CLAUDE_CONFIG_DIR` and no Anthropic subscription credential in scope. Fails closed if the gateway never becomes healthy. Arguments are forwarded to Claude Code. |
+| `ccodex launch [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch Claude Code through it using your own `~/.claude` login, so native claude models pass through to Anthropic on your subscription while gateway models route to their own providers, in one session. Fails closed if the gateway never becomes healthy, and refuses (exit 3) when a provider-routing key or Console API key would silently defeat the route. Arguments are forwarded to Claude Code. |
 | `ccodex launch --model <id>` | Pick any id in the running gateway's live catalog, including a namespaced one: `--model muse/muse-spark-1.2`. Run `ccodex models` for the list. |
 | `ccodex ultracode [claude args...]` | The same fail-closed launch path with session Ultracode applied. It owns the session `--settings` value, so it refuses a competing `--settings`, and it **never** bypasses permissions. |
 | `ccodex status` | Read-only supervision view: pid, port, uptime, healthy/down, log location, configured providers each compared against the LIVE catalog, this shell's environment-variable policy, session-inheritance coverage, and the attribution log command. Exit 0 means the gateway answered an identity-checked probe at that moment — evidence, not authorization. |
 | `ccodex restart` | Stop the gateway cleanly, then ensure it is back up. Fails closed on an unclean stop. Interrupts in-flight turns in every routed session, and `ocx` rewrites shared `~/.codex` config as part of its lifecycle. |
-| `ccodex session status` | Per-entry session inheritance: `SHARED`, `NOT INHERITED`, or absent, with an `N of M` count. Read-only, and works with the gateway down. |
-| `ccodex session adopt` | Print exactly what a migration would move. **Moves nothing.** |
-| `ccodex session adopt --migrate` | Move each blocking plane copy into a timestamped in-plane backup, then link to the global copy. Nothing is deleted; refuses when the global source is missing. |
 
 **Providers and models** — what a launched session can actually pick:
 
@@ -552,6 +549,7 @@ help of the tool *behind* a launch verb, end this command's options with `--`:
 ccodex launch --help                # this verb's help; prepares nothing, launches nothing
 ccodex launch -- --help             # `--` forwards verbatim: Claude Code's OWN help
 ccodex launch -- --print "prompt"   # any Claude Code argument, through a prepared session
+                                     # Claude Code's own help, only if gateway is already healthy
 ```
 
 `providers` and `models` are the two exceptions: they take no options of their own, so they run
@@ -644,80 +642,60 @@ pick; that view reads the gateway's live catalog rather than the configured list
 disagree and only the live one answers the question. Adding a provider goes through the reviewed
 configure route with muse as the worked example — nothing about it is special-cased in code.
 
-### Environment-variable policy
+### Which login a launch uses
 
-Mutating your global Claude settings requires explicit operation-specific approval and no launcher
-does it; the policy below governs the plane-local document the launcher constructs and the child
-process environment it builds. Claude Code resolves CLI flags > shell environment > settings `env`
-> dedicated settings keys > defaults
-([settings](https://code.claude.com/docs/en/settings.md)), so the launcher sanitizes **both** the
-process environment and that constructed document; closing one and not the other leaves the
-boundary open. Per class
-([env-vars](https://code.claude.com/docs/en/env-vars.md),
-[network-config](https://code.claude.com/docs/en/network-config.md)):
+`ccodex launch` uses your OWN `~/.claude` — configuration, plugins, agents, and login. That is
+what lets Claude Code present its existing claude.ai session to the gateway, which is the whole
+point of the route (ADR-0014). One session then serves both catalogs, because the gateway decides
+per request: a genuine `claude*`/`anthropic*` id that no alias or `modelMap` claims is forwarded
+verbatim to `api.anthropic.com` on your subscription, and every gateway id routes to its own
+provider on that provider's credential. No Anthropic credential is used for the routed turns.
 
-| Class | Examples | What happens |
-|---|---|---|
-| Credential | `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_CLIENT_KEY` | **Denied**, always, from both sources |
-| Provider routing | `CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_*`/`VERTEX_*`/`FOUNDRY_*` | **Denied, then set fresh** by the gateway; an inherited value would send this plane's traffic elsewhere |
-| Model pin | `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL` and its `_NAME`/`_DESCRIPTION`/`_SUPPORTED_CAPABILITIES` variants, `ANTHROPIC_CUSTOM_MODEL_OPTION*` | **Denied** — these name Anthropic models this plane may not route (ADR-0003); a session picks from the gateway catalog instead |
-| Forced fallback | `FALLBACK_FOR_ALL_PRIMARY_MODELS` | **Denied** — silent substitution against a restricted catalog is the canary's C1 hazard |
-| TLS downgrade | `NODE_TLS_REJECT_UNAUTHORIZED` | **Denied** |
-| Inert preference | `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`, `DO_NOT_TRACK`, `CLAUDE_CODE_ACCESSIBILITY`, `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, compaction/bash/UI flags | **Inherited** — the operator's deliberate choices |
-| Host-owned | `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_ACCOUNT_UUID`, `CLAUDE_CODE_MESSAGING_SOCKET` | **Neither** — Claude Code ignores these from an env block |
+Anthropic's [gateway documentation](https://code.claude.com/docs/en/llm-gateway) describes this
+configuration: with `ANTHROPIC_BASE_URL` set and **no** gateway credential, "a saved claude.ai
+login remains the active credential, so its usage limits and billing apply", and such gateways
+"must forward the OAuth capability in `anthropic-beta`" — which opencodex does, stripping only
+hop-by-hop headers plus `host`, `content-length`, `accept-encoding`, `x-opencodex-api-key`, and
+`origin`. The same page states Anthropic "doesn't support routing Claude Code to non-Claude models
+through any gateway", so the routed half is permitted but unsupported. The restriction in
+[legal and compliance](https://code.claude.com/docs/en/legal-and-compliance) binds third-party
+developers routing "on behalf of their users", not an operator routing their own credential
+through their own local hop.
 
-`ANTHROPIC_*` and `AWS_*` are denied **by prefix**, since nothing in those namespaces is an inert
-preference and a new upstream name should fail closed. `CLAUDE_*` is denied by default and allowed
-**by name**, because that namespace genuinely mixes routing flags with inert preferences and only
-an enumeration is honest; an unrecognized new `CLAUDE_*` variable is dropped rather than guessed
-at. The privacy flags are **set-to-activate** (any non-empty value enables), so dropping a set
-`DISABLE_TELEMETRY` would silently re-enable telemetry in the launched plane — it is preserved
-explicitly rather than by accident. `ccodex status` prints the classification of every such
-variable in the current shell, never a value. The settings `env` block is read once at session
-start, so the constructed document is a launch-time artifact and editing it mid-session does
-nothing.
+Until 2026-08-11 this launcher did the opposite — isolated config dir, full `ANTHROPIC_*`/
+`CLAUDE_*`/`AWS_*` scrub, and four refusals aimed at keeping a subscription credential out of
+scope. That machinery, the `ccodex session` verbs, and the separately named
+`ccodex claude-subscription` route are all gone. `scripts/muse-claude.sh` still keeps its own
+isolated plane, so ADR-0010's inheritance and environment-variable policy still govern **it**, and
+`assets/claude/session-inheritance.sh` is unchanged.
 
-That config dir is **selectively** separate rather than isolated in every respect, and ADR-0010
-records which half is which. Inert per-session data — prompt history, project transcripts,
-todos, shell snapshots, file history — is SHARED with `~/.claude` by symlink, so a launched
-session shows your real history and projects instead of opening blank, and one realpath'd
-history lock serializes both planes rather than letting two copies diverge.
+**Two refusals remain, and they are about billing honesty rather than prohibition.** A launch
+exits 3 when the gateway route would not actually be used. Neither one edits anything to fix it:
+changing your global settings file is a mutation that needs explicit operation-specific approval
+for that exact path, so the launcher reports the blocker and stops instead.
 
-**An entry that already holds this plane's own data is NOT inherited, and that state is
-permanent until you migrate it.** A launch never moves, deletes, or overwrites plane data to make
-room for a link — so on a plane that accumulated data before this feature existed, inheritance is
-simply off. It says so per entry, and `ccodex status` reports `session inheritance: N of M
-inheritable entries shared` so the state is visible without a special command. The remedy is
-explicit and reviewable:
+| Refused | Why it matters |
+|---|---|
+| A provider-routing key — `CLAUDE_CODE_USE_BEDROCK`/`USE_VERTEX`/`USE_FOUNDRY`, `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL` — exported **or** in the global `settings.json` `env`, or an `apiKeyHelper` there | It outranks the gateway. Under Bedrock the client consults `ANTHROPIC_BEDROCK_BASE_URL` and never `ANTHROPIC_BASE_URL`, so the session bills the cloud account while the launcher prints a gateway banner. Measured on a real host on 2026-08-10: the request never reached a local capture listener and was still answered. |
+| An `sk-ant-api*` Console key in `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` | It satisfies opencodex's bare `sk-ant-` passthrough gate, so it takes the **same** native branch and bills API credits while looking like subscription traffic. The prefix is the only distinguishing signal. |
 
-```bash
-ccodex session status               # per-entry: shared, not-inherited, or absent
-ccodex session adopt                # print exactly what would move; moves NOTHING
-ccodex session adopt --migrate      # move the blocking copy to a timestamped backup, then link
-```
+An `sk-ant-oat*` login is accepted — carrying it is the point. Only names and prefixes are ever
+inspected; no credential value is read, printed, copied, or persisted. `ccodex status` reports
+whether anything currently outranks the gateway.
 
-Nothing is ever deleted: the blocking copy is **moved** into
-`pre-inheritance-backup-<stamp>/` inside the plane and the path is printed, so an unwanted
-migration is undone by moving it back. A missing global source is a refusal rather than a skip,
-because hiding the plane's only copy would deliver nothing. After a migration the launched session
-shows the **global** history and projects, so the plane's own past prompts stop appearing in it.
+Keep a cloud-provider route in a per-command wrapper of your own rather than in the global
+settings document, so the two do not fight. `ocx claude` writes its `ocx-*.md` roster agents and
+the gateway model cache into `~/.claude`; that cache write is load-bearing rather than incidental,
+because Claude Code only refreshes it while holding a credential, so without it the `/model`
+picker would never list the routed ids.
 
 **Help is never a side-effecting operation.** `ccodex <verb> --help` prints that verb's own help
-and prepares nothing — no session inheritance, no constructed `settings.json`, no gateway. To reach
-the help of the tool *behind* a launch verb, end the wrapper's options with `--`
-(`ccodex launch -- --help`), which prepares a real session and forwards the argument verbatim.
+and prepares nothing — it starts no gateway and writes nothing. To reach the help of the tool
+*behind* a launch verb, end the wrapper's options with `--` (`ccodex launch -- --help`).
 
-Changing your global Claude settings still requires explicit operation-specific approval for
-that exact settings file, and this launcher never does it. The plane-local
-`settings.json` it CONSTRUCTS lives inside the launcher's own state directory: the global file is
-read and never written, copied, or linked. Only the global `statusLine` stanza is inherited,
-because that `env` block can carry a live credential (verified on a real host) and copying it
-would also re-point the child away from the gateway. Credentials never cross in either direction: the constructed document is asserted
-credential-free before it is written, and `.credentials.json`, the sibling `.claude.json`,
-`sessions/`, `session-env/`, `plugins/`, and `agents/` stay private. Inheritance runs only after
-every credential assertion, so a refused launch links nothing, and it is fail-soft — it never
-deletes existing plane data and never blocks a launch. `scripts/muse-claude.sh` shares the same
-`assets/claude/session-inheritance.sh`, so the two launchers cannot drift.
+Mutating your global Claude settings still requires explicit operation-specific approval for that
+exact file, and no launcher does it: the global document is read, never written, copied, or linked.
+
 
 The packaged statusline is offline, uses approximate built-in model-family prices only for its
 advisory subagent breakdown, and is not activated by installation. Changing global Claude

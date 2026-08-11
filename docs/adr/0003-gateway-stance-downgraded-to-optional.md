@@ -1,10 +1,13 @@
 # ADR-0003 — gateway stance downgraded: optional for non-Anthropic models, not a subscription-cost mechanism
 
 - **Status:** accepted
+- **Note:** the gateway-is-optional stance stands; the subscription-routing prohibition below does
+  NOT. ADR-0014 replaces it against Anthropic's current gateway and legal-and-compliance
+  documentation. This record is not a constraint on that point.
 - **Date:** 2026-08-06
 - **Deciders:** operator (decision), agent (evidence and drafting)
 - **Relates to:** `docs/research/2026-08-05-gateway-selection-memo.md` and its
-  2026-08-05 addendum
+  2026-08-05 addendum; `docs/adr/0013-explicit-unsupported-claude-subscription-passthrough.md`
 
 ## Context
 
@@ -89,6 +92,28 @@ problem it looks like it solves.
    bundle's use case. A more permissive-sounding gateway product's own
    marketing claims do not satisfy this condition; only Anthropic's
    documentation does.
+5. **A separately named escape hatch does not reverse this decision.**
+   `ccodex claude-subscription` is an explicit individual operator action,
+   implemented only to make its unsupported/account-risk nature conspicuous.
+   It is not provider-approved, is not a supported entitlement path, and its
+   explicit invocation creates neither authorization nor an exception to the
+   restriction above. It must retain that warning in its help and refuse
+   ambiguity rather than becoming an ordinary `launch` mode.
+
+   The route does not handle OAuth itself: it reads no credential store or
+   token, calls plain `claude` rather than `ocx claude`, and checks only masked
+   daemon status plus non-secret config scalars. It requires exactly one explicit
+   full native unmapped `--model` before its wrapper `--`, has no default, and
+   removes only that separator before forwarding the child argv. It requires an
+   already-healthy gateway and must never start/restart/configure one, because
+   upstream lifecycle commands mutate shared `~/.codex`. Thus its existence does
+   not weaken the ordinary split-plane route's subscription refusals.
+
+   OpenCodex 2.11.1's masked status omits `nativePassthrough`; its pinned source
+   documents default-on behavior unless that scalar is explicitly `false`. The
+   route checks the scalar directly and treats that source/pin behavior as a
+   limited invariant, not a runtime proof or provider authorization. ADR-0013
+   specifies the complete admission contract and test obligations.
 
 ## Consequences
 

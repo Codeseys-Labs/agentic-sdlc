@@ -44,15 +44,15 @@ usage: ccodex <command> [args...]
 
 Gateway plane (the common case; \`ccodex ocx <verb>\` also works as the long form):
   ensure                      Ensure the gateway is healthy without launching Claude Code.
-  launch [claude args...]     Ensure the gateway is healthy, then launch a Claude Code session
-                              through it. Select any catalog model with --model, including a
-                              muse one: --model muse/muse-spark-1.2
+  launch [claude args...]     Ensure the gateway is healthy, then launch Claude Code through it
+                              with your OWN ~/.claude login. Native claude models pass through
+                              to Anthropic on your subscription; gateway models route to their
+                              own providers -- both in one session. Select any catalog model
+                              with --model, including a muse one: --model muse/muse-spark-1.2
   ultracode [claude args...]  Same fail-closed launch path with session Ultracode.
-  status                      Gateway supervision, configured-vs-live providers, env policy,
-                              and how many session entries are actually shared.
+  status                      Gateway supervision, configured-vs-live providers, and whether
+                              anything would silently defeat the gateway route.
   restart                     Stop cleanly, then ensure the gateway is back up.
-  session <status|adopt>      Report session inheritance per entry, and migrate pre-existing
-                              plane data aside (with --migrate) so inheritance takes effect.
 
 Providers and models (what a launched session can actually pick):
   providers                   Configured providers, and which are LIVE in the running gateway.
@@ -133,7 +133,7 @@ run_ocx() {
 # `ultracode` is this command's operator-facing spelling of the launcher's `launch-ultracode`.
 launcher_verb() {
   case "$1" in
-    ensure|launch|status|restart|configure|session|launch-ultracode) printf '%s' "$1" ;;
+    ensure|launch|status|restart|configure|launch-ultracode) printf '%s' "$1" ;;
     ultracode) printf 'launch-ultracode' ;;
     *) return 1 ;;
   esac
@@ -154,7 +154,7 @@ sub_dispatch_help() {
 
 route="${1:-}"
 case "$route" in
-  ensure|launch|ultracode|status|restart|configure|session)
+  ensure|launch|ultracode|status|restart|configure)
     require_launcher
     verb="$(launcher_verb "$route")"
     shift
@@ -176,7 +176,7 @@ case "$route" in
     # handled before the verb table rather than falling through it.
     case "$verb" in
       -h|--help|help) usage; exit 0 ;;
-      "") printf 'error: ccodex ocx needs a verb (ensure|launch|ultracode|status|restart|session|configure)\n\n' >&2; usage >&2; exit 2 ;;
+      "") printf 'error: ccodex ocx needs a verb (ensure|launch|ultracode|status|restart|configure)\n\n' >&2; usage >&2; exit 2 ;;
     esac
     shift
     resolved="$(launcher_verb "$verb")" \

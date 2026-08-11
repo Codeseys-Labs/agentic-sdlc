@@ -1,6 +1,8 @@
 # ADR-0010 — A gateway-launched Claude Code session inherits inert session data and the statusLine stanza; settings.json is constructed key-by-key and never copied, because the global file carries a live credential
 
 - **Status:** accepted
+- **Note:** scoped to `scripts/muse-claude.sh` by ADR-0014. `scripts/opencodex-claude.sh` no longer
+  has a plane to inherit into. `assets/claude/session-inheritance.sh` is unchanged.
 - **Date:** 2026-08-07
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/adr/0003-gateway-stance-downgraded-to-optional.md`

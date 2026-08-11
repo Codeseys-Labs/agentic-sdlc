@@ -333,7 +333,8 @@ class OperatorToolsTests(unittest.TestCase):
             "  'ocx --version ') exit 0 ;;\n"
             "  'ocx health ') exit 0 ;;\n"
             "  'ocx health --json') printf '{\"ok\":true,\"pid\":1,\"port\":10100}\\n'; exit 0 ;;\n"
-            "  'ocx config get') exit 0 ;;\n"
+            "  'ocx claude config') printf '{\"enabled\":true,\"authMode\":\"subscription\",\"admissionKeyActive\":false,\"authDetectionUnknown\":false,\"authFoundBy\":\"claude-credentials-file\",\"modelMap\":{}}\\n'; exit 0 ;;\n"
+            "  'ocx config get') printf 'config path not found: %s\\n' \"${4:-}\" >&2; exit 2 ;;\n"
             "esac\n"
             'if [ "${1:-} ${2:-}" = "ocx claude" ]; then shift 2; exec claude "$@"; fi\n'
             'printf "STUB-OCX:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"\n'
@@ -462,23 +463,9 @@ class OperatorToolsTests(unittest.TestCase):
                     )
 
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    # A real session WAS prepared -- that is the point of the escape hatch.
+                    # A real route WAS invoked, so it reports its preparation.
                     self.assertIn(self.SIDE_EFFECT_MARKER, result.stdout)
                     self.assertIn(expected, result.stdout)
-
-    def test_dispatcher_routes_the_session_verb(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
-            operator_tools.install(config)
-            environment = self.stub_environment(root, config.bin_dir)
-
-            result = subprocess.run(
-                [str(config.bin_dir / "ccodex"), "session", "status"],
-                capture_output=True, text=True, env=environment, check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("session inheritance:", result.stdout)
 
     def test_dispatcher_routes_ensure_in_short_and_long_forms(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

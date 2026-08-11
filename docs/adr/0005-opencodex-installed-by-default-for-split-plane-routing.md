@@ -1,9 +1,13 @@
 # ADR-0005 — opencodex is installed by default for split-plane non-Anthropic routing, with the subscription boundary enforced in the launcher
 
 - **Status:** accepted
+- **Note:** opencodex is still installed by default and still optional at runtime, but the
+  SPLIT-PLANE framing below no longer holds: ADR-0014 replaced the two planes with one
+  launch route serving both catalogs.
 - **Date:** 2026-08-06
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/adr/0003-gateway-stance-downgraded-to-optional.md`,
+  `docs/adr/0013-explicit-unsupported-claude-subscription-passthrough.md`,
   `docs/research/2026-08-05-gateway-selection-memo.md` and its 2026-08-05
   addendum, `docs/research/2026-08-07-opencodex-qualification-canary.md`
   (closes the Decision item 5 canary gate), `skills/repo-toolchain-gates/SKILL.md`
@@ -147,6 +151,30 @@ current wrapper/context-window behavior was re-verified separately.
    usage level, and generalizes the lesson: when a pinned tool's safe usage is
    narrower than its default behavior, the narrowing belongs in an executable
    wrapper, because prose in a skill file cannot refuse anything.
+7. **`ccodex claude-subscription` is deliberately separate from the supported
+   split plane.** It is unsupported, account-risk, and not provider-approved;
+   its explicit invocation is informed operator choice, not authorization or a
+   supported subscription entitlement route. Ordinary `launch` and
+   `launch-ultracode` keep every subscription-OAuth refusal in item 4.
+
+   It reads no OAuth value or credential store, uses plain `claude` rather than
+   `ocx claude`, and exports only its locally verified `ANTHROPIC_BASE_URL`.
+   Before even a gateway status check it refuses the presence of parent
+   Anthropic/AWS/Claude routing or auth controls, forced fallback, and TLS
+   downgrade controls; it inspects exported names only, never their values. It
+   accepts exactly one explicit full native selector before the wrapper `--`, has
+   no default, removes only that separator, and rejects aliases, `[1m]` variants,
+   `modelMap` exact/date-stripped claims, admission keys, absent/unknown masked
+   auth detection, disabled inbound, explicitly disabled native passthrough, and
+   non-official native upstream configuration. ADR-0013 defines this narrower
+   escape hatch without altering the ordinary route's boundary.
+
+   The route never calls `ocx ensure`, `restart`, or configuration verbs: it
+   requires an identity-checked already-healthy gateway so it cannot cause
+   OpenCodex's documented shared `~/.codex` lifecycle mutation. In 2.11.1 the
+   masked status endpoint cannot expose `nativePassthrough`; source documents
+   default-on unless false, so direct scalar inspection plus the exact pin is an
+   explicit bounded invariant, never a claim that status proves it at runtime.
 
 ## Consequences
 

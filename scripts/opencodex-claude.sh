@@ -1,10 +1,34 @@
 #!/bin/bash
-# opencodex-claude.sh — split-plane launcher and supervisor for the pinned opencodex
-# gateway (`ocx`).
+# opencodex-claude.sh — launcher and supervisor for the pinned opencodex gateway (`ocx`).
 #
-# Purpose: run a SECOND Claude Code process pointed at the local opencodex proxy, for
-# non-Anthropic-model work, while the operator's native Claude Code session and config are
-# left untouched. Subcommands: ensure | launch | launch-ultracode | status | restart | configure.
+# Purpose: run Claude Code pointed at the local opencodex proxy so that BOTH kinds of model are
+# usable in ONE session. The gateway decides per request (server/claude-messages.ts): a genuine
+# `claude*`/`anthropic*` id that no alias or modelMap claims is forwarded VERBATIM to
+# api.anthropic.com carrying Claude Code's own login, while `gpt-*`, `muse/*`, and the
+# `claude-ocx-*` alias family route to their own providers on their own credentials.
+# Subcommands: ensure | launch | launch-ultracode | status | restart | configure.
+#
+# ADR-0014 REPLACED THE SPLIT PLANE. Until 2026-08-11 this script did the opposite: `launch`
+# isolated CLAUDE_CONFIG_DIR, scrubbed every ANTHROPIC_*/CLAUDE_*/AWS_* variable, and REFUSED
+# when a subscription credential was reachable, because ADR-0003 read Anthropic's policy as
+# prohibiting subscription routing outright. Two findings retired that reading:
+#
+#   * Anthropic's own gateway documentation describes this exact configuration. Setting only
+#     ANTHROPIC_BASE_URL, with NO gateway credential, "doesn't replace the subscription...  a
+#     saved claude.ai login remains the active credential, so its usage limits and billing
+#     apply", and such gateways "must forward the OAuth capability in anthropic-beta" — which
+#     opencodex does, stripping only hop-by-hop headers plus host/content-length/
+#     accept-encoding/x-opencodex-api-key/origin. (code.claude.com/docs/en/llm-gateway)
+#   * The prohibition that does exist is narrower than ADR-0003 assumed: it forbids THIRD-PARTY
+#     DEVELOPERS offering claude.ai login or routing "on behalf of their users", not an operator
+#     routing their own credential through their own local hop.
+#     (code.claude.com/docs/en/legal-and-compliance)
+#
+# So the scrub, the isolated plane, the four subscription refusals, the session-inheritance
+# call, the `session` verbs, and the separately named `claude-subscription` escape hatch are all
+# GONE. Anthropic still "doesn't support routing Claude Code to non-Claude models through any
+# gateway", so the routed half remains unsupported-but-permitted: no Anthropic credential is
+# used for those turns. See docs/adr/0014.
 #
 # ENSURE-UP: `launch` and `restart` own the gateway lifecycle rather than merely attaching.
 # Supervision is DELEGATED to opencodex's own verbs (`ocx ensure` starts-if-down, waits, and
@@ -18,81 +42,25 @@
 # launched against a dead or half-up gateway; a gateway that will not come healthy within the
 # bounded wait aborts the launch with a named reason and a nonzero exit.
 #
-# WHAT THIS DELIBERATELY DOES NOT DO
-#   * No Anthropic-subscription passthrough. docs/adr/0003 rejects routing Claude
-#     subscription OAuth through any third-party process: the mechanism works, the
-#     authorization does not. `ocx claude` on its own does NOT enforce that — read
-#     src/cli/claude.ts and src/claude/auth-mode.ts in the installed package: its auth
-#     resolver treats a readable subscription credential, AND an unreadable one, as
-#     `subscription` markerMode and forwards the operator's own OAuth to the proxy. This
-#     wrapper therefore forces the supported shape structurally rather than trusting that
-#     default: it isolates CLAUDE_CONFIG_DIR, scrubs every ANTHROPIC*/CLAUDE* variable out
-#     of the child environment, and REFUSES (exit 3) when a subscription credential would
-#     still be reachable. Non-Anthropic providers authenticating with their own credentials
-#     (Codex OAuth, provider API keys, via `configure`) are the supported path.
-#   * Launching is not route qualification. The canary in
-#     docs/research/2026-08-05-gateway-selection-memo.md §4 (probes A, C, D, E, F) is the
-#     qualification gate for trusting which model actually served a request; it is still
-#     unrun. A healthy gateway proves reachability, never model identity.
+# WHAT THIS SCRIPT DELIBERATELY DOES NOT DO
+#   * It never reads, copies, prints, or persists a credential. Claude Code holds its own login
+#     and `ocx claude` passes it to the gateway; this wrapper only checks for NAMES and PREFIXES
+#     that would silently defeat the route (see assert_gateway_route_is_effective).
+#   * It does not verify which model actually served a request. The canary in
+#     docs/research/2026-08-05-gateway-selection-memo.md §4 is the qualification gate and is
+#     still unrun. A healthy gateway proves reachability, never model identity — and the routed
+#     branch RE-LABELS its reply with the requested model, so the response body is inadmissible
+#     as evidence. Only the gateway's own request log distinguishes the branches.
 #   * A healthy `status` is evidence, not authorization. Exit 0 means the proxy answered an
 #     identity-checked health probe at that moment. It grants no authority for any outward
 #     effect.
-#   * This does NOT isolate the operator's Codex state. Isolation here covers CLAUDE_CONFIG_DIR
-#     only. `ocx ensure`/`start` also rewrite ~/.codex (pointing Codex's openai provider at the
-#     proxy) and `ocx stop` restores it — an upstream side effect this wrapper surfaces rather
-#     than hides, because a supervision call therefore mutates shared Codex config.
-# ENVIRONMENT-VARIABLE POLICY (ADR-0010). Claude Code resolves CLI flags > SHELL ENVIRONMENT >
-# settings.json env > dedicated settings keys > defaults, so BOTH the process environment and the
-# constructed settings.json must be sanitized; closing only one leaves the other open. Per class:
-#
-#   CLASS               EXAMPLES                                     WHAT HAPPENS
-#   credential          AWS_BEARER_TOKEN_BEDROCK, ANTHROPIC_API_KEY, DENIED, always. Never
-#                       ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_CLIENT_KEY  inherited from either source.
-#   provider routing    CLAUDE_CODE_USE_BEDROCK, ANTHROPIC_BASE_URL,  DENIED, then SET FRESH by the
-#                       ANTHROPIC_BEDROCK_*/VERTEX_*/FOUNDRY_*        gateway (ocx claude points
-#                                                                    ANTHROPIC_BASE_URL at the
-#                                                                    proxy). Inheriting one would
-#                                                                    send this plane's traffic
-#                                                                    somewhere else entirely.
-#   model pin           ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_*_MODEL    DENIED. These name Anthropic
-#                       (+ _NAME/_DESCRIPTION/_SUPPORTED_CAPABILITIES) models, which this plane is
-#                       ANTHROPIC_CUSTOM_MODEL_OPTION*                not permitted to route
-#                                                                    (ADR-0003). A launched session
-#                                                                    picks from the gateway's own
-#                                                                    catalog instead -- see
-#                                                                    `ccodex models`.
-#   forced fallback     FALLBACK_FOR_ALL_PRIMARY_MODELS               DENIED. Silent substitution
-#                                                                    against a restricted catalog
-#                                                                    is the canary's C1 hazard.
-#   TLS downgrade       NODE_TLS_REJECT_UNAUTHORIZED                  DENIED.
-#   inert preference    DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING,   INHERITED. These are the
-#                       DO_NOT_TRACK, CLAUDE_CODE_ACCESSIBILITY,      operator's deliberate
-#                       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,         privacy/behavior choices.
-#                       compaction/bash/UI flags                     Note SET-TO-ACTIVATE: any
-#                                                                    non-empty value enables, so
-#                                                                    DROPPING a set DISABLE_TELEMETRY
-#                                                                    would RE-ENABLE telemetry. It
-#                                                                    is preserved explicitly.
-#   host-owned          CLAUDE_CODE_REMOTE, CLAUDE_CODE_ACCOUNT_UUID, NEITHER. Claude Code ignores
-#                       CLAUDE_CODE_MESSAGING_SOCKET                  these from an env block.
-#
-# The ANTHROPIC_*/AWS_* namespaces are denied BY PREFIX (nothing in them is an inert preference,
-# so a new upstream name fails closed). CLAUDE_* is denied by default and allowed BY NAME, because
-# that namespace genuinely mixes routing flags with inert preferences and only an enumeration is
-# honest. Docs: code.claude.com/docs/en/env-vars.md, .../settings.md, .../network-config.md.
-# The settings env block is read once at session start, so the constructed document is a
-# launch-time artifact: editing it mid-session does nothing.
-#
-#   * The isolated config dir is NOT isolated in every respect, and saying so would now be
-#     false. Per ADR-0010 the dir is split into two classes: inert per-session DATA (prompt
-#     history, project transcripts, todos, shell snapshots, file history) is SHARED with the
-#     global install by symlink so a launched session is not blank, and the isolated
-#     settings.json is CONSTRUCTED with the global statusLine stanza only. Credentials never
-#     cross in either direction: the global settings.json is never copied or linked because its
-#     `env` block is a credential carrier on a real host (a live AWS_BEARER_TOKEN_BEDROCK was
-#     found there on 2026-08-07), the constructed document is asserted credential-free before
-#     it is written, and .credentials.json / ../.claude.json / sessions / session-env / plugins
-#     / agents stay private. See assets/claude/session-inheritance.sh.
+#   * It does NOT isolate the operator's Codex state. `ocx ensure`/`start` rewrite ~/.codex
+#     (pointing Codex's openai provider at the proxy) and `ocx stop` restores it — an upstream
+#     side effect this wrapper surfaces rather than hides.
+#   * `launch` now uses the GLOBAL ~/.claude config dir, so `ocx claude` writes its `ocx-*.md`
+#     roster agents and gateway model cache there. That cache write is load-bearing, not
+#     incidental: Claude Code only refreshes it while holding a credential, so without the
+#     pre-write the /model picker would never list the routed ids.
 #   * No credential is read, written, printed, or forwarded by this script. `configure` hands
 #     off to ocx's own interactive login flows; this script never handles the secret. It does
 #     WARN when a key is passed as `--api-key` on the command line, because argv is
@@ -107,17 +75,12 @@
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-# Isolated Claude Code config root for the gateway-routed process. Keeping it out of
-# ~/.claude is what makes this a SECOND plane: ocx syncs its own `ocx-*.md` roster agents
-# and gateway model cache into the effective config dir, so sharing the native one would
-# mutate the operator's live session state.
+# No isolated config root any more (ADR-0014): `launch` uses the operator's own ~/.claude, which
+# is what lets Claude Code present its existing login to the gateway. assets/claude/
+# session-inheritance.sh still exists and is still used by scripts/muse-claude.sh, which keeps
+# its own plane; this launcher no longer sources it because there is nothing to inherit into.
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
-isolated_config_dir="$state_home/agentic-sdlc/ocx-claude"
 log_dir="$state_home/agentic-sdlc/ocx-logs"
-# Selective session inheritance (ADR-0010), shared with scripts/muse-claude.sh so the two
-# launchers cannot diverge on what crosses the boundary. Sourced, not executed: it defines
-# functions and runs nothing until `launch` calls inherit_session_state after the scrub.
-session_inheritance="$root/assets/claude/session-inheritance.sh"
 # Bound on how long a just-started gateway may take to answer an identity-checked probe.
 # `ocx ensure` already waits internally (8s); this is the wrapper's own outer bound, so a
 # hung or half-up start is capped rather than inherited.
@@ -186,20 +149,25 @@ Plain `claude` starts the native Anthropic-routed CLI and does not use this gate
 EOF
       ;;
     launch|launch-ultracode)
-      local operator_verb=ultracode ultra=$'\nSession Ultracode is applied. '
+      local operator_verb=ultracode ultra=$'\n\nSession Ultracode is applied.'
       if [ "$1" = launch ]; then
-        operator_verb=launch; ultra=$'\n'
+        operator_verb=launch; ultra=''
       fi
       cat <<EOF
 usage: ccodex $operator_verb [claude args...]
        opencodex-claude.sh $1 [claude args...]
 
-Ensure the gateway is healthy (start it if down, restart once if half-up), then launch a
-second Claude Code process through it, with an isolated CLAUDE_CONFIG_DIR and no Anthropic
-subscription credential in scope.${ultra}Fails closed if the gateway never becomes healthy.
+Ensure the gateway is healthy (start it if down, restart once if half-up), then launch Claude
+Code through it using your OWN ~/.claude configuration and login. Fails closed if the gateway
+never becomes healthy.${ultra}
 
-Plain \`claude\` starts the native Anthropic-routed CLI and does not use this gateway. This
-\`ccodex\` route is the explicit non-Anthropic gateway launch.
+Both kinds of model work in this one session (ADR-0014). A genuine claude/anthropic id that no
+alias or modelMap claims passes through verbatim to Anthropic on your own subscription; every
+gateway id routes to its own provider on that provider's credential. This wrapper never reads
+your credential -- it only refuses when something would silently defeat the route.
+
+Plain \`claude\` talks to Anthropic directly and does not involve this gateway at all, so no
+gateway model is selectable there. This route is the one that puts both catalogs in one session.
 EOF
       [ "$1" = launch-ultracode ] && cat <<'EOF'
 
@@ -212,10 +180,14 @@ Common arguments, all forwarded to Claude Code:
   --model <id>              Any id in the running gateway's live catalog, including a
                             namespaced one: --model muse/muse-spark-1.2. See `ccodex models`.
 
-Session data (ADR-0010): inert per-session data is shared with ~/.claude by symlink; auth,
-roster agents, and the model cache stay private to this plane. An entry that already holds
-this plane's own data is NOT inherited -- report and migrate it with `ccodex session status`
-and `ccodex session adopt`.
+Config dir: your global ~/.claude. `ocx claude` writes its ocx-*.md roster agents and the
+gateway model cache there. That cache write is what puts the routed ids in the /model picker,
+because Claude Code only refreshes it while holding a credential.
+
+Refused (exit 3) when the route would not actually be used: a CLAUDE_CODE_USE_BEDROCK-style
+provider-routing variable exported or present in ~/.claude/settings.json `env` (either outranks
+this gateway's base URL), or an sk-ant-api* Console key in ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN
+(it takes the same native branch but bills API credits, not your subscription).
 
 THIS TEXT IS THIS WRAPPER'S. To reach Claude Code's OWN --help, end this wrapper's options
 with `--`, which prepares a real session and forwards everything after it verbatim:
@@ -251,33 +223,6 @@ A restart interrupts in-flight turns in every session routed through the gateway
 `ocx` rewrites shared ~/.codex configuration as part of its lifecycle.
 EOF
       ;;
-    session)
-      cat <<'EOF'
-usage: ccodex session status
-       ccodex session adopt [--migrate] [entry...]
-       opencodex-claude.sh session <status|adopt> [...]
-
-Report and repair session inheritance (ADR-0010) for the gateway plane.
-
-  status                    Per-entry state: SHARED (linked at the global copy), NOT
-                            INHERITED (this plane has its own data), or absent. Read-only.
-  adopt                     Print exactly what a migration WOULD move. Moves nothing.
-  adopt --migrate           Move each blocking plane copy into a timestamped backup INSIDE
-                            the plane, then link to the global copy. Nothing is deleted, and
-                            it refuses when the global source is missing.
-
-Why this is a separate command: a launch refuses to clobber this plane's existing data to
-make room for a link, so inheritance stays OFF for those entries until the data is moved
-aside. That refusal is right, but silently never inheriting is not what was asked for, so
-the remedy is an operation you name explicitly after reading the plan.
-
-After a migration the launched session shows the GLOBAL history and projects; this plane's
-own past prompts stop appearing in it. They are not gone -- the backup path is printed.
-
-Named entries restrict the operation. An entry with no global counterpart is refused rather
-than moved, because hiding this plane's only copy would deliver nothing.
-EOF
-      ;;
     configure)
       cat <<'EOF'
 usage: ccodex configure [ocx args...]
@@ -308,14 +253,17 @@ EOF
 
 usage() {
   cat <<'EOF'
-usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|session|configure> [args...]
+usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|configure> [args...]
 
   ensure                    Ensure the gateway is healthy without launching Claude Code.
   launch [claude args...]   Ensure the gateway is healthy (start it if down, restart once if
-                            half-up), then launch a second Claude Code process through it
-                            with an isolated CLAUDE_CONFIG_DIR and no Anthropic subscription
-                            credential in scope. Fails closed if the gateway never becomes
-                            healthy.
+                            half-up), then launch Claude Code through it using your own
+                            ~/.claude configuration and login. Native claude models pass
+                            through to Anthropic on your subscription; gateway models route to
+                            their own providers -- both in one session. Fails closed if the
+                            gateway never becomes healthy, and refuses (exit 3) when a
+                            provider-routing key or a Console API key would silently defeat
+                            the route.
   launch-ultracode [args...]  Apply the session-only {"ultracode":true} setting, then use the
                             same fail-closed launch path. This convenience route refuses a
                             competing --settings argument and permission-bypass flags.
@@ -326,9 +274,6 @@ usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|sessio
                             healthy.
   restart                   Stop the gateway cleanly if running, then ensure it is back up
                             and healthy. Fails closed on an unclean stop.
-  session <status|adopt>    Report session inheritance per entry, and migrate pre-existing
-                            plane data aside (explicitly, with --migrate) so inheritance can
-                            take effect. A launch never moves plane data by itself.
   configure [ocx args...]   Interactive passthrough to opencodex's own provider
                             login/config commands. Prints the command before running it. After
                             an admitted provider add/edit/remove it prints the required
@@ -342,7 +287,7 @@ To reach Claude Code's own --help through a real prepared session, end this wrap
 options with `--`:
   opencodex-claude.sh launch -- --help
 
-exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (subscription-OAuth boundary)
+exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (the gateway route would not be used)
 EOF
 }
 
@@ -401,13 +346,17 @@ require_ocx() {
 refuse() {
   printf '\nREFUSED: %s\n' "$1" >&2
   cat >&2 <<'EOF'
-docs/adr/0003 rejects routing Claude subscription OAuth through a third-party gateway.
-Anthropic's own legal-and-compliance documentation scopes subscription OAuth to ordinary
-use of native Anthropic applications and does not permit third parties to route requests
-through Free/Pro/Max plan credentials. The mechanism works; the authorization does not.
+This route sends Claude Code through the local gateway using your own login, so a setting that
+outranks the gateway's base URL would make the launch a no-op that still looks routed. Rather
+than print a gateway banner over traffic that never reached it, the launch stops here.
 
-The supported path is a non-Anthropic provider authenticating with its own credential:
-  ccodex configure
+A cloud-provider route is a different command, not a degraded version of this one: keep Bedrock
+or Vertex in a per-command wrapper of your own and leave the global settings document clean.
+
+Anthropic's gateway documentation covers this configuration: with ANTHROPIC_BASE_URL set and NO
+gateway credential, a saved claude.ai login stays the active credential and its billing applies.
+Routing Claude Code to NON-Claude models through any gateway is not supported by Anthropic --
+permitted, since no Anthropic credential is used for those turns, but unsupported. See ADR-0014.
 EOF
   exit 3
 }
@@ -610,148 +559,83 @@ ensure_gateway_up() {
   return 0
 }
 
-# --- subscription-OAuth boundary ---------------------------------------------------------
+# --- route integrity ---------------------------------------------------------------------
+#
+# The gateway route is the ORDINARY route now and it deliberately PRESERVES Claude Code's own
+# claude.ai login (ADR-0014). Nothing below tries to block that credential -- the previous
+# scrub/isolation/refusal machinery existed to prevent exactly what this route now wants, and
+# it is gone.
+#
+# What remains guards two SILENT failures that would otherwise be indistinguishable from
+# success, which matters more now that this is the default rather than a named escape hatch:
+#
+#   1. A provider-routing key in the GLOBAL settings.json `env` block OUTRANKS
+#      ANTHROPIC_BASE_URL. Under CLAUDE_CODE_USE_BEDROCK the client consults
+#      ANTHROPIC_BEDROCK_BASE_URL instead, so the gateway is bypassed entirely and the turn
+#      bills the cloud account while this wrapper prints a gateway banner. Measured on a real
+#      host on 2026-08-10: the request never reached a local capture listener and was still
+#      answered. This is not a theoretical hazard.
+#   2. An `sk-ant-api*` Console key satisfies opencodex's bare `sk-ant-` passthrough gate
+#      (hasAnthropicNativeCredential in server/claude-messages.ts), so it takes the SAME
+#      native branch and bills API credits while looking like subscription traffic. The
+#      prefix is the only thing separating the two.
+#
+# Names and prefixes only: no credential value is read, printed, copied, or persisted.
 
-# The two slots opencodex itself treats as parent-exported Anthropic credentials
-# (ANTHROPIC_PARENT_ENV_SLOTS in its launcher-context module). Checked BEFORE the scrub,
-# because after the scrub there is nothing left to inspect.
-subscription_shaped_env() {
+# Claude Code resolves a cloud-provider credential ABOVE its own OAuth, and under Bedrock or
+# Vertex it stops consulting ANTHROPIC_BASE_URL at all. Either way the gateway is not in the
+# path, so launching would report a route that does not exist.
+gateway_bypassing_env_name() {
+  local name
+  for name in CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY \
+              AWS_BEARER_TOKEN_BEDROCK ANTHROPIC_BEDROCK_BASE_URL ANTHROPIC_VERTEX_BASE_URL; do
+    [ -n "${!name:-}" ] && { printf '%s' "$name"; return 0; }
+  done
+  return 1
+}
+
+# The same keys, plus the credential-producing ones, in the global settings document. Shell env
+# is checked separately above because settings.json is the channel an operator forgets: it is
+# read on every launch and survives a clean shell.
+settings_bypassing_key_name() {
+  local settings="$HOME/.claude/settings.json"
+  [ -f "$settings" ] || return 1
+  jq_available || return 1
+  jq -r '
+    ((.env // {}) | keys) as $env
+    | [ $env[] | select(. == "CLAUDE_CODE_USE_BEDROCK" or . == "CLAUDE_CODE_USE_VERTEX"
+        or . == "CLAUDE_CODE_USE_FOUNDRY" or . == "AWS_BEARER_TOKEN_BEDROCK"
+        or . == "ANTHROPIC_BEDROCK_BASE_URL" or . == "ANTHROPIC_VERTEX_BASE_URL"
+        or . == "ANTHROPIC_API_KEY" or . == "ANTHROPIC_AUTH_TOKEN" or . == "ANTHROPIC_BASE_URL") ]
+      as $routing
+    | (if (.apiKeyHelper // null) != null then ["apiKeyHelper"] else [] end) as $helper
+    | ($routing + $helper) | first // empty
+  ' "$settings" 2>/dev/null | head -1 | grep . || return 1
+}
+
+# An exported Console key displaces the OAuth login and bills credits on the very same native
+# passthrough branch, so it is refused by PREFIX rather than silently accepted.
+console_key_env_name() {
   local name value
-  for name in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY; do
+  for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do
     value="${!name:-}"
-    # sk-ant-oat* is a subscription OAuth access token. An sk-ant-api* developer API key is
-    # a different credential class and is not what ADR-0003 forbids; it is scrubbed rather
-    # than refused, so it never reaches the gateway by accident either.
     case "$value" in
-      sk-ant-oat*) printf '%s' "$name"; return 0 ;;
+      sk-ant-api*) printf '%s' "$name"; return 0 ;;
     esac
   done
   return 1
 }
 
-# Environment scrub, delegated to the shared helper (ADR-0010) so the policy is defined once for
-# both launchers. It denies ANTHROPIC_*/CLAUDE_*/AWS_* by prefix plus named unprefixed hazards,
-# and restores an enumerated set of inert CLAUDE_* preferences afterwards.
-#
-# The previous rule here matched `^(ANTHROPIC|CLAUDE)` only, and that was a real defect in both
-# directions: `AWS_BEARER_TOKEN_BEDROCK` exported in the operator's shell reached the child
-# intact (verified by running this launcher under a planted parent environment), while
-# `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and the operator's privacy flags were needlessly
-# discarded. Scrubbing BOTH the process environment and the constructed settings.json is
-# required because Claude Code resolves shell environment ABOVE settings.json env.
-#
-# A missing helper falls back to the old prefix scrub PLUS AWS_*: the credential half of the
-# boundary must not depend on an optional file being present.
-scrub_anthropic_env() {
-  local name
-  if [ -f "$session_inheritance" ] && [ ! -L "$session_inheritance" ] \
-     && . "$session_inheritance" 2>/dev/null \
-     && command -v scrub_and_restore_claude_env >/dev/null 2>&1; then
-    scrub_and_restore_claude_env
-    return 0
+assert_gateway_route_is_effective() {
+  local offending
+  if offending="$(gateway_bypassing_env_name)"; then
+    refuse "$offending is exported, which routes Claude Code to a cloud provider and bypasses the gateway entirely; unset it or use \`ccode\` for that route"
   fi
-  # Fallback: preserve an installer choice across the prefix scrub so it wins over the opinionated
-  # default, exactly as the helper's capture-then-restore would.
-  local saved_pct="${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}"
-  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true); do
-    unset "$name" || true
-  done
-  unset NODE_TLS_REJECT_UNAUTHORIZED FALLBACK_FOR_ALL_PRIMARY_MODELS API_TIMEOUT_MS || true
-  if [ -n "$saved_pct" ]; then
-    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="$saved_pct"
-  elif [ -z "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" ]; then
-    # Opinionated default (ADR-0012 amended 2026-08-08): 85% when no explicit choice exists.
-    # Mirrors the primary path in session-inheritance.sh so a missing helper does not lose the
-    # default. One-directional safe: ignored if above the (undocumented) default, earlier at
-    # ~0.85*272000≈231200 if below.
-    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
+  if offending="$(settings_bypassing_key_name)"; then
+    refuse "$HOME/.claude/settings.json carries $offending, which outranks this route's gateway base URL; move it to a per-command wrapper instead of the global document"
   fi
-}
-
-# Fail closed against the same sources opencodex's auth detector reads, in the isolated
-# dir we control: <config-dir>/.credentials.json (claudeAiOauth) and the sibling
-# <config-dir>/../.claude.json (oauthAccount). Key names only -- no value is read.
-assert_isolated_dir_has_no_subscription() {
-  local credentials="$isolated_config_dir/.credentials.json"
-  local claude_json="$isolated_config_dir/../.claude.json"
-  local path key
-  for path in "$credentials" "$claude_json"; do
-    [ -e "$path" ] || [ -L "$path" ] || continue
-    [ -f "$path" ] && [ ! -L "$path" ] && [ -r "$path" ] \
-      || refuse "a Claude credential source is linked, unreadable, or not a regular file ($path)"
-  done
-  for path in "$credentials" "$claude_json"; do
-    [ -f "$path" ] || continue
-    key=claudeAiOauth
-    [ "$path" = "$claude_json" ] && key=oauthAccount
-    grep -q "$key" "$path" 2>/dev/null \
-      && refuse "the isolated Claude state carries a subscription OAuth marker ($path)"
-  done
-}
-
-# --- selective session inheritance (ADR-0010) ---------------------------------------------
-#
-# The helper is sourced lazily, inside the launch path, rather than at the top of this script:
-# `status`, `restart`, and `configure` have no business linking session state, and sourcing at
-# top level would define these functions for routes that must not use them. A missing helper
-# degrades to no inheritance -- the launch proceeds with a fully private config dir, which is
-# exactly the pre-ADR-0010 behavior and is never a reason to refuse a launch.
-# Named for the helper, so an entry it declines to inherit can point at the exact command that
-# fixes it. Set here rather than inside the helper because only a launcher knows which plane it
-# is and which operator-facing spelling reaches this state; the muse launcher names its own.
-session_remedy_command="ccodex session"
-
-inherit_session_state_if_available() {
-  if [ ! -f "$session_inheritance" ] || [ -L "$session_inheritance" ]; then
-    printf '  session   : not inherited (helper missing at %s)\n' "$session_inheritance"
-    return 0
-  fi
-  # shellcheck source=../assets/claude/session-inheritance.sh
-  . "$session_inheritance" || {
-    printf '  session   : not inherited (helper could not be sourced)\n'
-    return 0
-  }
-  inherit_session_state "$isolated_config_dir" "$HOME/.claude"
-}
-
-# Sourced for the read-only report and for the migration route. Unlike the launch path, a missing
-# helper here is a FAILURE rather than a degraded launch: `session status` exists only to answer a
-# question about the helper's own policy, and answering it from nothing would be a guess.
-require_session_helper() {
-  if [ ! -f "$session_inheritance" ] || [ -L "$session_inheritance" ]; then
-    printf 'error: the session-inheritance helper is missing: %s\n' "$session_inheritance" >&2
-    exit 1
-  fi
-  # shellcheck source=../assets/claude/session-inheritance.sh
-  . "$session_inheritance" || {
-    printf 'error: the session-inheritance helper could not be sourced: %s\n' "$session_inheritance" >&2
-    exit 1
-  }
-  command -v report_session_inheritance >/dev/null 2>&1 || {
-    printf 'error: the session-inheritance helper does not define the reporting functions\n' >&2
-    exit 1
-  }
-}
-
-assert_proxy_marker_mode() {
-  local mode
-  mode="$(ocx config get claudeCode.authMode 2>/dev/null | tr -d '[:space:]' || true)"
-  case "$mode" in
-    ""|auto|proxy) return 0 ;;
-    subscription) refuse "opencodex claudeCode.authMode is explicitly subscription; set it to proxy before using this split plane" ;;
-    *) refuse "opencodex claudeCode.authMode is unreadable or unrecognized ($mode)" ;;
-  esac
-}
-
-# macOS keychain is the one detector source an isolated config dir cannot mask, so it is
-# probed rather than assumed. Exit 44 is the documented "item does not exist" status.
-assert_no_keychain_subscription() {
-  [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] || return 0
-  command -v security >/dev/null 2>&1 || return 0
-  local status=0
-  security find-generic-password -s 'Claude Code-credentials' >/dev/null 2>&1 || status=$?
-  if [ "$status" -eq 0 ]; then
-    refuse "a Claude Code subscription credential is present in the macOS keychain, which an isolated config dir cannot mask"
+  if offending="$(console_key_env_name)"; then
+    refuse "$offending holds an sk-ant-api* Console key, which takes the same native passthrough branch and bills API credits rather than your subscription"
   fi
 }
 
@@ -766,18 +650,9 @@ cmd_ensure() {
 
 cmd_launch() {
   require_ocx
-  local offending
-  # The credential boundary is checked BEFORE any gateway is started: a refused launch must
-  # not leave a proxy running that the operator did not ask for.
-  if offending="$(subscription_shaped_env)"; then
-    refuse "$offending in this environment holds a subscription OAuth access token (sk-ant-oat*)"
-  fi
-  scrub_anthropic_env
-  mkdir -p "$isolated_config_dir"
-  assert_isolated_dir_has_no_subscription
-  assert_no_keychain_subscription
-  assert_proxy_marker_mode
-  export CLAUDE_CONFIG_DIR="$isolated_config_dir"
+  # Checked BEFORE any gateway is started: a refused launch must not leave a proxy running
+  # that the operator did not ask for.
+  assert_gateway_route_is_effective
 
   if ! command -v claude >/dev/null 2>&1; then
     printf 'error: the `claude` CLI is not on PATH; opencodex cannot launch it\n' >&2
@@ -785,26 +660,24 @@ cmd_launch() {
   fi
 
   printf 'preparing gateway-routed Claude Code\n'
-  # Ordered deliberately: inheritance runs AFTER every credential assertion and after the
-  # env scrub, so a refused launch never links anything, and the helper can never re-introduce
-  # a variable the scrub just removed. It only ever links inert data and writes a constructed
-  # settings.json; it is fail-soft, so no inheritance failure aborts a launch.
-  inherit_session_state_if_available
   ensure_gateway_up
   local json port
   json="$(gateway_health_json)"
   port="$(health_field port "$json")"
-  printf '  config dir: %s\n' "$isolated_config_dir"
-  printf '              (auth, roster agents, and model cache are private to this plane; inert\n'
-  printf '               session data is SHARED with ~/.claude by symlink -- see ADR-0010)\n'
-  printf '  auth      : opencodex proxy owns authentication; no Anthropic subscription credential in scope\n'
-  printf '              your ~/.claude credentials never cross: settings.json is constructed, never copied\n'
+  printf '  config dir: %s (global)\n' "$HOME/.claude"
+  printf '              ocx claude writes its roster agents and gateway model cache HERE; this\n'
+  printf '              route no longer uses a private plane (ADR-0014 supersedes ADR-0010 here)\n'
+  printf '  auth      : your own Claude login is preserved and sent to the gateway. Native claude\n'
+  printf '              models pass through verbatim to Anthropic on your subscription; gateway\n'
+  printf '              models route to their own providers. This wrapper never reads it.\n'
   printf '  routed at : http://127.0.0.1:%s\n' "${port:-unknown}"
   # Forwarded Claude arguments can contain inline settings and secrets. Never echo raw argv.
   printf '  command   : mise -C %s exec -- ocx claude [forwarded arguments withheld]\n\n' "$root"
-  # ocx claude re-checks liveness itself and then execs `claude` with stdio inherited. With
-  # every ANTHROPIC*/CLAUDE* slot scrubbed and no reachable subscription credential, its auth
-  # resolver lands on proxy markerMode -- the supported shape.
+  # ocx claude re-checks liveness, then execs `claude` with stdio inherited. It injects a marker
+  # token ONLY when markerMode resolves to "proxy" (cli/claude.ts:133) or an admission key is
+  # configured (:115); with a detected login neither fires, so Claude Code keeps its own OAuth
+  # and the native models pass through. It also pre-writes the gateway model cache (:286), which
+  # is what puts the routed ids in the /model picker.
   ocx claude "$@"
 }
 
@@ -832,44 +705,6 @@ cmd_launch_ultracode() {
   cmd_launch --settings '{"ultracode":true}' "$@"
 }
 
-# Neither route requires ocx, mise, or a healthy gateway: both are questions about local files in
-# this plane. Requiring the gateway would make "why is my history missing" unanswerable exactly
-# when the gateway is down.
-cmd_session() {
-  local verb="${1:-}"
-  shift || true
-  case "$verb" in
-    status)
-      [ "$#" -eq 0 ] || { printf 'error: `session status` takes no arguments\n' >&2; return 2; }
-      require_session_helper
-      printf '== session inheritance (ADR-0010) ==\n'
-      printf '  plane   : %s\n' "$isolated_config_dir"
-      printf '  global  : %s\n\n' "$HOME/.claude"
-      report_session_inheritance "$isolated_config_dir" "$HOME/.claude"
-      ;;
-    adopt)
-      local migrate=false argument entries=()
-      for argument in "$@"; do
-        case "$argument" in
-          --migrate) migrate=true ;;
-          --*) printf 'error: unknown `session adopt` flag: %s\n' "$argument" >&2; return 2 ;;
-          *) entries+=("$argument") ;;
-        esac
-      done
-      require_session_helper
-      if $migrate; then
-        printf 'migrating plane session data aside so inheritance can take effect\n'
-      else
-        printf 'PLAN ONLY -- nothing will be moved or linked. Add --migrate to perform it.\n'
-      fi
-      printf '  plane   : %s\n' "$isolated_config_dir"
-      printf '  global  : %s\n\n' "$HOME/.claude"
-      adopt_session_state "$isolated_config_dir" "$HOME/.claude" "$migrate" "${entries[@]+"${entries[@]}"}"
-      ;;
-    ""|-h|--help|help) verb_usage session; [ -n "$verb" ] || return 2 ;;
-    *) printf 'error: unknown session verb: %s\n\n' "$verb" >&2; verb_usage session >&2; return 2 ;;
-  esac
-}
 
 cmd_status() {
   require_ocx
@@ -921,29 +756,19 @@ cmd_status() {
     printf '            Fix: mise -C %s exec -- ocx sync, then `ccodex restart`.\n' "$root"
   fi
 
-  # Surfaced here, not only under `session status`, because the failure it reports is invisible:
-  # a plane whose inheritance never took effect looks exactly like one where it did until the
-  # operator notices their history is missing. A count in the ordinary status view is what makes
-  # "N of M shared" a fact they see rather than one they have to go asking for.
-  printf '\n== session inheritance (ADR-0010) ==\n'
-  if [ -f "$session_inheritance" ] && [ ! -L "$session_inheritance" ] \
-     && . "$session_inheritance" 2>/dev/null \
-     && command -v report_session_inheritance >/dev/null 2>&1; then
-    report_session_inheritance "$isolated_config_dir" "$HOME/.claude"
+  # There is no plane to inherit into any more (ADR-0014): `launch` uses the global config dir,
+  # so its session data IS the operator's own. What replaced that report is the route check --
+  # a bypassing key is the one remaining way a launch can look routed and not be.
+  printf '\n== gateway route reachability ==\n'
+  local blocker=""
+  if blocker="$(gateway_bypassing_env_name)"; then
+    printf '  BYPASSED: %s is exported; a launch would reach a cloud provider, not this gateway\n' "$blocker"
+  elif blocker="$(settings_bypassing_key_name)"; then
+    printf '  BYPASSED: %s in %s/.claude/settings.json outranks the gateway base URL\n' "$blocker" "$HOME"
+  elif blocker="$(console_key_env_name)"; then
+    printf '  MISBILLED: %s holds an sk-ant-api* Console key; native turns would bill credits\n' "$blocker"
   else
-    printf '  unknown : the inheritance helper is unavailable (%s)\n' "$session_inheritance"
-  fi
-
-  printf '\n== environment-variable policy (this shell, per ADR-0010) ==\n'
-  # Reports what WOULD happen to each variable currently set, without applying it. `status` must
-  # not mutate its own environment, and an operator debugging a wrong model or a leaked
-  # credential needs to see the classification before launching, not after.
-  if [ -f "$session_inheritance" ] && [ ! -L "$session_inheritance" ] \
-     && . "$session_inheritance" 2>/dev/null \
-     && command -v report_env_policy >/dev/null 2>&1; then
-    report_env_policy
-  else
-    printf '  unknown : the policy helper is unavailable (%s)\n' "$session_inheritance"
+    printf '  ok      : nothing in this shell or the global settings document outranks the gateway\n'
   fi
 
   printf '\n== attribution log stream ==\n'
@@ -1270,8 +1095,7 @@ case "$route" in
       verb_usage "$route"
       exit 0
     fi
-    # `--` ends this wrapper's options. Dropping it here is what makes `launch -- --help` reach
-    # Claude Code's own help rather than this text.
+    # Every route uses one leading wrapper separator to reach Claude Code.
     strip_forwarding_separator "${1:-}" && shift
     case "$route" in
       ensure) [ "$#" -eq 0 ] || { printf 'error: `ensure` takes no arguments\n' >&2; exit 2; }; cmd_ensure ;;
@@ -1282,7 +1106,6 @@ case "$route" in
       configure) cmd_configure "$@" ;;
     esac
     ;;
-  session) shift; cmd_session "$@" ;;
   -h|--help|help) usage ;;
   "") usage >&2; exit 2 ;;
   *) printf 'error: unknown subcommand %s\n\n' "$route" >&2; usage >&2; exit 2 ;;
