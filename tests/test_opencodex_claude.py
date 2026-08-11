@@ -41,7 +41,16 @@ class OpenCodexClaudeTests(unittest.TestCase):
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
+        # RESOLVED ONCE, HERE, so the launcher's output and this harness's expectations cannot be
+        # two spellings of one path. On macOS `$TMPDIR` is under `/var/folders/...` and `/var` is a
+        # symlink to `/private/var`, so `mkdtemp()` hands back the UNRESOLVED spelling while the
+        # launcher's own `$PWD` (bash sets it from getcwd, which is physical) is the resolved one.
+        # `claude_settings_documents` builds its list from `$HOME` and `$PWD` and DEDUPLICATES it by
+        # exact string, so an unresolved HOME against a resolved PWD makes one document count twice
+        # and makes every `checked: <path>` line disagree with `self.project`. Resolving the root is
+        # what makes that dedupe work off-Linux; sprinkling `.resolve()` at the assertions would
+        # leave the launcher still emitting two spellings of the same file.
+        root = Path(temporary.name).resolve()
         # A fake global ~/.claude, so selective session inheritance (ADR-0010) can be exercised
         # without ever reading or touching the real operator's config dir.
         self.home = root / "home"

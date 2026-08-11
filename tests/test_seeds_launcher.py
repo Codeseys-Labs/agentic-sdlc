@@ -44,7 +44,15 @@ class LauncherFixture:
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        # RESOLVED ONCE, HERE, so every fixture path below is the same spelling the launcher and its
+        # children report back. On macOS `$TMPDIR` lives under `/var/folders/...` and `/var` is a
+        # symlink to `/private/var`: `mkdtemp()` returns the unresolved form, while the launcher
+        # canonicalizes with `realpathSync` and the fake tools' `env` dump carries a `PWD` that came
+        # from getcwd. Comparing the two fails on paths the launcher never got wrong -- the receipt's
+        # `mise_global_config_file`, `bootstrap-home`, the trusted Git adapter's directory, and the
+        # child `PWD=` line. Resolving the root fixes all of them at the source; symlinks the tests
+        # deliberately create UNDER this root are unaffected, because they do not exist yet.
+        self.root = Path(self.temporary.name).resolve()
         self.distribution = self.root / "reviewed distribution"
         self.distribution.mkdir()
         (self.distribution / ".gitignore").write_text("IGNORED\n", encoding="utf-8")

@@ -547,7 +547,12 @@ def shipped_surface_violations(root: Path) -> list[str]:
 class ExactRuntimeWrapperTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        # RESOLVED ONCE, HERE, because the wrapper derives its own target from `pwd -P` -- the
+        # PHYSICAL cwd. On macOS `$TMPDIR` is under `/var/folders/...` and `/var` is a symlink to
+        # `/private/var`, so `mkdtemp()` hands back the unresolved spelling and the argv the wrapper
+        # records carries the resolved one; the two are the same directory and the assertion still
+        # fails. Resolving the root is the only place that makes `pwd -P` and `self.target` agree.
+        self.root = Path(self.temporary.name).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.node_root = self.root / "exact node"
