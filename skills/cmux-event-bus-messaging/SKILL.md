@@ -30,7 +30,8 @@ worker) subscribes and receives them event-driven.
 ## Context / Trigger Conditions
 - Fanning out `claude -p '…'` / `codex exec '…'` workers across `cmux new-workspace --command`
   and needing their results back. Wherever `claude` appears, substitute your own Claude Code
-  launch command: `ccodex launch --` for the non-Anthropic gateway route, or a personal alias.
+  launch command: `ccodex launch --` for the gateway route, which keeps your own Claude login and
+  serves native Anthropic AND gateway models in one session (ADR-0014), or a personal alias.
 - Wanting worker→worker reactions, not just fan-in to one orchestrator.
 - Your orchestrator script hangs at startup on `cmux events --limit 1` (idle bus).
 - A worker finishes and signals before the subscriber is ready → completion lost.
