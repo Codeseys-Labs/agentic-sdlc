@@ -1,0 +1,205 @@
+{
+  "calibration_id": "six-tier-2026-07-14|1e6422877ea14dc1bd54f0a3a16a1614c69d0ca8e2b315502d3582da5c9b3bd3|975289e1dac10d62ae8aa3da467934682df7351a2012d07d6bc0af41f83b9241|unavailable|eight-class-v1",
+  "probe": {
+    "catalog_ts": "2026-08-11T21:51:30Z",
+    "gateway": {
+      "endpoint": "http://127.0.0.1:10100/v1/models",
+      "live": true,
+      "catalog_sha256": "975289e1dac10d62ae8aa3da467934682df7351a2012d07d6bc0af41f83b9241"
+    },
+    "live_ids": [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
+    ],
+    "effort_vocab": {
+      "gateway": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "native-bedrock": []
+    },
+    "native_bedrock_live": false
+  },
+  "map": {
+    "mechanical_redo": {
+      "classification": {
+        "blast_radius": "local/reversible",
+        "determinism_of_gate": "complete",
+        "scope_of_mutation": "one bounded artifact",
+        "authority_proximity": "none",
+        "corpus_size": "small",
+        "dependency_fanout": "none"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-luna",
+        "effort": "low",
+        "context": "base"
+      },
+      "complement": null,
+      "fallback": [
+        "gpt-5.6-luna high — same capable-volume route; preserve the complete deterministic check"
+      ],
+      "gate": "complete deterministic check (compiler, test, schema, or exact diff)",
+      "kill_criteria": "no complete check is available — escalate to deterministic_gated_change"
+    },
+    "deterministic_gated_change": {
+      "classification": {
+        "blast_radius": "contained/visible",
+        "determinism_of_gate": "compiler, test, schema, or exact diff",
+        "scope_of_mutation": "isolated files",
+        "authority_proximity": "low",
+        "corpus_size": "small/medium",
+        "dependency_fanout": "low"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-luna",
+        "effort": "high",
+        "context": "base"
+      },
+      "complement": null,
+      "fallback": [
+        "gpt-5.6-terra xhigh — stronger certified route; retain the deterministic gate"
+      ],
+      "gate": "compiler, test, schema, or exact-diff acceptance check",
+      "kill_criteria": "gate still fails after one bounded same-tuple retry — reduce scope or escalate"
+    },
+    "evidence_extraction": {
+      "classification": {
+        "blast_radius": "contained/visible",
+        "determinism_of_gate": "evidence coverage or schema",
+        "scope_of_mutation": "read-only",
+        "authority_proximity": "low",
+        "corpus_size": "medium/large",
+        "dependency_fanout": "low"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-luna",
+        "effort": "high",
+        "context": "base"
+      },
+      "complement": "gpt-5.6-terra xhigh — bounded source-coverage audit",
+      "fallback": [
+        "gpt-5.6-terra xhigh — stronger certified route; retain schema and source-coverage checks"
+      ],
+      "gate": "closed output schema plus source-by-source evidence coverage",
+      "kill_criteria": "required sources, citations, or schema fields remain unaccounted for"
+    },
+    "repository_discovery": {
+      "classification": {
+        "blast_radius": "contained semantic omission",
+        "determinism_of_gate": "partitioned evidence inventory",
+        "scope_of_mutation": "read-only",
+        "authority_proximity": "low",
+        "corpus_size": "large",
+        "dependency_fanout": "medium"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-terra",
+        "effort": "xhigh",
+        "context": "base"
+      },
+      "complement": "gpt-5.6-luna high — partitioned inventory cross-check",
+      "fallback": [
+        "gpt-5.6-sol xhigh — stronger certified route; retain the partitioned inventory control"
+      ],
+      "gate": "partitioned evidence inventory with explicit unknowns and omission cross-check",
+      "kill_criteria": "unexplained partition gaps or unknowns would change the plan"
+    },
+    "semantic_implementation": {
+      "classification": {
+        "blast_radius": "contained silent degradation",
+        "determinism_of_gate": "partial; immutable review required",
+        "scope_of_mutation": "interacting bounded change",
+        "authority_proximity": "medium",
+        "corpus_size": "medium",
+        "dependency_fanout": "medium"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-terra",
+        "effort": "xhigh",
+        "context": "base"
+      },
+      "complement": "gpt-5.6-sol xhigh — bounded immutable-delta risk review",
+      "fallback": [
+        "gpt-5.6-sol xhigh — stronger certified route; retain independent immutable-candidate review"
+      ],
+      "gate": "explicit acceptance criteria plus a separate review of the immutable candidate",
+      "kill_criteria": "acceptance criteria remain unmet after bounded backflow"
+    },
+    "semantic_review": {
+      "classification": {
+        "blast_radius": "contained silent acceptance",
+        "determinism_of_gate": "explicit criteria plus independent review",
+        "scope_of_mutation": "immutable candidate",
+        "authority_proximity": "medium",
+        "corpus_size": "medium",
+        "dependency_fanout": "medium"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-terra",
+        "effort": "xhigh",
+        "context": "base"
+      },
+      "complement": "gpt-5.6-sol xhigh — bounded adversarial re-derivation",
+      "fallback": [
+        "gpt-5.6-sol xhigh — stronger certified route; preserve explicit criteria and adjudication"
+      ],
+      "gate": "explicit review criteria plus separate adversarial re-derivation; conductor adjudicates",
+      "kill_criteria": "material disagreement remains unresolved or the candidate changes during review"
+    },
+    "integration_reconcile": {
+      "classification": {
+        "blast_radius": "cross-branch or contract damage",
+        "determinism_of_gate": "re-gate on immutable integration head",
+        "scope_of_mutation": "multi-component fan-in",
+        "authority_proximity": "high",
+        "corpus_size": "large",
+        "dependency_fanout": "high"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-terra",
+        "effort": "xhigh",
+        "context": "base"
+      },
+      "complement": "gpt-5.6-sol xhigh — immutable integration-head contract audit",
+      "fallback": [
+        "gpt-5.6-sol xhigh — stronger certified route; re-gate the same immutable integration head"
+      ],
+      "gate": "full repository gate and independent contract review on the immutable integration head",
+      "kill_criteria": "conflict semantics are unclear, a contract check fails, or the integration head moves"
+    },
+    "authority_or_frontier": {
+      "classification": {
+        "blast_radius": "derail, trust, credential, data-loss, or settled-truth error",
+        "determinism_of_gate": "fail closed plus re-derivation",
+        "scope_of_mutation": "advisory only",
+        "authority_proximity": "direct",
+        "corpus_size": "large when needed",
+        "dependency_fanout": "high"
+      },
+      "provider_plane": "gateway",
+      "primary": {
+        "model": "gpt-5.6-sol",
+        "effort": "xhigh",
+        "context": "base"
+      },
+      "complement": null,
+      "fallback": [
+        "stop — no live certified independent frontier peer on native-bedrock"
+      ],
+      "gate": "independent non-model re-derivation and conductor adjudication; advisory scope only",
+      "kill_criteria": "authority boundary is unresolved or independent re-derivation is unavailable"
+    }
+  }
+}
