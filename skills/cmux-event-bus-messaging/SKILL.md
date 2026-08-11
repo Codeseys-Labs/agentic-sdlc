@@ -20,7 +20,7 @@ cmux is absent, do not install or start it unless the user explicitly requested 
 environment change; otherwise use the host's native collaboration messaging.
 
 ## Problem
-When orchestrating multiple agent workers (`ccode`/`codex`) in cmux workspaces, the
+When orchestrating multiple agent workers (`claude`/`codex`) in cmux workspaces, the
 obvious-but-wrong approach is to scrape each worker's terminal with `cmux read-screen` in
 a poll loop, or conclude "cmux is a terminal multiplexer, not a message bus, so there's no
 push channel." **Both are wrong.** cmux exposes a genuine pub/sub event bus with replay and
@@ -28,8 +28,10 @@ resume. Workers can push structured completion messages onto it; an orchestrator
 worker) subscribes and receives them event-driven.
 
 ## Context / Trigger Conditions
-- Fanning out `ccode -p '…'` / `codex exec '…'` workers across `cmux new-workspace --command`
-  and needing their results back.
+- Fanning out `claude -p '…'` / `codex exec '…'` workers across `cmux new-workspace --command`
+  and needing their results back. Wherever `claude` appears, substitute your own Claude Code
+  launch command: `ccodex launch --` for the gateway route, which keeps your own Claude login and
+  serves native Anthropic AND gateway models in one session (ADR-0014), or a personal alias.
 - Wanting worker→worker reactions, not just fan-in to one orchestrator.
 - Your orchestrator script hangs at startup on `cmux events --limit 1` (idle bus).
 - A worker finishes and signals before the subscriber is ready → completion lost.
@@ -93,7 +95,8 @@ decode, dedupe by id, read each `file` for the payload. Working implementation:
 
 ## Notes
 - Spawn workers with `cmux new-workspace --command "<text>"` — it types into the workspace's
-  INTERACTIVE zsh, so shell aliases (`ccode`) expand; no alias/config edit needed.
+  INTERACTIVE zsh, so the operator's OWN shell aliases expand — this bundle defines none, so an
+  alias like `ccode` works only if that operator already defined it; no alias/config edit needed.
 - Teardown a workspace with `cmux close-workspace --workspace <ref>` — `workspace-action` has
   NO `close` verb (only close-others/above/below).
 - Delegation-plane ranking: **Claude subagents** (results in-conversation) > **cmux event bus**

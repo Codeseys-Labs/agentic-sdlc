@@ -101,7 +101,13 @@ class MermaidRendererTests(unittest.TestCase):
 
     def test_node_bin_resolver_allows_npm_shim_only_when_target_stays_in_node_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            # RESOLVED ONCE, HERE, because `resolve_node_bin_shim` returns `shim.resolve(strict=True)`.
+            # On macOS `$TMPDIR` lives under `/var/folders/...` and `/var` is a symlink to
+            # `/private/var`, so `mkdtemp()` hands back the unresolved spelling while the resolver
+            # hands back the resolved one -- two spellings of one file, and the assertion fails on a
+            # path the resolver never got wrong. The shim symlink this test actually exercises is
+            # created BELOW this root afterwards, so resolving the root cannot resolve it away.
+            root = Path(temp).resolve()
             package = root / "node_modules" / "package" / "cli.mjs"
             package.parent.mkdir(parents=True)
             package.write_text("", encoding="utf-8")
@@ -152,9 +158,16 @@ class MermaidRendererTests(unittest.TestCase):
         policy = renderer.load_policy(POLICY_PATH)
         existed = (ROOT / ".mermaid-runtime").exists()
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp) / "workspace"
+            # Same macOS root cause, different symptom: `_render` walks every ancestor of the patched
+            # cache through `_safe_parent_chain`, and the `/var` -> `/private/var` symlink above
+            # `$TMPDIR` makes it refuse this fixture outright instead of mismatching a spelling. What
+            # is asserted here is deadline arithmetic, not platform support, and the fixture creates
+            # no symlink of its own, so resolving the root is safe -- the refusal still guards every
+            # path a real render walks.
+            base = Path(temp).resolve()
+            root = base / "workspace"
             root.mkdir()
-            repo = Path(temp) / "repo"
+            repo = base / "repo"
             (repo / "scripts").mkdir(parents=True)
             (repo / "scripts" / "sanitize_mermaid_svg.mjs").write_text("", encoding="utf-8")
             executable = repo / policy["paths"]["cache_root"] / policy["browser"]["executable_relative_path"]

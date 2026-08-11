@@ -157,8 +157,9 @@ remote, an unexpected remote, dirty tree, ref mismatch, or non-fast-forward each
 exit 3 rather than clobbering. Userinfo is a credential channel that every consumer keeps, so a
 `--remote` carrying a secret there is refused before the value reaches output, the receipt, Git's
 argv, or the clone's config, and the refusal names the option rather than echoing any part of the
-URL; an existing managed clone whose origin carries one is refused unread for the same reason,
-while `git@host:org/repo.git` and `ssh://git@host/org/repo.git` remain ordinary SSH remotes.
+URL; an existing managed clone's origin must be READ to detect one, so that value is inspected but
+never echoed — the refusal lands before the line that would have printed the remote — while
+`git@host:org/repo.git` and `ssh://git@host/org/repo.git` remain ordinary SSH remotes.
 The clone is managed, not eliminated: every task command and installed symlink resolves against a
 tree on disk, so do not describe this as a clone-free bundle install. HTTPS authenticates the
 transport, not the contents, and no signature over the fetched commit is verified. See `docs/adr/0011` and

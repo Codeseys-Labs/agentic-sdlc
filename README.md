@@ -500,22 +500,24 @@ mise run operator-tools:status
 
 ### `ccodex` — the operator dispatcher
 
-`ccodex` is the whole daily use surface without mise in the way. Plain `claude` remains the native
-Anthropic-routed CLI; `ccodex launch` is the explicit separate non-Anthropic gateway route. Fresh
+`ccodex` is the whole daily use surface without mise in the way. Plain `claude` remains the direct
+Anthropic-routed CLI; `ccodex launch` adds the gateway to that same login, so one session serves
+both catalogs — native claude ids pass through to Anthropic on your subscription and gateway ids
+route to their own providers (ADR-0014). It is not a separate non-Anthropic-only route. Fresh
 operator-tools installs no longer create `ocx-launch` or `ocx-ultracode`. Existing lifecycle-owned
 copies remain recognized and can be retired explicitly with `mise run operator-tools:retire-aliases`;
 changed, foreign, and adopted copies are preserved. Every gateway command remains reachable as
 `ccodex ocx <verb>`, the low-level compatibility form; `ccodex --help` prints the surface at any time.
 
-**Gateway plane** — running a Claude Code session against a non-Anthropic model:
+**Gateway plane** — running one Claude Code session that can reach both catalogs:
 
 | Command | What it does |
 |---|---|
-| `ccodex ensure` | Ensure the non-Anthropic gateway is healthy without launching Claude Code. |
+| `ccodex ensure` | Ensure the gateway is healthy without launching Claude Code. |
 | `ccodex launch [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch Claude Code through it using your own `~/.claude` login, so native claude models pass through to Anthropic on your subscription while gateway models route to their own providers, in one session. Fails closed if the gateway never becomes healthy, and refuses (exit 3) when a provider-routing key or Console API key would silently defeat the route. Arguments are forwarded to Claude Code. |
 | `ccodex launch --model <id>` | Pick any id in the running gateway's live catalog, including a namespaced one: `--model muse/muse-spark-1.2`. Run `ccodex models` for the list. |
 | `ccodex ultracode [claude args...]` | The same fail-closed launch path with session Ultracode applied. It owns the session `--settings` value, so it refuses a competing `--settings`, and it **never** bypasses permissions. |
-| `ccodex status` | Read-only supervision view: pid, port, uptime, healthy/down, log location, configured providers each compared against the LIVE catalog, this shell's environment-variable policy, session-inheritance coverage, and the attribution log command. Exit 0 means the gateway answered an identity-checked probe at that moment — evidence, not authorization. |
+| `ccodex status` | Read-only supervision view: pid, port, uptime, healthy/down, log location, configured providers each compared against the LIVE catalog, whether anything exported here or in the settings documents Claude Code reads for `env` would defeat the gateway route — the check NAMES the documents it read and what it did not read — and the attribution log command. Exit 0 means the gateway answered an identity-checked probe at that moment — evidence, not authorization. |
 | `ccodex restart` | Stop the gateway cleanly, then ensure it is back up. Fails closed on an unclean stop. Interrupts in-flight turns in every routed session, and `ocx` rewrites shared `~/.codex` config as part of its lifecycle. |
 
 **Providers and models** — what a launched session can actually pick:
