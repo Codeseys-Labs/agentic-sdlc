@@ -445,7 +445,7 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 | `operator-tools:install` / `operator-tools:status` / `operator-tools:retire-aliases` / `operator-tools:uninstall` | Manage `ccodex` and its statusline support in an existing Unix PATH; explicitly retire only unchanged owned historical aliases. |
 | `operator-tools:self-test` | Exercise the operator-command lifecycle in an isolated home. |
 | `claude:statusline:status` / `claude:statusline:activate` / `claude:statusline:deactivate` | Inspect or explicitly manage only Claude Code's `statusLine` fields. |
-| `ocx:launch` / `ocx:ultracode` | Launch the supervised split plane normally or with session-only Ultracode and ordinary permissions. |
+| `ocx:launch` / `ocx:ultracode` | Launch Claude Code through the gateway using your own `~/.claude` login — native Claude models on your subscription, gateway models on their own providers — normally or with session-only Ultracode and ordinary permissions. |
 | `ocx:status` / `ocx:restart` / `ocx:configure` | Report opencodex gateway reachability, restart it cleanly, or configure providers through their own login flows. |
 | `libraries:list` / `libraries:status` | List the installable external skill libraries with their front doors and surface cost, or report which are already present in this home. Read-only. |
 | `libraries:install` | Install explicitly named external skill libraries through their own front doors; dry run unless `--yes`. Vendors nothing into this tree, and no gate leaf, `contributor:setup`, or deprecated `setup` path reaches it. |
@@ -623,8 +623,10 @@ for the `ocx` routes only (the pinned opencodex build is resolved through `mise 
 is not on `PATH` by itself); `uv` is needed for the Python routes and works from a bare `PATH`.
 
 No shell startup file or PATH value is edited. Every launch route delegates to
-`scripts/opencodex-claude.sh`, so ADR-0005 credential refusal, environment scrubbing, the
-separate Claude config dir, and identity-checked supervision remain mandatory. `ccodex ultracode`
+`scripts/opencodex-claude.sh`, so identity-checked supervision and the two billing-honesty
+refusals remain mandatory. The ADR-0005 credential refusal, the environment scrub, and the
+separate Claude config dir are GONE from this launcher (ADR-0014): it uses your own `~/.claude`
+so Claude Code can present its existing login to the gateway. `ccodex ultracode`
 refuses competing `--settings` and permission-bypass flags. Launch/restart still carries
 opencodex's documented shared `~/.codex`
 configuration side effect.

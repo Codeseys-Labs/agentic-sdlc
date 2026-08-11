@@ -5,9 +5,10 @@
 #                                  [--ref <ref>] [--print-path]
 #
 # Fetch this bundle into a managed location and stop. --remote selects the exact
-# Git remote (default: https://github.com/Codeseys-Labs/agentic-sdlc.git); --ref
-# selects the branch or tag (default: main). --update permits a fast-forward
-# update of an exact clean managed clone. --dry-run and --print-path write nothing.
+# Git remote (default: https://github.com/Codeseys-Labs/agentic-sdlc.git) and is
+# refused when it carries credentials in its userinfo; --ref selects the branch
+# or tag (default: main). --update permits a fast-forward update of an exact
+# clean managed clone. --dry-run and --print-path write nothing.
 #
 # This script never trusts a config, installs a toolchain, installs bundle entries,
 # edits PATH, or verifies a signature over the fetched commit. Review the tree and
@@ -38,6 +39,39 @@ note() {
   printf '%s\n' "$1"
 }
 
+# A remote's userinfo is a credential channel, and every consumer of the value keeps
+# it: git writes the URL verbatim into the clone's .git/config and exposes it in its
+# own argv, this script records it in the receipt and prints it in the handoff, and a
+# later run reads it back out of the clone and echoes it again. Refuse rather than
+# redact — a partial redaction still leaks — and never echo the value while refusing.
+remote_carries_userinfo() {
+  local url=$1 scheme authority userinfo
+  case "$url" in
+    *://*)
+      scheme=${url%%://*}
+      authority=${url#*://}
+      authority=${authority%%/*}
+      case "$authority" in
+        *@*) userinfo=${authority%%@*} ;;
+        *) return 1 ;;
+      esac
+      ;;
+    # scp-style [user@]host:path. The colon this pattern requires after the '@' is
+    # the host:path separator, so a path that merely contains '@' is not userinfo.
+    *@*:*) scheme=ssh; userinfo=${url%%@*} ;;
+    *) return 1 ;;
+  esac
+  # SSH takes a username and never a secret, so 'git@host' stays an ordinary remote in
+  # both the scp-style and the ssh:// spelling; only a password-shaped userinfo is a
+  # credential there. Every other transport treats userinfo as a credential channel,
+  # where even a lone username can be the whole token.
+  case "$scheme" in
+    ssh|git+ssh|ssh+git) case "$userinfo" in *:*) return 0 ;; esac ;;
+    *) return 0 ;;
+  esac
+  return 1
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=1; shift ;;
@@ -45,10 +79,15 @@ while [ "$#" -gt 0 ]; do
     --print-path) print_path=1; shift ;;
     --ref) [ "$#" -ge 2 ] || die '--ref needs a value'; ref="$2"; shift 2 ;;
     --remote) [ "$#" -ge 2 ] || die '--remote needs a value'; remote="$2"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+# Refuse before the value reaches output, the receipt, git's argv, or the clone config.
+if remote_carries_userinfo "$remote"; then
+  die '--remote carries credentials in its userinfo, which this run would record in the receipt and in the clone config; pass a credential-free URL and let a Git credential helper or an SSH key hold the secret' 3
+fi
 
 if [ "$print_path" -eq 1 ]; then
   printf '%s\n' "$managed_home"
@@ -86,6 +125,10 @@ if [ "$existing" -eq 1 ]; then
   requested_commit="$(git -C "$managed_home" rev-parse --verify "$ref^{commit}" 2>/dev/null || true)"
   [ -n "$current_commit" ] ||
     die "managed path has a .git directory but no resolvable HEAD: $managed_home"
+  # A clone recorded before this refusal existed still holds the secret in its config.
+  if remote_carries_userinfo "${current_remote:-}"; then
+    die "managed clone origin carries credentials in its userinfo; move or remove it first: $managed_home" 3
+  fi
 
   note 'existing managed clone found:'
   note "  origin : ${current_remote:-<none>}"

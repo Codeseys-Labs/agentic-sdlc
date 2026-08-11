@@ -52,7 +52,7 @@ agentic_sdlc_exact_node() (
 
 # Exact-runtime front doors. Read-only inspection, conductor initialization, and conductor queue
 # recording remain distinct so a caller cannot accidentally route a mutating verb through inspect.
-agentic_sdlc_seeds() {
+agentic_sdlc_seeds() (
   if [ "$#" -lt 2 ]; then
     printf 'usage: agentic_sdlc_seeds <target> <allowed-read-only-command> [args...]\n' >&2
     return 2
@@ -60,7 +60,7 @@ agentic_sdlc_seeds() {
   seeds_target=$1
   shift
   agentic_sdlc_exact_node inspect --target "$seeds_target" "$@"
-}
+)
 
 agentic_sdlc_seeds_init() {
   if [ "$#" -ne 1 ]; then
@@ -70,7 +70,7 @@ agentic_sdlc_seeds_init() {
   agentic_sdlc_exact_node record --target "$1" --queue-writer conductor --expect-queue absent init
 }
 
-agentic_sdlc_seeds_record() {
+agentic_sdlc_seeds_record() (
   if [ "$#" -lt 3 ]; then
     printf 'usage: agentic_sdlc_seeds_record <target> <expected-sha256> <create|update> [args...]\n' >&2
     return 2
@@ -79,7 +79,7 @@ agentic_sdlc_seeds_record() {
   expected_queue=$2
   shift 2
   agentic_sdlc_exact_node record --target "$seeds_target" --queue-writer conductor --expect-queue "$expected_queue" "$@"
-}
+)
 
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0

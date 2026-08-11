@@ -14,8 +14,14 @@ for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN AWS_BEARER_TOKEN_BEDROCK \
   if [ -n "${!name:-}" ]; then printf 'VOID: %s is set in this container\n' "$name"; exit 3; fi
 done
 # settings.json env is the channel that silently bypassed ANTHROPIC_BASE_URL on the host.
-env_keys="$(jq -r '(.env // {}) | keys | length' ~/.claude/settings.json 2>/dev/null || echo unknown)"
-[ "$env_keys" = "0" ] || { printf 'VOID: ~/.claude/settings.json env is not empty (%s keys)\n' "$env_keys"; exit 3; }
+# Absent is the cleanest possible state (no settings document to carry a routing key at all),
+# so it counts as zero keys; only a file that EXISTS and is non-empty or unparseable voids the run.
+if [ -f ~/.claude/settings.json ]; then
+  env_keys="$(jq -r '(.env // {}) | keys | length' ~/.claude/settings.json 2>/dev/null || echo unknown)"
+else
+  env_keys=0
+fi
+[ "$env_keys" = "0" ] || { printf 'VOID: ~/.claude/settings.json env is not empty or unparseable (%s keys)\n' "$env_keys"; exit 3; }
 # A stored API key satisfies opencodex's bare sk-ant- passthrough gate and would bill credits
 # while looking like subscription traffic. It must be absent, not merely unused.
 if jq -e '.primaryApiKey' ~/.claude.json >/dev/null 2>&1; then
@@ -64,18 +70,48 @@ curl -s http://127.0.0.1:10100/api/requests 2>/dev/null \
   | jq -r '.[0:5][] | "\(.model // "?")  provider=\(.provider // "?")  status=\(.status // "?")"' \
   2>/dev/null || printf 'check the dashboard at http://127.0.0.1:10100/ for the provider column\n'
 
-step '4c. CONNECTION-LEVEL proof that Anthropic was actually reached'
-# Independent of any log the gateway writes about itself.
-ss -tn 2>/dev/null | grep -E '443' | head -5 || printf 'no established 443 connections visible\n'
+step '4c. CONNECTION-LEVEL signal that a peer on port 443 was reached (not proof of WHO)'
+# grep -E '443' matched any column containing those digits, including an ephemeral local port
+# like 44300, and attributed nothing. ss's own filter targets the PEER (dport) side precisely.
+# Reverse DNS on the peer is best-effort, not proof: a CDN-fronted IP's PTR record does not
+# reliably say "anthropic" — this shows a peer was reached, not who it is.
+peers="$(ss -tn state established '( dport = :443 )' 2>/dev/null | tail -n +2)"
+if [ -z "$peers" ]; then
+  printf 'no established port-443 peer visible\n'
+else
+  printf '%s\n' "$peers" | head -5 | while read -r _ _ _ peer; do
+    peer_ip="${peer%:*}"
+    host="$(getent hosts "$peer_ip" 2>/dev/null | awk '{print $2; exit}')"
+    printf 'peer %s  reverse-dns: %s\n' "$peer" "${host:-<none>}"
+  done
+fi
 
 step '5. NEGATIVE CONTROL — passthrough disabled must change the outcome'
 # If (4a) and (5) look identical, (4a) proved nothing.
+# A restore that only runs on the happy path — or whose own failure is discarded to /dev/null —
+# can leave the gateway permanently rerouting native ids away from Anthropic with no signal, on
+# an interrupt during this step or on the restoring `config set` itself failing. The trap makes
+# the restore run on EXIT/INT/TERM; the readback makes silent restore failure impossible.
+restored=0
+restore_passthrough() {
+  [ "$restored" = 1 ] && return
+  restored=1
+  ocx config set claudeCode.nativePassthrough true >/dev/null 2>&1
+  ocx restart >/dev/null 2>&1
+  readback="$(ocx config get claudeCode.nativePassthrough 2>/dev/null)"
+  case "$readback" in
+    *true*) printf 'restored: claudeCode.nativePassthrough=true (verified)\n' ;;
+    *) printf 'VOID: restore did NOT take effect (read back: %s) — fix before any other launch through this gateway\n' "$readback" ;;
+  esac
+}
+trap restore_passthrough EXIT INT TERM
+
 ocx config set claudeCode.nativePassthrough false >/dev/null 2>&1 && ocx restart >/dev/null 2>&1
 sleep 3
 ANTHROPIC_BASE_URL=http://127.0.0.1:10100 claude -p 'reply with the single word: control' \
   --model claude-opus-4-6 </dev/null 2>&1 | head -5
 printf '\nexpected: routed to the default provider or refused — NOT a clean native answer.\n'
-ocx config set claudeCode.nativePassthrough true >/dev/null 2>&1 && ocx restart >/dev/null 2>&1
+restore_passthrough
 
 step 'done'
 printf 'Billing check is OUTSIDE this script: claude.ai usage page should show the turns,\n'

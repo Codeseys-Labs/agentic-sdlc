@@ -11,6 +11,9 @@ import unittest
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "bootstrap-agentic-sdlc.sh"
 BASH = shutil.which("bash")
+# Not a credential: an obvious stand-in, assembled rather than written out as a
+# credential-shaped URL so the string in this file is unmistakably a test fixture.
+SENTINEL = "OCXTESTSENTINELTOKEN"
 
 
 @unittest.skipUnless(BASH, "Bash is required for bootstrap script tests")
@@ -242,6 +245,125 @@ class BootstrapAgenticSdlcTests(unittest.TestCase):
             self.assertEqual(receipt["remote"], remote)
             self.assertEqual(receipt["ref"], reference)
             self.assertEqual(receipt["path"], str(managed))
+
+    def test_credential_bearing_remote_is_refused_without_echoing_the_secret(self) -> None:
+        credential_urls = (
+            f"https://someuser:{SENTINEL}@example.test/agentic-sdlc.git",
+            f"https://{SENTINEL}@example.test/agentic-sdlc.git",
+            f"ssh://someuser:{SENTINEL}@example.test/agentic-sdlc.git",
+            f"someuser:{SENTINEL}@example.test:org/agentic-sdlc.git",
+        )
+        for remote in credential_urls:
+            for arguments in ((), ("--dry-run",), ("--print-path",)):
+                with self.subTest(remote=remote.replace(SENTINEL, "<sentinel>"), arguments=arguments):
+                    with tempfile.TemporaryDirectory() as temp:
+                        root = Path(temp)
+                        bin_dir = root / "bin"
+                        bin_dir.mkdir()
+                        git = bin_dir / "git"
+                        git.write_text(
+                            "#!/bin/sh\n"
+                            "if [ \"$1\" = clone ]; then for target do :; done; mkdir -p \"$target/.git\"; exit 0; fi\n"
+                            "if [ \"$1\" = -C ] && [ \"$3\" = rev-parse ]; then printf '%s\\n' 0123456789abcdef; fi\n"
+                        )
+                        git.chmod(0o755)
+                        mise = bin_dir / "mise"
+                        mise.write_text("#!/bin/sh\nprintf '%s\\n' untrusted\n")
+                        mise.chmod(0o755)
+                        managed = root / "managed"
+                        state = root / "state"
+
+                        result = self.run_script(
+                            *arguments,
+                            "--remote",
+                            remote,
+                            environment=os.environ | {
+                                "PATH": str(bin_dir) + os.pathsep + os.defpath,
+                                "AGENTIC_SDLC_HOME": str(managed),
+                                "XDG_STATE_HOME": str(state),
+                            },
+                        )
+
+                        self.assertEqual(result.returncode, 3)
+                        self.assertIn("--remote carries credentials in its userinfo", result.stderr)
+                        self.assertNotIn(SENTINEL, result.stdout)
+                        self.assertNotIn(SENTINEL, result.stderr)
+                        self.assertNotIn("example.test", result.stdout)
+                        self.assertNotIn("example.test", result.stderr)
+                        self.assertFalse(managed.exists())
+                        self.assertFalse(state.exists())
+
+    def test_credential_free_remotes_are_accepted_including_scp_style_ssh(self) -> None:
+        for remote in (
+            "https://example.test/agentic-sdlc.git",
+            "git@example.test:Codeseys-Labs/agentic-sdlc.git",
+            "ssh://git@example.test/Codeseys-Labs/agentic-sdlc.git",
+        ):
+            with self.subTest(remote=remote):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    bin_dir = root / "bin"
+                    bin_dir.mkdir()
+                    git = bin_dir / "git"
+                    git.write_text(
+                        "#!/bin/sh\n"
+                        "if [ \"$1\" = clone ]; then for target do :; done; mkdir -p \"$target/.git\"; exit 0; fi\n"
+                        "if [ \"$1\" = -C ] && [ \"$3\" = rev-parse ]; then printf '%s\\n' 0123456789abcdef; fi\n"
+                    )
+                    git.chmod(0o755)
+                    mise = bin_dir / "mise"
+                    mise.write_text("#!/bin/sh\nprintf '%s\\n' untrusted\n")
+                    mise.chmod(0o755)
+                    state = root / "state"
+
+                    result = self.run_script(
+                        "--remote",
+                        remote,
+                        environment=os.environ | {
+                            "PATH": str(bin_dir) + os.pathsep + os.defpath,
+                            "AGENTIC_SDLC_HOME": str(root / "managed"),
+                            "XDG_STATE_HOME": str(state),
+                        },
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    receipt = json.loads(
+                        (state / "agentic-sdlc" / "bootstrap-receipt.json").read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(receipt["remote"], remote)
+
+    @unittest.skipUnless(shutil.which("git"), "Git is required to build a managed clone fixture")
+    def test_existing_clone_with_credential_origin_is_refused_without_echoing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            mise = bin_dir / "mise"
+            mise.write_text("#!/bin/sh\nprintf '%s\\n' untrusted\n")
+            mise.chmod(0o755)
+            managed = root / "managed"
+            managed.mkdir()
+            state = root / "state"
+            origin = f"https://someuser:{SENTINEL}@example.test/agentic-sdlc.git"
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=managed, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"], cwd=managed, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=managed, check=True)
+            subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "A"], cwd=managed, check=True)
+            subprocess.run(["git", "remote", "add", "origin", origin], cwd=managed, check=True)
+
+            result = self.run_script(
+                environment=os.environ | {
+                    "PATH": str(bin_dir) + os.pathsep + os.defpath,
+                    "AGENTIC_SDLC_HOME": str(managed),
+                    "XDG_STATE_HOME": str(state),
+                },
+            )
+
+            self.assertEqual(result.returncode, 3)
+            self.assertIn("managed clone origin carries credentials in its userinfo", result.stderr)
+            self.assertNotIn(SENTINEL, result.stdout)
+            self.assertNotIn(SENTINEL, result.stderr)
+            self.assertFalse(state.exists())
 
     def test_non_https_remote_does_not_claim_https_authentication(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

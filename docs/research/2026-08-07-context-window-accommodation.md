@@ -629,8 +629,10 @@ launchers (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` only when not already exported:
 `assets/claude/session-inheritance.sh` with fallback in both `scripts/*-claude.sh`). Because
 the knob is one-directional this is safe even before measurement: if 85 > default it is a no-op,
 if 85 < default it compacts earlier at ~0.85×272000≈231200. An installer tunes per environment as
-`export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>` before `ccodex launch` — that value is
-capture-then-restored across the scrub and wins. ADR-0012 is amended accordingly; the procedure
+`export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>` before `ccodex launch` — that value wins.
+(As written, it won by being capture-then-restored across the environment scrub; ADR-0014 later
+deleted that scrub from `ccodex`, which now sets the 85 default directly only when the operator
+has chosen nothing. `scripts/muse-claude.sh` still uses the capture-then-restore form.) ADR-0012 is amended accordingly; the procedure
 below still settles the true optimum, and whatever it finds is an adjustment, not a reversal.
 
 What makes this settleable in one pass is that the arithmetic needed is

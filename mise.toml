@@ -57,9 +57,11 @@ version = "1.7.3"
 
 # Installed by default as of 2026-08-06 by explicit operator decision (docs/adr/0005). The
 # boundary is usage-level, not packaging-level: per docs/adr/0003 this gateway may route to
-# NON-Anthropic models through each provider's own credential (API key, Codex OAuth), and
-# Claude subscription OAuth is never routed through it. scripts/opencodex-claude.sh enforces
-# that in code. npm backend locks version+backend only, exactly like the Seeds and npm pins
+# NON-Anthropic models through each provider's own credential (API key, Codex OAuth). Claude
+# subscription OAuth IS now deliberately routed through it as well, on the operator's own login
+# (docs/adr/0014 reversed ADR-0003 on that point); no Anthropic credential is used for the
+# non-Claude half. scripts/opencodex-claude.sh enforces the two remaining billing-honesty
+# refusals in code. npm backend locks version+backend only, exactly like the Seeds and npm pins
 # above. This pin DOES run a transitive postinstall — `bun` 1.3.14 lays down an 89MB binary —
 # but it extracts with Node's built-in `zlib.unzipSync`, so unlike the removed mermaid pin it
 # adds no system-package prerequisite. Postinstall alone is not the defect; needing a tool

@@ -152,8 +152,13 @@ remote/ref/resolved-commit in a receipt under `XDG_STATE_HOME` outside the clone
 verify/first-use handoff: receipt and checkout commit, the two reviewed files, trust/toolchain,
 explicit plane selection, and post-install status. It requires mise and git, installs neither, and
 so adds no bootstrap prerequisite. It never trusts a config, resolves a toolchain, or installs
-bundle entries; `--dry-run`, `--print-path`, and `--help` create nothing; an unexpected remote,
-dirty tree, ref mismatch, or non-fast-forward each refuse by name at exit 3 rather than clobbering.
+bundle entries; `--dry-run`, `--print-path`, and `--help` create nothing; a credential-bearing
+remote, an unexpected remote, dirty tree, ref mismatch, or non-fast-forward each refuse by name at
+exit 3 rather than clobbering. Userinfo is a credential channel that every consumer keeps, so a
+`--remote` carrying a secret there is refused before the value reaches output, the receipt, Git's
+argv, or the clone's config, and the refusal names the option rather than echoing any part of the
+URL; an existing managed clone whose origin carries one is refused unread for the same reason,
+while `git@host:org/repo.git` and `ssh://git@host/org/repo.git` remain ordinary SSH remotes.
 The clone is managed, not eliminated: every task command and installed symlink resolves against a
 tree on disk, so do not describe this as a clone-free bundle install. HTTPS authenticates the
 transport, not the contents, and no signature over the fetched commit is verified. See `docs/adr/0011` and
@@ -271,23 +276,29 @@ Windows statusline/operator-tool activation is not certified and fails closed.
 `unmanaged` for a desired file that exists but is not owned; historical aliases are never
 reported as required or absent.
 
-Both launchers' Claude config dir is selectively separate, not isolated in every respect
-(ADR-0010). Inert per-session data — history, project transcripts, todos, shell snapshots, file
-history — is shared with `~/.claude` by symlink. Mutating global Claude settings still requires
-explicit operation-specific approval and no launcher does it: the plane-local `settings.json` a
-launcher constructs lives in its own state directory, and the global file is read, never written,
-copied, or linked. Only the global `statusLine` stanza is inherited, because that `env` block can
-carry a live credential and copying it would also re-point the child away from
-its verified route. Credentials never cross: the constructed document is asserted credential-free
-before it is written, credential and plane-owned stores stay private, inheritance runs only after
-every credential assertion, and it is fail-soft and never destructive. Do not cite config-dir
-isolation as evidence that no session data is shared. An entry whose plane copy already holds its
-own data is NOT inherited, and that is permanent until an operator migrates it: a launch never
-moves plane data, `status` reports how many entries are actually shared, and `ccodex session
-adopt --migrate` moves the blocking copy to a timestamped in-plane backup before linking. Never
-run that migration on an operator's behalf without explicit operation-specific approval, and do
-not read a skipped entry as inheritance working. Verb-level `--help` prints the launcher's own
-help and prepares nothing; `--` forwards the remaining arguments verbatim to the wrapped tool.
+`ccodex` has NO private plane (ADR-0014). Its `launch` and `ultracode` use the operator's own
+`~/.claude` — configuration, plugins, agents, and login — which is what lets Claude Code present
+its existing session to the gateway. `ocx claude` therefore writes its `ocx-*.md` roster agents and
+the gateway model cache into that global dir; the cache write is load-bearing, because Claude Code
+only refreshes it while holding a credential and the `/model` picker would otherwise never list the
+routed ids. There are no `ccodex session` verbs and no constructed plane-local `settings.json`.
+
+**Only `scripts/muse-claude.sh` still has a plane**, and ADR-0010 governs it alone: its config dir
+is selectively separate rather than isolated in every respect, inert per-session data (history,
+project transcripts, todos, shell snapshots, file history) is shared with `~/.claude` by symlink,
+and only the global `statusLine` stanza is inherited because that `env` block can carry a live
+credential and copying it would also re-point the child away from its verified route. Credentials
+never cross: the constructed document is asserted credential-free before it is written,
+credential and plane-owned stores stay private, inheritance runs only after every credential
+assertion, and it is fail-soft and never destructive. Do not cite config-dir isolation as evidence
+that no session data is shared, and do not read a skipped entry as inheritance working.
+
+Mutating global Claude settings still requires explicit operation-specific approval and no launcher
+does it: the global file is read, never written, copied, or linked. `ccodex launch` refuses (exit 3)
+rather than editing anything when that document would defeat the route — a provider-routing switch
+in its `env`, an `apiKeyHelper`, or an `sk-ant-api*` Console key. An `sk-ant-oat*` login is accepted
+wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares nothing; `--`
+forwards the remaining arguments verbatim to the wrapped tool.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim

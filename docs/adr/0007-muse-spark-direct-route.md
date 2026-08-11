@@ -1,6 +1,10 @@
 # ADR-0007 — Meta's Muse Spark is admitted on two routes: as an opencodex provider (primary) and as a direct gateway-free route (fallback), qualified as a route and placed in no tier
 
 - **Status:** accepted
+- **Note:** "both launchers" below is now `scripts/muse-claude.sh` ALONE. ADR-0014 removed the
+  scrub, the isolated config dir, and the subscription refusals from `scripts/opencodex-claude.sh`,
+  which routes the operator's own Claude login through the gateway on purpose. The muse route's
+  boundary below is unchanged.
 - **Date:** 2026-08-07
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Filename note:** this record is `0007-muse-spark-direct-route.md`, which reflects

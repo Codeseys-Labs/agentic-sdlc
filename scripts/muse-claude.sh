@@ -252,10 +252,11 @@ scrub_anthropic_env() {
   done
   if [ -n "$saved_pct" ]; then
     export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="$saved_pct"
-  elif [ -z "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" ]; then
+  else
     # Opinionated default (ADR-0012 amended 2026-08-08): mirrors the gateway launchers so the
     # direct muse route carries the same compaction expectation. Shared-pool sessions benefit
-    # from earlier compaction because the pool is one budget.
+    # from earlier compaction because the pool is one budget. The loop above already unset every
+    # CLAUDE_* variable, so an empty saved_pct means no override survives to check here.
     export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
   fi
 }

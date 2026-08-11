@@ -1072,9 +1072,13 @@ function requireQueueOwningRepositoryRoot(target, operation, tuple) {
     stdio: ['ignore', 'pipe', 'ignore'],
     windowsHide: true,
   });
+  // An adapter that never started has no stdout to read, so admission is checked before the
+  // path comparison: a failed probe is this launcher's named refusal, never a thrown TypeError.
+  if (common.error || common.status !== 0) {
+    fail(`Seeds ${operation} requires a queue-owning Git repository whose common Git directory the trusted adapter resolves: ${target}`);
+  }
   const commonLines = common.stdout.trimEnd().split(/\r?\n/);
-  if (common.error || common.status !== 0 || commonLines.length !== 1
-    || !samePath(resolve(target, commonLines[0]), marker)) {
+  if (commonLines.length !== 1 || !samePath(resolve(target, commonLines[0]), marker)) {
     fail(`Seeds ${operation} refuses a repository whose common Git directory redirects outside the queue-owning root: ${target}`);
   }
   const head = spawnSync(tuple.gitAdapter, ['rev-parse', '--verify', 'HEAD^{commit}'], {

@@ -248,7 +248,9 @@ measurement: if 85 > default it is a no-op, if 85 < default it compacts at
 ~0.85×272000≈231200 (`assets/claude/session-inheritance.sh` and both `scripts/*-claude.sh` export
 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` only when the operator has not already set it). An installer
 overrides it per environment with `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>` before
-`ccodex launch` — that value is capture-then-restored across the scrub and wins. The measurement
+`ccodex launch` — that value wins, because each launcher sets 85 only when the variable is unset.
+(`ccodex` sets it directly: ADR-0014 removed the environment scrub it used to be
+capture-then-restored across. `scripts/muse-claude.sh` still scrubs and restores.) The measurement
 procedure that would settle the true default remains recorded in the research memo cited below;
 until run, 85 is an opinionated safety margin rather than a settled measurement, and must not
 be read as a verified optimum.

@@ -1,6 +1,13 @@
 # ADR-0012 — Per-model context windows are owned by the gateway, the session carries one conservative floor, and the recorded truth lives in the calibration table
 
 - **Status:** accepted
+- **Note:** Decision item 4's parenthetical citation of `assets/claude/session-inheritance.sh` is
+  stale for `scripts/opencodex-claude.sh`: ADR-0014 deleted that script's environment scrub
+  entirely, and its `cmd_launch` now sets `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` directly rather than
+  through session-inheritance's capture-then-restore. `scripts/muse-claude.sh` is unaffected and
+  still ships the default through its own capture-then-restore fallback. The opinionated value,
+  its one-directional safety, and the operator-export override remain unchanged for both
+  launchers.
 - **Date:** 2026-08-07
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/research/2026-08-07-context-window-accommodation.md` (the executed

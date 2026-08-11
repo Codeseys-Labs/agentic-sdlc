@@ -156,8 +156,11 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertFalse(config.bin_dir.exists())
 
     def test_cli_help_explains_read_only_inspection_and_path_boundary(self) -> None:
+        # argparse re-wraps usage and epilog to the caller's terminal width, so COLUMNS is pinned
+        # wide: an unpinned width makes these substrings depend on whoever runs the suite.
         completed = subprocess.run(
-            [sys.executable, str(SCRIPT), "--help"], text=True, capture_output=True, check=False
+            [sys.executable, str(SCRIPT), "--help"], text=True, capture_output=True, check=False,
+            env={**os.environ, "COLUMNS": "200"},
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
