@@ -67,7 +67,7 @@ graph only by updating that test in the same commit.
   ```
 - **Install lefthook via `[tools]`, not brew/npm** — the hook manager itself is then
   version-pinned and present in CI and every worker without a separate install step.
-- **A `setup` task owns bootstrap**: `run = ["uv sync --all-extras --dev", "lefthook install"]`.
+- **A `contributor:setup` task owns contributor bootstrap**: `run = ["uv sync --all-extras --dev", "lefthook install"]`.
 - Python repos: reuse the existing uv venv via `[env] _.python.venv = {path=".venv"}` —
   never let mise create a parallel one.
 - Task args use the `usage` spec, not Tera `arg()`/`option()` (deprecated).
@@ -193,27 +193,31 @@ Two rules that outrank convenience:
 
 **A pin and the permission to use a tool a particular way are separate decisions — and the
 separation survives the pin.** As of 2026-08-06 this bundle DOES pin
-`npm:@bitkyc08/opencodex` (version 2.10.2, MIT, npm backend, `depends = ["node"]`), by
+`npm:@bitkyc08/opencodex` (version 2.11.1, MIT, npm backend, `depends = ["node"]`), by
 explicit operator decision recorded in `docs/adr/0005`. An earlier revision of this skill
 left it unpinned while the subscription-passthrough question was open; `docs/adr/0003`
 closed that question, so the packaging decision was made on its own merits — like the two
 npm pins above, the npm backend locks version+backend only, and the npm registry needs no
 credential, so the pin adds no second bootstrap prerequisite.
 
-What did NOT change is the boundary, and it is worth being precise about where it now
-lives: it is **usage-level, not packaging-level**. `docs/adr/0003` permits routing to
-**non-Anthropic** models through each provider's own credential (API key, Codex OAuth) and
-prohibits routing Claude **subscription** OAuth through any third-party process — the
-mechanism works, the authorization does not. The prohibition is enforced in code, in
-`scripts/opencodex-claude.sh`, because the upstream tool's own default does the opposite:
-its `ocx claude` auth resolver treats a readable (or unreadable) subscription credential as
-`subscription` mode and forwards the operator's OAuth to the proxy. The wrapper therefore
-isolates `CLAUDE_CONFIG_DIR`, scrubs every `ANTHROPIC*`/`CLAUDE*` variable from the child
-environment, and refuses with exit 3 when a subscription credential would still be
-reachable. **Generalize this:** when a pinned tool's safe usage is narrower than its default
-behavior, the narrowing belongs in an executable wrapper — prose in a skill file cannot
-refuse anything. Packaging feasibility was never authorization to adopt, and the pin is
-likewise not authorization for the prohibited use.
+The boundary is **usage-level, not packaging-level**, and it has since MOVED — which is the
+more useful half of the lesson. `docs/adr/0003` originally read Anthropic's policy as
+prohibiting Claude **subscription** OAuth through any third-party process, and
+`scripts/opencodex-claude.sh` enforced that by isolating `CLAUDE_CONFIG_DIR`, scrubbing every
+`ANTHROPIC*`/`CLAUDE*` variable, and refusing with exit 3. `docs/adr/0014` reversed it on
+evidence: Anthropic's own gateway documentation describes base-URL-without-a-gateway-credential
+as preserving the subscription's limits and billing, and the restriction that does exist binds
+third-party developers routing on behalf of *their* users. So the scrub and the isolated dir are
+gone, and what the wrapper refuses now is narrower and different: a provider-routing key or a
+Console API key that would silently bypass the gateway or move billing off the subscription.
+
+**Generalize this:** when a pinned tool's safe usage is narrower than its default behavior, the
+narrowing belongs in an executable wrapper — prose in a skill file cannot refuse anything. The
+reversal is the proof rather than the counterexample: because the boundary lived in code with
+tests, moving it was a reviewable diff with its own ADR, and the old refusals could not linger
+as folklore. Prose that had asserted the prohibition (including an earlier revision of this very
+paragraph) went stale silently and had to be hunted down afterwards. Packaging feasibility was
+never authorization to adopt, and a pin is not authorization for any particular use.
 
 **Wrapping a tool that supervises a daemon: delegate the supervision, re-probe the health.**
 The same launcher owns the gateway lifecycle (`launch` ensures-then-execs, `restart` =

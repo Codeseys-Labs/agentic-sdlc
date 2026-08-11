@@ -38,42 +38,108 @@ class OperatorToolsTests(unittest.TestCase):
 
             self.assertEqual(installed[0], 0)
             self.assertEqual(checked[0], 0)
-            for name in operator_tools.COMMANDS:
+            self.assertTrue(installed[1][-1].startswith("install summary:"))
+            self.assertTrue(checked[1][-1].startswith("status summary:"))
+            for name in operator_tools.DESIRED_COMMANDS:
                 path = config.bin_dir / name
                 self.assertTrue(path.is_file())
                 self.assertTrue(path.stat().st_mode & stat.S_IXUSR)
-            self.assertIn(
-                str(Path(__file__).parents[1] / "scripts" / "opencodex-claude.sh"),
-                (config.bin_dir / "ocx-launch").read_text(),
-            )
-            self.assertEqual(operator_tools.uninstall(config)[0], 0)
-            self.assertFalse(any((config.bin_dir / name).exists() for name in operator_tools.COMMANDS))
+            for name in operator_tools.HISTORICAL_ALIASES:
+                self.assertFalse((config.bin_dir / name).exists())
+            removed = operator_tools.uninstall(config)
+            self.assertEqual(removed[0], 0)
+            self.assertTrue(removed[1][-1].startswith("uninstall summary:"))
+            self.assertFalse(any((config.bin_dir / name).exists() for name in operator_tools.RECOGNIZED_COMMANDS))
 
-    def test_modified_owned_command_is_preserved(self) -> None:
+    def historical_alias_content(self, config: object, name: str = "ocx-launch") -> bytes:
+        del config
+        verb = "launch-ultracode" if name == "ocx-ultracode" else "launch"
+        return f"#!/bin/sh\nexec opencodex-claude.sh {verb} \"$@\"\n".encode()
+
+    def seed_owned_historical_alias(
+        self, config: object, name: str = "ocx-launch", *, removable: str = "true"
+    ) -> Path:
+        content = self.historical_alias_content(config, name)
+        path = config.bin_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        path.chmod(0o755)
+        state = operator_tools.empty_state()
+        key = str(path)
+        state["entries"][key] = {
+            "path": key,
+            "digest": operator_tools.digest_bytes(content),
+            "removable": removable,
+        }
+        operator_tools.write_state(config, state)
+        return path
+
+    def test_modified_owned_historical_alias_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
-            operator_tools.install(config)
-            path = config.bin_dir / "ocx-launch"
-            path.write_text("foreign\n")
+            path = self.seed_owned_historical_alias(config)
+            path.write_text("modified\n")
 
             installed = operator_tools.install(config)
-            removed = operator_tools.uninstall(config)
+            retired = operator_tools.retire_aliases(config)
 
-            self.assertEqual(installed[0], 1)
-            self.assertEqual(removed[0], 1)
-            self.assertEqual(path.read_text(), "foreign\n")
+            self.assertEqual(installed[0], 0)
+            self.assertEqual(retired[0], 1)
+            self.assertEqual(path.read_text(), "modified\n")
+            self.assertTrue(any("changed since install" in message for message in retired[1]))
 
-    def test_foreign_command_is_not_adopted_when_different(self) -> None:
+    def test_foreign_historical_alias_is_ignored_by_install_and_preserved_on_retirement(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
             config.bin_dir.mkdir(parents=True)
             path = config.bin_dir / "ocx-launch"
             path.write_text("foreign\n")
 
-            result = operator_tools.install(config)
+            installed = operator_tools.install(config)
+            retired = operator_tools.retire_aliases(config)
 
-            self.assertEqual(result[0], 1)
+            self.assertEqual(installed[0], 0)
+            self.assertEqual(retired[0], 0)
             self.assertEqual(path.read_text(), "foreign\n")
+            self.assertTrue(any("unmanaged" in message for message in retired[1]))
+
+    def test_unchanged_owned_historical_alias_requires_explicit_retirement(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            path = self.seed_owned_historical_alias(config)
+
+            self.assertEqual(operator_tools.install(config)[0], 0)
+            self.assertTrue(path.exists())
+            checked = operator_tools.status(config)
+            retired = operator_tools.retire_aliases(config)
+
+            self.assertEqual(checked[0], 0)
+            self.assertTrue(any("retirable historical alias" in message for message in checked[1]))
+            self.assertEqual(retired[0], 0)
+            self.assertFalse(path.exists())
+            self.assertNotIn(str(path), operator_tools.load_state(config.state_path, config)["entries"])
+
+    def test_adopted_historical_alias_is_never_retired(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            path = self.seed_owned_historical_alias(config, removable="false")
+
+            retired = operator_tools.retire_aliases(config)
+
+            self.assertEqual(retired[0], 0)
+            self.assertTrue(path.exists())
+            self.assertTrue(any("adopted pre-existing" in message for message in retired[1]))
+
+    def test_status_is_read_only_on_a_never_installed_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+
+            code, messages = operator_tools.status(config)
+
+            self.assertEqual(code, 1)
+            self.assertFalse(config.state_path.exists())
+            self.assertFalse(config.lock_path.exists())
+            self.assertTrue(messages[-1].startswith("status summary:"))
 
     def test_path_preflight_refuses_unlisted_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -82,8 +148,25 @@ class OperatorToolsTests(unittest.TestCase):
                 Path(__file__).parents[1], root / "home", root / "bin", root / "state"
             )
             with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=False):
-                with self.assertRaisesRegex(operator_tools.OperatorToolsError, "not on PATH"):
+                with self.assertRaisesRegex(operator_tools.OperatorToolsError, "not on PATH") as raised:
                     operator_tools.install(config)
+
+            self.assertIn("never edits PATH", str(raised.exception))
+            self.assertIn("start a new shell", str(raised.exception))
+            self.assertFalse(config.bin_dir.exists())
+
+    def test_cli_help_explains_read_only_inspection_and_path_boundary(self) -> None:
+        # argparse re-wraps usage and epilog to the caller's terminal width, so COLUMNS is pinned
+        # wide: an unpinned width makes these substrings depend on whoever runs the suite.
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPT), "--help"], text=True, capture_output=True, check=False,
+            env={**os.environ, "COLUMNS": "200"},
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--bin-dir PATH", completed.stdout)
+        self.assertIn("Status and --dry-run", completed.stdout)
+        self.assertIn("never creates shell aliases or edits PATH", completed.stdout)
 
     def test_self_test_is_isolated(self) -> None:
         code, messages = operator_tools.self_test(Path(__file__).parents[1])
@@ -137,12 +220,12 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertIsNotNone(disk_state["pending"])
             result = operator_tools.uninstall(config)
             self.assertEqual(result[0], 0)
-            self.assertFalse(any((config.bin_dir / name).exists() for name in operator_tools.COMMANDS))
+            self.assertFalse(any((config.bin_dir / name).exists() for name in operator_tools.RECOGNIZED_COMMANDS))
 
     def test_pending_conflict_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
-            content = operator_tools.desired_files(config)["ocx-launch"]
+            content = self.historical_alias_content(config)
             path = config.bin_dir / "ocx-launch"
             record = {"path": str(path), "digest": operator_tools.digest_bytes(content), "removable": "true"}
             state = operator_tools.empty_state()
@@ -199,7 +282,7 @@ class OperatorToolsTests(unittest.TestCase):
 
             for verb in ("mermaid", "provision", "check", "secrets", "validate", "hooks"):
                 self.assertNotIn(verb, routed, f"{verb} must not be an operator route")
-            for route in ("launch", "status", "providers", "models", "libraries", "bundle"):
+            for route in ("ensure", "launch", "status", "providers", "models", "libraries", "bundle"):
                 self.assertIn(route, routed, f"{route} should be an operator route")
             self.assertTrue(arms)
 
@@ -253,7 +336,8 @@ class OperatorToolsTests(unittest.TestCase):
             "  'ocx --version ') exit 0 ;;\n"
             "  'ocx health ') exit 0 ;;\n"
             "  'ocx health --json') printf '{\"ok\":true,\"pid\":1,\"port\":10100}\\n'; exit 0 ;;\n"
-            "  'ocx config get') exit 0 ;;\n"
+            "  'ocx claude config') printf '{\"enabled\":true,\"authMode\":\"subscription\",\"admissionKeyActive\":false,\"authDetectionUnknown\":false,\"authFoundBy\":\"claude-credentials-file\",\"modelMap\":{}}\\n'; exit 0 ;;\n"
+            "  'ocx config get') printf 'config path not found: %s\\n' \"${4:-}\" >&2; exit 2 ;;\n"
             "esac\n"
             'if [ "${1:-} ${2:-}" = "ocx claude" ]; then shift 2; exec claude "$@"; fi\n'
             'printf "STUB-OCX:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"\n'
@@ -291,6 +375,7 @@ class OperatorToolsTests(unittest.TestCase):
                 ["help"],
                 ["-h"],
                 ["--help"],
+                ["ensure", "--help"],
                 ["launch", "--help"],
                 ["launch", "-h"],
                 ["ultracode", "--help"],
@@ -381,23 +466,29 @@ class OperatorToolsTests(unittest.TestCase):
                     )
 
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    # A real session WAS prepared -- that is the point of the escape hatch.
+                    # A real route WAS invoked, so it reports its preparation.
                     self.assertIn(self.SIDE_EFFECT_MARKER, result.stdout)
                     self.assertIn(expected, result.stdout)
 
-    def test_dispatcher_routes_the_session_verb(self) -> None:
+    def test_dispatcher_routes_ensure_in_short_and_long_forms(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
             operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
 
-            result = subprocess.run(
-                [str(config.bin_dir / "ccodex"), "session", "status"],
-                capture_output=True, text=True, env=environment, check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("session inheritance:", result.stdout)
+            for arguments in (["ensure"], ["ocx", "ensure"]):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [str(dispatcher), *arguments],
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("does not launch Claude Code", result.stdout)
+                    self.assertNotIn("STUB-CLAUDE", result.stdout)
 
     def test_status_says_absent_for_a_file_that_was_never_installed(self) -> None:
         # `unmanaged` for a nonexistent file sent an operator hunting for a conflict to
@@ -408,11 +499,14 @@ class OperatorToolsTests(unittest.TestCase):
             code, messages = operator_tools.status(config)
 
             self.assertEqual(code, 1)
-            self.assertEqual(len(messages), len(operator_tools.COMMANDS))
-            for message in messages:
+            self.assertEqual(len(messages), len(operator_tools.DESIRED_COMMANDS) + 1)
+            for message in messages[:-1]:
                 self.assertTrue(message.startswith("absent: "), message)
                 self.assertIn("operator-tools:install", message)
+            self.assertTrue(messages[-1].startswith("status summary:"))
             self.assertFalse(any("unmanaged" in message for message in messages))
+            self.assertFalse(any("ocx-launch" in message for message in messages))
+            self.assertFalse(any("ocx-ultracode" in message for message in messages))
 
     def test_status_still_says_unmanaged_for_a_foreign_file(self) -> None:
         # The distinction has to cut both ways: a file that IS there but is not owned is a
@@ -425,16 +519,73 @@ class OperatorToolsTests(unittest.TestCase):
             code, messages = operator_tools.status(config)
 
             self.assertEqual(code, 1)
-            self.assertIn(f"unmanaged: {config.bin_dir / 'ocx-launch'}", messages)
+            unmanaged = config.bin_dir / "ocx-launch"
+            self.assertIn(f"kept historical alias (unmanaged): {unmanaged}", messages)
+            self.assertFalse(any(message.startswith("absent: ") and "ocx-launch" in message for message in messages))
             self.assertTrue(
                 any(message.startswith("absent: ") for message in messages),
                 messages,
             )
 
+    def test_v1_state_with_historical_alias_remains_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            path = self.seed_owned_historical_alias(config)
+            state = operator_tools.load_state(config.state_path, config)
+            state.pop("pending")
+            state["version"] = operator_tools.LEGACY_STATE_VERSION
+            config.state_path.write_text(operator_tools.json.dumps(state))
+
+            loaded = operator_tools.load_state(config.state_path, config)
+
+            self.assertEqual(loaded["version"], operator_tools.STATE_VERSION)
+            self.assertIn(str(path), loaded["entries"])
+
+    def test_retire_aliases_dry_run_preserves_file_and_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); mutable = self.config(root)
+            path = self.seed_owned_historical_alias(mutable)
+            before = mutable.state_path.read_bytes()
+            dry_run = self.config(root, dry_run=True)
+
+            code, messages = operator_tools.retire_aliases(dry_run)
+
+            self.assertEqual(code, 0)
+            self.assertTrue(path.exists())
+            self.assertEqual(mutable.state_path.read_bytes(), before)
+            self.assertTrue(any("would retire historical alias" in message for message in messages))
+
+    def test_status_detects_ownership_state_change_during_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            before_lock = config.lock_path.stat() if config.lock_path.exists() else None
+            original = operator_tools._status
+
+            def racing_status(selected: object) -> tuple[int, list[str]]:
+                result = original(selected)
+                state = operator_tools.load_state(selected.state_path, selected)
+                state["pending"] = {
+                    "operation": "uninstall",
+                    "path": str(selected.bin_dir / "ccodex"),
+                    "before": state["entries"][str(selected.bin_dir / "ccodex")],
+                    "after": None,
+                }
+                operator_tools.write_state(selected, state)
+                return result
+
+            with mock.patch.object(operator_tools, "_status", racing_status):
+                code, messages = operator_tools.status(config)
+
+            self.assertEqual(code, 1)
+            self.assertIn("ownership state changed during inspection", "\n".join(messages))
+            after_lock = config.lock_path.stat() if config.lock_path.exists() else None
+            self.assertEqual(before_lock, after_lock)
+
     def test_status_reports_pending_without_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
-            content = operator_tools.desired_files(config)["ocx-launch"]
+            content = self.historical_alias_content(config)
             path = config.bin_dir / "ocx-launch"
             record = {"path": str(path), "digest": operator_tools.digest_bytes(content), "removable": "true"}
             state = operator_tools.empty_state()

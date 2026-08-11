@@ -5,7 +5,7 @@
 # No ambient node, bun, sd, git, npm, or mise configuration supplies an execution fallback.
 set -euo pipefail
 
-AGENTIC_SDLC_SEEDS_VERSION=0.5.14
+AGENTIC_SDLC_SEEDS_VERSION=0.5.15
 AGENTIC_SDLC_NODE_TOOL=node@22.22.3
 AGENTIC_SDLC_BUN_TOOL=bun@1.3.10
 AGENTIC_SDLC_SEEDS_TOOL="npm:@os-eco/seeds-cli@${AGENTIC_SDLC_SEEDS_VERSION}"
@@ -50,17 +50,36 @@ agentic_sdlc_exact_node() (
   return "$child_status"
 )
 
-# Compatibility shell functions retain the documented Seeds(<target>, <args...>) notation while
-# delegating all validation and execution to the installed receipt contract.
-agentic_sdlc_seeds() {
+# Exact-runtime front doors. Read-only inspection, conductor initialization, and conductor queue
+# recording remain distinct so a caller cannot accidentally route a mutating verb through inspect.
+agentic_sdlc_seeds() (
   if [ "$#" -lt 2 ]; then
-    printf 'usage: agentic_sdlc_seeds <target> <allowed-sd-command> [args...]\n' >&2
+    printf 'usage: agentic_sdlc_seeds <target> <allowed-read-only-command> [args...]\n' >&2
     return 2
   fi
   seeds_target=$1
   shift
   agentic_sdlc_exact_node inspect --target "$seeds_target" "$@"
+)
+
+agentic_sdlc_seeds_init() {
+  if [ "$#" -ne 1 ]; then
+    printf 'usage: agentic_sdlc_seeds_init <target>\n' >&2
+    return 2
+  fi
+  agentic_sdlc_exact_node record --target "$1" --queue-writer conductor --expect-queue absent init
 }
+
+agentic_sdlc_seeds_record() (
+  if [ "$#" -lt 3 ]; then
+    printf 'usage: agentic_sdlc_seeds_record <target> <expected-sha256> <create|update> [args...]\n' >&2
+    return 2
+  fi
+  seeds_target=$1
+  expected_queue=$2
+  shift 2
+  agentic_sdlc_exact_node record --target "$seeds_target" --queue-writer conductor --expect-queue "$expected_queue" "$@"
+)
 
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0

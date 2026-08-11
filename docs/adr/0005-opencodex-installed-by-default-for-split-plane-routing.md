@@ -1,9 +1,13 @@
 # ADR-0005 — opencodex is installed by default for split-plane non-Anthropic routing, with the subscription boundary enforced in the launcher
 
 - **Status:** accepted
+- **Note:** opencodex is still installed by default and still optional at runtime, but the
+  SPLIT-PLANE framing below no longer holds: ADR-0014 replaced the two planes with one
+  launch route serving both catalogs.
 - **Date:** 2026-08-06
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/adr/0003-gateway-stance-downgraded-to-optional.md`,
+  `docs/adr/0013-explicit-unsupported-claude-subscription-passthrough.md`,
   `docs/research/2026-08-05-gateway-selection-memo.md` and its 2026-08-05
   addendum, `docs/research/2026-08-07-opencodex-qualification-canary.md`
   (closes the Decision item 5 canary gate), `skills/repo-toolchain-gates/SKILL.md`
@@ -81,16 +85,25 @@ only, so a supervision call does mutate shared Codex config.
 
 ## Decision
 
-1. **`npm:@bitkyc08/opencodex` version 2.10.2 is pinned in `mise.toml` and
+**2026-08-09 amendment.** The active packaging pin is now `2.11.1`. The original
+`2.10.2` observations below remain historical evidence for the version actually
+qualified on 2026-08-07; changing the active pin does not retroactively relabel
+that evidence. The upgrade was installed through the reviewed mise path, and the
+current wrapper/context-window behavior was re-verified separately.
+
+1. **`npm:@bitkyc08/opencodex` version 2.11.1 is pinned in `mise.toml` and
    installed by default**, with `depends = ["node"]`, the npm backend, and a
    regenerated `mise.lock`. It joins the convenience tier: no gate consumes it,
    and its absence degrades developer experience without changing any verdict.
 2. **`scripts/opencodex-claude.sh` is the only supported entry point**, with
-   subcommands `launch`, `launch-ultracode`, `status`, `restart`, and `configure` (also wired
-   as the `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure` mise
-   tasks). The separate, explicit operator-tools lifecycle can install `ocx-launch` and
-   `ocx-ultracode` into an already-on-PATH user bin directory; both are generated delegates
-   to this canonical script, never alternate gateway launchers. The Ultracode route injects
+   subcommands `ensure`, `launch`, `launch-ultracode`, `status`, `restart`, and `configure`
+   (the existing `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, and
+   `ocx:configure` mise compatibility tasks remain). The separate, explicit operator-tools
+   lifecycle installs the `ccodex` dispatcher, whose shorthand and `ccodex ocx <verb>` long
+   form both delegate to this canonical script. Historical `ocx-launch` and
+   `ocx-ultracode` files remain recognized only so old lifecycle state and interrupted
+   transitions can be recovered; fresh installs do not recreate them, and explicit
+   retirement removes only unchanged removable owned copies. The Ultracode route injects
    only the session setting, does not bypass permissions, and refuses competing settings or
    bypass flags.
    `launch` runs the gateway-routed Claude Code process under an isolated
@@ -138,6 +151,30 @@ only, so a supervision call does mutate shared Codex config.
    usage level, and generalizes the lesson: when a pinned tool's safe usage is
    narrower than its default behavior, the narrowing belongs in an executable
    wrapper, because prose in a skill file cannot refuse anything.
+7. **`ccodex claude-subscription` is deliberately separate from the supported
+   split plane.** It is unsupported, account-risk, and not provider-approved;
+   its explicit invocation is informed operator choice, not authorization or a
+   supported subscription entitlement route. Ordinary `launch` and
+   `launch-ultracode` keep every subscription-OAuth refusal in item 4.
+
+   It reads no OAuth value or credential store, uses plain `claude` rather than
+   `ocx claude`, and exports only its locally verified `ANTHROPIC_BASE_URL`.
+   Before even a gateway status check it refuses the presence of parent
+   Anthropic/AWS/Claude routing or auth controls, forced fallback, and TLS
+   downgrade controls; it inspects exported names only, never their values. It
+   accepts exactly one explicit full native selector before the wrapper `--`, has
+   no default, removes only that separator, and rejects aliases, `[1m]` variants,
+   `modelMap` exact/date-stripped claims, admission keys, absent/unknown masked
+   auth detection, disabled inbound, explicitly disabled native passthrough, and
+   non-official native upstream configuration. ADR-0013 defines this narrower
+   escape hatch without altering the ordinary route's boundary.
+
+   The route never calls `ocx ensure`, `restart`, or configuration verbs: it
+   requires an identity-checked already-healthy gateway so it cannot cause
+   OpenCodex's documented shared `~/.codex` lifecycle mutation. In 2.11.1 the
+   masked status endpoint cannot expose `nativePassthrough`; source documents
+   default-on unless false, so direct scalar inspection plus the exact pin is an
+   explicit bounded invariant, never a claim that status proves it at runtime.
 
 ## Consequences
 
@@ -178,8 +215,8 @@ only, so a supervision call does mutate shared Codex config.
   (`~/.codex` is repointed at the proxy on ensure/start and restored on stop),
   so `launch` and `restart` are not side-effect-free for a Codex user. This is
   surfaced in the script header rather than worked around.
-- **Confirmation:** `mise install` resolves 2.10.2 with no credential in the
-  environment; `ocx --version` prints `opencodex 2.10.2` through `mise exec`;
+- **Original 2026-08-06 confirmation:** `mise install` resolved 2.10.2 with no credential in the
+  environment; `ocx --version` printed `opencodex 2.10.2` through `mise exec`;
   `bash -n scripts/opencodex-claude.sh` parses; `mise run check` passes. The
   supervision ladder was exercised end-to-end on this host, no login required:
   `status` against a stopped gateway reports DOWN and exits 1; `restart` from

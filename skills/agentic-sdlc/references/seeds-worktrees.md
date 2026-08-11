@@ -20,7 +20,7 @@ fail before acquisition. Bootstrap alone runs `mise --locked install` with the r
 data/cache, and two distinct empty npmrc files; pins the official npm registry and npm backend;
 disables hooks/config environment; and ignores ambient HOME, npmrc/registry variables, and mise
 config/data/cache variables. It then consumes exact roots returned by `mise --no-config where` for
-Node `22.22.3`, Bun `1.3.10`, and `npm:@os-eco/seeds-cli@0.5.14`. It validates the version, platform
+Node `22.22.3`, Bun `1.3.10`, and `npm:@os-eco/seeds-cli@0.5.15`. It validates the version, platform
 layout, package name/version, separator-contained `sd` bin entry, and package controls. The released
 package's string `engines.bun` compatibility requirement is benign; Bun config, TypeScript config,
 macro, preload, and other actual execution-control forms remain forbidden. It creates a trusted
@@ -33,11 +33,16 @@ The lock and npm backend establish exact version selection but **do not authenti
 tarball or transitive dependency graph**. The receipt catches ordinary post-bootstrap drift but
 cannot close a same-UID TOCTOU race between its checks and spawn.
 
-Thereafter `Seeds(<target>, <args...>)` means exact Node running:
+Thereafter read-only `Seeds(<target>, <args...>)` means exact Node running:
 
 ```text
 seeds-launcher.mjs inspect --target <target> <args...>
 ```
+
+The maintained prerequisite wrapper exposes the same boundaries as three front doors:
+`agentic_sdlc_seeds <target> <read-only-args...>`, `agentic_sdlc_seeds_init <target>`, and
+`agentic_sdlc_seeds_record <target> <expected-sha256> <create|update> ...`. Each resolves exact
+Node before starting the installed launcher and preserves its immediate exit status.
 
 `inspect` never installs, calls mise, acquires from a network, discovers ambient tools, repairs a
 receipt, or reads target package controls. The process must itself be exact Node `22.22.3`; it
@@ -67,6 +72,28 @@ Seeds(<target>, prime)
 Seeds(<target>, ready --format json)
 Seeds(<target>, blocked --format json)
 ```
+
+For a repository with no `.seeds` filesystem node, the conductor may initialize the queue only as:
+
+```text
+seeds-launcher.mjs record --target <target> --queue-writer conductor --expect-queue absent init
+```
+
+Initialization inherits the entire receipt, hash, exact-runtime, and environment admission. It
+refuses an existing or partial directory, regular file, symlink, other filesystem node, and a
+linked-worktree/submodule target whose queue would redirect. It snapshots `.gitattributes`, which
+must be absent or a regular UTF-8 file whose exact-line classification agrees with the pinned
+initializer's substring check; ambiguous comments, longer rules, and CRLF forms refuse before any
+write. It then invokes exact pinned `init --json`. Success requires exactly
+`.seeds/.gitignore`, `config.yaml`, `issues.jsonl`, `templates.jsonl`, and `plans.jsonl`; the three
+JSONL files are empty, `.gitignore` is the exact lock-only policy, and `.gitattributes` equals its
+byte-for-byte prestate plus only the missing three merge-union lines. A failed child after either
+surface moves is reported as an unknown effect; failure with both surfaces unchanged is a clean
+refusal. Existing Seeds content is never repaired or overwritten by this seam.
+
+Once the queue exists, the conductor records only digest-bound `create` or `update` deltas through
+`--expect-queue <sha256>`. Standalone claim, close, delete, prune, disposition, sync, and other
+mutating forms remain forbidden.
 
 The conductor creates or updates Seeds for:
 

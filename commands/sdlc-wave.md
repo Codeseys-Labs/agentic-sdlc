@@ -5,7 +5,9 @@ description: Run one Seeds-backed worktree wave — select ready Seeds, spawn wo
 
 Run ONE implementation wave of the agentic-sdlc loop. Scope: $ARGUMENTS
 
-1. Load the `agentic-sdlc` skill (and its `references/seeds-worktrees.md`).
+1. Load the `agentic-sdlc` skill (and its `references/seeds-worktrees.md`). If the target's
+   Seeds queue is absent, route to `/sdlc-init` and stop: Wave does not initialize a queue or
+   improvise activation.
 2. Select the wave: using the loaded skill's exact Seeds shorthand, pick independent Seeds from
    `Seeds(<target>, ready --format json)` with disjoint
    file ownership (cap 3-5). Broad architecture / CI / shared-contract changes get
@@ -44,8 +46,12 @@ Run ONE implementation wave of the agentic-sdlc loop. Scope: $ARGUMENTS
    Never copy requested effort or context into resolved/readback fields, and never require
    impossible effective readback after request injection and model identity are verified.
    Prompt prose does not enforce a model or effort. Do not use host-default selection or
-   artificial all-six representation. Each worker prompt may carry the certified assignment
-   as an audit copy, but receipts—not the prompt—are the enforcement boundary. It must also
+   artificial all-six representation. If no certified delegation route exists, stop this Wave;
+   do not reinterpret a worker as direct execution or make a `RuntimeAssignment` claim. Return to
+   the Frame only to consider its exactly one bounded non-delegated conductor execution, which has
+   one clean dedicated Git worktree, zero workers, zero model spawns, and zero `RuntimeAssignment`
+   claims. Each worker prompt may carry the certified assignment as an audit copy, but
+   receipts—not the prompt—are the enforcement boundary. It must also
    carry: Seed id + acceptance criteria, absolute worktree path, files in scope, gates to run,
    artifact report path, and requested context form.
 5. If cmux is already active, optionally publish wave status. Native workers require neither

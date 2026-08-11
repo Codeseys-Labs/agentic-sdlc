@@ -35,9 +35,10 @@ resolves zero tasks and exits 0. There is no `git`-style backend in
 would apply.
 
 Second, and decisively, the tree is a hard run-time dependency of this bundle,
-not merely an install-time one. All 36 task commands in `mise.toml` reference a
-repo-internal path, and no task is tree-independent: `check` and `setup` have no
-`run` at all, only `depends` on tasks that do. Every Python entrypoint anchors
+not merely an install-time one. Every runnable task in `mise.toml` ultimately
+reaches a repo-internal path, and no task is tree-independent: `check`,
+`contributor:setup`, and its deprecated `setup` forwarder have no `run` at all,
+only `depends` on tasks that do. Every Python entrypoint anchors
 its root at `Path(__file__).resolve().parents[1]` with no override flag
 (`scripts/install_skill_bundle.py:2890`, `scripts/install_operator_tools.py:477`,
 `scripts/render_mermaid_linux.py:28`). Default-mode installs are symlinks *into*
@@ -67,7 +68,7 @@ clone by hand, or track where the tree lives.
    as a convenience only. Piping a remote script into a shell executes bytes the
    operator has not read, which contradicts this repository's standing posture
    that review precedes trust.
-4. **A documented two-liner:** `git clone --depth 1 <url> <managed-path> && mise -C <managed-path> run setup`.
+4. **A documented two-liner:** `git clone --depth 1 <url> <managed-path> && mise -C <managed-path> run contributor:setup`.
    Rejected as insufficient on its own — it is honest but silently clobbers,
    re-clones, or half-updates on the second run, and it makes the operator hold
    the managed path in their head.
@@ -134,8 +135,10 @@ introducing a third.
   --locked install` exited 0 in **one** run installing all 13 tools;
   `mise run check` exited 0 over 694 tests in 325s; `bundle:install` exited 0;
   `bundle:status` reported `38 ok, 0 conflict, 0 absent`; the installed skill
-  symlink resolved into the managed clone; and `ocx-launch` was reachable on
-  PATH. One caveat found by that run and worth recording: `unzip` must be
+  symlink resolved into the managed clone; and the then-shipped `ocx-launch`
+  alias was reachable on PATH. That historical confirmation predates ADR-0010's
+  2026-08-10 alias-retirement amendment; fresh operator-tools installs now expose
+  `ccodex` instead. One caveat found by that run and worth recording: `unzip` must be
   present or puppeteer's postinstall — a transitive dependency of the advisory
   `mermaid-cli` pin — fails and takes `mise --locked install` to exit 1 with it,
   on both the first and second attempt. That is a container-image gap, not the

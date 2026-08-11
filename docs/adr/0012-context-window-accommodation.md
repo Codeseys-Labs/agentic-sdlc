@@ -1,6 +1,13 @@
 # ADR-0012 — Per-model context windows are owned by the gateway, the session carries one conservative floor, and the recorded truth lives in the calibration table
 
 - **Status:** accepted
+- **Note:** Decision item 4's parenthetical citation of `assets/claude/session-inheritance.sh` is
+  stale for `scripts/opencodex-claude.sh`: ADR-0014 deleted that script's environment scrub
+  entirely, and its `cmd_launch` now sets `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` directly rather than
+  through session-inheritance's capture-then-restore. `scripts/muse-claude.sh` is unaffected and
+  still ships the default through its own capture-then-restore fallback. The opinionated value,
+  its one-directional safety, and the operator-export override remain unchanged for both
+  launchers.
 - **Date:** 2026-08-07
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/research/2026-08-07-context-window-accommodation.md` (the executed
@@ -136,14 +143,17 @@ least usable.
    models are unmarked for the duration. It is never a global default, because it cannot be
    verified for the operator that no model switch will occur.
 
-4. **The proactive-compaction percentage stays unset until it is measured.** The override is
-   one-directional — it can only compact earlier, and a value above the default is silently
-   ignored — while the default percentage is undocumented. Any chosen value is therefore either
-   correct or a silent no-op with no way to distinguish them from documentation, so no value
-   ships on documentation alone. The research memo records the measurement procedure and the
-   surfaces that carry the signal; the decisive test is an A/B on the compaction event's
-   pre-compaction token count. A future session may set the value **with** that evidence, and
-   doing so is an adjustment under this record rather than a reversal of it.
+4. **The proactive-compaction percentage is an opinionated 85 (amended 2026-08-08; was
+   "stays unset until measured").** The override is one-directional — it can only compact earlier,
+   and a value above the (undocumented) default is silently ignored — so 85 is safe before
+   measurement: if the true default is ≤85 it is a no-op, if the true default is near 100% it
+   compacts materially earlier at ~0.85×272000≈231200. The launchers ship it as
+   `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` only when the operator has not already exported a value
+   (`assets/claude/session-inheritance.sh` and the fallback in both `scripts/*-claude.sh`), so an
+   installer tunes per environment with `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>` before
+   `ccodex launch`. The research memo still records the procedure that would settle the true
+   default — the decisive test is an A/B on `claude_code.compaction` `pre_tokens` — and replacing
+   85 with a measured value is an adjustment under this record, not a reversal.
 
 5. **The output ceiling is set explicitly for shared-pool sessions.** The client defaults its
    output maximum to 32000 for model IDs it does not recognize, which includes every

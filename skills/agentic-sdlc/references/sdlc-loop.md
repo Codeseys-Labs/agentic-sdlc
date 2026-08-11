@@ -54,8 +54,9 @@ Reconcile:
 - The conductor alone mutates Seeds after acceptance evidence is verified. An authorized
   integrator alone may perform an already-authorized fan-in; local status, passing gates,
   worker reports, reviewer recommendations, and conductor choices never grant authority.
-- The conductor runs `Seeds(<target>, sync)` using the exact launcher contract in
-  `references/seeds-worktrees.md` when the verified queue state changed.
+- The conductor records accepted queue deltas through the exact compare-and-swap launcher seam in
+  `references/seeds-worktrees.md`. Standalone sync, claim, close, delete, prune, and disposition
+  commands are not admitted; initialization has its separate absent-queue conductor form.
 
 Ship:
 - Squash/rebase worktree branches into an integration branch only within the authorized scope.

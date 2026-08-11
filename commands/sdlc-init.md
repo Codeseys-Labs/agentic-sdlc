@@ -45,10 +45,11 @@ record — it is not an authenticated approval, and no planner output authorizes
    - Resolve the target repository, then record `git status --short`, tracked/untracked
      files, current branch/HEAD, remotes, existing task runner, hooks, CI, instruction
      files, and language/toolchain manifests.
-   - Run the maintained prerequisite checker from the reviewed distribution checkout. It defines
-     `Seeds(<target>, <args...>)` as the exact, config-independent mise contract in
-     `agentic-sdlc` and verifies version/provenance; use that shorthand for every
-     Seeds operation below. Missing, unpinned, untrusted,
+   - Run the maintained prerequisite checker from the reviewed distribution checkout. Its
+     `agentic_sdlc_seeds`, `agentic_sdlc_seeds_init`, and `agentic_sdlc_seeds_record` front doors
+     resolve exact Node and delegate to the installed receipt-bound launcher. Use the read-only
+     `Seeds(<target>, <args...>)` shorthand only for inspection; use the explicit conductor
+     front doors for queue initialization or an existing-queue record. Missing, unpinned, untrusted,
      or ambiguous required capability fails closed; missing optional cmux or tmux
      never triggers implicit installation. `mise` is the only bootstrap prerequisite and the
      managed-tool bootstrap, not the sole readiness prerequisite; repository tools are pinned
@@ -79,7 +80,17 @@ record — it is not an authenticated approval, and no planner output authorizes
      worktrees; this runbook neither initializes nor promotes another VCS substrate.
 
 3. **Seeds queue of record**
-   - Run `Seeds(<target>, init)` only when `.seeds/` is absent. Preserve existing queue/configuration.
+   - Initialize only through `agentic_sdlc_seeds_init <target>`, which invokes the exact launcher
+     form `record --target <target> --queue-writer conductor --expect-queue absent init`. This is
+     allowed only when `.seeds` has no filesystem node at all and the target is the queue-owning
+     root, not a linked worktree/submodule redirect. Any existing directory, partial surface,
+     file, symlink, or non-regular `.gitattributes` is a conflict: inspect and preserve it; do not
+     treat it as permission to repair or overwrite. The launcher snapshots `.gitattributes` and refuses a
+     non-UTF-8 file or a prestate whose exact-line classification disagrees with the pinned
+     initializer's substring behavior before any write. It invokes exact pinned Seeds initialization
+     with JSON output and admits only the closed five-file `.seeds`
+     surface plus the precise missing `merge=union` line append. A failed child after either
+     surface moves is an unknown effect requiring inspection; no movement is a clean refusal.
    - Convert starting intent into 1–3 bounded Seeds, or derive them from accepted TODOs /
      issues. Never invent priority or silently import every TODO.
    - Record whether `.seeds/` is tracked or intentionally local according to repository
@@ -89,12 +100,12 @@ record — it is not an authenticated approval, and no planner output authorizes
    - Existing `mise.toml`: parse and preserve its tools/tasks; propose only missing pinned
      tools and tasks. New file: pin the detected language toolchain, linters, `lefthook`,
      and `betterleaks`; create fmt/lint/test tasks that match the repository, one aggregate
-     `check`, and a `setup` task. Never add speculative tools.
+     `check`, and a `contributor:setup` task. Never add speculative tools.
    - Git substrate: merge a marked Agentic SDLC block into `lefthook.yml`; pre-commit is the
      fast staged-file subset, pre-push includes tests and the working-tree secrets scan
      (`betterleaks dir .` with `--config` pinned at a tracked extend-only config, never the bare
      form — a drop-in config or `GITLEAKS_CONFIG*` variable otherwise replaces the ruleset). Preserve all
-     foreign hooks. `setup` installs lefthook.
+     foreign hooks. `contributor:setup` installs lefthook.
    - Wire the secrets gate into `mise run check` and CI. Run `betterleaks git .` only after
      explicit consent when history scanning is appropriate (public release/migration), and
      never plant a credential-shaped value in durable history to test it.

@@ -449,8 +449,8 @@
         },
         "research_director": {
           "description_sha256": "28a363fe86b3382cf5c059d135b75059174cc356a9c32bd55a33490bc0839f8b",
-          "developer_instructions_sha256": "9354550eeeef56875735201c7db273d5d65a9ad13cec2e0f1ae4787bdc1ba1fc",
-          "manifest_sha256": "585f4f76d3e09d74e1eb5dbe3a6555fe9026bdeba9cd1b1c8e8945c784b08d5f",
+          "developer_instructions_sha256": "e490284af11143c71a9a07d0e5778594c3ba99bd648220dec3268b4d5491e0b8",
+          "manifest_sha256": "5b5a407446feeec962083bd5506135cc4be9e5fdeef482877073e7c0fef37fa3",
           "path": "agents/codex/research/research_director.toml",
           "sandbox_mode": "workspace-write"
         },
@@ -512,7 +512,7 @@
       "max"
     ]
   },
-  "research_director_seeds_contract_sha256": "9835671709c91b8cf936bd5468a1bd7d533c02ae8f3daac852eccaffc96d326f",
+  "research_director_seeds_contract_sha256": "2ca7f36c728d324ab60f2b99d4b3fb03f064180496c0731aa33447a7dee4ba72",
   "schema_version": "runtime-assignment-normative-contract/v1",
   "seeds_read_only_semantics": "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor.",
   "validation_only_semantics": "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."

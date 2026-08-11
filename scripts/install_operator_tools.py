@@ -22,12 +22,13 @@ from typing import Any, Iterator
 
 STATE_VERSION = 2
 LEGACY_STATE_VERSION = 1
-# `ccodex` is the dispatcher for the whole USE surface (ADR-0010). The two ocx-* commands are
-# retained as thin aliases for existing muscle memory: they cost one template line each and
-# removing them would break an operator's shell history for no gain. Maintenance tasks (test,
-# validate, check, secrets, mermaid, hooks) are deliberately NOT installed -- they belong to
-# working on the repository, not to using what it installed.
-COMMANDS = ("agentic-sdlc-statusline", "ccodex", "ocx-launch", "ocx-ultracode")
+# `ccodex` is the dispatcher for the whole USE surface (ADR-0010). A fresh install owns only it
+# and the packaged statusline support command. The two ocx-* names were shipped previously and
+# remain valid in v1/v2 state and pending transitions, but they are historical aliases rather
+# than desired files: status never requires them and install never recreates or refreshes them.
+DESIRED_COMMANDS = ("agentic-sdlc-statusline", "ccodex")
+HISTORICAL_ALIASES = ("ocx-launch", "ocx-ultracode")
+RECOGNIZED_COMMANDS = DESIRED_COMMANDS + HISTORICAL_ALIASES
 
 
 class OperatorToolsError(RuntimeError):
@@ -82,6 +83,65 @@ def path_entries() -> set[str]:
     }
 
 
+def path_guidance(bin_dir: Path) -> str:
+    """Explain the PATH boundary without changing it on the operator's behalf."""
+    return (
+        f"add {bin_dir} to PATH in your shell configuration, start a new shell, "
+        "then retry; this lifecycle never edits PATH"
+    )
+
+
+def conflict_messages(path: Path, reason: str) -> list[str]:
+    """Name a preserved file and the operator action required to proceed."""
+    return [
+        f"conflict: {path}",
+        f"preserved: {path} ({reason}; inspect and resolve it before retrying)",
+    ]
+
+
+def operator_summary(operation: str, messages: list[str]) -> str:
+    """Render one final lifecycle line for install, status, and uninstall."""
+    if operation == "install":
+        installed = sum(message.startswith("installed:") for message in messages)
+        refreshed = sum(message.startswith("refreshed:") for message in messages)
+        adopted = sum(message.startswith("adopted ") for message in messages)
+        unchanged = sum(message.startswith("ok:") for message in messages)
+        planned = sum(message.startswith("would ") for message in messages)
+        conflicts = sum(message.startswith("conflict:") for message in messages)
+        return (
+            "install summary: "
+            f"{installed} installed, {refreshed} refreshed, {adopted} adopted, "
+            f"{unchanged} unchanged, {planned} planned, {conflicts} conflict"
+        )
+    if operation == "status":
+        ok = sum(message.startswith("ok:") for message in messages)
+        unmanaged = sum(message.startswith("unmanaged:") for message in messages)
+        absent = sum(message.startswith("absent:") for message in messages)
+        conflicts = sum(message.startswith("conflict:") for message in messages)
+        pending = sum(message.startswith("would recover") or message.startswith("interrupted") for message in messages)
+        return f"status summary: {ok} ok, {unmanaged + conflicts} conflict, {absent} absent, {pending} pending"
+    if operation == "uninstall":
+        removed = sum(message.startswith("removed:") for message in messages)
+        kept = sum(message.startswith("kept:") for message in messages)
+        absent = sum(message.startswith("absent:") for message in messages)
+        planned = sum(message.startswith("would ") for message in messages)
+        conflicts = sum(message.startswith("conflict:") for message in messages)
+        return (
+            "uninstall summary: "
+            f"{removed} removed, {kept} kept, {absent} absent, {planned} planned, {conflicts} conflict"
+        )
+    if operation == "retire":
+        retired = sum(message.startswith("retired historical alias:") for message in messages)
+        kept = sum(message.startswith("kept historical alias") for message in messages)
+        forgotten = sum(message.startswith("forgot missing") for message in messages)
+        planned = sum(message.startswith("would ") for message in messages)
+        return (
+            "alias retirement summary: "
+            f"{retired} retired, {kept} kept, {forgotten} forgotten, {planned} planned"
+        )
+    raise ValueError(f"unsupported operator lifecycle summary: {operation}")
+
+
 def validate_bin_dir(config: Config) -> None:
     bin_dir = config.bin_dir
     if not bin_dir.is_absolute():
@@ -89,7 +149,9 @@ def validate_bin_dir(config: Config) -> None:
     if bin_dir == Path(bin_dir.anchor) or bin_dir == config.repo_root or config.repo_root in bin_dir.parents:
         raise OperatorToolsError(f"unsafe operator-tools bin directory: {bin_dir}")
     if config.require_path and os.path.normcase(str(bin_dir)) not in path_entries():
-        raise OperatorToolsError(f"operator-tools bin directory is not on PATH: {bin_dir}")
+        raise OperatorToolsError(
+            f"operator-tools bin directory is not on PATH: {bin_dir}; {path_guidance(bin_dir)}"
+        )
     current = bin_dir
     while not current.exists() and current != current.parent:
         current = current.parent
@@ -112,17 +174,10 @@ def desired_files(config: Config) -> dict[str, bytes]:
     statusline = config.repo_root / "assets" / "claude" / "statusline-command.sh"
     launcher = config.repo_root / "scripts" / "opencodex-claude.sh"
     templates = config.repo_root / "assets" / "launchers"
-    sources = (
-        statusline,
-        launcher,
-        templates / "ccodex.in",
-        templates / "ocx-launch.in",
-        templates / "ocx-ultracode.in",
-    )
+    sources = (statusline, launcher, templates / "ccodex.in")
     for path in sources:
         if not path.is_file():
             raise OperatorToolsError(f"required operator-tools source is missing: {path}")
-    quoted_launcher = shell_quote(str(launcher))
     # The dispatcher resolves its root at run time from AGENTIC_SDLC_ROOT, falling back to this
     # install-time value, so a clone that later moves to a managed path can be pointed at with an
     # environment variable instead of a reinstall. The path is shell-quoted because a repo root
@@ -130,14 +185,12 @@ def desired_files(config: Config) -> dict[str, bytes]:
     dispatcher = (
         (templates / "ccodex.in")
         .read_text(encoding="utf-8")
-        .replace("@CANONICAL_LAUNCHER@", quoted_launcher)
+        .replace("@CANONICAL_LAUNCHER@", shell_quote(str(launcher)))
         .replace("@CANONICAL_ROOT@", shell_quote(str(config.repo_root)))
     )
     return {
         "agentic-sdlc-statusline": statusline.read_bytes(),
         "ccodex": dispatcher.encode(),
-        "ocx-launch": (templates / "ocx-launch.in").read_text(encoding="utf-8").replace("@CANONICAL_LAUNCHER@", quoted_launcher).encode(),
-        "ocx-ultracode": (templates / "ocx-ultracode.in").read_text(encoding="utf-8").replace("@CANONICAL_LAUNCHER@", quoted_launcher).encode(),
     }
 
 
@@ -163,7 +216,7 @@ def validate_pending(config: Config, state: dict[str, object]) -> None:
     if not isinstance(pending, dict) or pending.get("operation") not in {"install", "refresh", "uninstall"}:
         raise OperatorToolsError(f"invalid operator-tools pending operation: {config.state_path}")
     key = pending.get("path")
-    if not isinstance(key, str) or Path(key).parent != config.bin_dir or Path(key).name not in COMMANDS:
+    if not isinstance(key, str) or Path(key).parent != config.bin_dir or Path(key).name not in RECOGNIZED_COMMANDS:
         raise OperatorToolsError(f"invalid operator-tools pending path: {key}")
     before, after = pending.get("before"), pending.get("after")
     if before is not None and not valid_record(before, key):
@@ -199,7 +252,7 @@ def load_state(path: Path, config: Config | None = None) -> dict[str, object]:
     if value.get("version") != STATE_VERSION or not isinstance(value.get("entries"), dict) or "pending" not in value:
         raise OperatorToolsError(f"invalid operator-tools state: {path}")
     for key, record in value["entries"].items():
-        if not isinstance(key, str) or Path(key).name not in COMMANDS or not valid_record(record, key):
+        if not isinstance(key, str) or Path(key).name not in RECOGNIZED_COMMANDS or not valid_record(record, key):
             raise OperatorToolsError(f"invalid operator-tools ownership record: {key}")
     if config is not None:
         validate_pending(config, value)
@@ -364,6 +417,7 @@ def _install(config: Config) -> tuple[int, list[str]]:
     if state.get("pending") is not None:
         if config.dry_run:
             messages.append(recover_pending(config, state, read_only=True) or "")
+            messages.append(operator_summary("install", messages))
             return 1, messages
         messages.append(recover_pending(config, state, read_only=False) or "")
     entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
@@ -375,7 +429,7 @@ def _install(config: Config) -> tuple[int, list[str]]:
         record = entries.get(key)
         if path.exists() or path.is_symlink():
             if path.is_symlink() or not path.is_file():
-                partial = True; messages.append(f"conflict: {path}"); continue
+                partial = True; messages.extend(conflict_messages(path, "an unsupported non-file entry already exists")); continue
             actual = digest_file(path)
             if record is None:
                 if actual == wanted:
@@ -384,10 +438,10 @@ def _install(config: Config) -> tuple[int, list[str]]:
                         entries[key] = {"path": key, "digest": actual, "removable": "false"}
                         write_state(config, state)
                 else:
-                    partial = True; messages.append(f"conflict: {path}")
+                    partial = True; messages.extend(conflict_messages(path, "a foreign file already exists"))
                 continue
             if actual != record.get("digest"):
-                partial = True; messages.append(f"conflict: {path}"); continue
+                partial = True; messages.extend(conflict_messages(path, "owned file changed")); continue
             if actual == wanted:
                 messages.append(f"ok: {path}"); continue
             if config.dry_run:
@@ -405,6 +459,7 @@ def _install(config: Config) -> tuple[int, list[str]]:
         atomic_write(path, content, 0o755)
         commit_pending(config, state)
         messages.append(f"installed: {path}")
+    messages.append(operator_summary("install", messages))
     return (1 if partial else 0), messages
 
 
@@ -425,30 +480,121 @@ def _status(config: Config) -> tuple[int, list[str]]:
             messages.append(str(exc))
         partial = True
     entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
-    for name in COMMANDS:
+    for name in DESIRED_COMMANDS:
         path = config.bin_dir / name
         record = entries.get(str(path))
         if record is None:
-            # `unmanaged` and `absent` are different facts and were previously reported with the
-            # same word. Unmanaged says "a file is there but this lifecycle does not own it",
-            # which sends an operator looking for a conflict to resolve; for a file that simply
-            # was never installed the honest report is `absent` plus the command that installs
-            # it. Both still exit 1, because neither is an installed owned tool.
+            # `unmanaged` and `absent` are different facts. A desired file that is not present is
+            # required/absent; an existing file outside this lifecycle is unmanaged. Historical
+            # aliases are handled below and are never classified as required or absent.
             partial = True
             if path.exists() or path.is_symlink():
                 messages.append(f"unmanaged: {path}")
+                messages.append(
+                    f"preserved: {path} (an unmanaged file already exists; inspect and resolve it before retrying)"
+                )
             else:
                 messages.append(f"absent: {path} (not installed; run `mise run operator-tools:install`)")
         elif not live_matches(path, record):
-            partial = True; messages.append(f"conflict: {path}")
+            partial = True; messages.extend(conflict_messages(path, "owned file changed"))
         else:
             messages.append(f"ok: {path}")
+    for name in HISTORICAL_ALIASES:
+        path = config.bin_dir / name
+        record = entries.get(str(path))
+        if record is None:
+            if path.exists() or path.is_symlink():
+                messages.append(f"kept historical alias (unmanaged): {path}")
+            continue
+        if not path.exists() and not path.is_symlink():
+            messages.append(f"historical alias ownership record retained; file is missing: {path}")
+        elif not live_matches(path, record):
+            partial = True
+            messages.extend(conflict_messages(path, "historical alias changed and was preserved"))
+        elif record.get("removable") == "false":
+            messages.append(f"kept historical alias (adopted pre-existing entry): {path}")
+        else:
+            messages.append(
+                f"retirable historical alias: {path} "
+                "(run `mise run operator-tools:retire-aliases`; use `ccodex launch|ultracode`)"
+            )
+    messages.append(operator_summary("status", messages))
     return (1 if partial else 0), messages
 
 
-def status(config: Config) -> tuple[int, list[str]]:
+def _retire_aliases(config: Config) -> tuple[int, list[str]]:
+    validate_bin_dir(config)
+    state = load_state(config.state_path, config)
+    messages: list[str] = []
+    if state.get("pending") is not None:
+        if config.dry_run:
+            messages.append(recover_pending(config, state, read_only=True) or "")
+            messages.append(operator_summary("retire", messages))
+            return 1, messages
+        messages.append(recover_pending(config, state, read_only=False) or "")
+    entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
+    partial = False
+    for name in HISTORICAL_ALIASES:
+        path = config.bin_dir / name
+        key = str(path)
+        record = entries.get(key)
+        if record is None:
+            if path.exists() or path.is_symlink():
+                messages.append(f"kept historical alias (unmanaged): {path}")
+            continue
+        if not path.exists() and not path.is_symlink():
+            if config.dry_run:
+                messages.append(f"would forget missing historical alias ownership: {path}")
+            else:
+                entries.pop(key)
+                write_state(config, state)
+                messages.append(f"forgot missing historical alias ownership: {path}")
+            continue
+        if not live_matches(path, record):
+            partial = True
+            messages.append(f"kept historical alias (changed since install): {path}")
+            messages.append(f"preserved: {path} (inspect it and move to `ccodex launch|ultracode` manually)")
+            continue
+        if record.get("removable") == "false":
+            messages.append(f"kept historical alias (adopted pre-existing entry): {path}")
+            continue
+        if config.dry_run:
+            messages.append(f"would retire historical alias: {path}")
+            continue
+        arm(config, state, "uninstall", path, record, None)
+        durable_unlink(path)
+        commit_pending(config, state)
+        messages.append(f"retired historical alias: {path}")
+    if not messages:
+        messages.append("no historical aliases are owned or present")
+    messages.append(operator_summary("retire", messages))
+    return (1 if partial else 0), messages
+
+
+def retire_aliases(config: Config) -> tuple[int, list[str]]:
     with lifecycle_lock(config):
-        return _status(config)
+        return _retire_aliases(config)
+
+
+def state_snapshot(path: Path) -> tuple[bool, bytes | None]:
+    if not path.exists():
+        return False, None
+    if path.is_symlink() or not path.is_file():
+        raise OperatorToolsError(f"operator-tools state must be a regular file: {path}")
+    return True, path.read_bytes()
+
+
+def status(config: Config) -> tuple[int, list[str]]:
+    # Status stays lock-free so a never-installed inspection creates nothing. Detect a writer
+    # racing the scan by comparing the durable ownership document before and after it.
+    before = state_snapshot(config.state_path)
+    code, messages = _status(config)
+    after = state_snapshot(config.state_path)
+    if after != before:
+        messages.insert(-1, "interrupted status: ownership state changed during inspection; retry")
+        messages[-1] = operator_summary("status", messages[:-1])
+        return 1, messages
+    return code, messages
 
 
 def _uninstall(config: Config) -> tuple[int, list[str]]:
@@ -458,11 +604,12 @@ def _uninstall(config: Config) -> tuple[int, list[str]]:
     if state.get("pending") is not None:
         if config.dry_run:
             messages.append(recover_pending(config, state, read_only=True) or "")
+            messages.append(operator_summary("uninstall", messages))
             return 1, messages
         messages.append(recover_pending(config, state, read_only=False) or "")
     entries: dict[str, dict[str, str]] = state["entries"]  # type: ignore[assignment]
     partial = False
-    for name in COMMANDS:
+    for name in RECOGNIZED_COMMANDS:
         path = config.bin_dir / name; key = str(path); record = entries.get(key)
         if record is None:
             continue
@@ -471,7 +618,7 @@ def _uninstall(config: Config) -> tuple[int, list[str]]:
                 entries.pop(key); write_state(config, state)
             messages.append(f"absent: {path}"); continue
         if not live_matches(path, record):
-            partial = True; messages.append(f"conflict: {path}"); continue
+            partial = True; messages.extend(conflict_messages(path, "owned file changed")); continue
         if record.get("removable") == "false":
             messages.append(f"kept: {path} (adopted pre-existing entry)"); continue
         if config.dry_run:
@@ -480,6 +627,7 @@ def _uninstall(config: Config) -> tuple[int, list[str]]:
         durable_unlink(path)
         commit_pending(config, state)
         messages.append(f"removed: {path}")
+    messages.append(operator_summary("uninstall", messages))
     return (1 if partial else 0), messages
 
 
@@ -492,19 +640,50 @@ def self_test(repo_root: Path) -> tuple[int, list[str]]:
     with tempfile.TemporaryDirectory(prefix="agentic-sdlc-operator-tools-") as temp:
         root = Path(temp); home = root / "home"; bin_dir = home / ".local" / "bin"
         config = Config(repo_root, home, bin_dir, root / "state", require_path=False)
-        installed = install(config); checked = status(config); removed = uninstall(config)
-        if installed[0] or checked[0] or removed[0] or any((bin_dir / name).exists() for name in COMMANDS):
-            return 1, installed[1] + checked[1] + removed[1] + ["operator-tools self-test failed"]
+        installed = install(config); checked = status(config); retired = retire_aliases(config); removed = uninstall(config)
+        if installed[0] or checked[0] or retired[0] or removed[0] or any((bin_dir / name).exists() for name in RECOGNIZED_COMMANDS):
+            return 1, installed[1] + checked[1] + retired[1] + removed[1] + ["operator-tools self-test failed"]
     return 0, ["operator-tools self-test passed"]
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("install", "status", "uninstall", "self-test"))
-    parser.add_argument("--home", type=Path, default=Path.home())
-    parser.add_argument("--bin-dir", type=Path)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "The target bin directory must already exist under a user-owned physical path and be "
+            "on PATH. This lifecycle never creates shell aliases or edits PATH. Status and --dry-run "
+            "are read-only."
+        ),
+    )
+    parser.add_argument(
+        "command",
+        choices=("install", "status", "retire-aliases", "uninstall", "self-test"),
+        help="operator-command lifecycle action",
+    )
+    parser.add_argument(
+        "--home",
+        type=Path,
+        default=Path.home(),
+        metavar="PATH",
+        help="operator home used to derive default bin and state directories",
+    )
+    parser.add_argument(
+        "--bin-dir",
+        type=Path,
+        metavar="PATH",
+        help="existing user-owned PATH directory to receive commands",
+    )
+    parser.add_argument(
+        "--state-root",
+        type=Path,
+        metavar="PATH",
+        help="ownership-state root (default: XDG_STATE_HOME or HOME/.local/state)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report install or removal changes without writing",
+    )
     return parser.parse_args(argv)
 
 
@@ -526,7 +705,12 @@ def main(argv: list[str] | None = None) -> int:
             args.dry_run,
         )
         try:
-            code, messages = {"install": install, "status": status, "uninstall": uninstall}[args.command](config)
+            code, messages = {
+                "install": install,
+                "status": status,
+                "retire-aliases": retire_aliases,
+                "uninstall": uninstall,
+            }[args.command](config)
         except OperatorToolsError as exc:
             print(f"fatal: {exc}", file=sys.stderr)
             return 2

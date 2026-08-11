@@ -2,7 +2,7 @@
   "schema_version": "role-manifest/v1",
   "generated_from": {
     "normative_contract_path": "policy/runtime-assignment-normative-contract-v1.json",
-    "normative_contract_sha256": "c5f8dcc34afab21740daae74ea252fded66f1651663abf3672d3f54d7201d201",
+    "normative_contract_sha256": "53e2113a51e2ab6b4b6d5de7ca70a1f433f4335acddda4d2b626036d190cc377",
     "validator_ruleset": "validate_bundle.validate_role_manifest"
   },
   "counts": {
@@ -838,7 +838,7 @@
       "projections": {
         "codex": {
           "path": "agents/codex/research/research_director.toml",
-          "content_digest": "585f4f76d3e09d74e1eb5dbe3a6555fe9026bdeba9cd1b1c8e8945c784b08d5f",
+          "content_digest": "5b5a407446feeec962083bd5506135cc4be9e5fdeef482877073e7c0fef37fa3",
           "sandbox_mode": "workspace-write",
           "filesystem_write": true,
           "submission_contract": "research-ledger"

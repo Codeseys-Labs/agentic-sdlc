@@ -16,14 +16,18 @@ this distribution, and puts entries this bundle did not author onto its own sele
 Foreign *ideas* enter by exactly one path: an adapted `references/*.md` with a root `NOTICE`
 donor entry landed in the same change, re-expressed rather than copied.
 
-**Installable on request.** `libraries:list`, `libraries:status`, and `libraries:install` run a
-named library's own front door — `mattpocock/skills`, ECC (`affaan-m/ECC`), and hyperresearch.
-Invoking a third party's installer copies nothing here: the bytes land in the operator's home,
+**Installable on request, from a closed catalog.** `libraries:list`, `libraries:status`, and
+`libraries:install` support exactly `mattpocock/skills`, ECC (`affaan-m/ECC`), and hyperresearch
+through each library's own front door. Unlisted libraries—including gstack—are operator-owned
+foreign state until separately verified and onboarded; these tasks do not adopt, inspect for
+ownership, migrate, or remove them. Invoking a supported third party's installer copies nothing
+here: the bytes land in the operator's home,
 written by the library's own code, under its own name and licence. No donor obligation attaches,
 because this bundle is not a donee. The tasks are opt-in, collision-checked, and reached by no
-gate leaf and no `setup`/`bundle:install` path, so installing is a deliberate choice and never a
-side effect. The installer's ownership model keeps the two coexisting: an entry this bundle does
-not own is classified `foreign` and preserved rather than replaced. See
+gate leaf and no `contributor:setup`, deprecated `setup`, or `bundle:install` path, so installing
+is a deliberate choice and never a side effect. The installer's ownership model keeps the two
+coexisting: an entry this bundle does not own is classified `foreign` and preserved rather than
+replaced. See
 `docs/adr/0009-external-skill-libraries-are-opt-in-through-their-own-front-doors.md`,
 `docs/adr/0008-third-party-skill-libraries-are-the-operators-own-install.md` (the no-vendoring
 rule 0009 refines), `skills/external-skill-libraries/`, and
@@ -52,9 +56,11 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   research roster under `agents/codex/research/`.
 - `commands/` — `/sdlc-init` activates repository-specific DevEx, tracked baseline,
   gates, trust, and shared guidance; `/sdlc-frame`, `/sdlc-wave`, and `/sdlc-mission`
-  run the delivery loop (Claude Code slash commands; other hosts invoke the flagship skill
-  with the same intents). Global installation and per-repository activation are separate
-  lifecycle planes.
+  run the delivery loop. `/sdlc-rightsize` is the user-facing Claude Code command that loads
+  the `model-tier-rightsizing` skill and writes a regenerable model-task map for certified
+  dispatch; `model-tier-rightsizing` itself remains a skill, not a slash command. Other hosts
+  invoke the flagship skill with the same intents. Global installation and per-repository
+  activation are separate lifecycle planes.
 
 ## Working on THIS repo
 
@@ -125,11 +131,15 @@ without persisting trust. Never make permanent Windows environment/trust/config 
 
 From a clean clone the order is: clone, review `mise.toml` and `mise.lock`, obtain explicit
 operation-specific approval and run `mise trust ./mise.toml` for that exact reviewed config path,
-`mise --locked install`, then `mise run bundle:install`. Without the trust step every later `mise`
-command in the repository exits with `config files are not trusted`. Resolving the lock downloads
-roughly 1.3 GB across the 13 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
+`mise --locked install`, then choose a plane with `mise run bundle:install -- --agent claude` or
+`mise run bundle:install -- --agent codex` (or install both). Claude's configured root is the
+selected `--claude-home` plus `.claude`; Codex's is `--codex-home` or `CODEX_HOME`. Status,
+`--dry-run`, and `--help` are read-only. A Claude marketplace overlap is reported once per Claude
+plane and blocks only direct Claude installation, so a selected Codex plane still proceeds.
+Without the trust step every later `mise` command in the repository exits with `config files are not trusted`. Resolving the lock downloads
+roughly 1.3 GB across the 12 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
 so skipping the explicit install step does not avoid the cost — the first `mise run <task>`
-installs all 13 without prompting. `mise run check` last measured 654 tests in 814s with
+installs all 12 without prompting. `mise run check` last measured 654 tests in 814s with
 `OK (skipped=13)` on Linux, its `validate` and `secrets` leaves each under 2s, so budget about 15
 minutes and expect longer on a loaded host. Both figures go stale by design — the count grows
 with the suite and the clock varies by host — and the gate's verdict is the evidence.
@@ -137,14 +147,21 @@ with the suite and the clock varies by host — and the gate's verdict is the ev
 `scripts/bootstrap-agentic-sdlc.sh` replaces the clone step only, for an operator who would rather
 not choose or track a directory. It fetches into
 `${XDG_DATA_HOME:-$HOME/.local/share}/agentic-sdlc` (override `AGENTIC_SDLC_HOME`, discover with
-`--print-path`), records remote/ref/resolved-commit in a receipt under `XDG_STATE_HOME` outside the
-clone, then stops and prints the remaining commands. It requires mise and git, installs neither, and
+`--print-path`), accepts an explicit `--remote <git-url>` and `--ref`, records
+remote/ref/resolved-commit in a receipt under `XDG_STATE_HOME` outside the clone, then stops with a
+verify/first-use handoff: receipt and checkout commit, the two reviewed files, trust/toolchain,
+explicit plane selection, and post-install status. It requires mise and git, installs neither, and
 so adds no bootstrap prerequisite. It never trusts a config, resolves a toolchain, or installs
-bundle entries; `--dry-run` creates nothing; an unexpected remote, dirty tree, ref mismatch, or
-non-fast-forward each refuse by name at exit 3 rather than clobbering. The clone is managed, not
-eliminated: every task command and installed symlink resolves against a tree on disk, so do not
-describe this as a clone-free bundle install. HTTPS authenticates the transport, not the contents,
-and no signature over the fetched commit is verified. See `docs/adr/0011` and
+bundle entries; `--dry-run`, `--print-path`, and `--help` create nothing; a credential-bearing
+remote, an unexpected remote, dirty tree, ref mismatch, or non-fast-forward each refuse by name at
+exit 3 rather than clobbering. Userinfo is a credential channel that every consumer keeps, so a
+`--remote` carrying a secret there is refused before the value reaches output, the receipt, Git's
+argv, or the clone's config, and the refusal names the option rather than echoing any part of the
+URL; an existing managed clone whose origin carries one is refused unread for the same reason,
+while `git@host:org/repo.git` and `ssh://git@host/org/repo.git` remain ordinary SSH remotes.
+The clone is managed, not eliminated: every task command and installed symlink resolves against a
+tree on disk, so do not describe this as a clone-free bundle install. HTTPS authenticates the
+transport, not the contents, and no signature over the fetched commit is verified. See `docs/adr/0011` and
 `docs/research/2026-08-07-clone-free-install.md`, which record that mise's experimental `git::`
 task includes cannot serve this repository: they clone into a cache anyway, parse targets against
 the task-file schema, carry no `[tools]`, and run tasks in the caller's directory.
@@ -156,7 +173,7 @@ dirty, untracked, or ignored distribution content, then explicitly invokes revie
 `mise --locked install` with isolated HOME, mise config/data/cache, hooks, npmrc files, and fixed
 official registry/npm backend. Ambient npm/mise config cannot select acquisition. It resolves only
 config-free exact roots, validates Node 22.22.3, Bun 1.3.10, and the
-`npm:@os-eco/seeds-cli@0.5.14` package/bin/layout; the released package's string `engines.bun` is
+`npm:@os-eco/seeds-cli@0.5.15` package/bin/layout; the released package's string `engines.bun` is
 benign while actual config/macro/preload controls remain forbidden. It then atomically records the
 exact Git commit/tree, tool hashes, and a prior receipt for rollback. Inspect is separate and never
 installs, networks, invokes mise, or repairs: it admits only an active receipt and exact current
@@ -169,18 +186,20 @@ receipt detects ordinary drift, not a same-UID TOCTOU racer. The Seeds lock prov
 version and npm backend, not tarball or transitive dependency integrity. Never accept ambient
 Seeds provenance.
 
-Record is the conductor's queue write and the only mode that mutates a queue. It admits exactly
-two queue verbs and rejects every other form, including any removal, pruning, closing, claiming,
-or syncing shape. It inherits the whole inspect admission and adds two conditions: the caller
-passes `--queue-writer conductor` plus `--expect-queue <sha256>` naming the exact queue it
-classified against, and after the write the launcher re-reads the queue and admits only the
-prestate plus exactly the requested delta. A moved queue, an unrequested field, a rewritten or
-reordered neighbouring record, an added or removed queue file, or a plan transition beyond the
-owning plan's status and timestamp is refused with the divergence named. A prestate the queue
-writer would silently rewrite is refused before the writer starts, and a writer that fails after
-moving the queue is reported as an unknown effect rather than a success or a clean refusal. The
-queue's own lock stays the queue writer's. A verified record is evidence, never authorization for
-push, publication, PR mutation, merge, deployment, or any other outward effect.
+Record is the conductor's queue write and the only mode that mutates a queue. An absent queue has
+one exact form: `--queue-writer conductor --expect-queue absent init`. It inherits receipt, hash,
+exact-runtime, and environment admission; rejects every existing/partial/file/symlink/redirected
+`.seeds`; snapshots `.gitattributes`; refuses non-UTF-8 or exact-line/substr-match-ambiguous
+prestates before mutation; invokes exact pinned `init --json`; and admits only the closed five-file
+`.seeds` surface plus the precise missing merge-union append. A failed child after either
+surface moves is an unknown effect; no movement is a clean refusal. Existing queues require
+`--expect-queue <sha256>` and admit only create or update, never removal, pruning, closing, claiming,
+syncing, or another standalone mutation. After the write the launcher admits only the prestate plus
+the requested delta. A moved queue, unrequested field, rewritten/reordered neighbour, queue-file
+surface change, or plan transition beyond the owner's status and timestamp is refused. A prestate
+the writer would silently rewrite is refused before it starts. The queue's own lock stays the
+writer's. A verified record is evidence, never authorization for push, publication, PR mutation,
+merge, deployment, or any other outward effect.
 
 Before spawn, the conductor supplies a certified `RuntimeAssignment` with requested
 model/effort/context values; `resolution_state` must be `resolved`. Exact model/effort request
@@ -200,9 +219,25 @@ model selection as policy.
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`
 - `bundle:install:all-hosts`, `bundle:status:all-hosts`
-- `operator-tools:install`, `operator-tools:status`, `operator-tools:uninstall`, `operator-tools:self-test`
+- `operator-tools:install`, `operator-tools:status`, `operator-tools:retire-aliases`,
+  `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
+  `ocx:launch` runs Claude Code through the gateway using the operator's OWN `~/.claude` login, so
+  ONE session serves both catalogs: a genuine `claude*`/`anthropic*` id that no alias or `modelMap`
+  claims is forwarded verbatim to `api.anthropic.com` on that subscription, while every gateway id
+  routes to its own provider on that provider's credential. Anthropic's gateway documentation
+  describes this shape — base URL set, no gateway credential, `anthropic-beta` forwarded — as
+  preserving the subscription's limits and billing. It also states that routing Claude Code to
+  NON-Claude models through any gateway is unsupported, so the routed half is
+  permitted-but-unsupported; no Anthropic credential is used for those turns. The isolated plane,
+  the environment scrub, the subscription refusals, the `session` verbs, and the separately named
+  `claude-subscription` route are all GONE (ADR-0014 supersedes ADR-0013 and amends ADR-0003).
+  `launch` still refuses (exit 3) when the route would not actually be used: a provider-routing key
+  (`CLAUDE_CODE_USE_BEDROCK`-class, exported or in the global `settings.json` `env`), an
+  `apiKeyHelper`, or an `sk-ant-api*` Console key — the first bypasses the gateway entirely, and the
+  last takes the same native branch but bills API credits. An `sk-ant-oat*` login is accepted; no
+  credential value is ever read or printed. A healthy launch is still not model-identity evidence.
   Muse Spark has no tasks of its own: it is one provider registered in the gateway, whose models
   appear in the single flat live catalog as namespaced ids, so
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a
@@ -211,43 +246,59 @@ model selection as policy.
 - `libraries:list`, `libraries:status`, `libraries:install`, `libraries:migrate` — external skill
   libraries through their own front doors, opt-in and dry-run without `--yes`; `migrate` retires
   another channel's copies of the same upstream through that channel's own removal path before
-  installing. Never gate leaves, and reached by no `setup`/`bundle:install` path
+  installing. Never gate leaves, and reached by no `contributor:setup`, deprecated `setup`, or
+  `bundle:install` path
 - `research-os:install` (`--target` required, no implicit current-directory scaffold), `validate`,
-  `test`, `self-test`, `secrets`, `check`, `hooks:install`, `setup`
+  `test`, `self-test`, `secrets`, `check`, `hooks:install`, `contributor:setup`, `setup` (the
+  one-release deprecated forwarder)
 
 That list is every task `mise tasks` reports; re-run `mise tasks` and re-diff it against this
 list whenever a task is added or renamed, because a stale list here reads as an authoritative
 inventory. `mise run bundle:status` always ends with one
 terminal line — either `no owned entries for this host` or an `N ok, M conflict, K absent`
-summary — so a silent exit 0 is a defect, not a clean host.
+summary — so a silent exit 0 is a defect, not a clean host. Status inventories lifecycle-owned
+records, not every unowned name in a configured collection. Use `bundle:install -- --agent
+<claude|codex> --dry-run` to detect an occupied unowned destination without adopting, overwriting,
+or deleting it.
 
 Operator tools are an explicit Unix lifecycle plane, not part of plugin or ordinary bundle
-installation. They install only into an existing user-owned PATH directory and never edit shell
-startup files or PATH. The statusline remains inactive until the operation-specific
-`claude:statusline:activate` command; it owns only `statusLine.type` and `statusLine.command` and
-preserves conflicts. Both anywhere opencodex commands delegate to the canonical supervised
-launcher. `ocx-ultracode` enables session Ultracode without bypassing permissions and refuses
-competing settings or bypass flags. Native Windows statusline/operator-tool activation is not
-certified and fails closed. `operator-tools:status` reports a never-installed command as
-`absent` and reserves `unmanaged` for a file that exists but is not owned; both exit nonzero.
+installation. They install only `ccodex` plus its packaged statusline support command into an
+existing user-owned PATH directory and never edit shell startup files or PATH. The statusline
+remains inactive until the operation-specific `claude:statusline:activate` command; it owns only
+`statusLine.type` and `statusLine.command` and preserves conflicts. Historical `ocx-launch` and
+`ocx-ultracode` names remain recognized in v1/v2 ownership state and pending transitions, but
+fresh installs neither require nor recreate them. `operator-tools:retire-aliases` removes only
+unchanged removable owned copies through the crash-consistent unlink lifecycle; modified,
+foreign, and adopted copies are preserved and reported. `ccodex ultracode` enables session
+Ultracode without bypassing permissions and refuses competing settings or bypass flags. Native
+Windows statusline/operator-tool activation is not certified and fails closed.
+`operator-tools:status` reports a never-installed desired command as `absent` and reserves
+`unmanaged` for a desired file that exists but is not owned; historical aliases are never
+reported as required or absent.
 
-Both launchers' Claude config dir is selectively separate, not isolated in every respect
-(ADR-0010). Inert per-session data — history, project transcripts, todos, shell snapshots, file
-history — is shared with `~/.claude` by symlink. Mutating global Claude settings still requires
-explicit operation-specific approval and no launcher does it: the plane-local `settings.json` a
-launcher constructs lives in its own state directory, and the global file is read, never written,
-copied, or linked. Only the global `statusLine` stanza is inherited, because that `env` block can
-carry a live credential and copying it would also re-point the child away from
-its verified route. Credentials never cross: the constructed document is asserted credential-free
-before it is written, credential and plane-owned stores stay private, inheritance runs only after
-every credential assertion, and it is fail-soft and never destructive. Do not cite config-dir
-isolation as evidence that no session data is shared. An entry whose plane copy already holds its
-own data is NOT inherited, and that is permanent until an operator migrates it: a launch never
-moves plane data, `status` reports how many entries are actually shared, and `ccodex session
-adopt --migrate` moves the blocking copy to a timestamped in-plane backup before linking. Never
-run that migration on an operator's behalf without explicit operation-specific approval, and do
-not read a skipped entry as inheritance working. Verb-level `--help` prints the launcher's own
-help and prepares nothing; `--` forwards the remaining arguments verbatim to the wrapped tool.
+`ccodex` has NO private plane (ADR-0014). Its `launch` and `ultracode` use the operator's own
+`~/.claude` — configuration, plugins, agents, and login — which is what lets Claude Code present
+its existing session to the gateway. `ocx claude` therefore writes its `ocx-*.md` roster agents and
+the gateway model cache into that global dir; the cache write is load-bearing, because Claude Code
+only refreshes it while holding a credential and the `/model` picker would otherwise never list the
+routed ids. There are no `ccodex session` verbs and no constructed plane-local `settings.json`.
+
+**Only `scripts/muse-claude.sh` still has a plane**, and ADR-0010 governs it alone: its config dir
+is selectively separate rather than isolated in every respect, inert per-session data (history,
+project transcripts, todos, shell snapshots, file history) is shared with `~/.claude` by symlink,
+and only the global `statusLine` stanza is inherited because that `env` block can carry a live
+credential and copying it would also re-point the child away from its verified route. Credentials
+never cross: the constructed document is asserted credential-free before it is written,
+credential and plane-owned stores stay private, inheritance runs only after every credential
+assertion, and it is fail-soft and never destructive. Do not cite config-dir isolation as evidence
+that no session data is shared, and do not read a skipped entry as inheritance working.
+
+Mutating global Claude settings still requires explicit operation-specific approval and no launcher
+does it: the global file is read, never written, copied, or linked. `ccodex launch` refuses (exit 3)
+rather than editing anything when that document would defeat the route — a provider-routing switch
+in its `env`, an `apiKeyHelper`, or an `sk-ant-api*` Console key. An `sk-ant-oat*` login is accepted
+wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares nothing; `--`
+forwards the remaining arguments verbatim to the wrapped tool.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim
@@ -261,9 +312,11 @@ unavailable; Linux lifecycle mutation requires glibc 2.28+ and `statx` birth-tim
 inspects every known v1 document without rewriting it, and ordinary lifecycle commands block
 while one is outstanding. `bundle:install -- --migrate-state --dry-run` previews an exact,
 state-only conversion; `bundle:install -- --migrate-state` merges all exact records from the
-operator and configured-home legacy paths into central v2 without installing or refreshing
-bundle entries. A distinct legacy source is retired only after durable v2 persistence and an
-exact recheck. Linux/macOS persistence-barrier failures stop mutation; native Windows provides
+operator and configured-home legacy paths into central v2 without installing, refreshing, or
+adopting an unrecorded file or link. Diagnose unowned destinations with an install dry run;
+`--migrate-state` is not a repair path for them. A distinct legacy source is retired only after
+durable v2 persistence and an exact recheck. Linux/macOS persistence-barrier failures stop
+mutation; native Windows provides
 handle-bound process-crash recovery but does not claim sudden-power-loss durability for namespace
 transitions. Concurrent external mutation of managed paths during a write command is unsupported.
 Exact legacy links and byte-identical copies can be adopted; foreign, retargeted, and modified

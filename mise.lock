@@ -377,11 +377,11 @@ version = "10.8.1"
 backend = "npm:npm"
 
 [[tools."npm:@bitkyc08/opencodex"]]
-version = "2.10.2"
+version = "2.11.1"
 backend = "npm:@bitkyc08/opencodex"
 
 [[tools."npm:@os-eco/seeds-cli"]]
-version = "0.5.14"
+version = "0.5.15"
 backend = "npm:@os-eco/seeds-cli"
 
 [[tools.ripgrep]]

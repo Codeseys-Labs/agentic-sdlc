@@ -51,7 +51,8 @@ installed to make an install possible.
 
 0008's other two reasons survive intact and are what this record's mechanism is built around.
 **Selection-surface pressure is real and unbounded** — it is the cost that appears in no diff,
-and the reason installation must be a deliberate choice rather than a side effect of `setup`.
+and the reason installation must be a deliberate choice rather than a side effect of
+`contributor:setup` or its deprecated `setup` forwarder.
 **Name collision is mechanical and silent** — first writer holds a name, and the loser's entry
 is simply not the one that loads, with no error at all.
 
@@ -85,8 +86,8 @@ The three libraries, with the facts re-verified for this record:
 
 ## Considered options
 
-1. **Install a library automatically as part of `bundle:install` / `setup` (what the operator
-   asked for as the ideal).** Rejected, and this is the one place this record declines the
+1. **Install a library automatically as part of `bundle:install` / `contributor:setup` (or
+   its deprecated `setup` forwarder; what the operator asked for as the ideal).** Rejected, and this is the one place this record declines the
    stated preference. Silently adding 284 entries to an always-loaded selection surface as a
    side effect of installing this bundle is the exact failure the whole record exists to
    prevent, and it would make ADR-0002's prerequisite question live again by putting a network
@@ -119,8 +120,9 @@ The three libraries, with the facts re-verified for this record:
 
 2. **No gate, install task, or hook reaches any of these verbs, and that is asserted
    mechanically rather than promised in prose.** `tests/test_external_libraries.py` walks the
-   `mise.toml` dependency closure of `setup`, `check`, `bundle:install`, `test`, and
-   `self-test` and fails if any of them reaches a `libraries:*` task, and it fails if any other
+   `mise.toml` dependency closure of `contributor:setup`, its deprecated `setup`
+   forwarder, `check`, `bundle:install`, `test`, and `self-test` and fails if any of them
+   reaches a `libraries:*` task, and it fails if any other
    shipped script imports the module. This is the check ADR-0008's own Consequences section
    noted was missing for its Decision item 1 ("no mechanical check enforces Decision item 1"),
    now supplied for the inverted rule.
@@ -343,8 +345,9 @@ distinct from "expensive", and a test keeps the two from collapsing into each ot
 **Net effect on reachability.** All three libraries are reachable, and `list` prints the exact
 command for each: mattpocock as *installable after migration*, ecc as *installable behind
 --acknowledge-ecc-surface*, hyperresearch as *installable*. No library reports as blocked, and a
-test asserts that. Nothing is auto-invoked: the dependency-closure test still walks `setup`,
-`check`, `bundle:install`, `test`, and `self-test` and fails if any reaches a `libraries:*` task.
+test asserts that. Nothing is auto-invoked: the dependency-closure test still walks
+`contributor:setup`, its deprecated `setup` forwarder, `check`, `bundle:install`, `test`, and
+`self-test` and fails if any reaches a `libraries:*` task.
 
 **Amendment item: a dry run's exit code describes, it does not attempt.** A container replay from
 the public remote found that `mise run check` was RED on a fresh machine while green on the
@@ -376,6 +379,29 @@ interest is a **message** hides semantic changes. Tool presence is now stubbed r
 inferred from the environment, verified green under both a genuinely clean PATH and the developer
 host, and confirmed to fail when the old conflated behaviour is reintroduced.
 
+## Amendment — 2026-08-10: the supported catalog is closed
+
+The reachable catalog is exactly `mattpocock/skills`, ECC (`affaan-m/ECC`), and hyperresearch.
+This list is exhaustive, not illustrative. An unlisted library—including gstack—is outside every
+`libraries:list`, `libraries:status`, `libraries:install`, `libraries:migrate`, and
+`libraries:uninstall` ownership or support claim. Operators remain free to install one through its
+own independent path, but this bundle treats the resulting files as foreign state: it does not
+adopt them, inspect them to infer ownership, migrate them, or remove them. This exclusion is not a
+finding that gstack or another unlisted library is unsafe; it means the project has not verified
+and onboarded it.
+
+Adding a fourth row is a new onboarding decision, not routine table maintenance. The same change
+must establish and coordinate evidence for the upstream licence, published-artifact front door,
+selection-surface cost, name-collision and ownership behavior, credential behavior, removal
+semantics, user/agent documentation, and executable tests. `SUPPORTED_LIBRARIES` in
+`scripts/install_external_libraries.py` is the code-level closed set, and the tests pin each row's
+key and exact upstream origin so neither a fourth library nor a substituted repository can enter
+silently.
+
+The repository-local `.gstack/` ignore accommodation is removed with this amendment. Existing
+repo-local or global gstack files remain independently owned foreign state and are deliberately
+not read, deleted, migrated, staged, or otherwise mutated by this change.
+
 ## Reversal condition
 
 Reopened by an observable change in either direction.
@@ -404,7 +430,8 @@ links, and the lock entry intact; a lock below schema version 3 is discarded by 
 and names are matched through `sanitizeName` and dropped when unmatched rather than expanded.
 
 **Toward automatic installation.** If a future operator decision asks for a library to be
-installed by `bundle:install` or `setup`, that reopens Decision item 2 in a new record rather
+installed by `bundle:install`, `contributor:setup`, or its deprecated `setup` forwarder, that
+reopens Decision item 2 in a new record rather
 than being implemented as a task edit — and it must answer the ADR-0002 prerequisite question
 for a network call in the install path, which this record avoids rather than solves.
 

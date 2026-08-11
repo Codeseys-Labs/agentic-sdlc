@@ -32,7 +32,8 @@ tmux merely to run this skill. Use Seeds as the queue of record.
 Global bundle distribution is a separate lifecycle plane from per-project activation.
 Activate a repository through the `/sdlc-init` runbook (or the same intent on a non-Claude
 host) before the first Frame or Wave. Activation establishes a reviewed tracked Git
-baseline, Seeds, pinned gates, trust, and shared AGENTS.md guidance.
+baseline, Seeds, pinned gates, trust, and shared AGENTS.md guidance. If the target has no
+Seeds queue, route to `/sdlc-init` and stop; Frame and Wave never improvise activation.
 Mise is the only bootstrap prerequisite. From a reviewed distribution checkout, run the installed
 flagship tool `seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node
 `22.22.3`. Bootstrap requires an exact clean Git distribution root. It rejects any nested checkout
@@ -43,7 +44,7 @@ official npm registry, distinct empty npmrc files, and a disabled hooks/config e
 HOME, npmrc/registry, and mise config/data/cache cannot select acquisition. Bootstrap then resolves
 exact config-free roots and atomically publishes an active tuple receipt. It verifies the executing
 Node and the recorded Node are exactly `22.22.3`, and Bun is exactly `1.3.10`, and the package/bin
-layout matches exact `@os-eco/seeds-cli@0.5.14`. It permits only the real package's benign string
+layout matches exact `@os-eco/seeds-cli@0.5.15`. It permits only the real package's benign string
 `engines.bun` compatibility declaration; it rejects actual Bun/config/TypeScript/macro/preload
 controls. It records a trusted empty Bun configuration, the exact Git root/commit/tree plus
 `mise.toml`/`mise.lock`, and typed tree/file hashes. It retains the preceding receipt for explicit
@@ -66,20 +67,22 @@ system/global Git config isolation. Target `bunfig`, `.env`, package config, amb
 `NODE_OPTIONS`, npm/mise overrides, and unreviewed Seeds debug variables have no execution effect.
 
 The conductor's durable queue write is `seeds-launcher.mjs record --target <target>
---queue-writer conductor --expect-queue <sha256> <verb> ...`. It admits exactly two queue
-verbs and nothing else — no removal, pruning, closing, claiming, or syncing form is accepted.
-It reuses the whole `inspect` admission (same active receipt, same current-hash checks, same
-exact absolute Bun/entry pair, same environment allowlist) and adds a compare-and-swap plus a
-readback. The caller must name the exact queue digest it classified against. A queue that moved
-is refused with both digests named. After the write, the launcher re-reads the queue and verifies
-that the post-state equals the prestate plus exactly the requested delta. It refuses while naming
-any divergence: an unrequested field, a rewritten or reordered neighbouring record, an added or
-removed queue file, or a plan transition outside the owning plan's status and timestamp. A
-prestate the queue writer would silently rewrite (malformed, duplicated, or non-canonical
-records) is refused before the writer starts. The explicit `--queue-writer conductor`
-acknowledgement keeps the seam from becoming generally writable. The queue's own lock stays the
-queue writer's; the seam adds none. A verified record is the conductor's own evidence. It
-authorizes no push, PR, merge, deployment, or other outward effect.
+--queue-writer conductor --expect-queue <expectation> <verb> ...`. An absent queue has exactly one
+admitted form: `--expect-queue absent init`. It inherits the whole `inspect` admission, refuses any
+existing/partial/file/symlink/redirected `.seeds`, snapshots `.gitattributes`, and refuses a
+non-UTF-8 or exact-line/substr-match-ambiguous prestate before mutation. It invokes exact pinned
+`init --json` and admits only the closed five-file initializer surface plus the precise missing
+merge-union append. A failed child after either surface moves is an unknown effect; no movement is
+a clean refusal. An existing queue requires its exact sha256 and admits only create or update — no
+removal, pruning, closing, claiming, syncing, or other standalone mutation. It reuses the same
+receipt, current-hash checks, absolute Bun/entry pair, and environment allowlist and adds a
+compare-and-swap plus readback. A queue that moved is refused with both digests named. The observed
+poststate must equal the prestate plus exactly the requested delta; unrequested fields, rewritten
+or reordered neighbouring records, queue-file surface changes, and unbounded plan transitions are
+refused. A prestate the writer would silently rewrite is refused before it starts. The explicit
+`--queue-writer conductor` acknowledgement keeps the seam from becoming generally writable. The
+queue's own lock stays the queue writer's; the seam adds none. A verified record is the conductor's
+own evidence and authorizes no push, PR, merge, deployment, or other outward effect.
 
 ## Repo Location
 
@@ -108,9 +111,13 @@ mutation.
 
 ## First Moves
 
-1. Prime the project state:
-   - Run `Seeds(<target>, prime)`.
-   - Inspect `Seeds(<target>, ready --format json)`, `Seeds(<target>, blocked --format json)`, and repo docs/ADRs/roadmap.
+1. Confirm the project is activated before execution:
+   - If the Seeds queue is absent, route to `/sdlc-init` (or the same activation intent on a
+     non-Claude host) and stop. Do not create a queue, infer activation, or start a Frame/Wave
+     from the missing state.
+   - For an active queue, run `Seeds(<target>, prime)` and inspect
+     `Seeds(<target>, ready --format json)`, `Seeds(<target>, blocked --format json)`, plus repo
+     docs/ADRs/roadmap.
    - Check `git status --short` before planning worktrees.
 2. Detect the host-native execution plane first:
    - Inventory direct execution, role agents/subagents, background delegation, and native
@@ -121,9 +128,16 @@ mutation.
    - Probe cmux only when `command -v cmux` succeeds and `CMUX_WORKSPACE_ID` is set. If
      either check fails, skip cmux silently. tmux is never part of the baseline probe.
 3. Decide the run shape:
-   - Small fix: handle directly or use one provider-native role/subagent after capability
-     checks pass.
-   - Multi-file implementation: use provider-native workers in a Seeds-backed worktree wave.
+   - A certified delegation route: use provider-native workers in a Seeds-backed worktree wave.
+   - No certified delegation route: a Frame may authorize exactly one bounded, non-delegated
+     conductor execution only when the ready Seed is small, has an observable done condition, and
+     fits one clean dedicated Git worktree. It has the same framed scope, acceptance criteria,
+     gate, stable-snapshot review, and conductor-only queue reconciliation as a Wave, but has zero
+     workers, zero model spawns, and makes no `RuntimeAssignment` claim.
+   - Stop rather than use that exception when work needs a second direct pass or retry, another
+     worker or model, parallel work, unbounded discovery, or review that cannot be independent of
+     the executing conductor. The exception never turns a missing certified route into delegated
+     execution.
    - Unclear architecture: discover -> research if needed -> plan -> act -> review.
    - Large backlog-zero work: bounded waves with continuous Seeds reconciliation.
 4. Run `scripts/check-agentic-sdlc-prereqs.sh` from the repo root for local checks. Missing
@@ -151,8 +165,13 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
 
 ## Delegation Rules
 
-- Prefer the host's native roles, subagents, workflows, teams, or background tasks. Keep
-  direct execution for work too small to justify delegation.
+- Prefer the host's native roles, subagents, workflows, teams, or background tasks. Direct
+  execution is only the single bounded conductor exception stated in First Moves: it exists only
+  when no certified delegation route is available, and is never a worker/model spawn or a
+  `RuntimeAssignment` claim.
+- Every actual worker or model spawn is delegated execution. It requires the certified
+  `RuntimeAssignment` admission boundary below; a missing, inherited, unresolved, or unverified
+  route stops before dispatch and spawn. Do not relabel a worker as direct execution to bypass it.
 - Require every delegated worker to return a structured report for conductor capture. A
   write-capable worker may also maintain its assigned artifact; for a read-only worker, the
   conductor persists the captured submission. Treat messages, status, and summaries as

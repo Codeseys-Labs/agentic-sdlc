@@ -255,6 +255,17 @@ class PrecheckTests(unittest.TestCase):
         self.assertIn("does not contain the documented entrypoint", check.refusal)
         self.assertEqual(MODULE.library_state(check), "blocked")
 
+    def test_supported_catalog_is_exact_and_origin_pinned(self) -> None:
+        self.assertEqual(
+            tuple((library.key, library.origin) for library in MODULE.SUPPORTED_LIBRARIES),
+            (
+                ("mattpocock", "https://github.com/mattpocock/skills"),
+                ("ecc", "https://github.com/affaan-m/ECC"),
+                ("hyperresearch", "https://github.com/jordan-gibbs/hyperresearch"),
+            ),
+        )
+        self.assertEqual(tuple(MODULE.LIBRARIES), ("mattpocock", "ecc", "hyperresearch"))
+
     def test_no_shipped_library_row_is_blocked(self) -> None:
         # The deliverable: all three must be reachable. A `blocked` row would be a dead end.
         for library in MODULE.LIBRARIES.values():
@@ -822,6 +833,13 @@ class DryRunCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown librar", result.stderr)
 
+    def test_gstack_is_outside_the_supported_catalog(self) -> None:
+        result = self.run_cli("install", "gstack", "--yes")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown librar", result.stderr)
+        self.assertIn("gstack", result.stderr)
+        self.assertNotIn("front door:", result.stdout)
+
     def test_refusal_is_reported_without_running_a_front_door(self) -> None:
         # The refusal must be VISIBLE and nothing may run. The exit code is deliberately 0
         # here: this is a dry run, and describing "a real install would refuse, because X" is
@@ -998,7 +1016,14 @@ class IsolationFromInstallPathTests(unittest.TestCase):
                     reachable(dependency, seen)
             return seen
 
-        for root_task in ("setup", "check", "bundle:install", "test", "self-test"):
+        for root_task in (
+            "contributor:setup",
+            "setup",
+            "check",
+            "bundle:install",
+            "test",
+            "self-test",
+        ):
             closure = reachable(root_task, set())
             self.assertFalse(
                 {name for name in closure if name.startswith("libraries:")},
