@@ -302,6 +302,35 @@ class OpenCodexClaudeTests(unittest.TestCase):
         """The line the mise stub writes for `ocx <arguments>` (`printf '<%s>'` over argv)."""
         return "".join(f"<{field}>" for field in ("ocx", *arguments))
 
+    def assertFullRouteWithRedactedFailure(self, log: Path, *arguments: str) -> None:
+        """Assert the COMPLETE traced route, including any credential, without printing it.
+
+        The credential-route tests have two obligations that pull against each other: the
+        expectation must cover the key flag AND its value (a route expectation that stops at
+        `--base-url` passes against a wrapper that drops `--api-key` before forwarding -- the
+        precise silent drop those tests exist to catch), while a failure must not put the value in
+        the output of a test whose sibling assertion is that it is never printed.
+
+        `assertIn`'s standard failure message prints both operands, so it would dump the value and
+        the whole trace. `unittest` APPENDS a custom `msg` to that standard message by default;
+        `longMessage = False` makes `msg` REPLACE it. That is what lets the comparison stay exact
+        while the diagnostic stays redacted. Set on the instance, so it is scoped to the one test
+        method that calls this (each test runs on a fresh instance).
+
+        The values these callers pass are test sentinels, not real secrets. The habit is the point:
+        a helper that cannot leak is what keeps the next author from re-truncating the expectation.
+        """
+        redacted = self.traced_ocx_route(
+            *("<redacted>" if index > 0 and arguments[index - 1].endswith("-key") else argument
+              for index, argument in enumerate(arguments))
+        )
+        self.longMessage = False
+        self.assertIn(
+            self.traced_ocx_route(*arguments),
+            log.read_text(),
+            f"the complete route was not forwarded; expected (redacted): {redacted}",
+        )
+
     def test_ultracode_injects_exact_setting_and_preserves_arguments(self) -> None:
         result, log = self.run_launcher("launch-ultracode", "--model", "gpt-5.6-sol")
 
@@ -1084,15 +1113,18 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
         # The forwarded route, not merely a trace file: `ocx --version` creates that file before
-        # any route runs, so its existence proved only that the preflight happened. The credential
-        # is deliberately not part of the expectation -- it is in the trace, but naming it here
-        # would put the secret in the assertion instead of in the negative check above.
-        self.assertIn(
-            self.traced_ocx_route(
-                "provider", "add", "custom-vendor", "--base-url",
-                "https://models.example.test/v1",
-            ),
-            log.read_text(),
+        # any route runs, so its existence proved only that the preflight happened.
+        #
+        # THE COMPLETE route, INCLUDING `--api-key` and its value. Truncating the expectation
+        # before the key flag -- to keep the sentinel out of assertion output -- meant a
+        # `cmd_configure` that silently dropped `--api-key` and its value before forwarding still
+        # PASSED, which is exactly the silent drop this test exists to catch. MEASURED on
+        # 2026-08-11 against a scratch copy patched to drop the flag: the truncated form passed,
+        # this form fails.
+        self.assertFullRouteWithRedactedFailure(
+            log,
+            "provider", "add", "custom-vendor", "--base-url",
+            "https://models.example.test/v1", "--api-key", secret,
         )
 
     def test_configure_allows_masked_inspection(self) -> None:
@@ -1209,12 +1241,14 @@ class OpenCodexClaudeTests(unittest.TestCase):
         # A warning, never a refusal: upstream `provider add` has no stdin alternative, so the
         # route must still be FORWARDED. `log.exists()` could not tell that from a wrapper that
         # warned and then dropped the command, because `ocx --version` had already created the file.
-        self.assertIn(
-            self.traced_ocx_route(
-                "provider", "add", "custom-vendor", "--base-url",
-                "https://models.example.test/v1",
-            ),
-            log.read_text(),
+        # Neither could a route expectation that stopped before `--api-key`: warning about a
+        # credential in argv and then dropping that credential is the same observable, and it is
+        # the failure mode this test is named for. So the KEY FLAG AND ITS VALUE are in the
+        # expectation, with the failure message redacted (see assertFullRouteWithRedactedFailure).
+        self.assertFullRouteWithRedactedFailure(
+            log,
+            "provider", "add", "custom-vendor", "--base-url",
+            "https://models.example.test/v1", "--api-key", secret,
         )
 
     def test_no_argv_credential_warning_without_a_key_flag(self) -> None:
