@@ -1,7 +1,7 @@
 {
   "calibration_id": "six-tier-2026-07-14|1e6422877ea14dc1bd54f0a3a16a1614c69d0ca8e2b315502d3582da5c9b3bd3|975289e1dac10d62ae8aa3da467934682df7351a2012d07d6bc0af41f83b9241|unavailable|eight-class-v1",
   "probe": {
-    "catalog_ts": "2026-08-11T21:51:30Z",
+    "catalog_ts": "2026-08-12T15:56:04Z",
     "gateway": {
       "endpoint": "http://127.0.0.1:10100/v1/models",
       "live": true,
@@ -10,7 +10,10 @@
     "live_ids": [
       "gpt-5.6-sol",
       "gpt-5.6-terra",
-      "gpt-5.6-luna"
+      "gpt-5.6-luna",
+      "muse/muse-spark-1.1",
+      "muse/muse-spark-1.2",
+      "muse/muse-spark-1.2-contributor"
     ],
     "effort_vocab": {
       "gateway": [
@@ -40,7 +43,7 @@
         "effort": "low",
         "context": "base"
       },
-      "complement": null,
+      "complement": "muse/muse-spark-1.2 — routed mechanical experiment (no effort channel; shared-pool output budget set explicitly)",
       "fallback": [
         "gpt-5.6-luna high — same capable-volume route; preserve the complete deterministic check"
       ],

@@ -7,8 +7,9 @@
 - **Calibration revision:** `six-tier-2026-07-14`
 - **Classifier:** `eight-class-v1`
 - **Normalized target digest:** `1e6422877ea14dc1bd54f0a3a16a1614c69d0ca8e2b315502d3582da5c9b3bd3` (clean Git commit/tree identity)
-- **Gateway catalog:** `2026-08-11T21:51:30Z` · HTTP 200 · SHA-256 `975289e1dac10d62ae8aa3da467934682df7351a2012d07d6bc0af41f83b9241`
-- **Gateway canary receipt digest:** `0471bd29231004bf852eb4f97f6ce646d2272db099f016cc1e54a5f2ca0bf111`
+- **Gateway catalog:** `2026-08-12T15:56:04Z` · HTTP 200 · SHA-256 `975289e1dac10d62ae8aa3da467934682df7351a2012d07d6bc0af41f83b9241`
+- **Gateway GPT canary receipt digest:** `0471bd29231004bf852eb4f97f6ce646d2272db099f016cc1e54a5f2ca0bf111`
+- **Gateway Muse canary receipt digest:** `d2b6e069b94ac7a29af17ceef015b033ff0ecf5a48d20a03a3513dd5c69a079a`
 - **Native Bedrock:** unavailable; no native-Bedrock selector and identity channel was present
 
 Policy: [model-tier-rightsizing](../skills/model-tier-rightsizing/SKILL.md) ·
@@ -27,11 +28,23 @@ the exact `resolvedModel`, and `routeKind=native` (never `default-provider`):
 | `gpt-5.6-sol` | `xhigh` | `ocx-msp87izh-dj` | verified |
 | `gpt-5.6-terra` | `xhigh` | `ocx-msp87g5b-dh` | verified |
 
-The selected routes share the catalog-observed gateway vocabulary `low`, `medium`, `high`,
+The following effort-free Muse requests also returned non-empty output. Each exact namespaced
+catalog ID correlated to `provider=muse`, `routeKind=explicit-provider`, and the matching
+provider-native `resolvedModel`; none used `default-provider`. The namespace is the gateway
+dispatch form, while the attribution record deliberately reports the provider-native suffix:
+
+| Exact dispatch ID | Resolved model | Request ID | G2 identity |
+|---|---|---|---|
+| `muse/muse-spark-1.1` | `muse-spark-1.1` | `ocx-msq9iuq4-j4` | verified |
+| `muse/muse-spark-1.2` | `muse-spark-1.2` | `ocx-msq9iw2b-j5` | verified |
+| `muse/muse-spark-1.2-contributor` | `muse-spark-1.2-contributor` | `ocx-msq9iy77-j6` | verified |
+
+The selected GPT routes share the catalog-observed gateway vocabulary `low`, `medium`, `high`,
 `xhigh`, and `max`; this map selected only the correlated `low`, `high`, and `xhigh` tuples
-above. The attribution records did not expose independent effective-effort or context-window
-readback for the Responses route. Both are therefore **unavailable**, not copied from
-requested values. `base` in the map is a requested context form, not a served-window claim.
+above. Muse advertises no effort channel, so none was sent or inferred. The attribution records
+did not expose independent effective-effort or context-window readback for these routes.
+Those fields are therefore **unavailable**, not copied from requested values. `base` in the map
+is a requested context form, not a served-window claim.
 
 Native Bedrock was not probed because this host exposed no genuine native-Bedrock adapter,
 selector, or identity evidence. The ordinary Claude subscription passthrough is a different
@@ -40,10 +53,10 @@ or dispatchable fallback appears below.
 
 ## Complete ccodex catalog
 
-All ten served IDs were inspected. Only the three selected GPT IDs above received
-attribution-correlated role canaries for this map. Other rows are catalog evidence only.
-The `ultra` label was not requested; the adapter boundary maps it to `max`, so it is not
-admitted by this run. Muse remains namespaced and catalog-visible but tier/role-unproven.
+All ten served IDs were inspected. The three selected GPT IDs received effort-bearing role
+canaries; all three Muse IDs received effort-free G2 route canaries. The remaining GPT rows
+are catalog evidence only. The `ultra` label was not requested; the adapter boundary maps it
+to `max`, so it is not admitted by this run. Muse is dispatchable but remains tier/role-unproven.
 
 | Exact catalog ID | Advertised effort values | Dispatch status in this map |
 |---|---|---|
@@ -54,9 +67,9 @@ admitted by this run. Muse remains namespaced and catalog-visible but tier/role-
 | `gpt-5.4` | low, medium, high, xhigh | catalog-only; not dispatchable |
 | `gpt-5.4-mini` | low, medium, high, xhigh | catalog-only; not dispatchable |
 | `gpt-5.3-codex-spark` | low, medium, high, xhigh | catalog-only; not dispatchable |
-| `muse/muse-spark-1.1` | none advertised | catalog-only; not dispatchable |
-| `muse/muse-spark-1.2` | none advertised | catalog-only; not dispatchable |
-| `muse/muse-spark-1.2-contributor` | none advertised | catalog-only; not dispatchable |
+| `muse/muse-spark-1.1` | none advertised | dispatchable and G2-correlated; mechanical experiment only |
+| `muse/muse-spark-1.2` | none advertised | dispatchable and G2-correlated; mechanical experiment only |
+| `muse/muse-spark-1.2-contributor` | none advertised | dispatchable and G2-correlated; mechanical experiment only |
 
 ## Eight-class recommendation
 
@@ -65,7 +78,7 @@ admitted by this run. Muse remains namespaced and catalog-visible but tier/role-
 - **Classification:** blast radius `local/reversible`; gate `complete`; mutation `one bounded artifact`; authority `none`; corpus `small`; fanout `none`
 - **Provider plane:** `gateway`
 - **Primary:** `gpt-5.6-luna` · effort `low` · requested context `base`
-- **Complement:** none
+- **Complement:** muse/muse-spark-1.2 — routed mechanical experiment (no effort channel; shared-pool output budget set explicitly)
 - **Fallback:** gpt-5.6-luna high — same capable-volume route; preserve the complete deterministic check
 - **Gate:** complete deterministic check (compiler, test, schema, or exact diff)
 - **Kill criteria:** no complete check is available — escalate to deterministic_gated_change
@@ -146,7 +159,8 @@ admitted by this run. Muse remains namespaced and catalog-visible but tier/role-
 - Effective context readback: unavailable; every `base` value is request-only.
 - Native Bedrock: unavailable; all native-Bedrock cells are omitted.
 - Claude Fable/Opus/Sonnet: not certified on native Bedrock by this run and not dispatchable here.
-- Muse: all three namespaced IDs were catalog-visible, but no six-primary role qualification was established.
+- Muse: all three namespaced routes are dispatchable and G2-correlated, but advertise no effort channel.
+  They remain bounded to complete-deterministic-gate mechanical experiments and are not selected as a calibrated primary.
 - Remaining GPT catalog IDs: live catalog entries only; no task-map role canary was run.
 
 ## Regeneration
