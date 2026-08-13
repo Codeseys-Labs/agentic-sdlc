@@ -92,6 +92,33 @@ class SecretsScanTests(unittest.TestCase):
         self.assertIn("regular.txt", paths)
         self.assertNotIn("linked.txt", paths)
 
+    def test_git_visible_files_checks_link_type_before_file_type(self) -> None:
+        module = self.module()
+        calls: list[str] = []
+
+        class Candidate:
+            def is_symlink(self) -> bool:
+                calls.append("is_symlink")
+                return True
+
+            def is_file(self) -> bool:
+                calls.append("is_file")
+                raise AssertionError("a symlink must not be followed")
+
+        class Root:
+            def __truediv__(self, _relative: str) -> Candidate:
+                return Candidate()
+
+            def __str__(self) -> str:
+                return "/repo"
+
+        completed = subprocess.CompletedProcess([], 0, b"linked.txt\0", b"")
+        with mock.patch.object(module.subprocess, "run", return_value=completed):
+            paths = module.git_visible_files(Root())
+
+        self.assertEqual(paths, [])
+        self.assertEqual(calls, ["is_symlink"])
+
     def test_batches_keep_config_redaction_separator_and_byte_ceiling(self) -> None:
         module = self.module()
         prefix = [

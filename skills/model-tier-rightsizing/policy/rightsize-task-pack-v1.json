@@ -26,10 +26,5 @@
     "tools",
     "verifier"
   ],
-  "task_optional_fields": ["fixture"],
-  "qualification_requires": {
-    "kind": "target-representative",
-    "target_representative": true,
-    "hidden_or_immutable_expected_results": true
-  }
+  "task_optional_fields": ["fixture"]
 }

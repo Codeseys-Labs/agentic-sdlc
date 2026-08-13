@@ -1204,6 +1204,7 @@ assert_yolo_has_no_competing_permission_control() {
   local argument
   for argument in "$@"; do
     case "$argument" in
+      --) break ;;
       --yolo|--dangerously-skip-permissions|--dangerously-skip-permissions=*|--allow-dangerously-skip-permissions|--allow-dangerously-skip-permissions=*|--permission-mode|--permission-mode=*)
         printf 'REFUSED: --yolo owns the session permission mode; remove the competing %s argument\n' "$argument" >&2
         return 3
@@ -1218,6 +1219,7 @@ cmd_launch_route() {
   if ! $forward_verbatim; then
     local argument
     for argument in "$@"; do
+      [ "$argument" = -- ] && break
       if [ "$argument" = --yolo ]; then
         printf 'REFUSED: --yolo is a wrapper option and must be the first argument after the launch verb\n' >&2
         return 3
@@ -1235,6 +1237,7 @@ cmd_launch_ultracode() {
   shift 2
   local argument previous=""
   for argument in "$@"; do
+    [ "$argument" = -- ] && break
     case "$argument" in
       --settings|--settings=*)
         printf 'REFUSED: launch-ultracode owns the session --settings value; use ordinary launch for a custom settings document\n' >&2

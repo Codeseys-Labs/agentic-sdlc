@@ -1130,6 +1130,7 @@ class RightsizeV2ContractTests(unittest.TestCase):
 
     def test_schema_has_exact_routes_and_all_eight_classes(self) -> None:
         schema = (ROUTER.parent / "references" / "model-task-map-schema.md").read_text(encoding="utf-8")
+        self.assertIn("if (!entry?.primary?.dispatchable_recommendation)", schema)
         for required in (
             "model-task-map/v2",
             "rightsize-evidence/v1",

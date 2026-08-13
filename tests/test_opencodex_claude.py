@@ -416,6 +416,28 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 self.assertIn(expected, log.read_text())
                 self.assertNotIn("permissions: BYPASSED", result.stdout)
 
+    def test_wrapper_validation_stops_at_claudes_option_terminator(self) -> None:
+        cases = (
+            (
+                ("launch", "--yolo", "--", "--permission-mode", "auto"),
+                "<ocx><claude><--dangerously-skip-permissions><--><--permission-mode><auto>",
+            ),
+            (
+                ("launch", "--model", "gpt-5.6-sol", "--", "--yolo"),
+                "<ocx><claude><--model><gpt-5.6-sol><--><--yolo>",
+            ),
+            (
+                ("launch-ultracode", "--", "--", "--settings", "literal"),
+                '<ocx><claude><--settings><{"ultracode":true}><--><--settings><literal>',
+            ),
+        )
+        for arguments, expected_route in cases:
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher(*arguments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(expected_route, log.read_text())
+
     def test_unescaped_yolo_must_be_the_first_wrapper_argument(self) -> None:
         for route in ("launch", "launch-ultracode"):
             with self.subTest(route=route):
@@ -500,7 +522,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
             ('{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}', "CLAUDE_CODE_USE_BEDROCK"),
             ('{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid"}}', "ANTHROPIC_BASE_URL"),
             ('{"apiKeyHelper":"/bin/echo"}', "apiKeyHelper"),
-            ('{"env":{"ANTHROPIC_API_KEY":"sk-ant-api03-OCXSETTINGS"}}', "ANTHROPIC_API_KEY"),
+            ('{"env":{"ANTHROPIC_API_KEY":"sk-ant-api-test"}}', "ANTHROPIC_API_KEY"),
         )
         for payload, key in payloads:
             for arguments in (
@@ -523,7 +545,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
             ('{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}', "CLAUDE_CODE_USE_BEDROCK"),
             ('{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid"}}', "ANTHROPIC_BASE_URL"),
             ('{"apiKeyHelper":"/bin/echo"}', "apiKeyHelper"),
-            ('{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-api03-OCXSETTINGS"}}', "ANTHROPIC_AUTH_TOKEN"),
+            ('{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-api-test"}}', "ANTHROPIC_AUTH_TOKEN"),
         )
         for payload, key in payloads:
             with self.subTest(key=key):

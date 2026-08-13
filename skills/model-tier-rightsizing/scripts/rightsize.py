@@ -13,6 +13,7 @@ digests, never task prompts, model output, credentials, PII, or mutable absolute
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Iterable
 import copy
 import hashlib
 import json
@@ -25,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Callable, Iterable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -39,7 +40,6 @@ DEFAULT_PACK_PATH = SKILL_ROOT / "evaluations" / "harness-smoke-v1.json"
 BENCHMARK_PATH = SKILL_ROOT / "references" / "model-benchmark-evidence-2026-08-12.json"
 LAUNCHER_PATH = REPO_ROOT / "scripts" / "opencodex-claude.sh"
 EVALUATOR_PATH = Path(__file__).resolve()
-GATEWAY_ENDPOINT = "http://127.0.0.1:10100/v1/models"
 EVALUATOR_VERSION = "rightsize-evaluator/1"
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -248,10 +248,21 @@ def repository_identity(target: Path, runner: CommandRunner = default_runner) ->
     return resolved, digest({"commit": commit, "relative_target": relative})
 
 
-def fetch_catalog(timeout: int = 5) -> bytes:
-    request = Request(GATEWAY_ENDPOINT, headers={"Accept": "application/json"})
+def configured_gateway_endpoint(runner: CommandRunner = default_runner) -> str:
+    raw = run_checked(
+        ["mise", "-C", str(REPO_ROOT), "exec", "--", "ocx", "config", "get", "port"],
+        runner=runner,
+        label="ocx-configured-port",
+    ).strip()
+    if not raw.isascii() or not raw.isdecimal() or not 1 <= int(raw) <= 65535:
+        raise RightsizeError("ocx-configured-port-invalid")
+    return f"http://127.0.0.1:{raw}/v1/models"
+
+
+def fetch_catalog(endpoint: str, timeout: int = 5) -> bytes:
+    request = Request(endpoint, headers={"Accept": "application/json"})
     try:
-        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed loopback endpoint
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - validated loopback endpoint
             if response.status != 200:
                 raise RightsizeError(f"gateway-catalog-http:{response.status}")
             return response.read()
@@ -354,7 +365,8 @@ def discover(
     captured_at: str | None = None,
 ) -> dict[str, Any]:
     _, target_digest = repository_identity(target, runner)
-    raw_catalog = fetch_catalog() if catalog_raw is None else catalog_raw
+    gateway_endpoint = configured_gateway_endpoint(runner)
+    raw_catalog = fetch_catalog(gateway_endpoint) if catalog_raw is None else catalog_raw
     ids = catalog_ids(raw_catalog)
     live_raw = run_checked(
         ["mise", "-C", str(REPO_ROOT), "exec", "--", "ocx", "models", "live", "--json"],
@@ -385,7 +397,7 @@ def discover(
         "captured_at": captured_at or utc_timestamp(),
         "target_identity_sha256": target_digest,
         "gateway": {
-            "endpoint": GATEWAY_ENDPOINT,
+            "endpoint": gateway_endpoint,
             "live": True,
             "catalog_sha256": digest_bytes(raw_catalog),
             "catalog_ids": ids,
@@ -952,7 +964,7 @@ def wire_model_id(route: dict[str, Any]) -> str:
     return route["requested_model_id"] + suffix
 
 
-def capture_logs(runner: CommandRunner = default_runner) -> list[dict[str, Any]]:
+def capture_logs(runner: CommandRunner = default_runner) -> dict[str, Any]:
     raw = run_checked(
         ["mise", "-C", str(REPO_ROOT), "exec", "--", "ocx", "observe", "logs", "--jsonl"],
         runner=runner,
@@ -960,13 +972,18 @@ def capture_logs(runner: CommandRunner = default_runner) -> list[dict[str, Any]]
         label="ocx-attribution-logs",
     )
     records: list[dict[str, Any]] = []
+    skipped_lines = 0
     for line in raw.splitlines():
         if not line.strip():
             continue
-        value = parse_no_duplicate_members(line)
+        try:
+            value = parse_no_duplicate_members(line)
+        except RightsizeError:
+            skipped_lines += 1
+            continue
         if isinstance(value, dict) and isinstance(value.get("requestId"), str):
             records.append(value)
-    return records
+    return {"records": records, "skipped_lines": skipped_lines}
 
 
 def task_workspace(task: dict[str, Any], pack_path: Path) -> tuple[tempfile.TemporaryDirectory[str], Path]:
@@ -1213,7 +1230,7 @@ def run_attempt(
     *,
     runner: CommandRunner = default_runner,
 ) -> dict[str, Any]:
-    before = capture_logs(runner)
+    before_capture = capture_logs(runner)
     temporary, workspace = task_workspace(task, pack_path)
     started = time.time()
     started_ms = int(started * 1000)
@@ -1254,18 +1271,31 @@ def run_attempt(
         "task_prompt_sha256": digest_bytes(task["prompt"].encode("utf-8")),
     }
     try:
-        result = runner(
-            argv,
-            cwd=workspace,
-            timeout=timeout_seconds,
-            env=evaluation_environment(),
-            input=task["prompt"],
-        )
+        try:
+            result = runner(
+                argv,
+                cwd=workspace,
+                timeout=timeout_seconds,
+                env=evaluation_environment(),
+                input=task["prompt"],
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RightsizeError("wall-time-budget-exhausted") from exc
         ended = time.time()
         ended_ms = int(ended * 1000)
-        after = capture_logs(runner)
-        records = new_attempt_records(before, after, route, started_ms, ended_ms)
-        identity = identity_evidence(route, records)
+        try:
+            after_capture = capture_logs(runner)
+        except RightsizeError as exc:
+            raise RightsizeError("attempt-attribution-unavailable-after-model-call") from exc
+        malformed_lines = after_capture["skipped_lines"]
+        records = new_attempt_records(
+            before_capture["records"], after_capture["records"], route, started_ms, ended_ms
+        )
+        if malformed_lines:
+            records = []
+            identity = {"verified": False, "failure": "malformed-attribution-stream"}
+        else:
+            identity = identity_evidence(route, records)
         output = ""
         envelope: dict[str, Any] = {}
         failure_class: str | None = None
@@ -1294,6 +1324,7 @@ def run_attempt(
             "tool_steps": envelope.get("tool_steps"),
             "request_injection_evidence": injection,
             "identity_evidence": identity,
+            "attribution_log_skipped_lines": malformed_lines,
             "effort_readback": "unavailable",
             "context_readback": "unavailable",
             "output_sha256": digest_bytes(output.encode("utf-8")) if output else None,
@@ -1489,8 +1520,7 @@ def build_evidence(
             "qualification_state": "route-probed"
             if any(
                 attempt["route_id"] == digest(route_plan["route"])
-                and attempt["accepted"]
-                and attempt["failure_class"] is None
+                and attempt["failure_class"] not in {"transport", "identity"}
                 for attempt in attempts
             )
             else "catalog-only",
@@ -1555,16 +1585,21 @@ def build_map(evidence: dict[str, Any]) -> dict[str, Any]:
         summaries = [item for item in evidence["summaries"] if item["task_class"] == task_class]
         measured_ids = evidence.get("measured_pareto_fronts", {}).get(task_class, [])
         dispatch_ids = evidence.get("dispatch_pareto_fronts", {}).get(task_class, [])
-        measured = [item for item in summaries if item["route_id"] in measured_ids]
-        measured.sort(
-            key=lambda item: (
-                -item["wilson_95"]["lower"],
-                item["observed_api_equivalent_cost_per_accepted"] is None,
-                item["observed_api_equivalent_cost_per_accepted"] or math.inf,
-                item["route_id"],
+
+        def ranked(front_ids: list[str]) -> list[dict[str, Any]]:
+            selected = [item for item in summaries if item["route_id"] in front_ids]
+            selected.sort(
+                key=lambda item: (
+                    -item["wilson_95"]["lower"],
+                    item["observed_api_equivalent_cost_per_accepted"] is None,
+                    item["observed_api_equivalent_cost_per_accepted"] or math.inf,
+                    item["route_id"],
+                )
             )
-        )
-        dispatchable = [item for item in measured if item["route_id"] in dispatch_ids]
+            return selected
+
+        measured = ranked(measured_ids)
+        dispatchable = ranked(dispatch_ids)
         candidates = dispatchable or measured
         primary = route_reference(candidates[0]) if candidates else None
         complement = route_reference(candidates[1]) if len(candidates) > 1 else None

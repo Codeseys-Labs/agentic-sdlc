@@ -162,7 +162,8 @@ status is `blocked-no-compatible-local-evidence`; absence never implies a host d
 
 - normalized non-sensitive run specification and authorization digest;
 - target, catalog, task-pack, benchmark-snapshot, request-tuple, launcher, task-input, and output digests;
-- whitelisted gateway attribution fields correlated by `requestId`;
+- whitelisted gateway attribution fields correlated by `requestId`, plus the count of malformed
+  lines in the post-call JSONL snapshot; any nonzero count makes attribution inadmissible;
 - accepted/verifier result and failure class;
 - input, uncached input, cache-read, cache-write, reasoning, visible output, and total tokens;
 - wall time, first-output latency, and model/tool steps;
@@ -221,7 +222,7 @@ A consumer may look up a task class only after checking:
 
 ```js
 const entry = modelTaskMap.map[taskClass];
-if (!entry.primary?.dispatchable_recommendation) {
+if (!entry?.primary?.dispatchable_recommendation) {
   throw new Error(`not-admitted: ${taskClass}`);
 }
 const assignment = {

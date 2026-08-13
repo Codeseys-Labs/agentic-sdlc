@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -76,6 +77,8 @@ def runner_for_discovery(repo: Path):
             return subprocess.CompletedProcess(argv, 0, str(repo) + "\n", "")
         if "rev-parse HEAD" in joined:
             return subprocess.CompletedProcess(argv, 0, "a" * 40 + "\n", "")
+        if "config get port" in joined:
+            return subprocess.CompletedProcess(argv, 0, "10100\n", "")
         if "models live --json" in joined:
             return subprocess.CompletedProcess(argv, 0, json.dumps(LIVE_MODELS), "")
         if "provider list" in joined:
@@ -93,7 +96,7 @@ def discovery() -> dict:
         "captured_at": "2026-08-12T00:00:00Z",
         "target_identity_sha256": "1" * 64,
         "gateway": {
-            "endpoint": RIGHTSIZE.GATEWAY_ENDPOINT,
+            "endpoint": "http://127.0.0.1:10100/v1/models",
             "live": True,
             "catalog_sha256": "2" * 64,
             "catalog_ids": ["gpt-5.6-luna", "muse/muse-spark-1.2"],
@@ -213,6 +216,38 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(result["live_providers"], ["muse", "openai"])
         self.assertNotIn("anthropic", result["configured_providers"])
         self.assertTrue(result["claude_subscription"]["usable"])
+
+    def test_discovery_reads_the_configured_gateway_port(self) -> None:
+        calls: list[list[str]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            base_runner = runner_for_discovery(repo)
+
+            def runner(argv, **kwargs):
+                calls.append(argv)
+                if "config" in argv and "get" in argv and "port" in argv:
+                    return subprocess.CompletedProcess(argv, 0, "12042\n", "")
+                return base_runner(argv, **kwargs)
+
+            with mock.patch.object(RIGHTSIZE, "fetch_catalog", return_value=canonical(CATALOG)) as fetch:
+                result = RIGHTSIZE.discover(
+                    repo, runner=runner, captured_at="2026-08-12T00:00:00Z"
+                )
+
+        self.assertTrue(any("config" in argv and "port" in argv for argv in calls))
+        fetch.assert_called_once_with("http://127.0.0.1:12042/v1/models")
+        self.assertEqual(result["gateway"]["endpoint"], "http://127.0.0.1:12042/v1/models")
+
+    def test_configured_gateway_port_rejects_non_ascii_digits(self) -> None:
+        for value in ("²\n", "１２３\n"):
+            with self.subTest(value=value):
+                def runner(argv, **_kwargs):
+                    return subprocess.CompletedProcess(argv, 0, value, "")
+
+                with self.assertRaisesRegex(
+                    RIGHTSIZE.RightsizeError, "ocx-configured-port-invalid"
+                ):
+                    RIGHTSIZE.configured_gateway_endpoint(runner)
 
     def test_duplicate_json_members_are_rejected(self) -> None:
         with self.assertRaisesRegex(RIGHTSIZE.RightsizeError, "duplicate-json-member:model"):
@@ -527,6 +562,149 @@ class MetricsAndRenderTests(unittest.TestCase):
             "blocked-not-role-qualified-or-runtime-admitted",
         )
 
+    def test_dispatch_front_can_select_a_route_outside_the_measured_front(self) -> None:
+        unqualified_route = route("gpt-5.6-terra")
+        qualified_route = route("gpt-5.6-luna")
+        unqualified = RIGHTSIZE.summarize_route(
+            unqualified_route,
+            "mechanical_redo",
+            [attempt(unqualified_route)],
+            "pilot",
+            {"target_representative": False},
+            POLICY,
+            False,
+        )
+        qualified = copy.deepcopy(unqualified)
+        qualified.update(
+            {
+                "route_id": RIGHTSIZE.digest(qualified_route),
+                "route": qualified_route,
+                "qualification_state": "role-qualified",
+                "runtime_policy_admitted": True,
+                "dispatchable_recommendation": True,
+            }
+        )
+        evidence = {
+            "summaries": [unqualified, qualified],
+            "measured_pareto_fronts": {"mechanical_redo": [unqualified["route_id"]]},
+            "dispatch_pareto_fronts": {"mechanical_redo": [qualified["route_id"]]},
+            "target_identity_sha256": "1" * 64,
+            "catalog_sha256": "2" * 64,
+            "task_pack": {"task_pack_sha256": "3" * 64},
+            "benchmark_snapshot_sha256": "4" * 64,
+            "run_spec": run_spec(),
+            "route_registry": [],
+        }
+
+        entry = RIGHTSIZE.build_map(evidence)["map"]["mechanical_redo"]
+
+        self.assertEqual(entry["primary"]["route_id"], qualified["route_id"])
+        self.assertTrue(entry["primary"]["dispatchable_recommendation"])
+        self.assertEqual(entry["status"], "recommended")
+
+    def test_route_probe_accepts_a_completed_response_that_fails_the_task_gate(self) -> None:
+        spec = run_spec()
+        plan, execution = RIGHTSIZE.plan_run(spec, discovery(), ROOT)
+        rejected = attempt(route(), accepted=False)
+
+        evidence = RIGHTSIZE.build_evidence(
+            plan, execution, [rejected], "2026-08-12T00:00:00Z"
+        )
+
+        probe = next(
+            item for item in evidence["route_probes"] if item["route_id"] == RIGHTSIZE.digest(route())
+        )
+        self.assertEqual(probe["qualification_state"], "route-probed")
+
+    def test_capture_logs_skips_malformed_lines_and_reports_the_count(self) -> None:
+        record = {"requestId": "request-1", "status": 200}
+
+        def runner(argv, **_kwargs):
+            return subprocess.CompletedProcess(
+                argv, 0, f"{{partial\n{json.dumps(record)}\n", ""
+            )
+
+        captured = RIGHTSIZE.capture_logs(runner)
+
+        self.assertEqual(captured["records"], [record])
+        self.assertEqual(captured["skipped_lines"], 1)
+
+    def test_attempt_rejects_equal_count_replaced_malformed_log_lines(self) -> None:
+        task = copy.deepcopy(RIGHTSIZE.PROBE_TASK)
+        record = {
+            "requestId": "request-1",
+            "requestedModel": "gpt-5.6-luna",
+            "resolvedModel": "gpt-5.6-luna",
+            "provider": "openai",
+            "status": 200,
+            "timestamp": 1,
+            "inboundProtocol": "messages",
+            "conversationId": "conversation-1",
+            "routeDecision": {
+                "routeKind": "native",
+                "selected": {"provider": "openai", "model": "gpt-5.6-luna"},
+            },
+        }
+        captures = iter(
+            (
+                "{old-partial\n",
+                f"{{new-partial\n{json.dumps(record)}\n",
+            )
+        )
+
+        def runner(argv, **_kwargs):
+            if "observe" in argv:
+                return subprocess.CompletedProcess(argv, 0, next(captures), "")
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"result": "RIGHTSIZE_ROUTE_OK"}), ""
+            )
+
+        with mock.patch.object(RIGHTSIZE.time, "time", side_effect=[0.001, 0.001]):
+            result = RIGHTSIZE.run_attempt(
+                route(), task, RIGHTSIZE.DEFAULT_PACK_PATH, 1.0, 10, runner=runner
+            )
+
+        self.assertEqual(result["attribution_log_skipped_lines"], 1)
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["failure_class"], "identity")
+        self.assertEqual(result["identity_evidence"]["failure"], "malformed-attribution-stream")
+
+    def test_model_call_timeout_becomes_a_wall_time_refusal(self) -> None:
+        task = copy.deepcopy(RIGHTSIZE.PROBE_TASK)
+        calls = 0
+
+        def runner(argv, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            raise subprocess.TimeoutExpired(argv, 1)
+
+        with self.assertRaisesRegex(RIGHTSIZE.RightsizeError, "wall-time-budget-exhausted"):
+            RIGHTSIZE.run_attempt(route(), task, RIGHTSIZE.DEFAULT_PACK_PATH, 1.0, 1, runner=runner)
+
+    def test_post_call_attribution_failure_names_the_completed_attempt(self) -> None:
+        task = copy.deepcopy(RIGHTSIZE.PROBE_TASK)
+        calls = 0
+
+        def runner(argv, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if calls == 2:
+                return subprocess.CompletedProcess(
+                    argv, 0, json.dumps({"result": "RIGHTSIZE_ROUTE_OK"}), ""
+                )
+            return subprocess.CompletedProcess(argv, 1, "", "unavailable")
+
+        with self.assertRaisesRegex(
+            RIGHTSIZE.RightsizeError, "attempt-attribution-unavailable-after-model-call"
+        ):
+            RIGHTSIZE.run_attempt(
+                route(), task, RIGHTSIZE.DEFAULT_PACK_PATH, 1.0, 10, runner=runner
+            )
+
     def test_prompt_uses_stdin_not_process_arguments(self) -> None:
         calls: list[tuple[list[str], dict]] = []
         prompt = "TOP_SECRET_PROMPT"
@@ -598,9 +776,18 @@ class MetricsAndRenderTests(unittest.TestCase):
             path.write_text(RIGHTSIZE.pretty_json(artifact), encoding="utf-8")
             self.assertFalse(RIGHTSIZE.valid_json_artifact(path))
 
-    def test_clean_machine_behavior_does_not_depend_on_ambient_path(self) -> None:
-        with mock.patch("shutil.which", return_value=None):
-            self.assertIsNone(__import__("shutil").which("claude"))
+    def test_evaluation_environment_is_allowlisted_and_has_a_deterministic_path(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"AWS_SECRET_ACCESS_KEY": "secret", "ANTHROPIC_API_KEY": "secret"},
+            clear=True,
+        ):
+            environment = RIGHTSIZE.evaluation_environment()
+
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", environment)
+        self.assertNotIn("ANTHROPIC_API_KEY", environment)
+        self.assertEqual(environment["PATH"], os.defpath)
+        self.assertEqual(environment["ENABLE_CLAUDEAI_MCP_SERVERS"], "false")
 
 
 if __name__ == "__main__":

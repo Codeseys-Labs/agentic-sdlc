@@ -183,6 +183,10 @@ class GateGraphTests(unittest.TestCase):
         "npm:@bitkyc08/opencodex",
     }
 
+    def test_repository_text_bytes_are_stable_across_host_checkouts(self) -> None:
+        attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+        self.assertIn("* text=auto eol=lf", attributes)
+
     MUTATIONS = (
         (
             "mise.toml",

@@ -50,7 +50,7 @@ def git_visible_files(root: Path) -> list[str]:
             continue
         relative = os.fsdecode(raw)
         path = root / relative
-        if path.is_file() and not path.is_symlink():
+        if not path.is_symlink() and path.is_file():
             paths.append(relative)
     return paths
 
