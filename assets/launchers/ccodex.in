@@ -44,12 +44,14 @@ usage: ccodex <command> [args...]
 
 Gateway plane -- one session, both catalogs (\`ccodex ocx <verb>\` is the long form):
   ensure                      Ensure the gateway is healthy without launching Claude Code.
-  launch [claude args...]     Ensure the gateway is healthy, then launch Claude Code through it
+  launch [--yolo] [args...]  Ensure the gateway is healthy, then launch Claude Code through it
                               with your OWN ~/.claude login. Native claude models pass through
                               to Anthropic on your subscription; gateway models route to their
                               own providers -- both in one session. Select any catalog model
-                              with --model, including a muse one: --model muse/muse-spark-1.2
-  ultracode [claude args...]  Same fail-closed launch path with session Ultracode.
+                              with --model. --yolo explicitly bypasses permission checks and is
+                              unsafe outside an isolated, disposable environment.
+  ultracode [--yolo] [args...] Same fail-closed launch path with session Ultracode; --yolo
+                              explicitly bypasses permission checks with the same warning.
   status                      Gateway supervision, configured-vs-live providers, and whether
                               anything would silently defeat the gateway route.
   restart                     Stop cleanly, then ensure the gateway is back up.
@@ -58,6 +60,8 @@ Providers and models (what a launched session can actually pick):
   providers                   Configured providers, and which are LIVE in the running gateway.
   models                      The running gateway's flat live catalog. Muse models appear here
                               as ordinary namespaced entries, not as a separate plane.
+  set-fast-model [<id|->]     Select Claude Code's Haiku/background small-fast model from current
+                              Claude families and the live OCX catalog, or set an exact id; - clears.
   configure [args...]         Reviewed provider configuration. Adding a provider:
                               ccodex configure provider add muse --adapter openai-responses \\
                                 --base-url https://api.meta.ai/v1 --default-model muse-spark-1.2
@@ -120,13 +124,83 @@ run_python() {
   exec uv run --python 3.12.11 --script "$root/scripts/$script" "$@"
 }
 
-# ocx passthrough for the read-only provider/model views. These reuse opencodex's own verbs
-# rather than reimplementing a catalog reader: a second implementation would be a second thing
-# that can disagree with the gateway about what is served.
+# Pinned ocx passthrough. Read-only catalog routes and the explicitly named fast-model mutation
+# reuse OpenCodex's own verbs rather than creating a second reader or configuration store that
+# could disagree with the gateway.
 run_ocx() {
   require_root
   require_tool mise "$route"
   exec mise -C "$root" exec -- ocx "$@"
+}
+
+set_fast_model_help() {
+  cat <<'EOF'
+usage: ccodex set-fast-model [<exact-model-id|->]
+
+With no value, select from Claude Code's current Sonnet/Opus/Fable families or the
+live OCX catalog; clear the override to use the normal subscription Haiku slot. With
+one value, set that exact Claude or routed id without prompting; pass - to clear it.
+
+This is not the Auto mode permission classifier. A selection persists operator
+configuration; help and cancellation do not.
+EOF
+}
+
+select_fast_model() {
+  local catalog lines choice selected index=1
+  catalog="$(mise -C "$root" exec -- ocx models live --json 2>/dev/null)" || {
+    printf 'error: cannot read the live OCX catalog; no selection was written\n' >&2
+    printf 'Start or repair the gateway, then run `ccodex set-fast-model` again.\n' >&2
+    return 1
+  }
+  lines="$(printf '%s' "$catalog" | mise -C "$root" exec -- jq -r '
+    .[] | select(.disabled != true) |
+    [.namespaced, (if .native == true then "native OCX" else "routed via " + .provider end)] |
+    @tsv
+  ')" || {
+    printf 'error: the live OCX catalog could not be parsed; no selection was written\n' >&2
+    return 1
+  }
+  [ -n "$lines" ] || {
+    printf 'error: the live OCX catalog is empty; no selection was written\n' >&2
+    return 1
+  }
+
+  printf 'Claude Code families (entitlement checked when used):\n'
+  for selected in sonnet opus fable; do
+    printf '  %d) %-34s %s\n' "$index" "$selected" 'Claude family alias'
+    index=$((index + 1))
+  done
+  printf '\nLive OCX catalog:\n'
+  while IFS="$(printf '\t')" read -r selected source; do
+    printf '  %d) %-34s %s\n' "$index" "$selected" "$source"
+    index=$((index + 1))
+  done <<EOF
+$lines
+EOF
+  printf '  %d) %-34s %s\n' "$index" '-' 'clear current selection'
+  printf '\nSelect 1-%d (q to cancel): ' "$index"
+  IFS= read -r choice || choice=q
+  case "$choice" in
+    q|Q|'') printf 'selection cancelled; no configuration was written\n' >&2; return 3 ;;
+    *[!0-9]*|0) printf 'error: invalid selection; no configuration was written\n' >&2; return 2 ;;
+  esac
+  [ "$choice" -le "$index" ] || {
+    printf 'error: invalid selection; no configuration was written\n' >&2
+    return 2
+  }
+  if [ "$choice" -le 3 ]; then
+    case "$choice" in
+      1) selected=sonnet ;;
+      2) selected=opus ;;
+      3) selected=fable ;;
+    esac
+  elif [ "$choice" -eq "$index" ]; then
+    selected=-
+  else
+    selected="$(printf '%s\n' "$lines" | cut -f1 | grep -n '^' | grep "^$((choice - 3)):" | cut -d: -f2-)"
+  fi
+  run_ocx claude config set --small-fast-model "$selected"
 }
 
 # Long-form verb name for the supervised launcher, or empty for a spelling it does not serve.
@@ -186,6 +260,20 @@ case "$route" in
   providers)
     shift
     run_ocx provider list "$@"
+    ;;
+  set-fast-model)
+    shift
+    case "${1:-}" in
+      -h|--help|help) [ "$#" -eq 1 ] || { printf 'usage: ccodex set-fast-model [<exact-model-id|->]\n' >&2; exit 2; }; set_fast_model_help; exit 0 ;;
+    esac
+    [ "$#" -le 1 ] || { printf 'usage: ccodex set-fast-model [<exact-model-id|->]\n' >&2; exit 2; }
+    if [ "$#" -eq 0 ]; then
+      require_root
+      require_tool mise "$route"
+      select_fast_model
+    else
+      run_ocx claude config set --small-fast-model "$1"
+    fi
     ;;
   # The LIVE catalog, read from the running gateway's own `GET /v1/models` -- deliberately NOT
   # `ocx models list`, which reports the CONFIGURED models from the config file. The two

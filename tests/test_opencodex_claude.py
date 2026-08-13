@@ -34,6 +34,11 @@ class OpenCodexClaudeTests(unittest.TestCase):
         global_settings_local: object | None = None,
         project_settings: object | None = None,
         project_settings_local: object | None = None,
+        selected_settings_raw: str | None = None,
+        selected_settings_name: str = "selected-settings.json",
+        selected_settings_mode: int | None = None,
+        selected_settings_directory: bool = False,
+        remove_selected_settings_before_open: bool = False,
         global_session_entries: bool = False,
         preset_isolated_settings: object | None = None,
         preset_isolated_projects: bool = False,
@@ -79,6 +84,14 @@ class OpenCodexClaudeTests(unittest.TestCase):
             if payload is not None:
                 (self.project / ".claude").mkdir(parents=True, exist_ok=True)
                 (self.project / ".claude" / name).write_text(json.dumps(payload))
+        self.selected_settings = self.project / selected_settings_name
+        if selected_settings_directory:
+            self.selected_settings.mkdir(parents=True, exist_ok=True)
+        elif selected_settings_raw is not None:
+            self.selected_settings.parent.mkdir(parents=True, exist_ok=True)
+            self.selected_settings.write_text(selected_settings_raw)
+            if selected_settings_mode is not None:
+                self.selected_settings.chmod(selected_settings_mode)
         if global_session_entries:
             self.global_claude.mkdir(parents=True, exist_ok=True)
             (self.global_claude / "history.jsonl").write_text('{"display":"real prompt"}\n')
@@ -168,7 +181,20 @@ class OpenCodexClaudeTests(unittest.TestCase):
         curl.chmod(0o755)
         jq = shutil.which("jq")
         if jq:
-            (bin_dir / "jq").symlink_to(jq)
+            jq_command = bin_dir / "jq"
+            if remove_selected_settings_before_open:
+                jq_command.write_text(
+                    "#!/bin/sh\n"
+                    'if [ "${1:-}" = --version ]; then\n'
+                    '  count=0; [ ! -f "$OCX_TEST_JQ_COUNT" ] || read -r count < "$OCX_TEST_JQ_COUNT"\n'
+                    '  count=$((count + 1)); printf "%s\\n" "$count" > "$OCX_TEST_JQ_COUNT"\n'
+                    '  [ "$count" -ne 2 ] || rm -f -- "$OCX_TEST_SELECTED_SETTINGS"\n'
+                    'fi\n'
+                    'exec "$TEST_REAL_JQ" "$@"\n'
+                )
+                jq_command.chmod(0o755)
+            else:
+                jq_command.symlink_to(jq)
         claude = bin_dir / "claude"
         # Records the environment it actually received, so the ADR-0010 env policy can be
         # asserted per class against the REAL child environment rather than against the script's
@@ -199,6 +225,8 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "CATALOG_JSON": "" if catalog_json is None else json.dumps(catalog_json),
             "OCX_TEST_ENV_LOG": str(self.env_log),
             "OCX_TEST_ARGV_LOG": str(self.argv_log),
+            "OCX_TEST_SELECTED_SETTINGS": str(self.selected_settings),
+            "OCX_TEST_JQ_COUNT": str(root / "jq-count"),
             "SUBSCRIPTION_STATUS": json.dumps(subscription_status if subscription_status is not None else {
                 "enabled": True, "authMode": "auto", "markerMode": "subscription",
                 "authModeOrigin": "auto-present", "admissionKeyActive": False,
@@ -337,16 +365,87 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("<ocx><claude><--settings><{\"ultracode\":true}><--model><gpt-5.6-sol>", log.read_text())
 
-    def test_ultracode_refuses_competing_settings_before_ocx(self) -> None:
-        result, log = self.run_launcher("launch-ultracode", "--settings", "{}")
+    def test_yolo_is_an_orthogonal_owned_flag_on_both_launch_profiles(self) -> None:
+        cases = (
+            (
+                ("launch", "--yolo", "--model", "gpt-5.6-sol"),
+                "<ocx><claude><--dangerously-skip-permissions><--model><gpt-5.6-sol>",
+            ),
+            (
+                ("launch-ultracode", "--yolo", "--model", "gpt-5.6-sol"),
+                "<ocx><claude><--dangerously-skip-permissions><--settings>"
+                "<{\"ultracode\":true}><--model><gpt-5.6-sol>",
+            ),
+        )
+        for arguments, expected_route in cases:
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher(*arguments)
 
-        self.assertEqual(result.returncode, 3)
-        self.assertIn("REFUSED", result.stderr)
-        self.assertFalse(log.exists())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(expected_route, log.read_text())
+                self.assertNotIn("<--yolo>", log.read_text())
+                self.assertIn("permissions: BYPASSED", result.stdout)
+
+    def test_yolo_refuses_competing_permission_controls_before_ocx(self) -> None:
+        for route in ("launch", "launch-ultracode"):
+            for conflict in (
+                ("--dangerously-skip-permissions",),
+                ("--dangerously-skip-permissions=true",),
+                ("--allow-dangerously-skip-permissions",),
+                ("--allow-dangerously-skip-permissions=true",),
+                ("--permission-mode=bypassPermissions",),
+                ("--permission-mode", "plan"),
+            ):
+                with self.subTest(route=route, conflict=conflict):
+                    result, log = self.run_launcher(route, "--yolo", *conflict)
+
+                    self.assertEqual(result.returncode, 3)
+                    self.assertIn("REFUSED", result.stderr)
+                    self.assertIn("--yolo", result.stderr)
+                    self.assertFalse(log.exists())
+
+    def test_forwarding_separator_keeps_a_literal_yolo_argument(self) -> None:
+        for route, expected in (
+            ("launch", "<ocx><claude><--yolo>"),
+            ("launch-ultracode", '<ocx><claude><--settings><{"ultracode":true}><--yolo>'),
+        ):
+            with self.subTest(route=route):
+                result, log = self.run_launcher(route, "--", "--yolo")
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(expected, log.read_text())
+                self.assertNotIn("permissions: BYPASSED", result.stdout)
+
+    def test_unescaped_yolo_must_be_the_first_wrapper_argument(self) -> None:
+        for route in ("launch", "launch-ultracode"):
+            with self.subTest(route=route):
+                result, log = self.run_launcher(route, "--model", "gpt-5.6-sol", "--yolo")
+
+                self.assertEqual(result.returncode, 3)
+                self.assertIn("REFUSED", result.stderr)
+                self.assertIn("must be the first", result.stderr)
+                self.assertFalse(log.exists())
+
+    def test_ultracode_refuses_competing_settings_before_ocx(self) -> None:
+        secret = "OCX_ULTRACODE_SETTINGS_SECRET"
+        for arguments in (
+            ("--settings", f'{{"token":"{secret}"}}'),
+            (f'--settings={{"token":"{secret}"}}',),
+        ):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch-ultracode", *arguments)
+
+                self.assertEqual(result.returncode, 3)
+                self.assertIn("REFUSED", result.stderr)
+                self.assertNotIn(secret, result.stdout + result.stderr)
+                self.assertFalse(log.exists())
 
     def test_ultracode_refuses_permission_bypass_before_ocx(self) -> None:
         for arguments in (
             ("--dangerously-skip-permissions",),
+            ("--dangerously-skip-permissions=true",),
+            ("--allow-dangerously-skip-permissions",),
+            ("--allow-dangerously-skip-permissions=true",),
             ("--permission-mode=bypassPermissions",),
             ("--permission-mode", "bypassPermissions"),
         ):
@@ -356,10 +455,199 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 self.assertFalse(log.exists())
 
     def test_ordinary_launch_keeps_argument_boundaries(self) -> None:
-        result, log = self.run_launcher("launch", "--settings", '{"custom":true}', "two words")
+        payload = '{"custom":"OCX_SETTINGS_VALUE"}'
+        for arguments in (
+            ("--settings", payload, "two words"),
+            (f"--settings={payload}", "two words"),
+            ("--", "--settings", payload, "two words"),
+        ):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch", *arguments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                forwarded = arguments[1:] if arguments[0] == "--" else arguments
+                self.assertIn(self.traced_ocx_route("claude", *forwarded), log.read_text())
+                self.assertNotIn("OCX_SETTINGS_VALUE", result.stdout + result.stderr)
+
+    def test_ordinary_launch_keeps_readable_settings_file_arguments(self) -> None:
+        payload = '{"custom":"OCX_SETTINGS_FILE_VALUE"}'
+        for setting_argument in ("--settings", "--settings=selected-settings.json"):
+            with self.subTest(setting_argument=setting_argument):
+                arguments = (
+                    (setting_argument, "selected-settings.json")
+                    if setting_argument == "--settings"
+                    else (setting_argument,)
+                )
+                result, log = self.run_launcher(
+                    "launch", *arguments, selected_settings_raw=payload
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(self.traced_ocx_route("claude", *arguments), log.read_text())
+                self.assertNotIn("OCX_SETTINGS_FILE_VALUE", result.stdout + result.stderr)
+
+    def test_ordinary_launch_stops_scanning_settings_at_claudes_option_terminator(self) -> None:
+        payload = '{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}'
+        arguments = ("prompt words", "--", "--settings", payload)
+
+        result, log = self.run_launcher("launch", *arguments)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("<ocx><claude><--settings><{\"custom\":true}><two words>", log.read_text())
+        self.assertIn(self.traced_ocx_route("claude", *arguments), log.read_text())
+
+    def test_ordinary_launch_refuses_bypassing_inline_settings_before_gateway_contact(self) -> None:
+        payloads = (
+            ('{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}', "CLAUDE_CODE_USE_BEDROCK"),
+            ('{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid"}}', "ANTHROPIC_BASE_URL"),
+            ('{"apiKeyHelper":"/bin/echo"}', "apiKeyHelper"),
+            ('{"env":{"ANTHROPIC_API_KEY":"sk-ant-api03-OCXSETTINGS"}}', "ANTHROPIC_API_KEY"),
+        )
+        for payload, key in payloads:
+            for arguments in (
+                ("--settings", payload),
+                (f"--settings={payload}",),
+                ("--", "--settings", payload),
+            ):
+                with self.subTest(key=key, arguments=arguments):
+                    result, log = self.run_launcher("launch", *arguments)
+
+                    self.assertEqual(result.returncode, 3, result.stderr)
+                    self.assertIn(key, result.stderr)
+                    self.assertNotIn(payload, result.stdout + result.stderr)
+                    self.assertNotIn("routed at", result.stdout)
+                    self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_bypassing_settings_files_before_gateway_contact(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+        payloads = (
+            ('{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}', "CLAUDE_CODE_USE_BEDROCK"),
+            ('{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid"}}', "ANTHROPIC_BASE_URL"),
+            ('{"apiKeyHelper":"/bin/echo"}', "apiKeyHelper"),
+            ('{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-api03-OCXSETTINGS"}}', "ANTHROPIC_AUTH_TOKEN"),
+        )
+        for payload, key in payloads:
+            with self.subTest(key=key):
+                result, log = self.run_launcher(
+                    "launch",
+                    f"--settings={selected_name}",
+                    selected_settings_raw=payload,
+                    selected_settings_name=selected_name,
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(key, result.stderr)
+                self.assertNotIn(selected_name, result.stdout + result.stderr)
+                self.assertNotIn(payload, result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_validates_every_settings_occurrence(self) -> None:
+        bypass = '{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}'
+
+        result, log = self.run_launcher(
+            "launch", "--settings", '{"custom":true}', "--settings", bypass
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("CLAUDE_CODE_USE_BEDROCK", result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_rejects_missing_or_empty_settings_option_values(self) -> None:
+        for arguments in (("--settings",), ("--settings=",)):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch", *arguments)
+
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("--settings", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_invalid_inline_settings_without_echoing_them(self) -> None:
+        for payload in ("{not-json", "null", "42", '["not", "an", "object"]'):
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher("launch", "--settings", payload)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("valid JSON object or a readable settings file", result.stderr)
+                self.assertNotIn(payload, result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_invalid_selected_settings_files(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+        for payload in ("", "{not-json", "null", '["not", "an", "object"]'):
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher(
+                    "launch", "--settings", selected_name,
+                    selected_settings_raw=payload,
+                    selected_settings_name=selected_name,
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("--settings", result.stderr)
+                self.assertNotIn(selected_name, result.stdout + result.stderr)
+                self.assertNotIn("{not-json", result.stdout + result.stderr)
+                self.assertNotIn('["not", "an", "object"]', result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_unavailable_selected_settings_files(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+        cases = (
+            (("--settings", "missing-settings-OCX_PATH_SECRET.json"), {}),
+            (
+                ("--settings", "OCX_PATH_SECRET"),
+                {
+                    "selected_settings_name": "OCX_PATH_SECRET",
+                    "selected_settings_directory": True,
+                },
+            ),
+            (
+                ("--settings", selected_name),
+                {
+                    "selected_settings_raw": "{}",
+                    "selected_settings_name": selected_name,
+                    "selected_settings_mode": 0,
+                },
+            ),
+        )
+        for arguments, fixture in cases:
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch", *arguments, **fixture)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("--settings", result.stderr)
+                self.assertNotIn("OCX_PATH_SECRET", result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_selected_settings_path_is_redacted_when_the_file_disappears_before_open(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+
+        result, log = self.run_launcher(
+            "launch", "--settings", selected_name,
+            selected_settings_raw="{}",
+            selected_settings_name=selected_name,
+            remove_selected_settings_before_open=True,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("could not be checked", result.stderr)
+        self.assertNotIn("OCX_PATH_SECRET", result.stdout + result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_accepts_a_scalar_shaped_settings_filename(self) -> None:
+        result, log = self.run_launcher(
+            "launch", "--settings", "true",
+            selected_settings_raw='{"custom":true}', selected_settings_name="true",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(self.traced_ocx_route("claude", "--settings", "true"), log.read_text())
+
+    def test_existing_persistent_settings_must_be_json_objects(self) -> None:
+        for payload in ("", "null", "42", '[]'):
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher("launch", global_settings_raw=payload)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("could not be checked", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
 
     def test_ensure_checks_health_without_launching_claude(self) -> None:
         result, log = self.run_launcher("ensure")
@@ -870,6 +1158,11 @@ class OpenCodexClaudeTests(unittest.TestCase):
             self.assertIn(document, result.stdout)
         self.assertIn("NOT checked", result.stdout)
         self.assertIn("managed", result.stdout)
+        self.assertIn("Claude.ai cloud connectors are off by default", result.stdout)
+        self.assertIn("ENABLE_CLAUDEAI_MCP_SERVERS=true", result.stdout)
+        self.assertIn("--settings <file-or-json>", result.stdout)
+        self.assertIn("every occurrence for route-bypassing settings", result.stdout)
+        self.assertIn("bytes and path are never printed", result.stdout)
 
     def test_status_names_the_documents_it_checked_instead_of_claiming_all_of_them(self) -> None:
         result, _ = self.run_launcher("status")
@@ -980,6 +1273,17 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(chosen.returncode, 0, chosen.stderr)
         self.assertIn("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=40", self.env_log.read_text())
 
+    def test_launch_disables_claude_ai_connectors_unless_the_operator_opts_in(self) -> None:
+        default_run, _ = self.run_launcher("launch")
+        self.assertEqual(default_run.returncode, 0, default_run.stderr)
+        self.assertIn("ENABLE_CLAUDEAI_MCP_SERVERS=false", self.env_log.read_text())
+
+        chosen, _ = self.run_launcher(
+            "launch", parent_env={"ENABLE_CLAUDEAI_MCP_SERVERS": "true"}
+        )
+        self.assertEqual(chosen.returncode, 0, chosen.stderr)
+        self.assertIn("ENABLE_CLAUDEAI_MCP_SERVERS=true", self.env_log.read_text())
+
     def test_launch_refuses_an_apikeyhelper_that_would_displace_the_login(self) -> None:
         result, log = self.run_launcher("launch", global_settings={"apiKeyHelper": "/bin/echo"})
 
@@ -998,6 +1302,35 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertIn("credits", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
         self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_yolo_routes_keep_gateway_and_billing_refusals_before_contact(self) -> None:
+        secret = "sk-ant-api03-YOLOTESTSENTINEL"
+        for route in ("launch", "launch-ultracode"):
+            with self.subTest(route=route, refusal="settings-route"):
+                result, log = self.run_launcher(
+                    route,
+                    "--yolo",
+                    global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("CLAUDE_CODE_USE_BEDROCK", result.stderr)
+                self.assertNotIn("permissions: BYPASSED", result.stdout)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+            with self.subTest(route=route, refusal="console-key"):
+                result, log = self.run_launcher(
+                    route,
+                    "--yolo",
+                    parent_env={"ANTHROPIC_API_KEY": secret},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_API_KEY", result.stderr)
+                self.assertIn("credits", result.stderr)
+                self.assertNotIn(secret, result.stdout + result.stderr)
+                self.assertNotIn("permissions: BYPASSED", result.stdout)
+                self.assertOnlyReadOnlyOcxRoutes(log)
 
     def test_launch_accepts_a_subscription_shaped_oauth_token(self) -> None:
         # The inverse of the case above, and the one ADR-0003 used to refuse outright: an
@@ -1487,6 +1820,17 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("-- --help", result.stdout)
         self.assertIn("claude --help", result.stdout)
+
+    def test_launch_help_documents_yolo_as_an_explicit_unsafe_wrapper_option(self) -> None:
+        for route in ("launch", "launch-ultracode"):
+            with self.subTest(route=route):
+                result, _ = self.run_launcher(route, "--help")
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("[--yolo]", result.stdout)
+                self.assertIn("--dangerously-skip-permissions", result.stdout)
+                self.assertIn("unsafe", result.stdout.lower())
+                self.assertIn("-- --yolo", result.stdout)
 
     def test_the_forwarding_separator_reaches_claude_code(self) -> None:
         # The escape hatch must actually work: `launch -- --help` prepares a real session and

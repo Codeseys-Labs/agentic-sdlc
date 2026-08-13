@@ -139,16 +139,12 @@ run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py self-tes
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"
 
 [tasks.secrets]
-description = "Scan the working tree for secrets with the pinned scanner"
-# Working tree only. The full-history verb (`betterleaks git .`) is deliberately NOT wired:
-# scanning history is a separate, consent-requiring pre-publish step, not a commit gate.
-# --config is explicit because the scanner otherwise auto-loads a drop-in .gitleaks.toml or
-# .betterleaks.toml from cwd and honors GITLEAKS_CONFIG*/BETTERLEAKS_CONFIG*, so an untracked
-# `[extend] useDefault = false` file would silently replace the ruleset and neuter the scan
-# while every pinned fixture stayed green; the flag has highest precedence and defeats both.
-# Exit code is the whole result: 0 clean, 1 findings. A clean scan is evidence, not authority.
-run = "betterleaks dir . --config .config/betterleaks.toml"
-run_windows = "betterleaks dir . --config .config/betterleaks.toml"
+description = "Scan Git-visible working-tree files with the pinned scanner"
+# The wrapper selects tracked files plus nonignored untracked files. Ignored operator runtime
+# state stays out, while a force-tracked file under an ignored prefix remains covered.
+# Full history remains a separate, consent-requiring pre-publish operation.
+run = "uv run --python 3.12.11 --script scripts/secrets_scan.py"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/secrets_scan.py"
 
 [tasks.check]
 description = "Run validation, installer tests, lifecycle self-test, and the secrets scan"
@@ -223,7 +219,7 @@ description = "Launch a second Claude Code process through the opencodex gateway
 run = "scripts/opencodex-claude.sh launch"
 
 [tasks."ocx:ultracode"]
-description = "Launch opencodex Claude with session Ultracode and ordinary permissions"
+description = "Launch opencodex Claude with Ultracode and optional explicit permission bypass"
 run = "scripts/opencodex-claude.sh launch-ultracode"
 
 [tasks."ocx:status"]
@@ -237,6 +233,15 @@ run = "scripts/opencodex-claude.sh restart"
 [tasks."ocx:configure"]
 description = "Configure opencodex providers through their own login flows"
 run = "scripts/opencodex-claude.sh configure"
+
+# Explicit rightsizing measurement surface (ADR-0015). This may spend provider/subscription
+# capacity and send selected task-pack data outward, so it is never a dependency of check, setup,
+# install, hooks, or another gate. `plan` makes no model calls; `evaluate` requires its exact
+# authorization digest after the operator reviews routes, egress, budgets, and stop conditions.
+[tasks."rightsize:evaluate"]
+description = "Discover, plan, evaluate, or render an evidence-backed model-task map"
+run = "uv run --python 3.12.11 --script skills/model-tier-rightsizing/scripts/rightsize.py"
+run_windows = "uv.exe run --python 3.12.11 --script skills/model-tier-rightsizing/scripts/rightsize.py"
 
 # Muse Spark has NO tasks of its own, deliberately (ADR-0007 amendment, ADR-0010). It is one
 # provider registered in the gateway, not a plane: the running gateway serves a single flat

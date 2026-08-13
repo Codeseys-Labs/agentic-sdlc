@@ -110,6 +110,13 @@ no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
   fit, independent perspective, quota, and verified transport—not provider preference or
   artificial all-six representation. The flagship hands off through
   `references/tiered-orchestration.md`.
+- `skills/dispatching-exact-ocx-models/`: exact-route dispatch seam after rightsizing resolves a
+  `RuntimeAssignment`. It distinguishes generated `ocx-*` Agent types from Workflow `agent()`
+  injection, checks model-visible tool compatibility, and requires verified post-run identity.
+- `skills/reviewing-overengineering/`: independent complexity/deletion audit for one immutable
+  plan or diff. It pairs deletion pressure with a safety-preservation rebuttal and classifies work
+  as essential safety complexity, accidental complexity removable now, or speculative deferral.
+  Ponytail may complement it but is never required.
 - `skills/cmux-event-bus-messaging/`: optional cmux-only event-bus pub/sub pattern (publish via
   `cmux log --source msg:<topic>`, subscribe via `cmux events` with replay/resume, the
   claim-check pattern, both race gotchas). Pairs with `references/cmux-integration.md`
@@ -178,10 +185,16 @@ no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
   require observed evidence; it preserves existing project policy and stops on ambiguity. `/sdlc-frame` frames one run,
   `/sdlc-wave` runs one Seeds-backed Git-worktree wave, `/sdlc-mission` runs an
   autonomous backlog-zero mission with concurrent critique and bounded backflow, and
-  `/sdlc-rightsize` probes live routing evidence and produces a regenerable
-  `.agentic-sdlc/model-task-map.json` + `.md` pair that downstream `Workflow()` DAG nodes
-  consult for certified `RuntimeAssignment` dispatch (see
-  `skills/model-tier-rightsizing/references/model-task-map-schema.md` and
+  `/sdlc-rightsize` discovers the operator's live OCX routes plus usable Claude-subscription
+  passthrough, asks only environment-relevant source/model/task/budget questions, and produces a
+  regenerable v2 `.agentic-sdlc/model-task-map.json` + `.md` + `.evidence.json` trio. Published
+  benchmarks nominate candidates; only an explicitly approved, bounded target-local evaluation
+  can recommend `role-qualified`, and the checked-in runtime receipt policy still separately
+  controls production admission. `mise run rightsize:evaluate -- plan ...` is read-only;
+  `evaluate` consumes provider/subscription capacity only with its exact displayed authorization
+  digest. Neither a benchmark, local evaluation, nor map authorizes dispatch (see
+  `skills/model-tier-rightsizing/references/model-task-map-schema.md`,
+  `docs/adr/0015-local-evaluation-is-the-rightsizing-promotion-boundary.md`, and
   `skills/model-tier-rightsizing/references/workflow-prompt-budget.md`).
 - `.claude-plugin/{plugin.json,marketplace.json}`: the repo doubles as a Claude Code
   plugin/marketplace — `claude plugin marketplace add <path-or-git-url>` then
@@ -445,17 +458,18 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 | `operator-tools:install` / `operator-tools:status` / `operator-tools:retire-aliases` / `operator-tools:uninstall` | Manage `ccodex` and its statusline support in an existing Unix PATH; explicitly retire only unchanged owned historical aliases. |
 | `operator-tools:self-test` | Exercise the operator-command lifecycle in an isolated home. |
 | `claude:statusline:status` / `claude:statusline:activate` / `claude:statusline:deactivate` | Inspect or explicitly manage only Claude Code's `statusLine` fields. |
-| `ocx:launch` / `ocx:ultracode` | Launch Claude Code through the gateway using your own `~/.claude` login — native Claude models on your subscription, gateway models on their own providers — normally or with session-only Ultracode and ordinary permissions. |
+| `ocx:launch` / `ocx:ultracode` | Launch Claude Code through the gateway using your own `~/.claude` login — native Claude models on your subscription, gateway models on their own providers — normally or with session-only Ultracode. Ordinary permissions are the default; a first `--yolo` is the explicit unsafe bypass profile. |
 | `ocx:status` / `ocx:restart` / `ocx:configure` | Report opencodex gateway reachability, restart it cleanly, or configure providers through their own login flows. |
 | `libraries:list` / `libraries:status` | List the installable external skill libraries with their front doors and surface cost, or report which are already present in this home. Read-only. |
 | `libraries:install` | Install explicitly named external skill libraries through their own front doors; dry run unless `--yes`. Vendors nothing into this tree, and no gate leaf, `contributor:setup`, or deprecated `setup` path reaches it. |
 | `libraries:migrate` | De-duplicate a name another channel holds for the same upstream: retire that channel's copies through its own removal path, then install. Dry run unless `--yes`; names at least one library, never migrates everything. |
 | `mermaid:provision` | Provision the pinned Linux x64 Mermaid browser runtime. Downloads a pinned browser, so it is an explicit operator step and never a gate leaf. |
 | `mermaid:linux-test` | Run the bounded Linux Mermaid renderer tests; they skip with named reasons when the runtime is absent. |
+| `rightsize:evaluate` | Explicit non-gate rightsizing CLI: discover, plan, evaluate after digest-bound approval, or deterministically render prior evidence. Live evaluation may consume provider/subscription capacity and send the selected task-pack data outward. |
 | `validate` | Run the portable bundle validator alone (the pre-commit hook's subset). |
 | `test` | Run the installer test suite. |
 | `self-test` | Exercise install/status/uninstall in an isolated home. |
-| `secrets` | Scan the working tree with the pinned scanner and the tracked extend-only config. History scanning stays a separate consented step. |
+| `secrets` | Scan tracked plus nonignored-untracked files with the pinned scanner and tracked extend-only config. Ignored runtime state stays out; history remains a separate consented step. |
 | `check` | Run the authoritative validation, tests, self-test, and secrets gate. Last measured on Linux: the `test` leaf ran 765 tests in 322s (`OK (skipped=13)`), while `validate` and `secrets` each finished in under 2s, so the suite dominates and 15 minutes is a reasonable budget — more on a loaded host, since gate runs contend for CPU and I/O. Treat both numbers as stale-by-design: the count grows with the suite, the clock varies by host, and the gate's verdict is the evidence. |
 | `hooks:install` | Install the checked-in lefthook hooks. |
 | `contributor:setup` | Install the configured bundle planes plus this repository's Git hooks. |
@@ -514,9 +528,9 @@ changed, foreign, and adopted copies are preserved. Every gateway command remain
 | Command | What it does |
 |---|---|
 | `ccodex ensure` | Ensure the gateway is healthy without launching Claude Code. |
-| `ccodex launch [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch Claude Code through it using your own `~/.claude` login, so native claude models pass through to Anthropic on your subscription while gateway models route to their own providers, in one session. Fails closed if the gateway never becomes healthy, and refuses (exit 3) when a provider-routing key or Console API key would silently defeat the route. Arguments are forwarded to Claude Code. |
+| `ccodex launch [--yolo] [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch Claude Code through it using your own `~/.claude` login, so native claude models pass through to Anthropic on your subscription while gateway models route to their own providers, in one session. Fails closed if the gateway never becomes healthy, and refuses (exit 3) when exported, persistent, or explicit `--settings` configuration would silently defeat the route. Accepted Claude arguments are forwarded unchanged. A first `--yolo` is consumed by ccodex and explicitly selects Claude Code's permission-bypass mode; it is unsafe outside an isolated, disposable environment. Use `-- --yolo` only to forward that spelling literally. |
 | `ccodex launch --model <id>` | Pick any id in the running gateway's live catalog, including a namespaced one: `--model muse/muse-spark-1.2`. Run `ccodex models` for the list. |
-| `ccodex ultracode [claude args...]` | The same fail-closed launch path with session Ultracode applied. It owns the session `--settings` value, so it refuses a competing `--settings`, and it **never** bypasses permissions. |
+| `ccodex ultracode [--yolo] [claude args...]` | The same fail-closed launch path with session Ultracode applied. Ordinary permissions remain the default. A first `--yolo` explicitly selects the same unsafe permission-bypass mode as `ccodex launch --yolo`; this is the ccodex equivalent of the historical `ccode-ultracode` alias. Ultracode owns the session `--settings` value and refuses a competing setting. |
 | `ccodex status` | Read-only supervision view: pid, port, uptime, healthy/down, log location, configured providers each compared against the LIVE catalog, whether anything exported here or in the settings documents Claude Code reads for `env` would defeat the gateway route — the check NAMES the documents it read and what it did not read — and the attribution log command. Exit 0 means the gateway answered an identity-checked probe at that moment — evidence, not authorization. |
 | `ccodex restart` | Stop the gateway cleanly, then ensure it is back up. Fails closed on an unclean stop. Interrupts in-flight turns in every routed session, and `ocx` rewrites shared `~/.codex` config as part of its lifecycle. |
 
@@ -526,11 +540,29 @@ changed, foreign, and adopted copies are preserved. Every gateway command remain
 |---|---|
 | `ccodex providers` | Configured providers, and which are LIVE in the running gateway. A provider in the config file is **not** live until synced and restarted — check here rather than trusting an add's success message. |
 | `ccodex models` | The running gateway's flat live catalog. Muse models appear as ordinary namespaced entries, not as a separate plane. |
+| `ccodex set-fast-model [<exact-model-id\|->]` | With no argument, choose a Claude Code family or a model in the gateway's live OCX catalog, or clear the override to use the normal subscription Haiku slot. One argument preserves the exact noninteractive path; `-` clears. The write goes through OpenCodex and is **not** Auto mode's permission classifier. Claude families are entitlement-checked when used; only the OCX rows are proven live when the menu is built. |
 | `ccodex configure` | With no arguments, print the admitted configuration surface in detail. |
 | `ccodex configure provider add\|edit\|remove\|set-default <name> ...` | Reviewed provider mutation for non-Anthropic providers. Writes the **config file only** — see [the key sequence below](#adding-a-provider-that-needs-an-api-key). |
 | `ccodex configure account add-key <name>` | Store a provider API key, read **only** from piped stdin. |
 | `ccodex configure account list\|current <name>` | Masked credential inspection. |
 | `ccodex configure help <verb>` | Inspect the upstream `ocx` surface without running it. |
+
+**Experimental non-Claude Auto fallback, per launch only.** Claude Code exposes no supported
+`classifierModel` setting. The only documented indirect experiment is to exclude Sonnet 5 from one
+launch, which makes current Claude Code fall back to the session model when that route is otherwise
+eligible:
+
+```bash
+auto_settings='{"availableModels":["gpt-5.6-sol"]}'
+ccodex launch --model gpt-5.6-sol --permission-mode auto --settings "$auto_settings"
+```
+
+Use the same exact routed ID in both places and keep all inline settings in that one document.
+`availableModels` constrains session, subagent, workflow, skill, and advisor selection for the
+whole launch—not only Auto—and routed GPT/Muse Auto support is undocumented. This recipe is not an
+identity claim; a real claim needs a separately approved bounded canary with request-correlated
+gateway attribution. See
+[`docs/research/2026-08-12-claude-code-auto-mode-controls.md`](docs/research/2026-08-12-claude-code-auto-mode-controls.md).
 
 **Installed-bundle lifecycle** — managing what is installed, without mise:
 
@@ -625,11 +657,13 @@ for the `ocx` routes only (the pinned opencodex build is resolved through `mise 
 is not on `PATH` by itself); `uv` is needed for the Python routes and works from a bare `PATH`.
 
 No shell startup file or PATH value is edited. Every launch route delegates to
-`scripts/opencodex-claude.sh`, so identity-checked supervision and the two billing-honesty
-refusals remain mandatory. The ADR-0005 credential refusal, the environment scrub, and the
+`scripts/opencodex-claude.sh`, so identity-checked supervision and the route-integrity
+refusals remain mandatory, including validation of every explicit `--settings` value before the
+gateway starts. The ADR-0005 credential refusal, the environment scrub, and the
 separate Claude config dir are GONE from this launcher (ADR-0014): it uses your own `~/.claude`
-so Claude Code can present its existing login to the gateway. `ccodex ultracode`
-refuses competing `--settings` and permission-bypass flags. Launch/restart still carries
+so Claude Code can present its existing login to the gateway. `ccodex ultracode` refuses a
+competing `--settings`; on either launch form, `--yolo` refuses competing permission controls.
+Launch/restart still carries
 opencodex's documented shared `~/.codex`
 configuration side effect.
 
@@ -673,19 +707,21 @@ scope. That machinery, the `ccodex session` verbs, and the separately named
 isolated plane, so ADR-0010's inheritance and environment-variable policy still govern **it**, and
 `assets/claude/session-inheritance.sh` is unchanged.
 
-**Two refusals remain, and they are about billing honesty rather than prohibition.** A launch
-exits 3 when the gateway route would not actually be used. Neither one edits anything to fix it:
-changing your global settings file is a mutation that needs explicit operation-specific approval
+**Three route-integrity refusal channels remain, for billing honesty rather than prohibition.** A
+launch exits 3 when the gateway route would not actually be used. None edits anything to fix it:
+changing a persistent settings file is a mutation that needs explicit operation-specific approval
 for that exact path, so the launcher reports the blocker and stops instead.
 
 | Refused | Why it matters |
 |---|---|
-| A provider-routing key — `CLAUDE_CODE_USE_BEDROCK`/`USE_VERTEX`/`USE_FOUNDRY`, `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL` — exported **or** in the global `settings.json` `env`, or an `apiKeyHelper` there | It outranks the gateway. Under Bedrock the client consults `ANTHROPIC_BEDROCK_BASE_URL` and never `ANTHROPIC_BASE_URL`, so the session bills the cloud account while the launcher prints a gateway banner. Measured on a real host on 2026-08-10: the request never reached a local capture listener and was still answered. |
+| A provider-routing key — `CLAUDE_CODE_USE_BEDROCK`/`USE_VERTEX`/`USE_FOUNDRY`, `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL` — exported **or** in a persistent settings `env`, or an `apiKeyHelper` there | It outranks the gateway. Under Bedrock the client consults `ANTHROPIC_BEDROCK_BASE_URL` and never `ANTHROPIC_BASE_URL`, so the session bills the cloud account while the launcher prints a gateway banner. Measured on a real host on 2026-08-10: the request never reached a local capture listener and was still answered. |
 | An `sk-ant-api*` Console key in `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` | It satisfies opencodex's bare `sk-ant-` passthrough gate, so it takes the **same** native branch and bills API credits while looking like subscription traffic. The prefix is the only distinguishing signal. |
+| An explicit `--settings` value that is missing, not one JSON object or a readable file containing one, or carries either blocker above | Claude merges selected settings after the process environment. A local two-listener probe on 2026-08-13 showed selected `env.ANTHROPIC_BASE_URL` taking every request away from the gateway. Every occurrence is inspected before gateway startup; accepted arguments are forwarded unchanged. |
 
-An `sk-ant-oat*` login is accepted — carrying it is the point. Only names and prefixes are ever
-inspected; no credential value is read, printed, copied, or persisted. `ccodex status` reports
-whether anything currently outranks the gateway.
+An `sk-ant-oat*` login is accepted — carrying it is the point. The checks inspect the minimum needed
+names, prefixes, and selected settings bytes; no credential value or selected settings path is
+printed, copied, or persisted. `ccodex status` reports persistent/exported blockers; launch-time
+`--settings` values are checked only on that launch.
 
 Keep a cloud-provider route in a per-command wrapper of your own rather than in the global
 settings document, so the two do not fight. `ocx claude` writes its `ocx-*.md` roster agents and

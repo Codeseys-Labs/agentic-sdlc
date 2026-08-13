@@ -20,6 +20,9 @@ TOOLCHAIN_GATES_SKILL = ROOT / "skills" / "repo-toolchain-gates" / "SKILL.md"
 LEFTHOOK = ROOT / "lefthook.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "validate.yml"
 SECRETS_CONFIG = ROOT / ".config" / "betterleaks.toml"
+SECRETS_SCRIPT = ROOT / "scripts" / "secrets_scan.py"
+SECRETS_RUN = "uv run --python 3.12.11 --script scripts/secrets_scan.py"
+SECRETS_RUN_WINDOWS = "uv.exe run --python 3.12.11 --script scripts/secrets_scan.py"
 
 
 class GateGraphTests(unittest.TestCase):
@@ -201,16 +204,13 @@ class GateGraphTests(unittest.TestCase):
         ("mise.toml", 'depends = ["validate", "test", "self-test", "secrets"]', 'depends = ["validate", "test", "self-test", "secrets"]\nrun = "python3 -c \'print(999)\'"', "check must contain only"),
         # Dropping the secrets leaf hollows the gate exactly like dropping self-test does.
         ("mise.toml", 'depends = ["validate", "test", "self-test", "secrets"]', 'depends = ["validate", "test", "self-test"]', "check must contain only"),
-        # The secrets task must stay the working-tree scan: the history verb is a separate
-        # consent-requiring pre-publish step, and silently widening it here is drift.
-        ("mise.toml", 'run = "betterleaks dir . --config .config/betterleaks.toml"', 'run = "betterleaks git . --config .config/betterleaks.toml"', "secrets must contain only"),
-        ("mise.toml", 'run = "betterleaks dir . --config .config/betterleaks.toml"', 'run = "true"', "secrets must contain only"),
-        # Dropping --config re-opens the neutering route it exists to close: without the flag
-        # the scanner auto-loads a drop-in .gitleaks.toml/.betterleaks.toml from cwd or a
-        # GITLEAKS_CONFIG*/BETTERLEAKS_CONFIG* variable, so an untracked `useDefault = false`
-        # replaces the ruleset while the scan still exits 0 and every fixture here stays green.
-        ("mise.toml", 'run = "betterleaks dir . --config .config/betterleaks.toml"', 'run = "betterleaks dir ."', "secrets must contain only"),
-        ("mise.toml", 'run_windows = "betterleaks dir . --config .config/betterleaks.toml"', 'run_windows = "betterleaks dir ."', "secrets must contain only"),
+        # The secrets task must stay on the reviewed Git-visible wrapper: history scanning is a
+        # separate consent-requiring pre-publish step, and a direct directory scan reaches ignored
+        # operator runtime state instead of tracked + nonignored-untracked files.
+        ("mise.toml", f'run = "{SECRETS_RUN}"', 'run = "betterleaks git . --config .config/betterleaks.toml"', "secrets must contain only"),
+        ("mise.toml", f'run = "{SECRETS_RUN}"', 'run = "true"', "secrets must contain only"),
+        ("mise.toml", f'run = "{SECRETS_RUN}"', 'run = "betterleaks dir . --config .config/betterleaks.toml"', "secrets must contain only"),
+        ("mise.toml", f'run_windows = "{SECRETS_RUN_WINDOWS}"', 'run_windows = "betterleaks dir . --config .config/betterleaks.toml"', "secrets must contain only"),
         # The pinned config is the other half of the same control: pinning only the flag would
         # leave an edit to the file it points at free to disable the default ruleset.
         (".config/betterleaks.toml", "useDefault = true", "useDefault = false", ".config/betterleaks.toml must contain only [extend] useDefault = true"),
@@ -545,12 +545,17 @@ class GateGraphTests(unittest.TestCase):
         # ubi: is deprecated for removal in mise 2027.1.0 and locks no per-platform checksum.
         self.assertNotIn("ubi:", scanner_keys[0])
 
-        # The gate is wired: one task, the working-tree verb, inside check's dependency chain.
-        # --config is asserted here too, because an invocation that can be silently repointed at
-        # a drop-in ruleset is wired in name only.
+        # The gate is wired through the Git-visible wrapper. The wrapper owns exact path
+        # selection and passes the pinned config on every scanner batch.
         secrets = config["tasks"]["secrets"]
-        self.assertEqual(secrets["run"], "betterleaks dir . --config .config/betterleaks.toml")
-        self.assertEqual(secrets["run_windows"], secrets["run"])
+        self.assertEqual(secrets["run"], SECRETS_RUN)
+        self.assertEqual(secrets["run_windows"], SECRETS_RUN_WINDOWS)
+        self.assertTrue(SECRETS_SCRIPT.is_file())
+        wrapper = SECRETS_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("ls-files", wrapper)
+        self.assertIn("--exclude-standard", wrapper)
+        self.assertIn('"--config"', wrapper)
+        self.assertIn('"--redact=100"', wrapper)
         self.assertEqual(
             tomllib.loads(SECRETS_CONFIG.read_text(encoding="utf-8")),
             {"extend": {"useDefault": True}},

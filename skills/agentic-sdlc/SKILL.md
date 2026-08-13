@@ -186,8 +186,14 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
   artifact into the four semantic tiers and choose within the eligible Sol/Fable, Terra/Opus,
   or Luna/Sonnet pair by task fit, independent perspective, quota, and verified transport.
   The caller must inject a certified exact model ID and **explicit requested effort** for
-  every worker; provider-neutral role definitions do not select a model. Stop before dispatch
-  when identity or adapter readback is unresolved. No host-default policy or artificial
+  every worker; provider-neutral role definitions do not select a model. For an OCX Ultracode
+  Workflow, every explicit `agent()` model ID must use its exact `[1m]` request form. If that
+  marked tuple is not certified, admitted, and readable through the required request/identity
+  evidence, stop before dispatch and return one `SeedProposal`; never fall back to the
+  unsuffixed form. The `[1m]` request remains distinct from base-ID identity readback and does
+  not prove served context. The canonical marker rule is in
+  `../model-tier-rightsizing/SKILL.md#ocx-ultracode-workflow-marker-rule`. Stop before dispatch
+  when a route is inherited, unresolved, or unverified. No host-default policy or artificial
   all-six representation.
 - Keep one macro conductor responsible for Seeds adjudication, worktree ownership, and
   evidence-backed recommendations. The conductor alone mutates Seeds; an authorized

@@ -51,6 +51,12 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   in a `RuntimeAssignment`; otherwise dispatch stops. Its
   canonical calibration preserves evidence, quotas, complements, fallbacks, controls, and
   roadmap lanes.
+- `skills/dispatching-exact-ocx-models/` — exact-route handoff after rightsizing. It distinguishes
+  generated `ocx-*` Agent definitions from Workflow call-site injection, checks route/tool
+  compatibility, and refuses results without correlated provider/model receipt evidence.
+- `skills/reviewing-overengineering/` — independent complexity/deletion audit for an immutable
+  plan or diff. It applies deletion pressure plus a safety-preservation rebuttal and requires any
+  remediated candidate to be reviewed again. Ponytail is optional, never a dependency.
 - `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
   critic, integrator) in Claude `.md` and Codex `.toml` forms, plus the repo-scoped
   research roster under `agents/codex/research/`.
@@ -68,9 +74,10 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   mise-managed uv/Python to validate name==dirname, the Codex 1024-char description cap,
   broken references, TOML/JSON parses, shell syntax, manifests, and secret-shaped strings in
   tracked text, then runs the installer tests, the lifecycle self-test, and the pinned
-  working-tree secrets scan (`mise run secrets` = `betterleaks dir .` with `--config` pinned at
-  the tracked extend-only `.config/betterleaks.toml`, so a drop-in config or `GITLEAKS_CONFIG*`
-  variable cannot silently replace the ruleset). Full git-history
+  Git-visible secrets scan. `mise run secrets` selects tracked files plus nonignored untracked
+  files, then calls betterleaks with the tracked extend-only `.config/betterleaks.toml` on every
+  batch; ignored runtime state is excluded but a force-tracked ignored path remains covered, and
+  no drop-in config or `GITLEAKS_CONFIG*` variable can replace the ruleset. Full git-history
   scanning stays a separate, explicitly consented pre-publish step. A passing gate
   is evidence only; it does not authorize an outward effect.
 - Run `./scripts/install-skill-bundle.sh self-test` after installer changes.
@@ -224,6 +231,11 @@ model selection as policy.
   `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
+- `rightsize:evaluate` — explicit model-rightsizing discovery/plan/evaluate/render surface; never a
+  gate leaf. `plan` makes no model calls. `evaluate` requires the plan's exact authorization digest
+  after the operator reviews routes, target-data egress, attempts, provider/subscription capacity,
+  budgets, outputs, and stop conditions. It emits advisory v2 map/evidence artifacts and never
+  dispatches workflow roles or changes runtime receipt policy.
   `ocx:launch` runs Claude Code through the gateway using the operator's OWN `~/.claude` login, so
   ONE session serves both catalogs: a genuine `claude*`/`anthropic*` id that no alias or `modelMap`
   claims is forwarded verbatim to `api.anthropic.com` on that subscription, while every gateway id
@@ -235,10 +247,13 @@ model selection as policy.
   the environment scrub, the subscription refusals, the `session` verbs, and the separately named
   `claude-subscription` route are all GONE (ADR-0014 supersedes ADR-0013 and amends ADR-0003).
   `launch` still refuses (exit 3) when the route would not actually be used: a provider-routing key
-  (`CLAUDE_CODE_USE_BEDROCK`-class, exported or in the global `settings.json` `env`), an
-  `apiKeyHelper`, or an `sk-ant-api*` Console key — the first bypasses the gateway entirely, and the
-  last takes the same native branch but bills API credits. An `sk-ant-oat*` login is accepted; no
-  credential value is ever read or printed. A healthy launch is still not model-identity evidence.
+  (`CLAUDE_CODE_USE_BEDROCK`-class, exported or in a persistent settings `env`), an
+  `apiKeyHelper`, an `sk-ant-api*` Console key, or an explicit `--settings` value that is uncheckable
+  or carries the same blocker — the provider switch bypasses the gateway entirely, and the Console
+  key takes the same native branch but bills API credits. Every selected settings value is inspected
+  before gateway startup, then accepted arguments are forwarded unchanged. An `sk-ant-oat*` login
+  is accepted; no credential value or selected settings path is printed. A healthy launch is still
+  not model-identity evidence.
   Muse Spark has no tasks of its own: it is one provider registered in the gateway, whose models
   appear in the single flat live catalog as namespaced ids, so
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a
@@ -271,8 +286,16 @@ remains inactive until the operation-specific `claude:statusline:activate` comma
 fresh installs neither require nor recreate them. `operator-tools:retire-aliases` removes only
 unchanged removable owned copies through the crash-consistent unlink lifecycle; modified,
 foreign, and adopted copies are preserved and reported. `ccodex ultracode` enables session
-Ultracode without bypassing permissions and refuses competing settings or bypass flags. Native
-Windows statusline/operator-tool activation is not certified and fails closed.
+Ultracode with ordinary permissions by default. A first `--yolo` on either `ccodex launch` or
+`ccodex ultracode` is an explicit unsafe opt-in to Claude Code permission bypass; it is consumed
+by the wrapper, cannot be combined with another permission-mode control, and does not weaken the
+gateway-health or billing-honesty refusals. `-- --yolo` forwards the spelling literally.
+`ccodex set-fast-model [<exact-model-id|->]` delegates to OpenCodex's existing configuration API
+for Claude Code's Haiku/background small-fast slot. Bare invocation offers current Claude families
+(entitlement checked when used), the gateway's live OCX catalog, and clear-to-normal-Haiku; one
+argument preserves exact noninteractive selection and `-` clears. A completed choice is a
+persistent operator mutation and is not an Auto-mode classifier selector. Native Windows
+statusline/operator-tool activation is not certified and fails closed.
 `operator-tools:status` reports a never-installed desired command as `absent` and reserves
 `unmanaged` for a desired file that exists but is not owned; historical aliases are never
 reported as required or absent.
@@ -296,10 +319,13 @@ that no session data is shared, and do not read a skipped entry as inheritance w
 
 Mutating global Claude settings still requires explicit operation-specific approval and no launcher
 does it: the global file is read, never written, copied, or linked. `ccodex launch` refuses (exit 3)
-rather than editing anything when that document would defeat the route — a provider-routing switch
-in its `env`, an `apiKeyHelper`, or an `sk-ant-api*` Console key. An `sk-ant-oat*` login is accepted
-wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares nothing; `--`
-forwards the remaining arguments verbatim to the wrapped tool.
+rather than editing anything when a persistent or explicit settings document would defeat the route
+— a provider-routing switch in `env`, an `apiKeyHelper`, or an `sk-ant-api*` Console key. Explicit
+`--settings` values must be one JSON object or a readable file containing one; every occurrence is
+inspected before gateway startup and accepted argv is forwarded unchanged. An `sk-ant-oat*` login
+is accepted wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares
+nothing; the leading wrapper `--` forwards the remaining arguments, while a later literal `--` ends
+Claude's own option parsing.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim

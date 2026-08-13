@@ -32,7 +32,7 @@ mise.toml   [tools]  → pins EVERYTHING: language, uv, linters, lefthook
             [tasks]  → fmt / vet / lint / test / … and ONE aggregate:
             [tasks.check]  depends = ["fmt","vet","lint","test",…]   ← THE gate
 lefthook.yml           → pre-commit = fast staged-file subset; pre-push = heavier subset
-betterleaks            → secrets gate: a [tasks.secrets] working-tree scan inside check +
+betterleaks            → secrets gate: a [tasks.secrets] Git-visible scan inside check +
                           a lefthook pre-push command; the full-history scan stays a separate
                           consent-requiring pre-publish step (pin the version always — see below)
 ```
@@ -83,27 +83,28 @@ graph only by updating that test in the same commit.
 - Bypass exists (`--no-verify`, `LEFTHOOK=0`) — hooks are a guardrail for humans and
   workers, not a security boundary. CI re-runs the same gates.
 
-## betterleaks: the secrets gate (wired here — working tree, not history)
+## betterleaks: the secrets gate (wired here — Git-visible files, not history)
 
 gitleaks-compatible fork (drop-in: same rules format, same flags) with live-credential
-`--validation` and faster scans. Two modes:
+`--validation` and faster scans. This bundle uses two distinct surfaces:
 
-- `betterleaks dir . --config <tracked-config>` — working tree (lefthook pre-push / CI step).
-  Never wire the bare form; see the `--config` paragraph below.
+- `scripts/secrets_scan.py` — asks Git for tracked files plus nonignored untracked files, then
+  invokes `betterleaks dir --redact=100 --config <tracked-config> -- <batch...>` (lefthook
+  pre-push / CI step). A force-tracked path beneath an ignored directory remains included.
 - `betterleaks git .` — FULL git history. Run before making any repo public or handing a
   bundle to another machine; HEAD-only scans miss secrets deleted in later commits.
 
-Exit code is the gate: 0 clean, 1 leaks. For a repo with a live secrets surface, wire it as a
-lefthook pre-push command and a CI step; pair with a repo-specific sweep (internal hostnames etc.)
-which generic rules won't catch.
+Exit code is the gate: 0 clean, 1 leaks. Unexpected scanner failures remain nonzero and outrank a
+finding result. For a repo with a live secrets surface, wire the wrapper as a lefthook pre-push
+command and a CI step; pair it with a repo-specific sweep (internal hostnames etc.) which generic
+rules won't catch.
 
 **Wiring status in THIS bundle: version-pinned, locked, and wired as a `check` leaf.**
-`betterleaks` is wired into `mise run check`: `[tasks.secrets]` runs the working-tree scan
-(`betterleaks dir . --config .config/betterleaks.toml`) and `[tasks.check]` depends on
-`["validate","test","self-test","secrets"]`, so the scan runs wherever `mise run check` runs —
-including CI, which invokes exactly that one command. `lefthook.yml` carries the same scan as a
-**pre-push** command; pre-commit stays the fast `validate`-only subset, because a full-tree scan
-is not a staged-file check.
+`betterleaks` is wired into `mise run check`: `[tasks.secrets]` runs the Git-visible wrapper and
+`[tasks.check]` depends on `["validate","test","self-test","secrets"]`, so the scan runs wherever
+`mise run check` runs — including CI, which invokes exactly that one command. `lefthook.yml`
+carries the same task as a **pre-push** command; pre-commit stays the fast `validate`-only subset,
+because this is not a staged-file-only check.
 
 **Always pass `--config` explicitly.** A bare `betterleaks dir .` auto-loads a drop-in
 `.gitleaks.toml`/`.betterleaks.toml` from the working directory and honors
@@ -118,8 +119,13 @@ pinned config fails `mise run validate`.
 
 What is scanned and what is not is a deliberate boundary:
 
-- **Scanned automatically: the working tree** (`betterleaks dir . --config …`). That is the surface
-  a commit or push can newly expose, and it is cheap enough to sit in the default gate.
+- **Scanned automatically: tracked files plus nonignored untracked files.** Git supplies the
+  NUL-delimited set, so ignored operator/runtime state is absent without hiding a force-tracked
+  path under the same prefix. Symlinks and non-regular entries are skipped rather than followed.
+  This is the surface a commit or push can newly expose, and it is cheap enough for the default gate.
+- **NOT scanned automatically: ignored untracked files.** They are not part of Git's visible change
+  surface. If such runtime state needs its own audit, scan it by an explicit operation rather than
+  broadening every repository gate and leaking foreign logs into normal test output.
 - **NOT scanned automatically: git history** (`betterleaks git .`). History scanning is a
   separate, consent-requiring **pre-publish** step — run it deliberately before a repo is made
   public or handed to another machine, because rewriting or acting on a historical finding is an
@@ -127,7 +133,7 @@ What is scanned and what is not is a deliberate boundary:
   in this bundle invokes the history verb; `test_betterleaks_is_pinned_locked_and_wired` asserts
   that no executed task/hook/CI command string does.
 - **A clean scan is evidence, not authorization.** Exit 0 means the pinned scanner's rules found
-  nothing in the working tree at that moment. It does not certify the absence of secrets (rules
+  nothing in the Git-visible files at that moment. It does not certify the absence of secrets (rules
   are heuristics, history is out of scope), and it grants no authority to push, publish, tag, or
   hand the bundle anywhere — each of those still needs explicit operation-specific authorization.
 
@@ -154,17 +160,17 @@ Pinning a tool and wiring its invocation are still two separate decisions; this 
 both, and the earlier revision that stopped at pinning said so plainly rather than claiming a gate
 it did not run. Keep them coupled in the enforcing tests:
 `tests/test_gate_graph.py::test_betterleaks_is_pinned_locked_and_wired` requires the `[tools]`
-pin, the per-platform lock records, the `[tasks.secrets]` working-tree verb, `secrets` in
-`[tasks.check]`'s `depends`, and the pre-push hook command — so neither half can be quietly
-dropped while this text describes both. `test_removing_secrets_from_check_is_caught` is the
+pin, per-platform lock records, exact `[tasks.secrets]` wrapper command, wrapper selection/config
+markers, `secrets` in `[tasks.check]`'s `depends`, and the pre-push hook command. The focused
+`tests/test_secrets_scan.py` suite proves ignored-untracked exclusion, force-tracked inclusion,
+NUL-safe names, batching, and exit precedence. `test_removing_secrets_from_check_is_caught` is the
 mutation negative: hollowing `depends` back to the base three fails the validator. The `MUTATIONS`
-table adds the two neutering routes: stripping `--config` from either `run` field, and flipping
-`useDefault` to `false` inside the pinned config. Any change to
-the graph updates `scripts/validate_bundle.py` (`REQUIRED_TASKS`, `SECRETS_COMMAND`,
-`SECRETS_CONFIG_PATH`, `validate_secrets_config`, the frozen
-`check` table, the frozen `lefthook.yml` bytes) and those tests in the same commit; changing the
-tool version additionally requires regenerating the SHA-pinned lock. A pinned, wired scanner is
-evidence infrastructure — running it clean authorizes nothing.
+table also refuses direct/history/no-op replacements and a config edit that disables defaults.
+Any graph change updates `scripts/validate_bundle.py` (`REQUIRED_TASKS`, `SECRETS_COMMAND`,
+`SECRETS_COMMAND_WINDOWS`, `SECRETS_CONFIG_PATH`, `validate_secrets_config`, the frozen `check`
+table, the frozen `lefthook.yml` bytes) and those tests together; a tool-version change also
+regenerates the SHA-pinned lock. A pinned, wired scanner is evidence infrastructure — running it
+clean authorizes nothing.
 
 ## Pinning a tool that is not in the mise registry
 

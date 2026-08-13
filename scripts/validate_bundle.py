@@ -202,15 +202,14 @@ MERMAID_PROVISION_TASK = {
     "description": "Provision the pinned Linux Mermaid browser runtime (explicit, not a gate)",
     "run": f"uv run --python {PYTHON_VERSION} --script scripts/provision_mermaid_linux.py",
 }
-# The secrets task runs the pinned scanner binary directly, not through uv, so it is pinned
-# on its own. `dir` scans the working tree; the full-history verb (`git`) is deliberately not
-# wired here — history scanning is a consent-requiring pre-publish step, not a commit gate.
-# `--config` is part of the pin, not a convenience: without it the scanner auto-loads a drop-in
-# .gitleaks.toml/.betterleaks.toml from cwd or a GITLEAKS_CONFIG*/BETTERLEAKS_CONFIG* variable,
-# so an untracked `[extend] useDefault = false` file silently replaces the ruleset. mise resolves
-# the pinned binary on PATH identically on both platforms, so run_windows is the same string.
+# The secrets task runs one stdlib wrapper through the pinned Python. It asks Git for exactly
+# tracked + nonignored-untracked files, so ignored operator runtime state is absent without hiding
+# a force-tracked file beneath an ignored prefix. The wrapper supplies this explicit tracked config
+# to every scanner batch; history scanning remains a separate consent-requiring operation.
 SECRETS_CONFIG_PATH = ".config/betterleaks.toml"
-SECRETS_COMMAND = f"betterleaks dir . --config {SECRETS_CONFIG_PATH}"
+SECRETS_SCRIPT_PATH = "scripts/secrets_scan.py"
+SECRETS_COMMAND = f"uv run --python {PYTHON_VERSION} --script {SECRETS_SCRIPT_PATH}"
+SECRETS_COMMAND_WINDOWS = f"uv.exe run --python {PYTHON_VERSION} --script {SECRETS_SCRIPT_PATH}"
 RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
@@ -1395,12 +1394,17 @@ def validate_mise(root: Path, result: Validation) -> None:
             if task.get(field) != expected:
                 result.error(f"mise.toml task {name}.{field} must equal {expected!r}")
     expected_secrets = {
-        "description": "Scan the working tree for secrets with the pinned scanner",
+        "description": "Scan Git-visible working-tree files with the pinned scanner",
         "run": SECRETS_COMMAND,
-        "run_windows": SECRETS_COMMAND,
+        "run_windows": SECRETS_COMMAND_WINDOWS,
     }
     if tasks.get("secrets") != expected_secrets:
-        result.error(f"mise.toml secrets must contain only its description and the exact working-tree scan {SECRETS_COMMAND!r}")
+        result.error(
+            "mise.toml secrets must contain only its description and the exact Git-visible "
+            f"scan {SECRETS_COMMAND!r} / {SECRETS_COMMAND_WINDOWS!r}"
+        )
+    if not (root / SECRETS_SCRIPT_PATH).is_file():
+        result.error(f"{SECRETS_SCRIPT_PATH} is required by the secrets task")
     validate_secrets_config(root, result)
     expected_ocx_tasks = {
         "ocx:launch": {
@@ -1408,7 +1412,7 @@ def validate_mise(root: Path, result: Validation) -> None:
             "run": "scripts/opencodex-claude.sh launch",
         },
         "ocx:ultracode": {
-            "description": "Launch opencodex Claude with session Ultracode and ordinary permissions",
+            "description": "Launch opencodex Claude with Ultracode and optional explicit permission bypass",
             "run": "scripts/opencodex-claude.sh launch-ultracode",
         },
         "ocx:status": {

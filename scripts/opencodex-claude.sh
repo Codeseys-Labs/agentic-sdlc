@@ -155,8 +155,8 @@ EOF
         operator_verb=launch; ultra=''
       fi
       cat <<EOF
-usage: ccodex $operator_verb [claude args...]
-       opencodex-claude.sh $1 [claude args...]
+usage: ccodex $operator_verb [--yolo] [claude args...]
+       opencodex-claude.sh $1 [--yolo] [claude args...]
 
 Ensure the gateway is healthy (start it if down, restart once if half-up), then launch Claude
 Code through it using your OWN ~/.claude configuration and login. Fails closed if the gateway
@@ -173,17 +173,31 @@ EOF
       [ "$1" = launch-ultracode ] && cat <<'EOF'
 
 This route owns the session --settings value, so it refuses a competing --settings argument,
-and it never bypasses permissions.
+including when --yolo is selected.
 EOF
       cat <<'EOF'
 
-Common arguments, all forwarded to Claude Code:
+Wrapper option (must be first; use `-- --yolo` to forward a literal `--yolo`):
+  --yolo                    Start with Claude Code permission checks bypassed. This is equivalent
+                            to --dangerously-skip-permissions and disables Auto's classifier.
+                            It is unsafe outside an isolated, disposable environment.
+
+Common arguments, forwarded to Claude Code unchanged after preflight:
   --model <id>              Any id in the running gateway's live catalog, including a
                             namespaced one: --model muse/muse-spark-1.2. See `ccodex models`.
+  --settings <file-or-json> A JSON object or readable JSON-object file. Ordinary launch checks
+                            every occurrence for route-bypassing settings, then forwards accepted
+                            arguments unchanged. A later literal `--` ends Claude option parsing.
 
 Config dir: your global ~/.claude. `ocx claude` writes its ocx-*.md roster agents and the
 gateway model cache there. That cache write is what puts the routed ids in the /model picker,
 because Claude Code only refreshes it while holding a credential.
+
+Claude.ai cloud connectors are off by default in this gateway route because some flatten to
+tool names longer than a provider's 64-character ceiling, causing the whole request to fail
+before inference. Local, project, and plugin MCP servers remain available. Opt in explicitly
+for a compatible model/session with:
+  ENABLE_CLAUDEAI_MCP_SERVERS=true ccodex launch
 
 Refused (exit 3) when the route would not actually be used:
   * a CLAUDE_CODE_USE_BEDROCK-style provider-routing variable, exported or enabled in a settings
@@ -193,9 +207,11 @@ Refused (exit 3) when the route would not actually be used:
     settings `env` block (an exported one is PRESERVED into the session; a settings one REPLACES
     what this route sets -- both measured),
   * an apiKeyHelper, or an sk-ant-api* Console key in ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (it
-    takes the same native branch but bills API credits, not your subscription).
+    takes the same native branch but bills API credits, not your subscription),
+  * any explicit --settings value that is empty, not one JSON object or a readable file containing
+    one, or carries one of the route blockers above. Its bytes and path are never printed.
 
-EXACTLY these documents are checked, because these are the ones Claude Code was measured to read
+EXACTLY these persistent documents are checked, because these are the ones Claude Code was measured to read
 for `env`:
   ~/.claude/settings.json
   ./.claude/settings.json          (relative to the directory you launch from)
@@ -277,7 +293,7 @@ usage() {
 usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|configure> [args...]
 
   ensure                    Ensure the gateway is healthy without launching Claude Code.
-  launch [claude args...]   Ensure the gateway is healthy (start it if down, restart once if
+  launch [--yolo] [claude args...]  Ensure the gateway is healthy (start it if down, restart once if
                             half-up), then launch Claude Code through it using your own
                             ~/.claude configuration and login. Native claude models pass
                             through to Anthropic on your subscription; gateway models route to
@@ -286,9 +302,10 @@ usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|config
                             provider-routing key, a non-loopback ANTHROPIC_BASE_URL, or a
                             Console API key would silently defeat the route. `launch --help`
                             names the settings documents that check reads.
-  launch-ultracode [args...]  Apply the session-only {"ultracode":true} setting, then use the
-                            same fail-closed launch path. This convenience route refuses a
-                            competing --settings argument and permission-bypass flags.
+  launch-ultracode [--yolo] [args...]  Apply the session-only {"ultracode":true} setting, then
+                            use the same fail-closed launch path. This convenience route refuses
+                            a competing --settings argument. On either launch route, an explicit
+                            first --yolo enables Claude Code's permission-bypass mode.
   status                    Supervision view: pid, port, uptime, healthy/down, log location,
                             configured providers, attribution stream. Also compares each
                             CONFIGURED provider against the running gateway's LIVE catalog and
@@ -821,25 +838,20 @@ gateway_bypassing_env_name() {
 # ONE PATH PER CALL, and one jq program for every path. The document list lives in
 # claude_settings_documents below and is walked by bypassing_settings_document_and_key, so adding a
 # document is a list edit rather than a second copy of this program drifting away from the first.
-settings_document_bypassing_key_name() {
-  local settings="$1"
-  # A genuinely absent document carries no key. That is a real clean state, not a gap. `-e` follows
-  # the symlink, so a DANGLING one counts as absent -- deliberately matching Claude Code, which
-  # reads this path and treats ENOENT as no settings at all; hard-stopping a working launch because
-  # a dotfile symlink's target moved would refuse a client state that carries no key to begin with.
-  [ -e "$settings" ] || return 1
-  if [ ! -f "$settings" ] || [ ! -r "$settings" ]; then
-    printf 'unreadable:not a readable regular file'; return 0
-  fi
-  if ! jq_available; then
-    printf 'unreadable:jq is unavailable, so this document cannot be inspected'; return 0
-  fi
-  local found="" status=0
-  found="$(jq -r \
+# Read exactly one JSON settings object from stdin and emit one bounded classification: `clean` or
+# the first bypassing key. The document bytes never enter a shell variable. `-s` is intentional:
+# ordinary jq accepts an empty stream and concatenated JSON values, but neither is one settings
+# object. A nonzero status therefore means malformed, empty, multiple, or non-object input.
+settings_bypass_classification() {
+  jq -ers \
     --arg loopback "$loopback_base_url_pattern" \
     --argjson booleans "$(json_name_array "${routing_boolean_switches[@]}")" \
     --argjson slots "$(json_name_array "${routing_endpoint_slots[@]}")" '
-    (.env // {}) as $env
+    if length != 1 or (.[0] | type) != "object"
+    then error("not exactly one settings object")
+    else .[0]
+    end
+    | (.env // {}) as $env
     # ONE reader for every slot, and NOT `$env[.] // ""`. The jq `//` operator is false-OR-null,
     # not null-coalescing, so a JSON literal `false` read as ABSENT: `{"env":{"ANTHROPIC_BASE_URL":
     # false}}` reported CLEAN while the identical `"https://evil.example"` refused. That mattered
@@ -862,14 +874,29 @@ settings_document_bypassing_key_name() {
     | [ "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"
         | select(slot(.) | startswith("sk-ant-api")) ] as $console
     | (if (.apiKeyHelper // null) != null then ["apiKeyHelper"] else [] end) as $helper
-    | ($switches + $endpoints + $base + $console + $helper) | first // empty
-  ' "$settings" 2>/dev/null)" || status=$?
-  # Malformed JSON is unreadable, not clean -- jq exits nonzero and prints nothing.
-  if [ "$status" -ne 0 ]; then
-    printf 'unreadable:the document could not be parsed'; return 0
+    | ($switches + $endpoints + $base + $console + $helper) | first // "clean"
+  '
+}
+
+settings_document_bypassing_key_name() {
+  local settings="$1"
+  # A genuinely absent document carries no key. That is a real clean state, not a gap. `-e` follows
+  # the symlink, so a DANGLING one counts as absent -- deliberately matching Claude Code, which
+  # reads this path and treats ENOENT as no settings at all; hard-stopping a working launch because
+  # a dotfile symlink's target moved would refuse a client state that carries no key to begin with.
+  [ -e "$settings" ] || return 1
+  if [ ! -f "$settings" ] || [ ! -r "$settings" ]; then
+    printf 'unreadable:not a readable regular file'; return 0
   fi
-  found="$(printf '%s' "$found" | head -1)"
-  [ -n "$found" ] || return 1
+  if ! jq_available; then
+    printf 'unreadable:jq is unavailable, so this document cannot be inspected'; return 0
+  fi
+  local found="" status=0
+  found="$(settings_bypass_classification < "$settings" 2>/dev/null)" || status=$?
+  if [ "$status" -ne 0 ]; then
+    printf 'unreadable:the document could not be parsed as a settings object'; return 0
+  fi
+  [ "$found" = clean ] && return 1
   printf '%s' "$found"
 }
 
@@ -944,6 +971,100 @@ bypassing_settings_document_and_key() {
   return 1
 }
 
+# Classify one explicit `--settings <file-or-json>` value without echoing it. Claude documents JSON
+# or a file path, so try a JSON object first; if that is not one cleanly parsed object, inspect an
+# existing path. The classifier returns only the source kind, never the path or selected bytes. A
+# missing path and invalid inline JSON are intentionally one generic `invalid` result because the CLI syntax cannot tell
+# which one the caller meant without guessing from secret-bearing text.
+settings_argument_bypassing_key_name() {
+  local value="$1" found="" status=0
+  if [ -n "$value" ] && jq_available; then
+    found="$(printf '%s' "$value" | settings_bypass_classification 2>/dev/null)" || status=$?
+    if [ "$status" -eq 0 ]; then
+      [ "$found" = clean ] && return 1
+      printf 'inline\t%s' "$found"
+      return 0
+    fi
+  fi
+
+  if [ -e "$value" ]; then
+    if [ ! -f "$value" ] || [ ! -r "$value" ]; then
+      printf 'file\tunreadable:not a readable regular file'
+      return 0
+    fi
+    if ! jq_available; then
+      printf 'file\tunreadable:jq is unavailable, so this file cannot be inspected'
+      return 0
+    fi
+    status=0
+    found="$(settings_bypass_classification 2>/dev/null < "$value")" || status=$?
+    if [ "$status" -ne 0 ]; then
+      printf 'file\tunreadable:the file could not be parsed as a settings object'
+      return 0
+    fi
+    [ "$found" = clean ] && return 1
+    printf 'file\t%s' "$found"
+    return 0
+  fi
+
+  printf 'invalid'
+}
+
+settings_argument_refusal() {
+  local source="$1" offending="$2" label="the selected --settings value"
+  [ "$source" = file ] && label="the selected --settings file"
+  case "$offending" in
+    invalid)
+      refuse "the --settings value is not a valid JSON object or a readable settings file" ;;
+    unreadable:*)
+      refuse "$label could not be checked (${offending#unreadable:}); an unverifiable --settings value stops the launch rather than passing as clean" ;;
+    apiKeyHelper)
+      refuse "$label defines apiKeyHelper, which outranks your Claude login and bills whatever key it returns; remove it or use a per-command wrapper" ;;
+    ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)
+      refuse "$label sets $offending to an sk-ant-api* Console key, which takes the same native passthrough branch and bills API credits rather than your subscription" ;;
+    ANTHROPIC_BASE_URL)
+      refuse "$label sets ANTHROPIC_BASE_URL in its \`env\` block to an address that is not this host's loopback gateway, and that value REPLACES the one this launch sets, so the session would talk to it instead of the gateway" ;;
+    *)
+      refuse "$label carries $offending, which routes Claude Code to a cloud provider and bypasses this gateway" ;;
+  esac
+}
+
+assert_forwarded_settings_are_effective() {
+  local -a arguments=("$@")
+  local index=0 argument value result source offending
+  while [ "$index" -lt "${#arguments[@]}" ]; do
+    argument="${arguments[$index]}"
+    case "$argument" in
+      --) break ;;
+      --settings)
+        index=$((index + 1))
+        if [ "$index" -ge "${#arguments[@]}" ] || [ -z "${arguments[$index]}" ]; then
+          printf 'error: --settings requires a non-empty file-or-json value\n' >&2
+          return 2
+        fi
+        value="${arguments[$index]}"
+        ;;
+      --settings=*)
+        value="${argument#--settings=}"
+        if [ -z "$value" ]; then
+          printf 'error: --settings requires a non-empty file-or-json value\n' >&2
+          return 2
+        fi
+        ;;
+      *) index=$((index + 1)); continue ;;
+    esac
+    if result="$(settings_argument_bypassing_key_name "$value")"; then
+      if [ "$result" = invalid ]; then
+        settings_argument_refusal inline invalid
+      fi
+      source="${result%%$'\t'*}"
+      offending="${result#*$'\t'}"
+      settings_argument_refusal "$source" "$offending"
+    fi
+    index=$((index + 1))
+  done
+}
+
 # An exported Console key displaces the OAuth login and bills credits on the very same native
 # passthrough branch, so it is refused by PREFIX rather than silently accepted.
 console_key_env_name() {
@@ -1006,10 +1127,13 @@ cmd_ensure() {
 }
 
 cmd_launch() {
+  local permission_profile="$1"
+  shift
   require_ocx
   # Checked BEFORE any gateway is started: a refused launch must not leave a proxy running
   # that the operator did not ask for.
   assert_gateway_route_is_effective
+  assert_forwarded_settings_are_effective "$@" || return $?
 
   if ! command -v claude >/dev/null 2>&1; then
     printf 'error: the `claude` CLI is not on PATH; opencodex cannot launch it\n' >&2
@@ -1031,6 +1155,17 @@ cmd_launch() {
     export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
   fi
 
+  # Claude Code flattens auto-fetched claude.ai connector tools into Anthropic tool names such
+  # as `mcp__claude_ai_<connector>__<tool>`. Muse Spark rejects the whole request when any one
+  # of those names exceeds its 64-character function-name ceiling, before the model can answer
+  # or choose a different tool. Measured on 2026-08-12 with AlphaVantage (68) and Robinhood (65).
+  # Keep local/project/plugin MCP servers: this switch gates only auto-fetched claude.ai cloud
+  # connectors. Preserve an explicit operator value so a native-Claude or known-compatible
+  # gateway session can opt back in with `ENABLE_CLAUDEAI_MCP_SERVERS=true ccodex launch`.
+  if [ -z "${ENABLE_CLAUDEAI_MCP_SERVERS+x}" ]; then
+    export ENABLE_CLAUDEAI_MCP_SERVERS=false
+  fi
+
   printf 'preparing gateway-routed Claude Code\n'
   ensure_gateway_up
   local json port
@@ -1042,18 +1177,62 @@ cmd_launch() {
   printf '  auth      : your own Claude login is preserved and sent to the gateway. Native claude\n'
   printf '              models pass through verbatim to Anthropic on your subscription; gateway\n'
   printf '              models route to their own providers. This wrapper never reads it.\n'
+  printf '  connectors: claude.ai cloud connectors are off by default for gateway compatibility;\n'
+  printf '              set ENABLE_CLAUDEAI_MCP_SERVERS=true before launch to opt in explicitly\n'
+  if [ "$permission_profile" = yolo ]; then
+    printf '  permissions: BYPASSED (--yolo); Auto classifier and ordinary approval checks are off\n'
+  else
+    printf '  permissions: no ccodex profile selected; forwarded Claude arguments remain authoritative\n'
+  fi
   printf '  routed at : http://127.0.0.1:%s\n' "${port:-unknown}"
-  # Forwarded Claude arguments can contain inline settings and secrets. Never echo raw argv.
+  # Accepted Claude arguments retain their exact bytes and boundaries. They can still contain
+  # settings and secrets, so validation never becomes an excuse to echo raw argv.
   printf '  command   : mise -C %s exec -- ocx claude [forwarded arguments withheld]\n\n' "$root"
   # ocx claude re-checks liveness, then execs `claude` with stdio inherited. It injects a marker
   # token ONLY when markerMode resolves to "proxy" (cli/claude.ts:133) or an admission key is
   # configured (:115); with a detected login neither fires, so Claude Code keeps its own OAuth
   # and the native models pass through. It also pre-writes the gateway model cache (:286), which
   # is what puts the routed ids in the /model picker.
-  ocx claude "$@"
+  if [ "$permission_profile" = yolo ]; then
+    ocx claude --dangerously-skip-permissions "$@"
+  else
+    ocx claude "$@"
+  fi
+}
+
+assert_yolo_has_no_competing_permission_control() {
+  local argument
+  for argument in "$@"; do
+    case "$argument" in
+      --yolo|--dangerously-skip-permissions|--dangerously-skip-permissions=*|--allow-dangerously-skip-permissions|--allow-dangerously-skip-permissions=*|--permission-mode|--permission-mode=*)
+        printf 'REFUSED: --yolo owns the session permission mode; remove the competing %s argument\n' "$argument" >&2
+        return 3
+        ;;
+    esac
+  done
+}
+
+cmd_launch_route() {
+  local permission_profile="$1" forward_verbatim="$2"
+  shift 2
+  if ! $forward_verbatim; then
+    local argument
+    for argument in "$@"; do
+      if [ "$argument" = --yolo ]; then
+        printf 'REFUSED: --yolo is a wrapper option and must be the first argument after the launch verb\n' >&2
+        return 3
+      fi
+    done
+  fi
+  if [ "$permission_profile" = yolo ]; then
+    assert_yolo_has_no_competing_permission_control "$@" || return $?
+  fi
+  cmd_launch "$permission_profile" "$@"
 }
 
 cmd_launch_ultracode() {
+  local permission_profile="$1" forward_verbatim="$2"
+  shift 2
   local argument previous=""
   for argument in "$@"; do
     case "$argument" in
@@ -1061,12 +1240,32 @@ cmd_launch_ultracode() {
         printf 'REFUSED: launch-ultracode owns the session --settings value; use ordinary launch for a custom settings document\n' >&2
         return 3
         ;;
-      --dangerously-skip-permissions|--permission-mode=bypassPermissions)
+      --dangerously-skip-permissions|--dangerously-skip-permissions=*|--allow-dangerously-skip-permissions|--allow-dangerously-skip-permissions=*|--permission-mode=bypassPermissions)
+        if [ "$permission_profile" = yolo ]; then
+          printf 'REFUSED: --yolo owns the session permission mode; remove the competing %s argument\n' "$argument" >&2
+          return 3
+        fi
         printf 'REFUSED: launch-ultracode never bypasses permissions; use ordinary launch for an explicitly chosen risk profile\n' >&2
         return 3
         ;;
+      --permission-mode|--permission-mode=*)
+        if [ "$permission_profile" = yolo ]; then
+          printf 'REFUSED: --yolo owns the session permission mode; remove the competing %s argument\n' "$argument" >&2
+          return 3
+        fi
+        ;;
+      --yolo)
+        if ! $forward_verbatim; then
+          printf 'REFUSED: --yolo is a wrapper option and must be the first argument after the launch verb\n' >&2
+          return 3
+        fi
+        ;;
       bypassPermissions)
         if [ "$previous" = "--permission-mode" ]; then
+          if [ "$permission_profile" = yolo ]; then
+            printf 'REFUSED: --yolo owns the session permission mode; remove the competing --permission-mode argument\n' >&2
+            return 3
+          fi
           printf 'REFUSED: launch-ultracode never bypasses permissions; use ordinary launch for an explicitly chosen risk profile\n' >&2
           return 3
         fi
@@ -1074,7 +1273,10 @@ cmd_launch_ultracode() {
     esac
     previous="$argument"
   done
-  cmd_launch --settings '{"ultracode":true}' "$@"
+  if [ "$permission_profile" = yolo ]; then
+    assert_yolo_has_no_competing_permission_control "$@" || return $?
+  fi
+  cmd_launch "$permission_profile" --settings '{"ultracode":true}' "$@"
 }
 
 
@@ -1488,12 +1690,27 @@ case "$route" in
       verb_usage "$route"
       exit 0
     fi
-    # Every route uses one leading wrapper separator to reach Claude Code.
-    strip_forwarding_separator "${1:-}" && shift
+    # Every route uses one leading wrapper separator to reach Claude Code. For the two launch
+    # routes it also disables the wrapper-owned --yolo interpretation, so `-- --yolo` is passed
+    # literally while a first `--yolo` is consumed here and translated into Claude's explicit
+    # permission-bypass flag.
+    forward_verbatim=false
+    if strip_forwarding_separator "${1:-}"; then
+      shift
+      forward_verbatim=true
+    fi
     case "$route" in
       ensure) [ "$#" -eq 0 ] || { printf 'error: `ensure` takes no arguments\n' >&2; exit 2; }; cmd_ensure ;;
-      launch) cmd_launch "$@" ;;
-      launch-ultracode) cmd_launch_ultracode "$@" ;;
+      launch)
+        permission_profile=ordinary
+        if ! $forward_verbatim && [ "${1:-}" = --yolo ]; then permission_profile=yolo; shift; fi
+        cmd_launch_route "$permission_profile" "$forward_verbatim" "$@"
+        ;;
+      launch-ultracode)
+        permission_profile=ordinary
+        if ! $forward_verbatim && [ "${1:-}" = --yolo ]; then permission_profile=yolo; shift; fi
+        cmd_launch_ultracode "$permission_profile" "$forward_verbatim" "$@"
+        ;;
       status) cmd_status "$@" ;;
       restart) cmd_restart "$@" ;;
       configure) cmd_configure "$@" ;;

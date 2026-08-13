@@ -14,9 +14,14 @@ Route the consequence of a wrong answer, not task prestige or marketing rank.
 
 ## Dispatch ladder
 
-The stable policy has four tiers and three eligible primary pairs. A pair declares the
-eligible route family; the row-specific selection condition decides which exact member can
-run. Do not convert this into a provider default or a requirement to spend tokens on both.
+The stable policy has four tiers and three incumbent eligible primary pairs. A pair declares
+the production-admitted route family; the row-specific selection condition decides which exact
+member can run. The candidate universe is deliberately broader: `/sdlc-rightsize` discovers live
+configured providers and Claude-subscription passthrough, then may evaluate another exact route.
+Discovery or benchmark rank does not add that route to a pair. Only target-representative local
+qualification may recommend promotion, and the checked-in runtime receipt policy must separately
+admit the exact tuple before production dispatch. Do not convert a pair into a provider default
+or a requirement to spend tokens on both.
 
 1. **Frontier / derail:** `gpt-5.6-sol` or `claude-fable-5`. Sol carries an advisory
    frame, scale-setting recommendation, or candidate settled-truth derivation. Fable is
@@ -45,6 +50,23 @@ visible retry. Importance alone never moves it up. Choose inside each pair by ta
 independent perspective, verified transport, current quota, and correlated-error risk.
 There is no global provider preference and no requirement to spend tokens on all six.
 
+## OCX Ultracode Workflow marker rule
+
+For an **OCX Ultracode Workflow**, every explicit `model` ID passed to `agent()` must use that
+model's exact `[1m]` request form. The marker is part of the immutable outbound request: do not
+strip it, substitute an unsuffixed/base ID, or retry on an unsuffixed form.
+
+Before constructing the `agent()` call, the external authenticated harness must establish that
+that exact `[1m]` model/effort/context tuple is certified by policy, admitted by the active
+transport/catalog, and readable through the required identity/request-injection evidence. If any
+of those facts is unavailable, ambiguous, or fails, **stop before dispatch**; make no Workflow
+call and return one advisory `SeedProposal` to the conductor. A model's bare/base tuple is not a
+fallback for this OCX Ultracode Workflow rule.
+
+The suffix remains a request rather than proof of served context. The identity readback may report
+the base model ID, and effective-context readback may honestly be `unavailable`; neither fact
+permits removing `[1m]`, and neither claims a provider intrinsically serves 1M.
+
 ## Required dispatch contract
 
 A model name is not a route; a route is provider+lane+wire-format+auth+region+id+
@@ -59,7 +81,8 @@ Every delegated call or named-workflow worker consumes one provider-neutral
 - an explicit requested effort and context form, kept separate from independently observed
   provider, model identity, effective effort, and effective context telemetry;
 - immutable request-injection evidence: `request_injection_status: verified` and closed
-  `request_injection_evidence` proving the exact model and effort sent by the launcher or adapter;
+  `request_injection_evidence` proving the exact model, effort, and context form sent by the
+  launcher or adapter;
 - independent model-identity evidence: non-unknown `resolved_provider` and
   `resolved_model_id`, `model_readback_status: verified`, a closed
   `model_readback_evidence`. Independent provider/model observation may honestly be unavailable
@@ -79,6 +102,42 @@ and effective readback are different evidence classes: never copy requested valu
 resolved or readback fields, and never require impossible effective effort or context readback
 after request injection and model identity are verified. A requested value, host default,
 alias, or echoed prompt text is not resolution evidence.
+
+## Local qualification and Pareto evidence
+
+`skills/model-tier-rightsizing/scripts/rightsize.py` is the bounded measurement surface behind
+`/sdlc-rightsize`. It separates three route states: `catalog-only`, `route-probed`, and the
+task-class-scoped `role-qualified`. The bundled smoke pack tests transport and verifier mechanics
+only; it can never promote. Qualification requires a digest-bound target-representative pack,
+at least five held-out tasks in the selected class, at least three attempts per task, 90% accepted
+attempts, a 95% Wilson lower bound of at least 0.70, zero route/identity failures, and zero
+critical-task failures. Frontier/authority cases are all critical. These are minimum evidence
+requirements, not a claim that every workload needs only fifteen attempts; a calibration may
+require more.
+
+Provenance remains a precedence, not an average: `observed > declared > mined`. Published
+DeepSWE, Artificial Analysis, CursorBench, Prime Intellect, or vendor results may nominate and
+order already discovered candidates for local evaluation. They cannot raise a qualification rung,
+prove a route or context form, fill a scale-setter slot, or grant runtime-policy admission.
+
+After hard filters for route identity, semantic control, context feasibility, qualification, and
+runtime admission, compute a separate Pareto front per task class. Maximize the locally observed
+success lower bound and minimize route/identity failure plus the selected cost, token/quota, or
+wall-time measure. Missing data is not zero and cannot establish dominance. Keep mean, median,
+observed per-accepted economics, and provenance distinct. Claude-subscription marginal cost is
+unknown (`null`), never free; API-equivalent cost and quota/usage-credit state are separate facts.
+
+Context is a feasibility constraint rather than an optimization reward. Choose the smallest exact
+certified request form that fits peak input, output reserve, and safety margin. Keep model ID and
+context form separate; `[1m]` is eligible only for an already certified exact tuple or dedicated
+long-context qualification, and requested context never proves served context.
+
+A generated `model-task-map/v2` is still advisory. Local `role-qualified` evidence and checked-in
+runtime-policy admission are both required for a dispatchable recommendation; neither authorizes
+spawn. Evaluation calls themselves require an explicit authorization digest after the operator
+has reviewed routes, attempts, data egress, budgets, usage-credit implications, outputs, and stop
+conditions. Never turn the evaluator into a worker scheduler, queue, daemon, or production
+launcher.
 
 ## Receipt admission boundary
 
@@ -130,32 +189,45 @@ forwarded verbatim to the default provider rather than refused, so bare and pref
 unknown ID behave identically. These fields exist only on the gateway route; a direct-adapter
 receipt records `adapter_response_readback` and carries neither.
 
-The policy validates only certified requested tuples. Claude base tuples remain eligible; exact
-Claude `[1m]` forms are invalid until tuple-specific policy evidence exists. GPT `[1m]` forms
-remain eligible only where calibration supports that tuple. It emits deterministic
-validated/invalid JSON with a canonical JSON SHA-256 digest. It is stdlib-only.
+The policy validates only certified requested tuples. Claude base tuples remain eligible outside
+OCX Ultracode Workflow; exact Claude `[1m]` forms are invalid until tuple-specific policy evidence
+exists, so that mode stops before dispatch rather than selecting the base tuple. GPT `[1m]` forms
+remain eligible only where calibration supports that tuple. It emits deterministic validated/invalid
+JSON with a canonical JSON SHA-256 digest. It is stdlib-only.
 
-This repository supplies no host launcher. An external authenticated harness is the sole
-admission and spawn authority: it must invoke validation immediately before spawn, correlate
-the digest with immutable spawn evidence, and enforce no-bypass request injection and worker
-identity. Unsupported native host paths fail closed; do not replace that failure with a host
-default, adapter class, scheduler, retries, journal, queue, daemon, or Evolutionary Core.
+This repository supplies no production worker launcher. The bounded rightsizing evaluator may
+invoke the existing reviewed `ccodex` launcher only for an operator-approved evaluation plan; it
+cannot dispatch workflow roles. `receipt_admission.py` checks only a supplied receipt's internal
+schema and tuple consistency; it does not by itself enforce the OCX Ultracode `[1m]` marker rule,
+observe the outbound `agent()` argument, admit a route, or spawn a worker. An external authenticated
+harness remains the sole production admission and spawn authority: it must invoke validation
+immediately before spawn, correlate the digest with immutable spawn evidence, and enforce no-bypass
+request injection, worker identity, and the OCX Ultracode marked-form rule. Unsupported native host
+paths fail closed; do not replace that failure with a host default, adapter class, scheduler,
+retries, journal, queue, daemon, or Evolutionary Core.
 
-An executable Workflow call pins both fields on every worker; the second vendor is used
-only when it produces a distinct artifact:
+Ordinary non-OCX dispatch remains governed by the certified tuple policy: a certified `base`
+tuple can validate there, but it is never an OCX Ultracode fallback.
+
+An executable Workflow call pins both fields on every worker; a second vendor is used only
+when it produces a distinct artifact. In OCX Ultracode Workflow mode, every explicit model form
+carries `[1m]` and must be certified/admitted/readable before the call. This currently admitted
+GPT-only example does not make an uncertified Claude form executable:
 
 ```js
 const candidate = await agent(implementationPrompt, {
-  model: 'gpt-5.6-terra', effort: 'xhigh', schema: Candidate,
+  model: 'gpt-5.6-terra[1m]', effort: 'xhigh', schema: Candidate,
 })
 const review = await agent(reviewPrompt(candidate), {
-  model: 'claude-opus-4-8', effort: 'high', schema: ReviewFinding,
+  model: 'gpt-5.6-luna[1m]', effort: 'high', schema: ReviewFinding,
 })
 ```
 
 Do not omit either field on direct subagents, named workflows, retry workers, or reviewers.
 If a host's API separates model/effort assignment from the role prompt, the dispatch receipt
-must still carry the same requested values and the adapter readback state.
+must still carry the same requested values and the adapter readback state. If the adapter cannot
+accept the exact `[1m]` form, stop before the call and return one `SeedProposal`; never remove
+the suffix as a fallback.
 
 ## Fallback discipline
 
@@ -172,6 +244,8 @@ Load the [canonical calibration](references/model-routing-calibration.md) before
 It is the sole human reference for current exact IDs, requested effort bands, alias
 behavior, context boundaries, per-model context windows and their shared-versus-separate
 input/output shape, smoke evidence, quotas, roadmap-family lanes, vendor
-complements, fallbacks, rerun triggers, and auditable receipts. Do not copy its matrices
-here; recalibrate the reference when transport, lineup, telemetry, or representative results
-change.
+complements, fallbacks, rerun triggers, and auditable receipts. Load the versioned
+[benchmark evidence](references/model-benchmark-evidence-2026-08-12.json) only when nominating
+local evaluation candidates; its `mined` claims never replace calibration or observed evidence.
+Do not copy the calibration matrices here; recalibrate the reference when transport, lineup,
+telemetry, or representative results change.

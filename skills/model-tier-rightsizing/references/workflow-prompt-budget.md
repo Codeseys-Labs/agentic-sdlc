@@ -22,7 +22,12 @@ Keep four facts separate (from `model-routing-calibration.md`):
 Codex/ccodex path. It requests a larger upstream context window after dispatch.
 It does not name a different upstream model, does not prove an upstream 1M
 window was granted, does not increase intelligence, and does not satisfy an
-effort or capability claim on its own. The sibling receipt field
+effort or capability claim on its own. **OCX Ultracode Workflow is a distinct
+request-form policy:** every explicit `agent()` `model` ID must carry `[1m]`.
+The exact marked model/effort/context tuple must be certified, admitted, and
+readable before the call; otherwise stop before dispatch and return one
+`SeedProposal`. Never remove the marker, select a base form, or retry an
+unsuffixed form in that mode. The sibling receipt field
 `requested_context_form` is the request; `context_readback_status` remains
 `unavailable` unless transport telemetry independently exposes effective context
 behaviour. Never copy `requested_context_form: "[1m]"` into a readback field.
@@ -56,8 +61,8 @@ From `policy/runtime-assignment-normative-contract-v1.json`
 | `gpt-5.6-terra` | yes | **yes** | same |
 | `gpt-5.6-luna` | yes | **yes** | same |
 | `claude-fable-5` | yes | **no** | exact Claude `[1m]` forms were not separately certified |
-| `claude-opus-4-8` | yes | **no** | keep Claude work to compact packets / immutable deltas |
-| `claude-sonnet-5` | yes | **no** | until those forms pass |
+| `claude-opus-4-8` | yes | **no** | outside OCX Ultracode Workflow, compact packets / immutable deltas; inside it, stop before dispatch |
+| `claude-sonnet-5` | yes | **no** | until those forms pass; never remove `[1m]` to dispatch in OCX Ultracode Workflow |
 | `muse-spark-1.1` / `1.2` / `1.2-contributor` | no entry | **no** | Muse has no `[1m]` and no effort channel (`reasoning.effort` not exposed); see calibration §Muse two routes |
 
 A `RuntimeAssignment` with `requested_context_form: "[1m]"` for a Claude
@@ -82,9 +87,17 @@ encode the wire string.
 
 ## 3. When to use `[1m]` — and when not to
 
-Use `[1m]` **only** for a GPT assignment that will carry a transcript-,
-corpus-, or repository-heavy payload and is on a certified GPT route. The
-calibration's concrete triggers:
+Outside OCX Ultracode Workflow mode, use `[1m]` **only** for a GPT assignment
+that will carry a transcript-, corpus-, or repository-heavy payload and is on
+a certified GPT route. The calibration's concrete triggers:
+
+In OCX Ultracode Workflow mode, **every** explicit `agent()` model ID is
+instead the exact marked request form. Do not infer that an unmarked model is
+allowed because its prompt is small: certification, active-catalog admission,
+and request/identity evidence decide whether it may run. An uncertified or
+unsupported marked form, including a namespaced model whose active adapter has
+not admitted `muse/muse-spark-1.2[1m]` as an exact tuple, stops before dispatch
+and returns one `SeedProposal`; it does not reopen the base form.
 
 - **Frame / Plan** that consumes repository-wide evidence (`sol xhigh [1m]`)
 - **Discover** with repository-wide readers (`terra xhigh [1m]`)
@@ -173,9 +186,14 @@ Typical shape that fails:
 
 ```js
 // ANTI-PATTERN — embeds ~80k of calibration plus inventories into every call
-const merged = await agent(`You are the synthesizer. Inventories:\n${JSON.stringify(inventories, null, 2)}\nTaxonomy A:\n${JSON.stringify(taxonomies[0], null, 2)}\n...`, { model: 'gpt-5.6-sol', effort: 'xhigh' })
+const merged = await agent(`You are the synthesizer. Inventories:\n${JSON.stringify(inventories, null, 2)}\nTaxonomy A:\n${JSON.stringify(taxonomies[0], null, 2)}\n...`, { model: 'gpt-5.6-sol[1m]', effort: 'xhigh' })
 // → Prompt is too long
 ```
+
+The marked form does not excuse the oversized prompt. In OCX Ultracode Workflow
+mode it is required only after its tuple clears certification/admission/readback;
+if it does not, return a `SeedProposal` before this call rather than use
+`gpt-5.6-sol` without `[1m]`.
 
 `[1m]` does not fix this by itself:
 
@@ -208,7 +226,7 @@ await agent(
    Use targeted search: locate each symbol before reading its file region;
    cap any single file read to ~80 lines. Write the artifact to
    work/taxonomy.json and reply with its path + 3-line summary.`,
-  { model: 'gpt-5.6-terra', effort: 'xhigh', schema: TAXONOMY_SCHEMA }
+  { model: 'gpt-5.6-terra[1m]', effort: 'xhigh', schema: TAXONOMY_SCHEMA }
 )
 ```
 
@@ -241,7 +259,7 @@ await agent(`Inventories (digests only):
 ${taxonomyInputs}
 
 Design a 6-dimension task taxonomy ... Return TAXONOMY_SCHEMA.`,
-  { model: 'gpt-5.6-sol', effort: 'xhigh', schema: TAXONOMY_SCHEMA })
+  { model: 'gpt-5.6-sol[1m]', effort: 'xhigh', schema: TAXONOMY_SCHEMA })
 ```
 
 ### 6.3 Bound the corpus explicitly
@@ -263,24 +281,29 @@ unbounded JSON blob. Each stage's schema is its own budget enforcement:
 If a synthesis needs to merge two prior taxonomies, pass only the fields the
 synthesizer needs, not `JSON.stringify(entirePriorResults, null, 2)`.
 
-### 6.5 Apply `[1m]` narrowly, on the right lane
+### 6.5 Keep the OCX Ultracode request form exact
 
-After the brief is disciplined, add `[1m]` only to the GPT worker that
-legitimately needs a repository-wide context:
+After the brief is disciplined, an OCX Ultracode Workflow still uses `[1m]`
+on **every** explicit model ID. This example shows the certified GPT route:
 
 ```js
-// Only the repo-wide discovery/research worker gets [1m], and only on GPT
+// OCX Ultracode Workflow uses the certified marked model request form.
 await agent(repoWideDiscoveryPrompt, {
-  model: 'gpt-5.6-terra',
+  model: 'gpt-5.6-terra[1m]',
   effort: 'xhigh',
-  // requested_context_form: "[1m]" — expressed via the harness's context form,
-  // not by inventing a new model string
 })
+
+// The receipt records the corresponding requested_context_form: "[1m]".
+// If that exact marked tuple is not certified/admitted/readable, return a
+// SeedProposal before calling agent(); do not retry with gpt-5.6-terra.
 ```
 
-Stay within `certified_context_forms_by_model`. A request for `claude-*`
-with `[1m]` will be rejected by `receipt_admission.py`; a request for `muse/*`
-with `[1m]` has no defined behaviour.
+Stay within the exact certified tuple set. A request for `claude-*` with
+`[1m]` will currently be rejected by `receipt_admission.py`; a request for
+`muse/*[1m]` has no admitted syntax or tuple in the current policy. In OCX
+Ultracode Workflow mode, both are a stop-before-dispatch `SeedProposal`, not a
+reason to remove `[1m]`. Outside that mode, use the canonical policy for a
+compact base-form route.
 
 ### 6.6 Scale effort and width with the failure, not the prestige
 
@@ -397,9 +420,14 @@ Before dispatching a `Workflow()`:
       cap, not "read everything."
 - [ ] Handoffs between stages pass digests or typed schema outputs, not
       transcripts.
-- [ ] `[1m]` appears only on `gpt-5.6-sol` / `terra` / `luna` workers that are
-      repository- or transcript-heavy, and the `RuntimeAssignment` records
-      `requested_context_form: "[1m]"` alongside a valid `requested_effort`.
+- [ ] In OCX Ultracode Workflow mode, every explicit `agent()` `model` ID ends
+      with `[1m]`, and its exact marked model/effort/context tuple is certified,
+      admitted, and readable before the call. An unsupported model form produces
+      one stop-before-dispatch `SeedProposal`, never an unsuffixed retry.
+- [ ] Outside OCX Ultracode Workflow mode, `[1m]` appears only on
+      repository- or transcript-heavy certified GPT workers, and the
+      `RuntimeAssignment` records `requested_context_form: "[1m]"` alongside a
+      valid `requested_effort`.
 - [ ] The session floor is still 272000 unless the session is genuinely
       single-model on a larger window and the raise is documented.
 - [ ] Output budgets on shared-pool (`muse`) sessions are set explicitly

@@ -5,16 +5,18 @@ import re
 import tempfile
 import tomllib
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
 ROUTER = ROOT / "skills" / "model-tier-rightsizing" / "SKILL.md"
 CALIBRATION = ROUTER.parent / "references" / "model-routing-calibration.md"
+WORKFLOW_PROMPT_BUDGET = ROUTER.parent / "references" / "workflow-prompt-budget.md"
 FLAGSHIP = ROOT / "skills" / "agentic-sdlc" / "references" / "tiered-orchestration.md"
 RIGHTSIZE_COMMAND = ROOT / "commands" / "sdlc-rightsize.md"
 RIGHTSIZE_COMMAND_DESCRIPTION = (
-    "Probe live routing evidence and produce a regenerable model-task map for certified dispatch."
+    "Discover eligible routes, plan bounded local evaluations, and render a Pareto model-task map."
 )
 
 CONSUMERS = (
@@ -58,6 +60,17 @@ GLOBAL_ROLE_SURFACES = tuple(sorted((ROOT / "agents" / "claude").glob("sdlc-*.md
 )
 RESEARCH_ROLE_SURFACES = tuple(sorted((ROOT / "agents" / "codex" / "research").glob("*.toml")))
 RECEIPT_POLICY = ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+RECEIPT_ADMISSION = ROOT / "skills" / "model-tier-rightsizing" / "scripts" / "receipt_admission.py"
+RECEIPT_ADMISSION_SPEC = spec_from_file_location("receipt_admission", RECEIPT_ADMISSION)
+assert RECEIPT_ADMISSION_SPEC is not None and RECEIPT_ADMISSION_SPEC.loader is not None
+receipt_admission = module_from_spec(RECEIPT_ADMISSION_SPEC)
+RECEIPT_ADMISSION_SPEC.loader.exec_module(receipt_admission)
+RIGHTSIZE_POLICY = ROOT / "skills" / "model-tier-rightsizing" / "policy" / "rightsize-evaluation-v1.json"
+RIGHTSIZE_TASK_POLICY = ROOT / "skills" / "model-tier-rightsizing" / "policy" / "rightsize-task-pack-v1.json"
+RIGHTSIZE_SMOKE_PACK = ROOT / "skills" / "model-tier-rightsizing" / "evaluations" / "harness-smoke-v1.json"
+BENCHMARK_EVIDENCE = ROOT / "skills" / "model-tier-rightsizing" / "references" / "model-benchmark-evidence-2026-08-12.json"
+RIGHTSIZE_RESEARCH = ROOT / "docs" / "research" / "2026-08-12-model-rightsizing-benchmarks.md"
+RIGHTSIZE_ADR = ROOT / "docs" / "adr" / "0015-local-evaluation-is-the-rightsizing-promotion-boundary.md"
 CANONICAL_RECEIPT_FIELDS = tuple(json.loads(RECEIPT_POLICY.read_text(encoding="utf-8"))["canonical_receipt_fields"])
 
 GLOBAL_RUNTIME_CONSUMERS = (
@@ -540,6 +553,49 @@ def _assert_historical_evidence(text: str) -> None:
     assert re.search(r"(?is)\[1m\].{0,240}(?:does not|not).{0,100}(?:1M|context|intelligence)", text)
 
 
+
+def _ocx_workflow_agent_tuples(text: str) -> tuple[tuple[str, str, str], ...]:
+    option_objects = re.findall(
+        r"(?is)\bagent\([\s\S]{0,800}?,\s*\{(?P<options>[^{}]*)\}\s*\)", text
+    )
+    assert option_objects, "no executable agent() options objects found"
+
+    parsed: list[tuple[str, str, str]] = []
+    for options in option_objects:
+        model = re.search(r"(?i)\bmodel\s*:\s*['\"]([^'\"]+)['\"]", options)
+        effort = re.search(r"(?i)\beffort\s*:\s*['\"]([^'\"]+)['\"]", options)
+        assert model is not None, f"agent() options omit an explicit model: {options}"
+        assert effort is not None, f"agent() options omit an explicit effort: {options}"
+        model_form = model.group(1)
+        assert model_form.endswith("[1m]"), f"OCX Ultracode model form is not marked: {model_form}"
+        parsed.append((model_form.removesuffix("[1m]"), effort.group(1), "[1m]"))
+    return tuple(parsed)
+
+
+def _assert_ocx_workflow_agent_tuples_are_certified(text: str, policy: dict[str, object]) -> None:
+    certified_tuples = {tuple(item) for item in policy["certified_request_tuples"]}
+    for model_id, effort, context_form in _ocx_workflow_agent_tuples(text):
+        assert (model_id, effort, context_form) in certified_tuples, (
+            "OCX Ultracode agent() model/effort/context tuple is not certified",
+            model_id,
+            effort,
+            context_form,
+        )
+
+
+def _assert_namespaced_ocx_marker_is_failclosed(text: str, policy: dict[str, object]) -> None:
+    marked_model = "muse/muse-spark-1.2[1m]"
+    assert marked_model in text
+    assert not any(
+        model_id == marked_model.removesuffix("[1m]") and context_form == "[1m]"
+        for model_id, _effort, context_form in policy["certified_request_tuples"]
+    )
+    assert re.search(
+        r"(?is)muse/muse-spark-1\.2\[1m\].{0,160}(?:not currently )?certified.{0,100}admitted.{0,160}stop before dispatch",
+        text,
+    )
+
+
 class ModelTierRightsizingTests(unittest.TestCase):
     def test_sdlc_rightsize_is_a_claude_command_that_loads_rightsizing_before_dispatch(self) -> None:
         self.assertTrue(RIGHTSIZE_COMMAND.is_file())
@@ -550,6 +606,9 @@ class ModelTierRightsizingTests(unittest.TestCase):
         skill_load = text.index("skills/model-tier-rightsizing/SKILL.md")
         dispatch_boundary = text.index("Before spawn")
         self.assertLess(skill_load, dispatch_boundary)
+        self.assertIn("Do not dispatch any worker while running this command", text)
+        self.assertIn("generic `Explore` or `Plan` agent", text)
+        self.assertIn("generated `ocx-*` agent", text)
         self.assertNotIn(RIGHTSIZE_COMMAND.stem, {path.stem for path in (ROOT / "agents" / "codex").glob("*.toml")})
 
     def test_canonical_operational_matrices_allocate_pairs_with_selection_conditions(self) -> None:
@@ -566,6 +625,96 @@ class ModelTierRightsizingTests(unittest.TestCase):
         self.assertIn("certified bounded frontier/adversarial", router)
         self.assertIn("stops or reduces scope", router)
         _assert_no_unsafe_operational_prose(router)
+
+
+
+    def test_ultracode_workflow_explicit_models_require_certified_one_million_request_forms(self) -> None:
+        router = ROUTER.read_text(encoding="utf-8")
+        calibration = CALIBRATION.read_text(encoding="utf-8")
+        prompt_budget = WORKFLOW_PROMPT_BUDGET.read_text(encoding="utf-8")
+
+        for text in (router, calibration, prompt_budget):
+            with self.subTest(surface=text[:40]):
+                self.assertRegex(
+                    text,
+                    r"(?is)OCX Ultracode Workflow.{0,300}(?:every|each).{0,160}explicit.{0,80}model.{0,160}`?\[1m\]`?",
+                )
+                self.assertRegex(
+                    text,
+                    r"(?is)(?:uncertified|unadmitted|unreadable|unresolved|unsupported).{0,160}(?:stop before dispatch|SeedProposal|refus)",
+                )
+                self.assertNotRegex(
+                    text,
+                    r"(?is)OCX Ultracode Workflow.{0,500}(?:use|select|retry|fall back).{0,120}(?:an?\s+)?(?:unsuffixed|base).{0,80}(?:as|instead|default).{0,80}(?:fallback|form|model)",
+                )
+
+        policy = json.loads(RECEIPT_POLICY.read_text(encoding="utf-8"))
+        # These three documents are the authoritative OCX Ultracode Workflow surfaces. Their
+        # executable agent() examples must remain syntactically shallow option objects; the
+        # bounded parser deliberately does not claim to parse arbitrary JavaScript.
+        example_text = router + "\n" + calibration + "\n" + prompt_budget
+        _assert_ocx_workflow_agent_tuples_are_certified(example_text, policy)
+        _assert_namespaced_ocx_marker_is_failclosed(calibration, policy)
+
+        unsuffixed = example_text.replace("gpt-5.6-terra[1m]", "gpt-5.6-terra", 1)
+        with self.assertRaises(AssertionError):
+            _assert_ocx_workflow_agent_tuples_are_certified(unsuffixed, policy)
+
+        namespaced = calibration.replace("muse/muse-spark-1.2[1m]", "gpt-5.6-terra[1m]", 1)
+        with self.assertRaises(AssertionError):
+            _assert_namespaced_ocx_marker_is_failclosed(namespaced, policy)
+
+        unsupported_effort = example_text.replace("effort: 'xhigh'", "effort: 'ultra'", 1)
+        with self.assertRaises(AssertionError):
+            _assert_ocx_workflow_agent_tuples_are_certified(unsupported_effort, policy)
+
+        calibration_unsuffixed = calibration + """
+```js
+await agent(calibrationExample, { model: 'gpt-5.6-terra', effort: 'xhigh' })
+```
+"""
+        with self.assertRaises(AssertionError):
+            _assert_ocx_workflow_agent_tuples_are_certified(
+                router + "\n" + calibration_unsuffixed + "\n" + prompt_budget, policy
+            )
+
+        calibration_unsupported_effort = calibration + """
+```js
+await agent(calibrationExample, { model: 'gpt-5.6-terra[1m]', effort: 'ultra' })
+```
+"""
+        with self.assertRaises(AssertionError):
+            _assert_ocx_workflow_agent_tuples_are_certified(
+                router + "\n" + calibration_unsupported_effort + "\n" + prompt_budget, policy
+            )
+
+        self.assertIn("OCX Ultracode Workflow marker rule", router)
+        self.assertRegex(
+            router,
+            r"proving the exact model, effort, and context form sent by the\s+launcher or adapter",
+        )
+        self.assertRegex(
+            router,
+            r"(?is)receipt_admission\.py.{0,300}does not by itself enforce.{0,120}OCX\s+Ultracode.{0,120}\[1m\]",
+        )
+        self.assertRegex(
+            router,
+            r"(?is)An external authenticated\s+harness.{0,220}?sole.{0,160}(?:admission|spawn)",
+        )
+
+        base_receipt = receipt_admission.construct_receipt(
+            policy=policy,
+            requested_model_id="gpt-5.6-terra",
+            requested_effort="xhigh",
+            requested_context_form="base",
+            adapter_id="test-adapter",
+            adapter_version="v1",
+            adapter_config={"mode": "ordinary"},
+            model_identity_basis="unambiguous_exact_id_mapping",
+            effort_readback_status="unavailable",
+            context_readback_status="unavailable",
+        )
+        self.assertEqual(receipt_admission.receipt_errors(base_receipt, policy), [])
 
     def test_canonical_evidence_boundaries_historical_aliases_and_quota_history_remain_explicit(self) -> None:
         _assert_historical_evidence(CALIBRATION.read_text(encoding="utf-8"))
@@ -890,6 +1039,121 @@ class ModelTierRightsizingTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 with self.assertRaises(AssertionError):
                     assertion(text)
+
+
+class RightsizeV2ContractTests(unittest.TestCase):
+    def test_command_uses_adaptive_questions_and_separate_authorization(self) -> None:
+        text = RIGHTSIZE_COMMAND.read_text(encoding="utf-8")
+        for required in (
+            "AskUserQuestion",
+            "free-text **Other**",
+            "question-required:<field>",
+            "authorization_digest",
+            "Run evaluation",
+            "Adjust choices",
+            "Cancel",
+            "Do not dispatch any worker while running this command",
+            "generic `Explore` or `Plan` agent",
+            "generated `ocx-*` agent",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn("`provider_plane` is constrained", text)
+        self.assertIn("gateway-claude-subscription-passthrough", text)
+
+    def test_v2_policy_and_smoke_pack_are_closed_and_non_promoting(self) -> None:
+        policy = json.loads(RIGHTSIZE_POLICY.read_text(encoding="utf-8"))
+        task_policy = json.loads(RIGHTSIZE_TASK_POLICY.read_text(encoding="utf-8"))
+        pack = json.loads(RIGHTSIZE_SMOKE_PACK.read_text(encoding="utf-8"))
+        self.assertEqual(policy["run_spec_schema_version"], "rightsize-run-spec/v1")
+        self.assertEqual(policy["output_schema_version"], "model-task-map/v2")
+        self.assertFalse(policy["promotion"]["pilot_may_promote"])
+        self.assertTrue(policy["promotion"]["runtime_policy_admission_remains_separate"])
+        self.assertEqual(pack["schema_version"], task_policy["task_pack_schema_version"])
+        self.assertEqual(pack["kind"], "harness-smoke")
+        self.assertFalse(pack["target_representative"])
+        self.assertFalse(pack["expected_results_hidden_or_immutable"])
+        self.assertTrue(all(task["tools"] == [] for task in pack["tasks"]))
+
+    def test_benchmark_snapshot_classifies_all_artificial_analysis_evaluations(self) -> None:
+        evidence = json.loads(BENCHMARK_EVIDENCE.read_text(encoding="utf-8"))
+        self.assertEqual(evidence["provenance"], "mined")
+        names = {row["evaluation"] for row in evidence["artificial_analysis_applicability"]}
+        for expected in (
+            "Coding Agent Index",
+            "DeepSWE",
+            "Terminal-Bench v2.1",
+            "SWE-Atlas-QnA",
+            "AA-LCR",
+            "IFBench",
+            "ITBench-AA",
+            "AA-Omniscience",
+            "AA-Briefcase",
+            "GDPval-AA v2",
+            "tau3-Banking",
+            "AutomationBench-AA",
+            "EnterpriseOps-Gym-AA",
+            "APEX-Agents-AA",
+            "AA-AnalystAgent",
+            "SciCode",
+            "Harvey LAB-AA",
+            "MMMU-Pro",
+            "Humanity's Last Exam",
+            "GPQA Diamond",
+            "CritPt",
+            "MMLU-Pro",
+            "Global-MMLU-Lite",
+            "MATH-500",
+            "AIME 2025",
+            "LiveCodeBench",
+            "Terminal-Bench Hard",
+            "tau2-Bench Telecom",
+        ):
+            self.assertIn(expected, names)
+
+    def test_research_and_adr_preserve_promotion_and_authority_boundaries(self) -> None:
+        research = RIGHTSIZE_RESEARCH.read_text(encoding="utf-8")
+        adr = RIGHTSIZE_ADR.read_text(encoding="utf-8")
+        for required in (
+            "DeepSWE v1.1",
+            "Artificial Analysis Coding Agent Index v1.3",
+            "CursorBench 3.2",
+            "Prime Intellect / PrimeLabs research",
+            "observed > declared > mined",
+            "active-agent wall time",
+            "decode time",
+            "marginal_cost_usd",
+        ):
+            self.assertIn(required, research)
+        self.assertIn("evaluation is the only path", adr)
+        self.assertIn("not a production launcher", adr)
+        self.assertIn("runtime receipt policy", adr)
+
+    def test_schema_has_exact_routes_and_all_eight_classes(self) -> None:
+        schema = (ROUTER.parent / "references" / "model-task-map-schema.md").read_text(encoding="utf-8")
+        for required in (
+            "model-task-map/v2",
+            "rightsize-evidence/v1",
+            "transport_surface",
+            "route_kind",
+            "auth_basis",
+            "billing_basis",
+            "requested_model_id",
+            "requested_effort",
+            "requested_context_form",
+            "dispatchable_recommendation",
+        ):
+            self.assertIn(required, schema)
+        for task_class in (
+            "mechanical_redo",
+            "deterministic_gated_change",
+            "evidence_extraction",
+            "repository_discovery",
+            "semantic_implementation",
+            "semantic_review",
+            "integration_reconcile",
+            "authority_or_frontier",
+        ):
+            self.assertIn(task_class, schema)
 
 
 if __name__ == "__main__":

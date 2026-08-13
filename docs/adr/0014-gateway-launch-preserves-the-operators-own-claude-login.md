@@ -99,6 +99,18 @@ login`, which establishes that passthrough requires no credential onboarded into
    through 2026 has been unilateral and has reversed direction more than once. This record is
    evidence, not authorization, and it grants no authority for any outward effect.
 
+### 2026-08-13 amendment — selected settings are the third route-integrity channel
+
+Claude Code 2.1.229 was measured with two loopback listeners: the process environment named the
+local gateway listener while an explicit inline `--settings` object set
+`env.ANTHROPIC_BASE_URL` to the other listener. Every request reached the selected-settings
+listener. Decision item 4 therefore has a third current check: ordinary launch validates every
+`--settings <file-or-json>` and `--settings=<file-or-json>` occurrence before gateway startup. The
+value must be one JSON object or a readable file containing one, and it must not contain the same
+provider-routing, base-URL, helper, or Console-key blockers above. Accepted argv remains unchanged;
+settings bytes and paths are inspected but never printed, copied, or persisted. A later literal
+`--` ends Claude's option parsing and therefore the scan, as a separate two-listener probe confirmed.
+
 ## Consequences
 
 - Positive: one launch route instead of three, and it does what the gateway is for. Roughly 370

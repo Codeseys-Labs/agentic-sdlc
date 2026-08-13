@@ -332,6 +332,16 @@ class OperatorToolsTests(unittest.TestCase):
             "#!/bin/sh\n"
             'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done\n'
             '[ "${1:-}" = -- ] && shift\n'
+            'if [ "${1:-} ${2:-} ${3:-} ${4:-}" = "ocx claude config set" ]; then\n'
+            '  printf "STUB-OCX:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"; exit 0\n'
+            "fi\n"
+            'if [ "${1:-} ${2:-} ${3:-}" = "ocx models live" ]; then\n'
+            '  [ "${STUB_OCX_MODELS_FAIL:-}" = 1 ] && { printf "catalog unavailable\\n" >&2; exit 1; }\n'
+            '  printf \'[{"namespaced":"gpt-5.6-luna","native":true,"provider":"openai","disabled":false},{"namespaced":"muse/muse-spark-1.2","provider":"muse","disabled":false}]\\n\'; exit 0\n'
+            "fi\n"
+            'if [ "${1:-}" = jq ]; then\n'
+            '  cat >/dev/null; printf "gpt-5.6-luna\\tnative OCX\\nmuse/muse-spark-1.2\\trouted via muse\\n"; exit 0\n'
+            "fi\n"
             'case "${1:-} ${2:-} ${3:-}" in\n'
             "  'ocx --version ') exit 0 ;;\n"
             "  'ocx health ') exit 0 ;;\n"
@@ -470,6 +480,34 @@ class OperatorToolsTests(unittest.TestCase):
                     self.assertIn(self.SIDE_EFFECT_MARKER, result.stdout)
                     self.assertIn(expected, result.stdout)
 
+    def test_dispatcher_yolo_is_available_on_launch_and_ultracode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+
+            for arguments, expected in (
+                (
+                    ["launch", "--yolo", "--model", "gpt-5.6-sol"],
+                    "STUB-CLAUDE:<--dangerously-skip-permissions><--model><gpt-5.6-sol>",
+                ),
+                (
+                    ["ultracode", "--yolo", "--model", "gpt-5.6-sol"],
+                    "STUB-CLAUDE:<--dangerously-skip-permissions><--settings>"
+                    '<{\"ultracode\":true}><--model><gpt-5.6-sol>',
+                ),
+            ):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [str(config.bin_dir / "ccodex"), *arguments],
+                        capture_output=True, text=True, env=environment, check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(expected, result.stdout)
+                    self.assertNotIn("<--yolo>", result.stdout)
+                    self.assertIn("permissions: BYPASSED", result.stdout)
+
     def test_dispatcher_routes_ensure_in_short_and_long_forms(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
@@ -489,6 +527,145 @@ class OperatorToolsTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn("does not launch Claude Code", result.stdout)
                     self.assertNotIn("STUB-CLAUDE", result.stdout)
+
+    def test_set_fast_model_forwards_one_exact_value_without_launching(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
+            environment = self.stub_environment(root, config.bin_dir)
+
+            for value in ("gpt-5.6-luna", "claude-sonnet-5", "muse/muse-spark-1.2", "-"):
+                with self.subTest(value=value):
+                    result = subprocess.run(
+                        [str(dispatcher), "set-fast-model", value],
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(
+                        f"STUB-OCX:<ocx><claude><config><set><--small-fast-model><{value}>",
+                        result.stdout,
+                    )
+                    self.assertNotIn(self.SIDE_EFFECT_MARKER, result.stdout)
+                    self.assertNotIn("STUB-CLAUDE", result.stdout)
+
+    def test_set_fast_model_bare_invocation_selects_from_claude_families_and_live_ocx(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
+            environment = self.stub_environment(root, config.bin_dir)
+
+            for choice, expected in (
+                ("1", "sonnet"),
+                ("4", "gpt-5.6-luna"),
+                ("5", "muse/muse-spark-1.2"),
+            ):
+                with self.subTest(choice=choice, expected=expected):
+                    result = subprocess.run(
+                        [str(dispatcher), "set-fast-model"],
+                        input=f"{choice}\n",
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Claude Code families", result.stdout)
+                    self.assertIn("Live OCX catalog", result.stdout)
+                    self.assertIn("  5) muse/muse-spark-1.2", result.stdout)
+                    self.assertIn(
+                        "STUB-OCX:<ocx><claude><config><set><--small-fast-model>"
+                        f"<{expected}>",
+                        result.stdout,
+                    )
+                    self.assertNotIn(self.SIDE_EFFECT_MARKER, result.stdout)
+                    self.assertNotIn("STUB-CLAUDE", result.stdout)
+
+    def test_set_fast_model_selector_can_clear_and_cancel_without_a_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
+            environment = self.stub_environment(root, config.bin_dir)
+
+            cleared = subprocess.run(
+                [str(dispatcher), "set-fast-model"], input="6\n",
+                capture_output=True, text=True, env=environment, check=False,
+            )
+            cancelled = subprocess.run(
+                [str(dispatcher), "set-fast-model"], input="q\n",
+                capture_output=True, text=True, env=environment, check=False,
+            )
+
+            self.assertEqual(cleared.returncode, 0, cleared.stderr)
+            self.assertIn(
+                "STUB-OCX:<ocx><claude><config><set><--small-fast-model><->",
+                cleared.stdout,
+            )
+            self.assertEqual(cancelled.returncode, 3)
+            self.assertIn("selection cancelled", cancelled.stderr)
+            self.assertNotIn("config><set", cancelled.stdout)
+
+    def test_set_fast_model_selector_fails_closed_when_live_catalog_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+            environment["STUB_OCX_MODELS_FAIL"] = "1"
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "set-fast-model"], input="1\n",
+                capture_output=True, text=True, env=environment, check=False,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("cannot read the live OCX catalog", result.stderr)
+            self.assertNotIn("config><set", result.stdout)
+
+    def test_set_fast_model_refuses_extra_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
+            environment = self.stub_environment(root, config.bin_dir)
+
+            result = subprocess.run(
+                [str(dispatcher), "set-fast-model", "gpt-5.6-luna", "extra"],
+                capture_output=True,
+                text=True,
+                env=environment,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("usage: ccodex set-fast-model", result.stderr)
+            self.assertNotIn("STUB-OCX", result.stdout)
+
+    def test_set_fast_model_help_is_side_effect_free(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            dispatcher = config.bin_dir / "ccodex"
+            environment = self.stub_environment(root, config.bin_dir)
+
+            result = subprocess.run(
+                [str(dispatcher), "set-fast-model", "--help"],
+                capture_output=True,
+                text=True,
+                env=environment,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("usage: ccodex set-fast-model", result.stdout)
+            self.assertIn("not the Auto mode permission classifier", result.stdout)
+            self.assertNotIn("STUB-OCX", result.stdout)
+            self.assertNotIn("STUB-CLAUDE", result.stdout)
 
     def test_status_says_absent_for_a_file_that_was_never_installed(self) -> None:
         # `unmanaged` for a nonexistent file sent an operator hunting for a conflict to

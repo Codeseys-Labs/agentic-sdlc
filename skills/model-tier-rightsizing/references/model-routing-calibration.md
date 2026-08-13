@@ -53,12 +53,18 @@ promoted into that conclusion.
 
 ## Exact dispatch and requested effort
 
-Every dispatching Workflow consumer must receive an exact bare ID certified by the active
-transport. It must stop before dispatch when that certification or adapter readback is
-unresolved; a provider-neutral static role definition does not select a model. Bare Claude
-tier aliases are unsafe in the current path because settings expand them to
-provider-qualified IDs that ccodex rejects. This calibration does not change settings,
-trust, or configuration.
+Every dispatching Workflow consumer must receive an exact model request form certified by the
+active transport. It must stop before dispatch when that certification or adapter readback is
+unresolved; a provider-neutral static role definition does not select a model. **For an OCX
+Ultracode Workflow, every explicit `model` passed to `agent()` is the exact `[1m]` request
+form.** The exact `[1m]` model/effort/context tuple must be certified, admitted in the active
+served catalog, and readable through required immutable request and identity evidence before the
+call. An uncertified, unadmitted, unreadable, or ambiguous exact form must stop before dispatch
+and return one `SeedProposal`; base/unsuffixed syntax is never a fallback. Preserve a provider prefix in the
+marked form — for example, the syntax is `muse/muse-spark-1.2[1m]`, but it is not currently
+certified or admitted and therefore must stop before dispatch. Bare Claude tier aliases are unsafe in the current path
+because settings expand them to provider-qualified IDs that ccodex rejects. This calibration does
+not change settings, trust, or configuration.
 
 | Consequence lane | Eligible primary exact IDs | Selection condition | Requested effort | Complement | Required gate or control |
 |---|---|---|---|---|---|
@@ -130,10 +136,13 @@ not prove an upstream 1M context window, and does not increase intelligence.
 
 Base-model readback also does not prove compaction or context handling occurred. Verify
 that behavior through client telemetry and a representative task that actually reaches the
-compaction boundary. Use `[1m]` only for transcript-, corpus-, or repository-heavy GPT
-assignments; otherwise prefer bounded disk-backed artifacts. Exact Claude `[1m]` forms
-were not separately certified, so keep Claude work to compact packets and immutable deltas
-until those request forms pass.
+compaction boundary. Outside OCX Ultracode Workflow mode, use `[1m]` only for
+transcript-, corpus-, or repository-heavy GPT assignments and otherwise prefer bounded
+disk-backed artifacts. In OCX Ultracode Workflow mode, the marker is mandatory on **every**
+explicit `agent()` model request instead: an uncertified Claude or Muse `[1m]` tuple stops before
+dispatch rather than reverting to an unsuffixed compact packet. At this calibration date, the
+listed policy certifies `[1m]` tuples only for the GPT primary IDs. Exact Claude `[1m]` forms
+were not separately certified and remain unadmitted until those request forms pass.
 
 ## Context windows
 
@@ -697,6 +706,78 @@ above — it can never manufacture eligibility for a `catalog-only` route. **A b
 never fills a scale-setter slot**: only a locally observed, role-qualified route may occupy
 one, per the Frontier-tier doctrine in `SKILL.md`.
 
+### Bounded local evaluator (2026-08-12 amendment)
+
+`/sdlc-rightsize` now delegates deterministic discovery, normalization, measurement, and rendering
+to `scripts/rightsize.py`. This is a measurement surface, not a worker launcher. It accepts two
+current route kinds:
+
+- `gateway-routed-provider`: an exact live OCX catalog ID with provider-owned auth and billing;
+- `gateway-claude-subscription-passthrough`: an exact non-alias Claude ID carried through the same
+  loopback gateway using the operator's existing `claude.ai` login.
+
+The older `gateway | native-bedrock` `provider_plane` abstraction is retired from the generated
+map. It incorrectly merged auth, billing, discovery source, effort vocabulary, and identity
+strength. Every route now records transport, route kind, provider, auth basis, billing basis,
+exact model ID, requested effort, and requested context form. A configured provider is not a live
+provider; a registry provider is neither. Claude passthrough is deliberately absent from the OCX
+provider catalog and uses the checked-in exact-ID set plus `anthropic-native` attribution. Its
+requested effort may be admitted by a checked-in exact tuple, but no route-specific effort
+vocabulary is called observed unless the transport reports one.
+
+A live evaluation has two phases. `plan` canonicalizes `rightsize-run-spec/v1` and emits an
+authorization digest over target identity, raw catalog, selected routes, task pack, benchmark
+snapshot, attempts, budgets, egress class, output, and stop conditions. Only a separate explicit
+approval permits `evaluate` with that exact digest. A changed input invalidates approval. The
+evaluator never changes provider/gateway configuration, trust, global settings, queues, or the
+real target and never dispatches an agent role.
+
+The bundled `harness-smoke-v1` pack is a pilot and cannot promote. A qualification pack must be
+explicitly target-representative, bind immutable or hidden expected results, provide at least five
+distinct held-out tasks per selected class, and run at least three attempts per task. Promotion
+requires all of:
+
+- accepted rate at least `0.90`;
+- two-sided 95% Wilson lower bound at least `0.70`;
+- zero transport or identity failures;
+- zero failures on tasks marked critical;
+- the normal gate/independent-control predicate for the class.
+
+Every `authority_or_frontier` task is critical. These are minimum admission observations, not a
+universal sample-size sufficiency claim; high-variance work should require more tasks. A newly
+role-qualified route is still production-blocked until `runtime-assignment-receipt-v1.json`
+admits the exact model/effort/context tuple. Evaluation never rewrites that policy.
+
+For each task class, context and semantic controls are hard filters. A measured Pareto front
+compares compatible local pilot or qualification evidence; a separately named dispatch front then
+hard-filters for task-class `role-qualified` evidence and checked-in runtime admission. A measured
+primary may remain explicitly non-dispatchable. Among survivors, Pareto comparison maximizes the
+local success lower bound and minimizes route/identity failure plus the selected cost, token/quota,
+or wall-time measure. Missing data makes candidates incomparable on that dimension; it is never
+zero. Preserve mean and median separately, and compute observed per-accepted economics only from
+compatible local attempts:
+
+```text
+sum(observed attempt cost|tokens|wall time) / accepted successes
+```
+
+The value is unavailable when accepted successes are zero. Subscription marginal cost is `null`,
+not `$0`; API-equivalent cost, quota consumption, and possible usage credits are separate facts.
+Published benchmark data in `model-benchmark-evidence-2026-08-12.json` remains `mined` and may
+order which candidate to measure first. It never enters local metrics or promotes a rung.
+
+Context admission uses expected peak input plus task output reserve and a 10% safety margin. Select
+the smallest certified exact form that fits. Keep `requested_model_id` and
+`requested_context_form` separate even when Markdown renders `[1m]` as a suffix. A provider's
+native million-token base form and Muse's 1,048,576-token shared pool remain `base`; a `[1m]`
+request requires an exact certified tuple and never proves served capacity or compaction.
+
+Regenerate the v2 trio when target identity, route catalog, effort/context metadata, task pack,
+benchmark snapshot, price provenance, evaluator/policy revision, or local measurements change.
+Failed evaluation does not replace a prior map. A complete valid trio may regenerate; partial,
+v1, stale-digest, or user-edited output requires `--regenerate --force`, which still cannot
+bypass failed route evidence.
+
 ## Promotion ladder for a topology or role-substitution change (A0–A6)
 
 Before promoting a change to how models are assigned across roles — adding a new pair
@@ -748,17 +829,22 @@ fan-in; humans authorize outward actions.
 
 | Phase | Eligible primary exact IDs | Selection condition | Requested effort and context | Complement | Gate or control |
 |---|---|---|---|---|---|
-| Frame | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory frame; choose Fable only as the certified bounded adversarial assumptions packet. | Sol `high`; `xhigh` at trust or authority boundaries; `[1m]` only for transcript or repository-heavy frames; Fable `max` bounded packet | The non-selected member re-derives or attacks multiplier assumptions. | Re-derive; conductor adjudicates the recommendation. |
-| Discover | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for dense mapping; choose Opus when an immutable semantic candidate needs independent review. | Terra `xhigh`; `[1m]` for repository-wide readers; Opus `high`, `xhigh` | The non-selected member checks citations and omissions. | Partitioned scope and evidence inventory. |
-| Research | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for synthesis; choose Opus for a certified semantic review of the evidence packet. | Terra `xhigh`, `max`; `[1m]` only for long corpora; Opus `high`, `xhigh` | Luna/Sonnet can extract; Sol analyzes load-bearing unknowns. | Conductor adjudicates unknown disposition. |
-| Plan | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory plan; choose Fable only to attack certified bounded multiplier assumptions. | Sol `xhigh`; `[1m]` when repository-wide evidence is consumed; Fable `max` bounded packet | The non-selected member returns the plan or counterexample artifact. | Advisory plan; conductor alone mutates Seeds. |
-| Act, contained | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to implement interacting constraints; choose Opus to review immutable candidate decisions. | Terra `xhigh`; `max` for interacting constraints; Opus `high`, `xhigh` | The non-selected member produces candidate or review. | Unsuffixed unless artifact-heavy. |
-| Act, deterministic-gated | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the member with verified transport and independent evidence when the deterministic gate remains complete. | `high`, `xhigh` | The non-selected member checks stable evidence. | Unsuffixed by default; same deterministic gate. |
-| Review, semantic | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Opus for semantic review; choose Terra to reproduce and classify an immutable candidate. | Opus `high`, `xhigh`; Terra `xhigh`, `max`; Claude `[1m]` only after exact route certification | The non-selected member supplies review or reproduction. | Immutable candidate and acceptance criteria. |
+| Frame | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory frame; choose Fable only as the certified bounded adversarial assumptions packet. | Sol `high`; `xhigh` at trust or authority boundaries; Fable `max` bounded packet | The non-selected member re-derives or attacks multiplier assumptions. | Re-derive; conductor adjudicates the recommendation. |
+| Discover | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for dense mapping; choose Opus when an immutable semantic candidate needs independent review. | Terra `xhigh`; Opus `high`, `xhigh` | The non-selected member checks citations and omissions. | Partitioned scope and evidence inventory. |
+| Research | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for synthesis; choose Opus for a certified semantic review of the evidence packet. | Terra `xhigh`, `max`; Opus `high`, `xhigh` | Luna/Sonnet can extract; Sol analyzes load-bearing unknowns. | Conductor adjudicates unknown disposition. |
+| Plan | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory plan; choose Fable only to attack certified bounded multiplier assumptions. | Sol `xhigh`; Fable `max` bounded packet | The non-selected member returns the plan or counterexample artifact. | Advisory plan; conductor alone mutates Seeds. |
+| Act, contained | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to implement interacting constraints; choose Opus to review immutable candidate decisions. | Terra `xhigh`; `max` for interacting constraints; Opus `high`, `xhigh` | The non-selected member produces candidate or review. | Exact `[1m]` is mandatory only in OCX Ultracode Workflow mode. |
+| Act, deterministic-gated | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the member with verified transport and independent evidence when the deterministic gate remains complete. | `high`, `xhigh` | The non-selected member checks stable evidence. | Exact `[1m]` is mandatory only in OCX Ultracode Workflow mode; same deterministic gate. |
+| Review, semantic | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Opus for semantic review; choose Terra to reproduce and classify an immutable candidate. | Opus `high`, `xhigh`; Terra `xhigh`, `max` | The non-selected member supplies review or reproduction. | Immutable candidate and acceptance criteria. |
 | Review, trust or authority | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for authority analysis; choose Fable only to search a certified bounded counterexample packet. | Sol `xhigh`; Fable `max` bounded packet | The non-selected member supplies authority analysis or counterexamples. | Advisory analysis; conductor adjudicates. |
 | Reconcile | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to reconcile semantic evidence; choose Opus to review the immutable reconciliation candidate. | Terra `xhigh`; Opus `high`, `xhigh` | Sonnet validates evidence links. | Conductor alone records Seeds mutations. |
 | Integrate | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to integrate; choose Opus to review fan-in semantics after the integration head is immutable. | Terra `max`; Opus `high`, `xhigh` | Luna re-runs gates; the non-selected judgment member reviews or integrates. | Authorized integrator only; re-gate on integration head. |
 | Ship recommendation | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for promotion analysis; choose Fable only as a certified bounded adversarial receipt packet. | Sol `xhigh`; Fable `xhigh`, `max` bounded packet | Luna/Sonnet validate receipts. | Human separately authorizes outward action. |
+
+The context column describes non-Ultracode route selection. For an OCX Ultracode Workflow,
+every explicit `agent()` `model` argument instead carries the exact `[1m]` form and dispatch
+stops if that marked tuple is not certified, admitted, and readable; no phase row permits an
+unsuffixed fallback.
 
 ## Approved roadmap family lanes
 
