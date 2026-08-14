@@ -75,9 +75,11 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   broken references, TOML/JSON parses, shell syntax, manifests, and secret-shaped strings in
   tracked text, then runs the installer tests, the lifecycle self-test, and the pinned
   Git-visible secrets scan. `mise run secrets` selects tracked files plus nonignored untracked
-  files, then calls betterleaks with the tracked extend-only `.config/betterleaks.toml` on every
-  batch; ignored runtime state is excluded but a force-tracked ignored path remains covered, and
-  no drop-in config or `GITLEAKS_CONFIG*` variable can replace the ruleset. Full git-history
+  files, rejects symlinks and any selected path beneath a symlinked parent rather than following
+  them outside the repository, then calls betterleaks with the tracked extend-only
+  `.config/betterleaks.toml` on every batch; ignored runtime state is excluded but a force-tracked
+  ignored path remains covered, and no drop-in config or `GITLEAKS_CONFIG*` variable can replace
+  the ruleset. Full git-history
   scanning stays a separate, explicitly consented pre-publish step. A passing gate
   is evidence only; it does not authorize an outward effect.
 - Run `./scripts/install-skill-bundle.sh self-test` after installer changes.
@@ -123,6 +125,15 @@ code rather than claiming renderer support. The validator pins the supply chain 
 hashes), so loosening the sanitizer allowlist or the sandbox limits fails the gate.
 
 ## Installing this bundle
+
+The current supported distribution is checkout-backed and follows the steps below. A future
+self-contained GitHub release will make
+`mise use -g github:Codeseys-Labs/agentic-sdlc` the primary quick install while retaining this
+managed checkout for customization, contribution, gates, and release building. Do not claim that
+path works before a release artifact exists. Its proposed payload, explicit host-plane activation,
+copy-versus-link boundary, platform limits, and implementation order are recorded in
+`docs/plans/2026-08-14T163833Z-Install-UX.md`; ADR-0011 remains current until a later ADR supersedes
+it with executed release evidence.
 
 mise 2026.4.27+ is the only bootstrap prerequisite. It is the managed-tool bootstrap, not the
 sole readiness prerequisite. It pins uv, consumes the checked-in cross-platform `mise.lock`, and
@@ -300,9 +311,15 @@ statusline/operator-tool activation is not certified and fails closed.
 `unmanaged` for a desired file that exists but is not owned; historical aliases are never
 reported as required or absent.
 
-`ccodex` has NO private plane (ADR-0014). Its `launch` and `ultracode` use the operator's own
-`~/.claude` — configuration, plugins, agents, and login — which is what lets Claude Code present
-its existing session to the gateway. `ocx claude` therefore writes its `ocx-*.md` roster agents and
+`ccodex` has NO private plane (ADR-0014). Its `launch` and `ultracode` resolve the launcher from
+the distribution checkout and directly execute the absolute `ocx` path bound by the last explicit
+`operator-tools:install`; the same install binds `jq` and `uv` for catalog/config and Python-backed
+routes, so ordinary installed use does not invoke repository-scoped mise or substitute caller-PATH
+copies. Claude Code therefore starts in the caller's physical current workspace. A reviewed toolchain refresh requires a
+separate explicit operator-tools reinstall; ordinary commands never silently re-resolve, install, or
+update tools. They use the operator's own `~/.claude` — configuration, plugins, agents, and login —
+which is what lets Claude Code present its existing session to the gateway. `ocx claude` therefore
+writes its `ocx-*.md` roster agents and
 the gateway model cache into that global dir; the cache write is load-bearing, because Claude Code
 only refreshes it while holding a credential and the `/model` picker would otherwise never list the
 routed ids. There are no `ccodex session` verbs and no constructed plane-local `settings.json`.

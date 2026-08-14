@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -91,6 +92,25 @@ class SecretsScanTests(unittest.TestCase):
 
         self.assertIn("regular.txt", paths)
         self.assertNotIn("linked.txt", paths)
+
+    @unittest.skipIf(os.name == "nt", "symlink creation needs developer mode on Windows")
+    def test_git_visible_files_skip_files_below_symlinked_directories(self) -> None:
+        module = self.module()
+        with tempfile.TemporaryDirectory() as temp:
+            root = self.repository(temp)
+            outside = Path(temp) / "outside"
+            outside.mkdir()
+            (outside / "tracked.txt").write_text("outside\n", encoding="utf-8")
+            (root / "nested").mkdir()
+            (root / "nested" / "tracked.txt").write_text("inside\n", encoding="utf-8")
+            self.git(root, "add", "nested/tracked.txt")
+            self.git(root, "commit", "--quiet", "-m", "nested fixture")
+            shutil.rmtree(root / "nested")
+            (root / "nested").symlink_to(outside, target_is_directory=True)
+
+            paths = module.git_visible_files(root)
+
+        self.assertNotIn("nested/tracked.txt", paths)
 
     def test_git_visible_files_checks_link_type_before_file_type(self) -> None:
         module = self.module()

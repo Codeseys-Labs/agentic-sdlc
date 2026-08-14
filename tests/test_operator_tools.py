@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -21,6 +22,13 @@ spec.loader.exec_module(operator_tools)
 
 class OperatorToolsTests(unittest.TestCase):
     def config(self, root: Path, *, dry_run: bool = False) -> object:
+        runtime = root / "runtime"
+        runtime.mkdir(parents=True, exist_ok=True)
+        for name in ("ocx", "jq", "uv"):
+            path = runtime / name
+            if not path.exists():
+                path.write_text("#!/bin/sh\nexit 0\n")
+                path.chmod(0o755)
         return operator_tools.Config(
             Path(__file__).parents[1],
             root / "home",
@@ -28,6 +36,9 @@ class OperatorToolsTests(unittest.TestCase):
             root / "state",
             dry_run,
             False,
+            runtime / "ocx",
+            runtime / "jq",
+            runtime / "uv",
         )
 
     def test_install_status_uninstall_lifecycle(self) -> None:
@@ -258,6 +269,61 @@ class OperatorToolsTests(unittest.TestCase):
                 subprocess.run(["bash", "-n", str(dispatcher)], capture_output=True).returncode, 0
             )
 
+    def test_ccodex_binds_the_pinned_ocx_and_jq_paths_at_install_time(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            body = (config.bin_dir / "ccodex").read_text()
+            self.assertIn(f"installed_ocx='{config.ocx_path}'", body)
+            self.assertIn(f"installed_jq='{config.jq_path}'", body)
+            self.assertIn(f"installed_uv='{config.uv_path}'", body)
+            self.assertIn('export AGENTIC_SDLC_OCX="$installed_ocx"', body)
+            self.assertIn('export AGENTIC_SDLC_JQ="$installed_jq"', body)
+            self.assertNotIn('mise -C "$root" exec -- ocx', body)
+            self.assertNotIn('exec uv run', body)
+
+    def test_operator_tools_rejects_a_missing_pinned_runtime_before_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            config.ocx_path.unlink()
+
+            with self.assertRaisesRegex(
+                operator_tools.OperatorToolsError, "pinned ocx is not an executable file"
+            ):
+                operator_tools.install(config)
+
+            self.assertFalse(config.bin_dir.exists())
+            self.assertFalse(config.state_path.exists())
+
+    def test_operator_tools_refreshes_an_owned_dispatcher_when_a_binding_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            first = operator_tools.install(config)
+            old_body = (config.bin_dir / "ccodex").read_text()
+            replacement = root / "runtime" / "replacement ocx"
+            replacement.write_text("#!/bin/sh\nexit 0\n")
+            replacement.chmod(0o755)
+            refreshed_config = operator_tools.Config(
+                config.repo_root,
+                config.home,
+                config.bin_dir,
+                config.state_root,
+                config.dry_run,
+                config.require_path,
+                replacement,
+                config.jq_path,
+                config.uv_path,
+            )
+
+            refreshed = operator_tools.install(refreshed_config)
+            new_body = (config.bin_dir / "ccodex").read_text()
+
+            self.assertEqual(first[0], 0)
+            self.assertEqual(refreshed[0], 0)
+            self.assertTrue(any(message.startswith("refreshed:") for message in refreshed[1]))
+            self.assertNotEqual(old_body, new_body)
+            self.assertIn(f"installed_ocx='{replacement}'", new_body)
+
     def test_ccodex_omits_repository_maintenance_verbs(self) -> None:
         # The use surface is not the maintenance surface. Shipping `check`/`test`/`validate` on an
         # operator's PATH would present repo upkeep as a product feature.
@@ -330,8 +396,14 @@ class OperatorToolsTests(unittest.TestCase):
         mise = stubs / "mise"
         mise.write_text(
             "#!/bin/sh\n"
-            'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done\n'
+            'target_cwd=\n'
+            'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do\n'
+            '  if [ "$1" = -C ]; then shift; target_cwd="${1:-}"; fi\n'
+            '  shift\n'
+            'done\n'
             '[ "${1:-}" = -- ] && shift\n'
+            '[ -z "$target_cwd" ] || cd "$target_cwd"\n'
+            'case "${1:-}" in bash|*/bash) export PATH="$(dirname "$0"):$PATH"; exec "$@" ;; esac\n'
             'if [ "${1:-} ${2:-} ${3:-} ${4:-}" = "ocx claude config set" ]; then\n'
             '  printf "STUB-OCX:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"; exit 0\n'
             "fi\n"
@@ -354,9 +426,49 @@ class OperatorToolsTests(unittest.TestCase):
             "exit 0\n"
         )
         mise.chmod(0o755)
+        ocx = root / "runtime" / "ocx"
+        ocx.write_text(
+            "#!/bin/sh\n"
+            'if [ "${1:-} ${2:-} ${3:-}" = "models live --json" ]; then\n'
+            '  [ "${STUB_OCX_MODELS_FAIL:-}" = 1 ] && { printf "catalog unavailable\\n" >&2; exit 1; }\n'
+            '  printf \'[{"namespaced":"gpt-5.6-luna","native":true,"provider":"openai","disabled":false},{"namespaced":"muse/muse-spark-1.2","provider":"muse","disabled":false}]\\n\'; exit 0\n'
+            "fi\n"
+            'if [ "${1:-} ${2:-} ${3:-}" = "config get port" ]; then printf "10100\\n"; exit 0; fi\n'
+            'if [ "${1:-}" = claude ]; then\n'
+            '  if [ "${2:-} ${3:-} ${4:-}" = "config set --small-fast-model" ]; then\n'
+            '    printf "STUB-OCX:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"; exit 0\n'
+            '  fi\n'
+            '  shift; exec claude "$@"\n'
+            "fi\n"
+            'printf "STUB-OCX:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"\n'
+            "exit 0\n"
+        )
+        ocx.chmod(0o755)
+        jq = root / "runtime" / "jq"
+        jq.write_text(
+            "#!/bin/sh\n"
+            'case "${1:-}" in\n'
+            "  --version) printf 'jq-1.8.2\\n' ;;\n"
+            "  -ers) cat >/dev/null; printf 'clean\\n' ;;\n"
+            "  -r) cat >/dev/null; printf 'gpt-5.6-luna\\tnative OCX\\nmuse/muse-spark-1.2\\trouted via muse\\n' ;;\n"
+            "  *) exit 1 ;;\n"
+            "esac\n"
+        )
+        jq.chmod(0o755)
+        uv = root / "runtime" / "uv"
+        uv.write_text(
+            "#!/bin/sh\n"
+            'printf "BOUND-UV-PWD:%s\\n" "$PWD"\n'
+            'printf "BOUND-UV:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"\n'
+        )
+        uv.chmod(0o755)
+        ambient_uv = stubs / "uv"
+        ambient_uv.write_text("#!/bin/sh\nprintf 'AMBIENT-UV-RAN\\n'\n")
+        ambient_uv.chmod(0o755)
         claude = stubs / "claude"
         claude.write_text(
             "#!/bin/sh\n"
+            'printf "STUB-CLAUDE-PWD:%s\\n" "$PWD"\n'
             'printf "STUB-CLAUDE:"; for a in "$@"; do printf "<%s>" "$a"; done; printf "\\n"\n'
             "exit 0\n"
         )
@@ -364,6 +476,7 @@ class OperatorToolsTests(unittest.TestCase):
         home = root / "operator-home"
         (home / ".claude").mkdir(parents=True, exist_ok=True)
         (home / ".claude" / "history.jsonl").write_text('{"display":"global"}\n')
+        mise.unlink()
         return {
             "HOME": str(home),
             "XDG_STATE_HOME": str(root / "operator-state"),
@@ -480,6 +593,118 @@ class OperatorToolsTests(unittest.TestCase):
                     self.assertIn(self.SIDE_EFFECT_MARKER, result.stdout)
                     self.assertIn(expected, result.stdout)
 
+    def test_dispatcher_launches_claude_in_the_callers_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+            workspace = root / "caller workspace"
+            workspace.mkdir()
+            self.assertIsNone(shutil.which("mise", path=environment["PATH"]))
+            self.assertIsNone(shutil.which("ocx", path=environment["PATH"]))
+            environment["AGENTIC_SDLC_OCX"] = str(root / "foreign-ocx")
+
+            for arguments in (("launch",), ("ultracode",)):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [str(config.bin_dir / "ccodex"), *arguments],
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        cwd=workspace,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"STUB-CLAUDE-PWD:{workspace}", result.stdout)
+
+    def test_every_direct_ocx_route_names_a_stale_install_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+            config.ocx_path.unlink()
+
+            for arguments in (("providers",), ("models",), ("set-fast-model", "gpt-5.6-luna")):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [str(config.bin_dir / "ccodex"), *arguments],
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("installed pinned ocx executable is unavailable", result.stderr)
+                    self.assertIn("refresh operator tools", result.stderr)
+                    self.assertNotIn("No such file", result.stderr)
+
+    def test_jq_routes_name_a_stale_install_binding_without_path_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+            config.jq_path.unlink()
+
+            for arguments in (("set-fast-model",), ("models",)):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [str(config.bin_dir / "ccodex"), *arguments],
+                        input="q\n",
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("installed pinned jq executable is unavailable", result.stderr)
+                    self.assertIn("refresh operator tools", result.stderr)
+                    self.assertNotIn("No such file", result.stderr)
+
+    def test_python_route_uses_the_install_bound_uv_in_the_callers_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+            workspace = root / "python caller workspace"
+            workspace.mkdir()
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "bundle", "status"],
+                capture_output=True,
+                text=True,
+                env=environment,
+                cwd=workspace,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"BOUND-UV-PWD:{workspace}", result.stdout)
+            self.assertIn("<run><--python><3.12.11><--script>", result.stdout)
+            self.assertNotIn("AMBIENT-UV-RAN", result.stdout)
+
+    def test_python_route_names_a_stale_install_bound_uv_without_path_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+            config.uv_path.unlink()
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "bundle", "status"],
+                capture_output=True,
+                text=True,
+                env=environment,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("installed pinned uv executable is unavailable", result.stderr)
+            self.assertIn("refresh operator tools", result.stderr)
+            self.assertNotIn("AMBIENT-UV-RAN", result.stdout)
+
     def test_dispatcher_yolo_is_available_on_launch_and_ultracode(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
@@ -546,7 +771,7 @@ class OperatorToolsTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn(
-                        f"STUB-OCX:<ocx><claude><config><set><--small-fast-model><{value}>",
+                        f"STUB-OCX:<claude><config><set><--small-fast-model><{value}>",
                         result.stdout,
                     )
                     self.assertNotIn(self.SIDE_EFFECT_MARKER, result.stdout)
@@ -579,7 +804,7 @@ class OperatorToolsTests(unittest.TestCase):
                     self.assertIn("Live OCX catalog", result.stdout)
                     self.assertIn("  5) muse/muse-spark-1.2", result.stdout)
                     self.assertIn(
-                        "STUB-OCX:<ocx><claude><config><set><--small-fast-model>"
+                        "STUB-OCX:<claude><config><set><--small-fast-model>"
                         f"<{expected}>",
                         result.stdout,
                     )
@@ -604,7 +829,7 @@ class OperatorToolsTests(unittest.TestCase):
 
             self.assertEqual(cleared.returncode, 0, cleared.stderr)
             self.assertIn(
-                "STUB-OCX:<ocx><claude><config><set><--small-fast-model><->",
+                "STUB-OCX:<claude><config><set><--small-fast-model><->",
                 cleared.stdout,
             )
             self.assertEqual(cancelled.returncode, 3)

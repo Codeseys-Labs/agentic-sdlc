@@ -122,11 +122,13 @@ class OpenCodexClaudeTests(unittest.TestCase):
         # Pinned `jq` resolution is a separate tool call and is not part of the gateway log.
         mise.write_text(
             "#!/bin/sh\n"
+            'case " $* " in *" which ocx ") printf "%s/ocx\\n" "$(dirname "$0")"; exit 0 ;; esac\n'
             "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n"
             "[ \"${1:-}\" = -- ] && shift\n"
             "if [ \"${1:-}\" = jq ]; then shift; exec \"${TEST_REAL_JQ:-jq}\" \"$@\"; fi\n"
             "printf '<%s>' \"$@\" >> \"$OCX_TRACE_LOG\"\n"
             "printf '\\n' >> \"$OCX_TRACE_LOG\"\n"
+            "if [ \"${1:-}\" = bash ]; then export PATH=\"$(dirname \"$0\"):$PATH\"; exec \"$@\"; fi\n"
             "case \"${1:-} ${2:-} ${3:-}\" in\n"
             "  'ocx --version ') exit 0 ;;\n"
             "  'ocx health ') exit ${HEALTHY:-0} ;;\n"
@@ -154,6 +156,16 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "exit ${OCX_EXIT:-0}\n"
         )
         mise.chmod(0o755)
+        ocx = bin_dir / "ocx"
+        ocx.write_text(
+            "#!/bin/sh\n"
+            "printf '<ocx>' >> \"$OCX_TRACE_LOG\"\n"
+            "printf '<%s>' \"$@\" >> \"$OCX_TRACE_LOG\"\n"
+            "printf '\\n' >> \"$OCX_TRACE_LOG\"\n"
+            'if [ "${1:-}" = claude ]; then shift; exec claude "$@"; fi\n'
+            "exit ${OCX_EXIT:-0}\n"
+        )
+        ocx.chmod(0o755)
         # curl stub: serves the gateway catalog fixture for /v1/models and fails for
         # /healthz so uptime stays a nicety. CATALOG_JSON empty => unreachable catalog.
         #
@@ -330,6 +342,33 @@ class OpenCodexClaudeTests(unittest.TestCase):
         """The line the mise stub writes for `ocx <arguments>` (`printf '<%s>'` over argv)."""
         return "".join(f"<{field}>" for field in ("ocx", *arguments))
 
+    def assertExactTraceLine(self, log: Path, expected: str) -> None:
+        self.assertIn(expected, log.read_text().splitlines())
+
+    def assertExactTracedOcxRoute(self, log: Path, *arguments: str) -> None:
+        self.assertExactTraceLine(log, self.traced_ocx_route(*arguments))
+
+    def test_exact_route_assertion_rejects_appended_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "trace.log"
+            log.write_text("<ocx><claude><--model><gpt><--duplicated>\n")
+
+            with self.assertRaises(AssertionError):
+                self.assertExactTracedOcxRoute(log, "claude", "--model", "gpt")
+
+    def test_redacted_full_route_assertion_rejects_appended_arguments(self) -> None:
+        secret = "OCX_TEST_SECRET"
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "trace.log"
+            log.write_text(f"<ocx><provider><add><--api-key><{secret}><--duplicated>\n")
+
+            with self.assertRaises(AssertionError) as raised:
+                self.assertFullRouteWithRedactedFailure(
+                    log, "provider", "add", "--api-key", secret
+                )
+
+        self.assertNotIn(secret, str(raised.exception))
+
     def assertFullRouteWithRedactedFailure(self, log: Path, *arguments: str) -> None:
         """Assert the COMPLETE traced route, including any credential, without printing it.
 
@@ -355,7 +394,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.longMessage = False
         self.assertIn(
             self.traced_ocx_route(*arguments),
-            log.read_text(),
+            log.read_text().splitlines(),
             f"the complete route was not forwarded; expected (redacted): {redacted}",
         )
 
@@ -363,7 +402,9 @@ class OpenCodexClaudeTests(unittest.TestCase):
         result, log = self.run_launcher("launch-ultracode", "--model", "gpt-5.6-sol")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("<ocx><claude><--settings><{\"ultracode\":true}><--model><gpt-5.6-sol>", log.read_text())
+        self.assertExactTraceLine(
+            log, '<ocx><claude><--settings><{"ultracode":true}><--model><gpt-5.6-sol>'
+        )
 
     def test_yolo_is_an_orthogonal_owned_flag_on_both_launch_profiles(self) -> None:
         cases = (
@@ -382,7 +423,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 result, log = self.run_launcher(*arguments)
 
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(expected_route, log.read_text())
+                self.assertExactTraceLine(log, expected_route)
                 self.assertNotIn("<--yolo>", log.read_text())
                 self.assertIn("permissions: BYPASSED", result.stdout)
 
@@ -413,7 +454,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 result, log = self.run_launcher(route, "--", "--yolo")
 
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(expected, log.read_text())
+                self.assertExactTraceLine(log, expected)
                 self.assertNotIn("permissions: BYPASSED", result.stdout)
 
     def test_wrapper_validation_stops_at_claudes_option_terminator(self) -> None:
@@ -436,7 +477,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 result, log = self.run_launcher(*arguments)
 
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(expected_route, log.read_text())
+                self.assertExactTraceLine(log, expected_route)
 
     def test_unescaped_yolo_must_be_the_first_wrapper_argument(self) -> None:
         for route in ("launch", "launch-ultracode"):
@@ -488,7 +529,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
 
                 self.assertEqual(result.returncode, 0, result.stderr)
                 forwarded = arguments[1:] if arguments[0] == "--" else arguments
-                self.assertIn(self.traced_ocx_route("claude", *forwarded), log.read_text())
+                self.assertExactTracedOcxRoute(log, "claude", *forwarded)
                 self.assertNotIn("OCX_SETTINGS_VALUE", result.stdout + result.stderr)
 
     def test_ordinary_launch_keeps_readable_settings_file_arguments(self) -> None:
@@ -505,7 +546,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 )
 
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(self.traced_ocx_route("claude", *arguments), log.read_text())
+                self.assertExactTracedOcxRoute(log, "claude", *arguments)
                 self.assertNotIn("OCX_SETTINGS_FILE_VALUE", result.stdout + result.stderr)
 
     def test_ordinary_launch_stops_scanning_settings_at_claudes_option_terminator(self) -> None:
@@ -515,7 +556,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
         result, log = self.run_launcher("launch", *arguments)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(self.traced_ocx_route("claude", *arguments), log.read_text())
+        self.assertExactTracedOcxRoute(log, "claude", *arguments)
 
     def test_ordinary_launch_refuses_bypassing_inline_settings_before_gateway_contact(self) -> None:
         payloads = (
@@ -660,7 +701,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(self.traced_ocx_route("claude", "--settings", "true"), log.read_text())
+        self.assertExactTracedOcxRoute(log, "claude", "--settings", "true")
 
     def test_existing_persistent_settings_must_be_json_objects(self) -> None:
         for payload in ("", "null", "42", '[]'):
@@ -1447,7 +1488,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
         result, log = self.run_launcher("configure", "login", "xai", "two words")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("<ocx><login><xai><two words>", log.read_text())
+        self.assertExactTracedOcxRoute(log, "login", "xai", "two words")
 
     def test_configure_allows_third_party_anthropic_wire_adapter(self) -> None:
         result, log = self.run_launcher(

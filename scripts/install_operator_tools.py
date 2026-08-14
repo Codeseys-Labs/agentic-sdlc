@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 from typing import Any, Iterator
@@ -43,6 +44,9 @@ class Config:
     state_root: Path
     dry_run: bool = False
     require_path: bool = True
+    ocx_path: Path | None = None
+    jq_path: Path | None = None
+    uv_path: Path | None = None
 
     @property
     def state_path(self) -> Path:
@@ -170,6 +174,27 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
+def mise_executable(config: Config, tool: str) -> Path:
+    if configured := {"ocx": config.ocx_path, "jq": config.jq_path, "uv": config.uv_path}[tool]:
+        path = absolute(configured)
+    else:
+        try:
+            value = subprocess.run(
+                ["mise", "-C", str(config.repo_root), "which", tool],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise OperatorToolsError(
+                f"cannot resolve the pinned {tool}; run `mise --locked install` in {config.repo_root}"
+            ) from exc
+        path = absolute(Path(value))
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise OperatorToolsError(f"pinned {tool} is not an executable file: {path}")
+    return path
+
+
 def desired_files(config: Config) -> dict[str, bytes]:
     statusline = config.repo_root / "assets" / "claude" / "statusline-command.sh"
     launcher = config.repo_root / "scripts" / "opencodex-claude.sh"
@@ -178,15 +203,22 @@ def desired_files(config: Config) -> dict[str, bytes]:
     for path in sources:
         if not path.is_file():
             raise OperatorToolsError(f"required operator-tools source is missing: {path}")
+    ocx = mise_executable(config, "ocx")
+    jq = mise_executable(config, "jq")
+    uv = mise_executable(config, "uv")
     # The dispatcher resolves its root at run time from AGENTIC_SDLC_ROOT, falling back to this
-    # install-time value, so a clone that later moves to a managed path can be pointed at with an
-    # environment variable instead of a reinstall. The path is shell-quoted because a repo root
-    # containing a space or a quote would otherwise produce a script that does not parse.
+    # install-time value, so a clone that later moves to a managed path can be pointed at without a
+    # reinstall. Pinned runtime executables are deliberately absolute: daily use must not depend on
+    # ambient PATH or re-evaluate repository-scoped mise. Values are shell-quoted because roots and
+    # tool stores may contain spaces or quotes.
     dispatcher = (
         (templates / "ccodex.in")
         .read_text(encoding="utf-8")
         .replace("@CANONICAL_LAUNCHER@", shell_quote(str(launcher)))
         .replace("@CANONICAL_ROOT@", shell_quote(str(config.repo_root)))
+        .replace("@PINNED_OCX@", shell_quote(str(ocx)))
+        .replace("@PINNED_JQ@", shell_quote(str(jq)))
+        .replace("@PINNED_UV@", shell_quote(str(uv)))
     )
     return {
         "agentic-sdlc-statusline": statusline.read_bytes(),

@@ -76,6 +76,7 @@
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+caller_working_dir="$(pwd -P)"
 # No isolated config root any more (ADR-0014): `launch` uses the operator's own ~/.claude, which
 # is what lets Claude Code present its existing login to the gateway. assets/claude/
 # session-inheritance.sh still exists and is still used by scripts/muse-claude.sh, which keeps
@@ -159,8 +160,9 @@ usage: ccodex $operator_verb [--yolo] [claude args...]
        opencodex-claude.sh $1 [--yolo] [claude args...]
 
 Ensure the gateway is healthy (start it if down, restart once if half-up), then launch Claude
-Code through it using your OWN ~/.claude configuration and login. Fails closed if the gateway
-never becomes healthy.${ultra}
+Code through it in the caller's current workspace using your OWN ~/.claude configuration and
+login. The distribution checkout selects the pinned toolchain, not the project Claude works on.
+Fails closed if the gateway never becomes healthy.${ultra}
 
 Both kinds of model work in this one session (ADR-0014). A genuine claude/anthropic id that no
 alias or modelMap claims passes through verbatim to Anthropic on your own subscription; every
@@ -331,30 +333,34 @@ EOF
 }
 
 ocx() {
-  mise -C "$root" exec -- ocx "$@"
+  if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
+    "$AGENTIC_SDLC_OCX" "$@"
+  else
+    mise -C "$root" exec -- ocx "$@"
+  fi
 }
 
-# `jq` resolved the same way `ocx` is, and for the same reason.
-#
-# THE DEFECT THIS FIXES (2026-08-08, found by a fresh-host container install). Every caller here
-# used a bare `jq`, which is absent from the operator's PATH: this command is explicitly designed
-# to run WITHOUT mise on PATH, and `jq` arrives only through mise's pinned toolchain
-# (`mise.toml`, jq = 1.8.2). A missing `jq` made `configured_provider_class` return
-# "unclassifiable", which made every `configure` mutation refuse with
-# `anthropic-or-unclassifiable-provider` -- on a host where the provider was correctly configured
-# as non-Anthropic. The refusal named the wrong cause, so it sent the operator to inspect a
-# provider config that was already right.
-#
-# Every `configure` route already calls require_ocx, which requires mise, so the pinned `jq` is
-# reachable wherever classification runs. A bare `jq` is preferred when present, because an
-# operator who installed their own has a working tool and a mise round-trip per call is pure
-# latency; the pinned copy is the fallback rather than the first choice.
+# An installed ccodex injects the exact ocx executable bound by operator-tools installation, so
+# daily launch neither re-evaluates repo-scoped mise nor changes cwd. Direct checkout use keeps a
+# mise fallback, but resolves the executable first and then starts it from the caller workspace.
+launch_ocx_claude() {
+  local executable="${AGENTIC_SDLC_OCX:-}"
+  if [ -z "$executable" ]; then
+    executable="$(mise -C "$root" which ocx 2>/dev/null || true)"
+  fi
+  [ -n "$executable" ] && [ -x "$executable" ] || {
+    printf 'error: the pinned opencodex executable is unavailable\n' >&2
+    exit 1
+  }
+  "$executable" claude "$@"
+}
+
+# An installed ccodex injects the exact jq executable bound during operator-tools installation.
+# Direct source-checkout use accepts an ambient jq first and otherwise retains the repository's
+# pinned mise fallback. `type -P` searches PATH only; `command -v jq` would find this function.
 jq() {
   if [ -z "${resolved_jq:-}" ]; then
-    # `type -P` searches the PATH only. `command -v jq` would find THIS FUNCTION and recurse,
-    # because a function shadows the name it is probing -- the same shadowing class of bug that
-    # made a stale shell function hide the installed `ccodex`.
-    resolved_jq="$(type -P jq 2>/dev/null || true)"
+    resolved_jq="${AGENTIC_SDLC_JQ:-$(type -P jq 2>/dev/null || true)}"
     [ -n "$resolved_jq" ] || resolved_jq="mise"
   fi
   if [ "$resolved_jq" = mise ]; then
@@ -372,12 +378,17 @@ jq_available() {
 }
 
 require_ocx() {
-  if ! command -v mise >/dev/null 2>&1; then
-    printf 'error: mise is required to resolve the pinned opencodex build\n' >&2
+  if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
+    [ -x "$AGENTIC_SDLC_OCX" ] || {
+      printf 'error: the installed pinned opencodex executable is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+      exit 1
+    }
+  elif ! command -v mise >/dev/null 2>&1; then
+    printf 'error: mise is required for direct checkout use of the pinned opencodex build\n' >&2
     exit 1
   fi
   if ! ocx --version >/dev/null 2>&1; then
-    printf 'error: pinned opencodex is not installed; run `mise install` in %s\n' "$root" >&2
+    printf 'error: pinned opencodex is not installed; run `mise --locked install` in %s\n' "$root" >&2
     exit 1
   fi
 }
@@ -1187,16 +1198,17 @@ cmd_launch() {
   printf '  routed at : http://127.0.0.1:%s\n' "${port:-unknown}"
   # Accepted Claude arguments retain their exact bytes and boundaries. They can still contain
   # settings and secrets, so validation never becomes an excuse to echo raw argv.
-  printf '  command   : mise -C %s exec -- ocx claude [forwarded arguments withheld]\n\n' "$root"
+  printf '  workspace : %s\n' "$caller_working_dir"
+  printf '  command   : pinned ocx claude [forwarded arguments withheld]\n\n'
   # ocx claude re-checks liveness, then execs `claude` with stdio inherited. It injects a marker
   # token ONLY when markerMode resolves to "proxy" (cli/claude.ts:133) or an admission key is
   # configured (:115); with a detected login neither fires, so Claude Code keeps its own OAuth
   # and the native models pass through. It also pre-writes the gateway model cache (:286), which
   # is what puts the routed ids in the /model picker.
   if [ "$permission_profile" = yolo ]; then
-    ocx claude --dangerously-skip-permissions "$@"
+    launch_ocx_claude --dangerously-skip-permissions "$@"
   else
-    ocx claude "$@"
+    launch_ocx_claude "$@"
   fi
 }
 

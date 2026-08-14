@@ -260,6 +260,15 @@ The detailed command flow lives in [`/sdlc-frame`](commands/sdlc-frame.md) and
 
 ## Install and run the bundle
 
+The commands below describe the **current** checkout-backed distribution. A versioned,
+self-contained GitHub release is the agreed next distribution boundary, with
+`mise use -g github:Codeseys-Labs/agentic-sdlc` as the primary quick install and this managed
+checkout retained for customization, contribution, gates, and release building. That quick path is
+not available yet: the repository has no release artifact for mise to resolve. The exact proposed
+contract, payload split, activation boundary, and implementation sequence are recorded in
+[`docs/plans/2026-08-14T163833Z-Install-UX.md`](docs/plans/2026-08-14T163833Z-Install-UX.md).
+Do not present the planned command as working until its release workflow and clean-host tests land.
+
 ### Managed fetch, without cloning by hand
 
 If you would rather not choose a directory or track where the tree lives,
@@ -469,7 +478,7 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 | `validate` | Run the portable bundle validator alone (the pre-commit hook's subset). |
 | `test` | Run the installer test suite. |
 | `self-test` | Exercise install/status/uninstall in an isolated home. |
-| `secrets` | Scan tracked plus nonignored-untracked files with the pinned scanner and tracked extend-only config. Ignored runtime state stays out; history remains a separate consented step. |
+| `secrets` | Scan tracked plus nonignored-untracked regular files with the pinned scanner and tracked extend-only config. Symlinks and paths beneath symlinked parents are not followed; ignored runtime state stays out, and history remains a separate consented step. |
 | `check` | Run the authoritative validation, tests, self-test, and secrets gate. Last measured on Linux: the `test` leaf ran 765 tests in 322s (`OK (skipped=13)`), while `validate` and `secrets` each finished in under 2s, so the suite dominates and 15 minutes is a reasonable budget — more on a loaded host, since gate runs contend for CPU and I/O. Treat both numbers as stale-by-design: the count grows with the suite, the clock varies by host, and the gate's verdict is the evidence. |
 | `hooks:install` | Install the checked-in lefthook hooks. |
 | `contributor:setup` | Install the configured bundle planes plus this repository's Git hooks. |
@@ -528,7 +537,7 @@ changed, foreign, and adopted copies are preserved. Every gateway command remain
 | Command | What it does |
 |---|---|
 | `ccodex ensure` | Ensure the gateway is healthy without launching Claude Code. |
-| `ccodex launch [--yolo] [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch Claude Code through it using your own `~/.claude` login, so native claude models pass through to Anthropic on your subscription while gateway models route to their own providers, in one session. Fails closed if the gateway never becomes healthy, and refuses (exit 3) when exported, persistent, or explicit `--settings` configuration would silently defeat the route. Accepted Claude arguments are forwarded unchanged. A first `--yolo` is consumed by ccodex and explicitly selects Claude Code's permission-bypass mode; it is unsafe outside an isolated, disposable environment. Use `-- --yolo` only to forward that spelling literally. |
+| `ccodex launch [--yolo] [claude args...]` | Ensure the gateway is healthy — start it if down, restart once if half-up — then launch Claude Code in the caller's current workspace through the distribution's pinned gateway toolchain, using your own `~/.claude` login. Native claude models pass through to Anthropic on your subscription while gateway models route to their own providers, in one session. Fails closed if the gateway never becomes healthy, and refuses (exit 3) when exported, persistent, or explicit `--settings` configuration would silently defeat the route. Accepted Claude arguments are forwarded unchanged. A first `--yolo` is consumed by ccodex and explicitly selects Claude Code's permission-bypass mode; it is unsafe outside an isolated, disposable environment. Use `-- --yolo` only to forward that spelling literally. |
 | `ccodex launch --model <id>` | Pick any id in the running gateway's live catalog, including a namespaced one: `--model muse/muse-spark-1.2`. Run `ccodex models` for the list. |
 | `ccodex ultracode [--yolo] [claude args...]` | The same fail-closed launch path with session Ultracode applied. Ordinary permissions remain the default. A first `--yolo` explicitly selects the same unsafe permission-bypass mode as `ccodex launch --yolo`; this is the ccodex equivalent of the historical `ccode-ultracode` alias. Ultracode owns the session `--settings` value and refuses a competing setting. |
 | `ccodex status` | Read-only supervision view: pid, port, uptime, healthy/down, log location, configured providers each compared against the LIVE catalog, whether anything exported here or in the settings documents Claude Code reads for `env` would defeat the gateway route — the check NAMES the documents it read and what it did not read — and the attribution log command. Exit 0 means the gateway answered an identity-checked probe at that moment — evidence, not authorization. |
@@ -648,13 +657,18 @@ on reasoning for a two-word answer. A `max_tokens` that looks generous for the v
 returns `content: null` with `finish_reason: "length"` — which reads exactly like a broken
 credential and is not. Size the budget for the reasoning trace.
 
-**The repository clone is required.** `ccodex` is a thin, owned entry point, not a self-contained
-copy of the bundle: every route executes code inside the checkout, so a moved or deleted clone
-makes each route fail with a named error rather than misbehave. The root is resolved at run time —
-`AGENTIC_SDLC_ROOT` overrides the install-time path — so a clone that later moves to a managed
-location can be pointed at with an environment variable instead of a reinstall. `mise` is needed
-for the `ocx` routes only (the pinned opencodex build is resolved through `mise exec`, and `ocx`
-is not on `PATH` by itself); `uv` is needed for the Python routes and works from a bare `PATH`.
+**The repository clone is required, but repository-scoped mise is not part of daily installed
+`ccodex` use.** `ccodex` remains a thin, owned entry point rather than a self-contained copy: its
+launcher and Python lifecycle scripts live in the checkout, while `operator-tools:install` resolves
+the reviewed `ocx`, `jq`, and `uv` pins once and renders their absolute executable paths into the
+installed dispatcher. Launch and Ultracode invoke that bound `ocx` directly from the caller's physical current
+workspace; the checkout selects code and runtime identity, not the project Claude works on. A moved
+checkout may be selected with `AGENTIC_SDLC_ROOT`, but moving or replacing the mise tool store
+requires an explicit `mise run operator-tools:install` refresh from the reviewed distribution.
+Ordinary commands never silently re-resolve, install, or update those tools. Direct execution of
+source launchers retains a repository-scoped mise fallback for development and maintenance.
+Python-backed bundle, library, and statusline routes use the same install-bound
+`uv`; caller PATH cannot substitute it.
 
 No shell startup file or PATH value is edited. Every launch route delegates to
 `scripts/opencodex-claude.sh`, so identity-checked supervision and the route-integrity

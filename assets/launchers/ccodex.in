@@ -16,16 +16,17 @@
 # may already use.
 #
 # RUNTIME DEPENDENCIES, stated plainly because they are the operator's real question:
-#   * THE REPOSITORY CLONE IS REQUIRED. Every route below executes code inside @CANONICAL_ROOT@.
-#     This command is a thin, owned entry point, NOT a self-contained copy of the bundle, so if
-#     that directory is moved or deleted every route fails with the named error below rather than
-#     misbehaving. The root is resolved at run time (env override, then the installed default),
-#     not baked into an exec line, so a managed clone at a stable path can be pointed at without
-#     reinstalling this file.
-#   * mise is required for the `ocx` routes only. The pinned opencodex build is resolved through
-#     `mise exec`, and `ocx` is not on PATH by itself (verified: only mise's install dir has it).
-#   * uv is required for the python routes (libraries, bundle, statusline). It does NOT need mise:
-#     `uv run --python 3.12.11 --script ...` works from a bare PATH (verified).
+#   * THE REPOSITORY CLONE IS REQUIRED. Every route resolves its implementation and pinned tools
+#     from @CANONICAL_ROOT@. This command is a thin, owned entry point, NOT a self-contained copy of
+#     the bundle, so if that directory is moved or deleted every route fails with the named error
+#     below rather than misbehaving. Launch routes restore the caller's workspace before Claude Code
+#     starts; the distribution root selects code and tools, not the project Claude works on. The
+#     root is resolved at run time (env override, then the installed default), not baked into an
+#     exec line, so a managed clone at a stable path can be pointed at without reinstalling this file.
+#   * Launch-time mise activation is NOT required. Installation binds the exact pinned `ocx`,
+#     `jq`, and `uv` executables below; daily routes call those paths directly and preserve the
+#     caller cwd. Re-run the explicit operator-tools install after a reviewed toolchain upgrade to
+#     refresh them.
 set -euo pipefail
 
 # Repository root. AGENTIC_SDLC_ROOT wins, so an operator or a managed-clone installer can move
@@ -35,8 +36,13 @@ set -euo pipefail
 # installer shell-quotes the substituted path so a root containing a space still parses, and
 # quotes inside a `:-` word would be taken literally.
 installed_root=@CANONICAL_ROOT@
+installed_ocx=@PINNED_OCX@
+installed_jq=@PINNED_JQ@
+installed_uv=@PINNED_UV@
 root="${AGENTIC_SDLC_ROOT:-$installed_root}"
 launcher="$root/scripts/opencodex-claude.sh"
+export AGENTIC_SDLC_OCX="$installed_ocx"
+export AGENTIC_SDLC_JQ="$installed_jq"
 
 usage() {
   cat <<EOF
@@ -86,7 +92,7 @@ exit codes: 0 ok - 1 failure - 2 usage - 3 refused (a boundary declined the oper
 EOF
 }
 
-# Every route runs code inside the clone, so its absence is reported once, by name, rather than
+# Every route resolves code from the clone, so its absence is reported once, by name, rather than
 # surfacing as an obscure "no such file" from whichever route was attempted.
 require_root() {
   if [ ! -d "$root" ]; then
@@ -106,31 +112,41 @@ require_launcher() {
   }
 }
 
-require_tool() {
-  command -v "$1" >/dev/null 2>&1 || {
-    printf 'error: %s is required for `ccodex %s` and is not on PATH\n' "$1" "$2" >&2
-    [ "$1" = mise ] && printf 'The pinned opencodex build is resolved through mise; ocx is not on PATH by itself.\n' >&2
-    exit 1
-  }
-}
-
-# uv-backed python route. Never mise: these scripts declare their own interpreter and run from a
-# bare PATH, so requiring mise here would add a dependency the route does not have.
+# uv-backed Python route. The executable is bound during operator-tools installation just like ocx
+# and jq, so caller PATH cannot replace the reviewed runtime or make an installed route disappear.
 run_python() {
   local script="$1"
   shift
   require_root
-  require_tool uv "$route"
-  exec uv run --python 3.12.11 --script "$root/scripts/$script" "$@"
+  [ -x "$installed_uv" ] || {
+    printf 'error: the installed pinned uv executable is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+    exit 1
+  }
+  exec "$installed_uv" run --python 3.12.11 --script "$root/scripts/$script" "$@"
 }
 
 # Pinned ocx passthrough. Read-only catalog routes and the explicitly named fast-model mutation
 # reuse OpenCodex's own verbs rather than creating a second reader or configuration store that
 # could disagree with the gateway.
-run_ocx() {
+require_ocx() {
   require_root
-  require_tool mise "$route"
-  exec mise -C "$root" exec -- ocx "$@"
+  [ -x "$AGENTIC_SDLC_OCX" ] || {
+    printf 'error: the installed pinned ocx executable is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+    exit 1
+  }
+}
+
+require_jq() {
+  require_root
+  [ -x "$AGENTIC_SDLC_JQ" ] || {
+    printf 'error: the installed pinned jq executable is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+    exit 1
+  }
+}
+
+run_ocx() {
+  require_ocx
+  exec "$AGENTIC_SDLC_OCX" "$@"
 }
 
 set_fast_model_help() {
@@ -148,12 +164,14 @@ EOF
 
 select_fast_model() {
   local catalog lines choice selected index=1
-  catalog="$(mise -C "$root" exec -- ocx models live --json 2>/dev/null)" || {
+  require_ocx
+  require_jq
+  catalog="$("$AGENTIC_SDLC_OCX" models live --json 2>/dev/null)" || {
     printf 'error: cannot read the live OCX catalog; no selection was written\n' >&2
     printf 'Start or repair the gateway, then run `ccodex set-fast-model` again.\n' >&2
     return 1
   }
-  lines="$(printf '%s' "$catalog" | mise -C "$root" exec -- jq -r '
+  lines="$(printf '%s' "$catalog" | "$AGENTIC_SDLC_JQ" -r '
     .[] | select(.disabled != true) |
     [.namespaced, (if .native == true then "native OCX" else "routed via " + .provider end)] |
     @tsv
@@ -269,7 +287,6 @@ case "$route" in
     [ "$#" -le 1 ] || { printf 'usage: ccodex set-fast-model [<exact-model-id|->]\n' >&2; exit 2; }
     if [ "$#" -eq 0 ]; then
       require_root
-      require_tool mise "$route"
       select_fast_model
     else
       run_ocx claude config set --small-fast-model "$1"
@@ -283,9 +300,9 @@ case "$route" in
   # configured-only view here would be a confidently wrong answer to the operator's question.
   models)
     shift
-    require_root
-    require_tool mise models
-    port="$(mise -C "$root" exec -- ocx config get port 2>/dev/null | tr -d '[:space:]' | grep -E '^[0-9]+$' || true)"
+    require_ocx
+    require_jq
+    port="$("$AGENTIC_SDLC_OCX" config get port 2>/dev/null | tr -d '[:space:]' | grep -E '^[0-9]+$' || true)"
     if [ -z "$port" ] || ! command -v curl >/dev/null 2>&1; then
       printf 'error: cannot read the live catalog (no configured port, or curl is unavailable)\n' >&2
       printf 'Configured (NOT proof of what is served): ccodex providers\n' >&2
@@ -299,11 +316,7 @@ case "$route" in
     fi
     printf 'live catalog served by the gateway at 127.0.0.1:%s\n' "$port"
     printf '(any id below can be selected with `ccodex launch --model <id>` or the /model picker)\n\n'
-    if command -v jq >/dev/null 2>&1; then
-      printf '%s' "$catalog" | jq -r '(.data // []) | .[] | select(.id != null) | "  " + .id'
-    else
-      printf '%s' "$catalog" | grep -o '"id":"[^"]*"' | sed 's/"id":"/  /;s/"$//'
-    fi
+    printf '%s' "$catalog" | "$AGENTIC_SDLC_JQ" -r '(.data // []) | .[] | select(.id != null) | "  " + .id'
     printf '\nA namespaced id (provider/model) is an ordinary catalog entry: a provider such as\n'
     printf 'muse is one row in `ccodex providers`, never a separate plane or launcher.\n'
     printf '\nThis is reachability, not authorization, and it is not a capability claim.\n'
@@ -339,8 +352,9 @@ case "$route" in
     printf 'ccodex (agentic-sdlc operator dispatcher)\n'
     printf '  repository root : %s%s\n' "$root" "$([ -d "$root" ] || printf ' (MISSING)')"
     printf '  root source     : %s\n' "$([ -n "${AGENTIC_SDLC_ROOT:-}" ] && printf 'AGENTIC_SDLC_ROOT' || printf 'install-time default')"
-    printf '  mise (ocx routes)      : %s\n' "$(command -v mise 2>/dev/null || printf 'NOT on PATH')"
-    printf '  uv (python routes)     : %s\n' "$(command -v uv 2>/dev/null || printf 'NOT on PATH')"
+    printf '  pinned ocx             : %s%s\n' "$AGENTIC_SDLC_OCX" "$([ -x "$AGENTIC_SDLC_OCX" ] || printf ' (MISSING)')"
+    printf '  pinned jq              : %s%s\n' "$AGENTIC_SDLC_JQ" "$([ -x "$AGENTIC_SDLC_JQ" ] || printf ' (MISSING)')"
+    printf '  pinned uv              : %s%s\n' "$installed_uv" "$([ -x "$installed_uv" ] || printf ' (MISSING)')"
     printf '\nThe clone is required: this command executes code inside the root above.\n'
     ;;
   -h|--help|help) usage ;;
