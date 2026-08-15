@@ -13,7 +13,7 @@ external companion, a first-party adaptation, or no product role?
    reference, with an exact donor record; or
 3. give SimpleEnglish no product role.
 
-**Artifact.** `.scratch/claude-code-first-harness/research/simpleenglish-content-gap-analysis.md`
+**Artifact.** `docs/plans/claude-code-first-harness/research/simpleenglish-content-gap-analysis.md`
 
 ## Recommendation
 

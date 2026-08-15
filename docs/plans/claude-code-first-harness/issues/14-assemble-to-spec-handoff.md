@@ -36,5 +36,5 @@ system was changed.
 The next operation is:
 
 ```text
-/to-spec .scratch/claude-code-first-harness/to-spec-handoff.md
+/to-spec docs/plans/claude-code-first-harness/to-spec-handoff.md
 ```

@@ -36,7 +36,7 @@ non-transactional update, ambient credentials, and default egress.
 Run it from the repository root:
 
 ```bash
-python3 .scratch/claude-code-first-harness/prototypes/install-lifecycle/install_lifecycle_tui.py
+python3 docs/plans/claude-code-first-harness/prototypes/install-lifecycle/install_lifecycle_tui.py
 ```
 
 In a real terminal this opens the interactive driver. In a non-interactive command runner it

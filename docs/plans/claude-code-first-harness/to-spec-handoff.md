@@ -25,7 +25,7 @@ from evidence at every effect boundary.
 ## `/to-spec` invocation
 
 ```text
-/to-spec .scratch/claude-code-first-harness/to-spec-handoff.md
+/to-spec docs/plans/claude-code-first-harness/to-spec-handoff.md
 ```
 
 The specification may decide implementation details named under [Residual implementation
