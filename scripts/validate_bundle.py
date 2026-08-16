@@ -218,6 +218,8 @@ RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsi
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
 RELEASE_CONTRACT_RELATIVE_PATH = Path("policy") / "release-contract.v1.json"
+RELEASE_CANDIDATE_POLICY_RELATIVE_PATH = Path("policy") / "release-candidate.v1.json"
+RELEASE_CANDIDATE_POLICY_SCHEMA = "release-candidate-policy/v1"
 CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v1.json"
 CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA = "ccodex-sdlc-read-report-policy/v1"
 CCODEX_SDLC_READ_REPORT_SCHEMA = "ccodex-sdlc-read-report/v1"
@@ -1409,6 +1411,122 @@ def _canonical_read_report_policy_json(value: object) -> str:
     return json.dumps(value, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
 
 
+def _release_candidate_policy_path(value: object) -> bool:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value or value.startswith("/"):
+        return False
+    parts = value.split("/")
+    return all(part not in {"", ".", ".."} for part in parts) and not any(character in value for character in "*?[]")
+
+
+def validate_release_candidate_policy(root: Path, result: Validation) -> None:
+    """Keep the unpublished-candidate allowlist explicit, finite, and canonical."""
+    relative = RELEASE_CANDIDATE_POLICY_RELATIVE_PATH
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        result.error(f"{relative}: required release-candidate policy is missing or linked")
+        return
+    try:
+        raw = path.read_bytes()
+        policy = _strict_json_object(raw, str(relative))
+    except (OSError, ValueError) as exc:
+        result.error(str(exc))
+        return
+    canonical = json.dumps(policy, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
+    if raw != canonical.encode("ascii"):
+        result.error(f"{relative}: policy must use canonical ASCII compact JSON")
+    expected_top = {"archive", "canonical_json", "disclosures", "limits", "manifest", "payload", "runtime", "schema_version"}
+    if set(policy) != expected_top or policy.get("schema_version") != RELEASE_CANDIDATE_POLICY_SCHEMA:
+        result.error(f"{relative}: closed policy schema mismatch")
+        return
+    if policy.get("canonical_json") != {
+        "allow_nonfinite": False,
+        "ensure_ascii": True,
+        "separators": [",", ":"],
+        "sort_keys": True,
+        "trailing_newline": True,
+    }:
+        result.error(f"{relative}: canonical JSON contract mismatch")
+    if policy.get("archive") != {"prefix": "agentic-sdlc-candidate-", "suffix": "-linux-x64.tar.gz"}:
+        result.error(f"{relative}: archive naming contract mismatch")
+    if policy.get("disclosures") != {"licensing": "incomplete", "provenance": "unverified", "sbom": "absent"}:
+        result.error(f"{relative}: disclosure contract must remain incomplete and unverified")
+
+    limits = policy.get("limits")
+    expected_limits = {"max_archive_bytes", "max_entries", "max_file_bytes", "max_path_bytes", "max_total_bytes", "max_uncompressed_bytes"}
+    if not isinstance(limits, dict) or set(limits) != expected_limits or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in limits.values()):
+        result.error(f"{relative}: bounded verifier limits are invalid")
+    elif not (
+        limits["max_file_bytes"] <= limits["max_total_bytes"] < limits["max_uncompressed_bytes"] <= 536_870_912
+        and limits["max_archive_bytes"] <= 536_870_912
+        and limits["max_entries"] <= 100_000
+        and limits["max_path_bytes"] <= 4096
+    ):
+        result.error(f"{relative}: bounded verifier limits exceed the v1 ceiling")
+
+    manifest = policy.get("manifest")
+    expected_manifest = {"artifact_kind", "platform", "product_version", "public_channel", "release_claim", "schema_version", "support_tier"}
+    if not isinstance(manifest, dict) or set(manifest) != expected_manifest:
+        result.error(f"{relative}: candidate manifest descriptor is invalid")
+    else:
+        if {key: manifest.get(key) for key in expected_manifest - {"product_version"}} != {
+            "artifact_kind": "unpublished-candidate",
+            "platform": "linux-x64",
+            "public_channel": None,
+            "release_claim": "none",
+            "schema_version": "release-candidate/v1",
+            "support_tier": "unsupported",
+        }:
+            result.error(f"{relative}: candidate manifest must not make a release or support claim")
+        try:
+            contract = load_release_contract_json(root / RELEASE_CONTRACT_RELATIVE_PATH)
+            checkout = contract.get("checkout")
+            expected_version = checkout.get("version") if isinstance(checkout, dict) else None
+        except ValueError:
+            expected_version = None
+        if not isinstance(manifest.get("product_version"), str) or manifest.get("product_version") != expected_version:
+            result.error(f"{relative}: product version must equal the canonical release contract version")
+
+    payload = policy.get("payload")
+    if not isinstance(payload, dict) or set(payload) != {"files", "trees"}:
+        result.error(f"{relative}: payload allowlist is invalid")
+    else:
+        files, trees = payload.get("files"), payload.get("trees")
+        if not all(isinstance(value, list) for value in (files, trees)):
+            result.error(f"{relative}: payload allowlist members must be lists")
+        else:
+            assert isinstance(files, list) and isinstance(trees, list)
+            if (
+                not files
+                or not trees
+                or files != sorted(files)
+                or trees != sorted(trees)
+                or len(files) != len(set(files))
+                or len(trees) != len(set(trees))
+                or not all(_release_candidate_policy_path(value) for value in [*files, *trees])
+                or any(file == tree or file.startswith(tree + "/") for file in files for tree in trees)
+                or any(left.startswith(right + "/") for left in trees for right in trees if left != right)
+            ):
+                result.error(f"{relative}: payload allowlist must be sorted, closed, and non-overlapping")
+            required_files = {"LICENSE", "NOTICE"}
+            required_trees = {"agents", "assets", "commands", "policy", "scripts", "skills"}
+            if not required_files.issubset(files) or not required_trees.issubset(trees):
+                result.error(f"{relative}: minimal authored payload roots are missing")
+
+    runtime = policy.get("runtime")
+    if not isinstance(runtime, dict) or set(runtime) != {"destination", "license_paths", "python_executable", "python_version"}:
+        result.error(f"{relative}: runtime descriptor is invalid")
+    elif (
+        runtime.get("destination") != "runtime/python"
+        or runtime.get("python_executable") != "bin/python3.12"
+        or runtime.get("python_version") != PYTHON_VERSION
+        or not isinstance(runtime.get("license_paths"), list)
+        or not runtime["license_paths"]
+        or runtime["license_paths"] != sorted(runtime["license_paths"])
+        or not all(_release_candidate_policy_path(value) for value in runtime["license_paths"])
+    ):
+        result.error(f"{relative}: private Python runtime contract is invalid")
+
+
 def validate_ccodex_sdlc_read_report_policy(root: Path, result: Validation) -> None:
     """Keep the checkout-development reader's closed semantic report descriptor deterministic."""
     relative = CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH
@@ -2468,6 +2586,7 @@ def validate(root: Path) -> Validation:
     validate_skills(root, result)
     validate_python(root, result)
     validate_release_contract(root, result)
+    validate_release_candidate_policy(root, result)
     validate_ccodex_sdlc_read_report_policy(root, result)
     validate_runtime_policy_contract(root, result)
     validate_agents(root, result)
