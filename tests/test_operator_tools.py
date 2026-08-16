@@ -39,6 +39,7 @@ class OperatorToolsTests(unittest.TestCase):
             runtime / "ocx",
             runtime / "jq",
             runtime / "uv",
+            Path(sys.executable),
         )
 
     def test_install_status_uninstall_lifecycle(self) -> None:
@@ -75,7 +76,11 @@ class OperatorToolsTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         path.chmod(0o755)
-        state = operator_tools.empty_state()
+        state = (
+            operator_tools.load_state(config.state_path, config)
+            if config.state_path.exists()
+            else operator_tools.empty_state()
+        )
         key = str(path)
         state["entries"][key] = {
             "path": key,
@@ -282,6 +287,65 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertNotIn('mise -C "$root" exec -- ocx', body)
             self.assertNotIn('exec uv run', body)
 
+    def test_ccodex_binds_the_injected_sdlc_python_at_install_time(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = self.config(root)
+            config = operator_tools.Config(
+                base.repo_root,
+                base.home,
+                base.bin_dir,
+                base.state_root,
+                base.dry_run,
+                base.require_path,
+                base.ocx_path,
+                base.jq_path,
+                base.uv_path,
+                sdlc_python_path=Path(sys.executable),
+            )
+
+            operator_tools.install(config)
+
+            body = (config.bin_dir / "ccodex").read_text()
+            self.assertIn(f"installed_sdlc_python='{Path(sys.executable)}'", body)
+            self.assertNotIn("@PINNED_SDLC_PYTHON@", body)
+
+    def test_sdlc_python_resolution_uses_only_managed_offline_uv_lookup(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            managed = runtime / "uv-managed-python"
+            ambient = runtime / "ambient-system-python"
+            managed.symlink_to(Path(sys.executable))
+            ambient.symlink_to(Path(sys.executable))
+            uv = runtime / "uv"
+            expected = "python find --managed-python --no-config --no-project --offline --no-python-downloads 3.12.11"
+            uv.write_text(
+                "#!/bin/sh\n"
+                f"if [ \"$*\" = \"{expected}\" ]; then\n"
+                f"  printf '%s\\n' '{managed}'\n"
+                "else\n"
+                f"  printf '%s\\n' '{ambient}'\n"
+                "fi\n"
+            )
+            uv.chmod(0o755)
+            config = operator_tools.Config(
+                Path(__file__).parents[1],
+                root / "home",
+                root / "bin",
+                root / "state",
+                require_path=False,
+                uv_path=uv,
+            )
+
+            resolved = operator_tools.sdlc_python_executable(config, uv)
+
+            self.assertEqual(resolved, managed)
+            self.assertNotEqual(resolved, ambient)
+
     def test_operator_tools_rejects_a_missing_pinned_runtime_before_install(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = self.config(root)
@@ -313,6 +377,7 @@ class OperatorToolsTests(unittest.TestCase):
                 replacement,
                 config.jq_path,
                 config.uv_path,
+                config.sdlc_python_path,
             )
 
             refreshed = operator_tools.install(refreshed_config)
@@ -998,6 +1063,102 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertEqual(result[0], 1)
             self.assertIn("would recover abort", result[1][0])
             self.assertEqual(config.state_path.read_bytes(), before)
+
+    def test_readonly_projection_preserves_pending_evidence_without_a_lock_or_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            path = config.bin_dir / "ccodex"
+            record = {
+                "path": str(path),
+                "digest": operator_tools.digest_bytes(b"future dispatcher"),
+                "removable": "true",
+            }
+            state = operator_tools.empty_state()
+            operator_tools.arm(config, state, "install", path, None, record)
+            before = config.state_path.read_bytes()
+
+            projection = operator_tools.readonly_projection(config)
+
+            self.assertEqual(projection["state"], "blocked")
+            self.assertEqual(
+                projection["recovery"],
+                [
+                    {
+                        "action": "lifecycle-dry-run",
+                        "component": "operator-tools",
+                        "path": str(path),
+                        "state": "pending",
+                    }
+                ],
+            )
+            self.assertIn("pending-recovery", {finding["code"] for finding in projection["findings"]})
+            self.assertEqual(config.state_path.read_bytes(), before)
+            self.assertFalse(config.lock_path.exists())
+
+    def test_readonly_projection_keeps_absent_historical_aliases_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            self.assertEqual(operator_tools.install(config)[0], 0)
+
+            projection = operator_tools.readonly_projection(config)
+
+            self.assertEqual(projection["state"], "healthy")
+            entries = {entry["name"]: entry["state"] for entry in projection["entries"]}
+            self.assertEqual(set(entries), set(operator_tools.DESIRED_COMMANDS))
+            self.assertTrue(all(state == "owned" for state in entries.values()))
+            self.assertNotIn("ocx-launch", entries)
+            self.assertNotIn("ocx-ultracode", entries)
+
+    def test_readonly_projection_reports_present_historical_aliases_without_making_them_required(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            self.assertEqual(operator_tools.install(config)[0], 0)
+            alias = self.seed_owned_historical_alias(config)
+
+            owned = operator_tools.readonly_projection(config)
+            alias_entry = next(entry for entry in owned["entries"] if entry["name"] == alias.name)
+            self.assertEqual(alias_entry["state"], "owned")
+            self.assertEqual(owned["state"], "healthy")
+
+            alias.write_text("modified alias\n")
+            modified = operator_tools.readonly_projection(config)
+            alias_entry = next(entry for entry in modified["entries"] if entry["name"] == alias.name)
+            self.assertEqual(alias_entry["state"], "modified")
+            self.assertEqual(modified["state"], "degraded")
+
+            alias.unlink()
+            missing = operator_tools.readonly_projection(config)
+            self.assertEqual(missing["state"], "healthy")
+            self.assertFalse(any(entry["name"] == alias.name for entry in missing["entries"]))
+
+    def test_readonly_projection_types_symlinked_and_racy_state_without_mutating(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config = self.config(root)
+            external = root / "external-state"
+            external.write_text("{}")
+            config.state_path.parent.mkdir(parents=True)
+            config.state_path.symlink_to(external)
+
+            symlinked = operator_tools.readonly_projection(config)
+
+            self.assertEqual(symlinked["state"], "blocked")
+            self.assertIn("state-symlinked", {finding["code"] for finding in symlinked["findings"]})
+            config.state_path.unlink()
+            original = operator_tools._readonly_read_file
+
+            def racy(path: Path) -> tuple[str, bytes | None, str | None]:
+                if path == config.state_path:
+                    return "racy", None, None
+                return original(path)
+
+            with mock.patch.object(operator_tools, "_readonly_read_file", side_effect=racy):
+                raced = operator_tools.readonly_projection(config)
+
+            self.assertEqual(raced["state"], "blocked")
+            self.assertIn("state-racy", {finding["code"] for finding in raced["findings"]})
+            self.assertFalse(config.state_path.exists())
 
 
 if __name__ == "__main__":

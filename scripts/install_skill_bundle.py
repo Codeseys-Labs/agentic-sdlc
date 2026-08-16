@@ -1988,13 +1988,32 @@ def rename_absent(
         ) from exc
 
 
+def transaction_configured_records(tx: dict[str, Any], config: Config) -> list[dict[str, Any]]:
+    """Return validated transaction records that target this configured home.
+
+    A rename has distinct before and after keys; all other operations use the transaction key for
+    both records.  Callers reach this only after ``validate_transactions``, so these paths and
+    records are safe to use internally for selection but must never become report text.
+    """
+    candidates = [
+        (tx.get("key"), tx.get("new_record")),
+        (tx.get("old_key") if tx.get("operation") == "rename" else tx.get("key"), tx.get("old_record")),
+    ]
+    selected: list[dict[str, Any]] = []
+    for key, record in candidates:
+        if (
+            not isinstance(key, str)
+            or not isinstance(record, dict)
+            or (config.agent != "all" and record.get("agent") != config.agent)
+            or not destination_is_configured(key, record, config)
+        ):
+            continue
+        selected.append(record)
+    return selected
+
+
 def transaction_selects_config(tx: dict[str, Any], config: Config) -> bool:
-    record = tx.get("new_record") or tx.get("old_record")
-    if not isinstance(record, dict):
-        return False
-    if config.agent != "all" and record.get("agent") != config.agent:
-        return False
-    return destination_is_configured(tx["key"], record, config)
+    return bool(transaction_configured_records(tx, config))
 
 
 def transaction_authority_matches(tx: dict[str, Any], config: Config) -> bool:
@@ -2812,6 +2831,203 @@ def status_summary(counts: dict[str, int]) -> str:
     if not any(counts.values()):
         return "no owned entries for this host (run: mise run bundle:install)"
     return f"{counts['ok']} ok, {counts['conflict']} conflict, {counts['absent']} absent"
+
+
+def _readonly_json_document(content: bytes, path: Path) -> dict[str, Any]:
+    """Decode a state document without duplicate-key or non-finite ambiguity."""
+    def reject_duplicate(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> Any:
+        raise ValueError(f"non-finite JSON value {value!r}")
+
+    try:
+        value = json.loads(
+            content.decode("utf-8"), object_pairs_hook=reject_duplicate, parse_constant=reject_constant
+        )
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        # Parser diagnostics can repeat arbitrary keys and values from hostile state.  The
+        # consumer receives the closed malformed-state finding instead.
+        raise InstallerError("bundle state is malformed") from exc
+    if not isinstance(value, dict):
+        raise InstallerError("bundle state is malformed")
+    return value
+
+
+def _readonly_read_file(path: Path) -> tuple[str, bytes | None, str | None]:
+    """Return a stable regular-file snapshot or a read-only evidence failure."""
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return "absent", None, None
+    except OSError:
+        return "unreadable", None, None
+    if stat.S_ISLNK(before.st_mode):
+        return "symlinked", None, None
+    if not stat.S_ISREG(before.st_mode):
+        return "unsupported", None, None
+    try:
+        content = path.read_bytes()
+        after = os.lstat(path)
+    except OSError:
+        return "unreadable", None, None
+    before_witness = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    after_witness = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    if before_witness != after_witness:
+        return "racy", None, None
+    return "present", content, None
+
+
+def _readonly_finding(code: str, message: str, path: Path | str) -> dict[str, str]:
+    return {"code": code, "component": "bundle", "message": message, "path": str(path)}
+
+
+def _readonly_locator(category: str, record: dict[str, Any], ordinal: int) -> str:
+    """Return a deterministic public locator without reproducing state-owned names or paths."""
+    return f"bundle-{category}://{record['agent']}/{record['kind']}/{ordinal}"
+
+
+def readonly_projection(config: Config) -> dict[str, object]:
+    """Read the canonical bundle lifecycle evidence without locks, migration, repair, or writes."""
+    paths: list[Path] = []
+    for path in (config.state_path, config.legacy_state_path):
+        if str(path) not in {str(current) for current in paths}:
+            paths.append(path)
+    findings: list[dict[str, str]] = []
+    entries: list[dict[str, str]] = []
+    recovery: list[dict[str, str]] = []
+    documents: list[tuple[Path, dict[str, Any]]] = []
+    projection_state = "absent"
+
+    for path in paths:
+        observed, content, _detail = _readonly_read_file(path)
+        if observed == "absent":
+            continue
+        if observed != "present":
+            findings.append(_readonly_finding(f"state-{observed}", f"bundle state is {observed}", path))
+            projection_state = "unreadable" if observed == "unreadable" else "blocked"
+            continue
+        assert content is not None
+        try:
+            document = _readonly_json_document(content, path)
+        except InstallerError:
+            findings.append(_readonly_finding("state-malformed", "bundle state is malformed", path))
+            projection_state = "unreadable"
+            continue
+        documents.append((path, document))
+
+    if len(documents) > 1:
+        findings.append(
+            _readonly_finding(
+                "state-ambiguous",
+                "multiple bundle state documents are present; read-only inspection will not select or migrate one",
+                documents[0][0],
+            )
+        )
+        projection_state = "blocked"
+    elif len(documents) == 1:
+        state_path, state = documents[0]
+        if set(state) != {"version", "entries", "transactions"}:
+            findings.append(_readonly_finding("state-malformed", "bundle state has an unknown field", state_path))
+            projection_state = "unreadable"
+        elif state.get("version") != STATE_VERSION:
+            findings.append(
+                _readonly_finding(
+                    "state-unsupported",
+                    "bundle state version is not readable without explicit migration",
+                    state_path,
+                )
+            )
+            projection_state = "blocked"
+        else:
+            try:
+                validate_state(config, state)
+            except InstallerError:
+                findings.append(_readonly_finding("state-malformed", "bundle state is malformed", state_path))
+                projection_state = "unreadable"
+            else:
+                owned_entries = state["entries"]
+                assert isinstance(owned_entries, dict)
+                selected_entries: list[tuple[dict[str, Any], Path, str]] = []
+                for key in sorted(owned_entries):
+                    record = owned_entries[key]
+                    assert isinstance(key, str) and isinstance(record, dict)
+                    if not destination_is_configured(key, record, config):
+                        # The lifecycle intentionally retains ownership records for earlier
+                        # configured homes. They are outside this operator projection, not a
+                        # foreign target for the current query, so a read-only report must leave
+                        # them unselected rather than inventing a conflict or touching them.
+                        continue
+                    destination = Path(key)
+                    if not path_present(destination):
+                        entry_state = "absent"
+                    elif entry_matches_record(destination, record):
+                        entry_state = "owned"
+                    else:
+                        entry_state = "foreign"
+                    selected_entries.append((record, destination, entry_state))
+                for ordinal, (record, _destination, entry_state) in enumerate(selected_entries, start=1):
+                    locator = _readonly_locator("entry", record, ordinal)
+                    entries.append(
+                        {
+                            "name": f"{record['agent']}-{record['kind']}-{ordinal}",
+                            "path": locator,
+                            "state": entry_state,
+                        }
+                    )
+                    if entry_state != "owned":
+                        findings.append(
+                            _readonly_finding(
+                                "owned-entry-conflict",
+                                f"owned bundle entry is {entry_state}",
+                                locator,
+                            )
+                        )
+                        if projection_state not in {"blocked", "unreadable"}:
+                            projection_state = "degraded"
+                transactions = state["transactions"]
+                assert isinstance(transactions, dict)
+                selected_transactions: list[dict[str, Any]] = []
+                for key in sorted(transactions):
+                    transaction = transactions[key]
+                    assert isinstance(key, str) and isinstance(transaction, dict)
+                    configured_records = transaction_configured_records(transaction, config)
+                    if not configured_records:
+                        continue
+                    selected_transactions.append(configured_records[0])
+                for ordinal, record in enumerate(selected_transactions, start=1):
+                    locator = _readonly_locator("transaction", record, ordinal)
+                    recovery.append(
+                        {
+                            "action": "lifecycle-dry-run",
+                            "component": "bundle",
+                            "path": locator,
+                            "state": "pending",
+                        }
+                    )
+                    findings.append(
+                        _readonly_finding(
+                            "pending-recovery",
+                            "bundle has an interrupted lifecycle transaction; only a lifecycle dry run may propose recovery",
+                            locator,
+                        )
+                    )
+                    projection_state = "blocked"
+                if projection_state == "absent" and (selected_entries or selected_transactions):
+                    projection_state = "healthy"
+
+    return {
+        "entries": entries,
+        "findings": findings,
+        "recovery": recovery,
+        "state": projection_state,
+        "state_paths": [str(path) for path in paths],
+    }
 
 
 def status(config: Config) -> Result:

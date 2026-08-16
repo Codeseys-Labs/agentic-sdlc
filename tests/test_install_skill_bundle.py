@@ -1256,6 +1256,70 @@ class InstallSkillBundleTests(unittest.TestCase):
             write.assert_not_called()
             self.assertEqual(config.state_path.read_bytes(), before)
 
+    def test_readonly_projection_preserves_pending_transaction_evidence_without_a_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            destination, _transaction = self.create_armed_create_transaction(config, entry)
+            before = config.state_path.read_bytes()
+
+            projection = installer.readonly_projection(config)
+
+            self.assertEqual(projection["state"], "blocked")
+            self.assertEqual(
+                projection["recovery"],
+                [
+                    {
+                        "action": "lifecycle-dry-run",
+                        "component": "bundle",
+                        "path": "bundle-transaction://claude/skill/1",
+                        "state": "pending",
+                    }
+                ],
+            )
+            self.assertIn("pending-recovery", {finding["code"] for finding in projection["findings"]})
+            self.assertEqual(config.state_path.read_bytes(), before)
+            self.assertFalse(config.state_path.with_name("installer.lock").exists())
+
+    def test_readonly_projection_types_malformed_and_foreign_evidence_without_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            config.state_path.parent.mkdir(parents=True)
+            config.state_path.write_text('{"version":3,"entries":{},"entries":{},"transactions":{}}')
+            malformed_before = config.state_path.read_bytes()
+
+            malformed = installer.readonly_projection(config)
+
+            self.assertEqual(malformed["state"], "unreadable")
+            self.assertIn("state-malformed", {finding["code"] for finding in malformed["findings"]})
+            self.assertEqual(config.state_path.read_bytes(), malformed_before)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            self.install_only(config, entry)
+            destination = installer.destination_for(entry, config)
+            (destination / "SKILL.md").write_text("foreign replacement")
+            before = config.state_path.read_bytes()
+
+            foreign = installer.readonly_projection(config)
+
+            self.assertEqual(foreign["state"], "degraded")
+            self.assertIn("owned-entry-conflict", {finding["code"] for finding in foreign["findings"]})
+            self.assertEqual(config.state_path.read_bytes(), before)
+
     def test_root_retarget_and_recreated_path_conflict_without_victim_inspection(self) -> None:
         if not hasattr(os, "symlink"):
             self.skipTest("symlinks are required")

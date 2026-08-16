@@ -122,11 +122,15 @@ OPERATOR_TOOL_ARTIFACTS = frozenset(
         # under assets/, which the scripts/*.sh syntax glob does not reach.
         "assets/claude/session-inheritance.sh",
         "assets/launchers/ccodex.in",
+        "policy/ccodex-sdlc-read-report.v1.json",
+        "scripts/ccodex_sdlc.py",
+        "scripts/ccodex_sdlc_readonly.py",
         "scripts/install_operator_tools.py",
         "scripts/manage_claude_statusline.py",
         "tests/test_claude_statusline.py",
         "tests/test_manage_claude_statusline.py",
         "tests/test_operator_tools.py",
+        "tests/test_ccodex_sdlc.py",
         "tests/test_opencodex_claude.py",
     }
 )
@@ -214,6 +218,62 @@ RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsi
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
 RELEASE_CONTRACT_RELATIVE_PATH = Path("policy") / "release-contract.v1.json"
+CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v1.json"
+CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA = "ccodex-sdlc-read-report-policy/v1"
+CCODEX_SDLC_READ_REPORT_SCHEMA = "ccodex-sdlc-read-report/v1"
+CCODEX_SDLC_READ_REPORT_TOP_LEVEL_FIELDS = [
+    "schema_version",
+    "command",
+    "checkout",
+    "runtime",
+    "operator_tools",
+    "bundle",
+    "recovery",
+    "future_dimensions",
+    "findings",
+    "overall",
+]
+CCODEX_SDLC_READ_REPORT_FIELDS = {
+    "bundle": ["entries", "findings", "recovery", "state", "state_paths"],
+    "checkout": ["certification_claim", "plane", "public_channel", "release", "release_topology_adr_status", "version"],
+    "command": ["dry_run", "verb"],
+    "finding": ["code", "component", "message", "path"],
+    "future_dimensions": ["activation", "release", "waves"],
+    "overall": ["exit_class", "state"],
+    "projection_entry": ["name", "path", "state"],
+    "recovery": ["effect", "proposals", "state"],
+    "recovery_item": ["action", "component", "path", "state"],
+    "runtime": ["interpreter", "isolated", "state", "version"],
+}
+CCODEX_SDLC_READ_REPORT_VOCABULARIES = {
+    "command_verbs": ["doctor", "inspect", "recover", "status"],
+    "component_states": ["absent", "blocked", "degraded", "healthy", "unreadable"],
+    "entry_states": ["absent", "foreign", "modified", "owned", "racy", "symlinked", "unreadable", "unsupported"],
+    "exit_classes": ["invariant-failure", "ok", "safe-refusal"],
+    "finding_codes": [
+        "checkout-contract-invalid",
+        "foreign-entry",
+        "foreign-state",
+        "owned-entry-conflict",
+        "owned-entry-racy",
+        "pending-invalid",
+        "pending-recovery",
+        "runtime-admission-refused",
+        "state-ambiguous",
+        "state-malformed",
+        "state-racy",
+        "state-symlinked",
+        "state-unsupported",
+        "state-unreadable",
+    ],
+    "finding_components": ["bundle", "checkout", "operator-tools", "runtime"],
+    "overall_states": ["absent", "blocked", "degraded", "healthy", "unreadable"],
+    "recovery_actions": ["lifecycle-dry-run"],
+    "recovery_effects": ["none"],
+    "recovery_item_states": ["pending"],
+    "recovery_states": ["not-needed", "pending", "proposed"],
+    "runtime_states": ["admitted", "refused"],
+}
 RELEASE_CONTRACT_TOP_LEVEL_KEYS = (
     "schema_version",
     "checkout",
@@ -1323,6 +1383,66 @@ def validate_release_contract(root: Path, result: Validation) -> None:
             _validate_release_stable_admission(checkout, rows, core, result)
 
 
+def _strict_json_object(raw: bytes, label: str) -> dict[str, object]:
+    """Parse policy JSON without accepting duplicate keys or non-finite constants."""
+    def reject_duplicate(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f"duplicate key {key!r}")
+            value[key] = item
+        return value
+
+    def reject_constant(value: str) -> object:
+        raise ValueError(f"non-finite JSON constant {value!r}")
+
+    try:
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate, parse_constant=reject_constant)
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label}: invalid strict JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label}: JSON object required")
+    return value
+
+
+def _canonical_read_report_policy_json(value: object) -> str:
+    return json.dumps(value, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
+
+
+def validate_ccodex_sdlc_read_report_policy(root: Path, result: Validation) -> None:
+    """Keep the checkout-development reader's closed semantic report descriptor deterministic."""
+    relative = CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        result.error(f"{relative}: required canonical read-report policy is missing or linked")
+        return
+    try:
+        raw = path.read_bytes()
+        policy = _strict_json_object(raw, str(relative))
+    except (OSError, ValueError) as exc:
+        result.error(str(exc))
+        return
+    if raw != _canonical_read_report_policy_json(policy).encode("utf-8"):
+        result.error(f"{relative}: policy must use canonical JSON")
+    expected = {
+        "canonical_serialization": {
+            "allow_nonfinite": False,
+            "ensure_ascii": True,
+            "indent": None,
+            "separators": [",", ":"],
+            "sort_keys": True,
+            "trailing_newline": True,
+        },
+        "field_vocabularies": CCODEX_SDLC_READ_REPORT_FIELDS,
+        "report_schema_version": CCODEX_SDLC_READ_REPORT_SCHEMA,
+        "report_top_level_fields": CCODEX_SDLC_READ_REPORT_TOP_LEVEL_FIELDS,
+        "schema_version": CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA,
+        "vocabularies": CCODEX_SDLC_READ_REPORT_VOCABULARIES,
+    }
+    if policy != expected:
+        result.error(f"{relative}: closed schema/vocabulary descriptor differs from the read-report contract")
+
+
 def runtime_receipt_policy() -> dict[str, object]:
     return load_json_object(RECEIPT_POLICY_PATH, "runtime receipt policy")
 
@@ -2348,6 +2468,7 @@ def validate(root: Path) -> Validation:
     validate_skills(root, result)
     validate_python(root, result)
     validate_release_contract(root, result)
+    validate_ccodex_sdlc_read_report_policy(root, result)
     validate_runtime_policy_contract(root, result)
     validate_agents(root, result)
     validate_managed_role_contract(root, result)

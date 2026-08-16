@@ -47,6 +47,9 @@ class Config:
     ocx_path: Path | None = None
     jq_path: Path | None = None
     uv_path: Path | None = None
+    # Test-only seam for the interpreter rendered into the `ccodex sdlc` route. Production
+    # installations leave this unset and resolve it through the already-bound uv executable.
+    sdlc_python_path: Path | None = None
 
     @property
     def state_path(self) -> Path:
@@ -195,6 +198,57 @@ def mise_executable(config: Config, tool: str) -> Path:
     return path
 
 
+def sdlc_python_executable(config: Config, uv: Path) -> Path:
+    """Resolve and verify the exact uv-managed interpreter for read-only SDLC inspection.
+
+    The returned absolute executable is rendered into the dispatcher so daily reads never need
+    to invoke uv or select an interpreter from the caller's PATH. `sdlc_python_path` is an
+    injection seam for isolated tests; it is still subjected to the same exact-version check.
+    """
+    if config.sdlc_python_path is not None:
+        candidate = absolute(config.sdlc_python_path)
+    else:
+        try:
+            resolved = subprocess.run(
+                [
+                    str(uv),
+                    "python",
+                    "find",
+                    "--managed-python",
+                    "--no-config",
+                    "--no-project",
+                    "--offline",
+                    "--no-python-downloads",
+                    "3.12.11",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise OperatorToolsError(
+                "cannot resolve uv-managed Python 3.12.11; run `mise --locked install` in "
+                f"{config.repo_root}"
+            ) from exc
+        candidate = absolute(Path(resolved))
+    if not candidate.is_file() or not os.access(candidate, os.X_OK):
+        raise OperatorToolsError(f"uv-managed Python 3.12.11 is not an executable file: {candidate}")
+    try:
+        observed = subprocess.run(
+            [str(candidate), "-I", "-B", "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise OperatorToolsError(f"cannot execute uv-managed Python 3.12.11: {candidate}") from exc
+    if observed != "3.12.11":
+        raise OperatorToolsError(
+            f"uv-managed Python must be exactly 3.12.11, got {observed or 'no version'}: {candidate}"
+        )
+    return candidate
+
+
 def desired_files(config: Config) -> dict[str, bytes]:
     statusline = config.repo_root / "assets" / "claude" / "statusline-command.sh"
     launcher = config.repo_root / "scripts" / "opencodex-claude.sh"
@@ -206,6 +260,7 @@ def desired_files(config: Config) -> dict[str, bytes]:
     ocx = mise_executable(config, "ocx")
     jq = mise_executable(config, "jq")
     uv = mise_executable(config, "uv")
+    sdlc_python = sdlc_python_executable(config, uv)
     # The dispatcher resolves its root at run time from AGENTIC_SDLC_ROOT, falling back to this
     # install-time value, so a clone that later moves to a managed path can be pointed at without a
     # reinstall. Pinned runtime executables are deliberately absolute: daily use must not depend on
@@ -219,6 +274,7 @@ def desired_files(config: Config) -> dict[str, bytes]:
         .replace("@PINNED_OCX@", shell_quote(str(ocx)))
         .replace("@PINNED_JQ@", shell_quote(str(jq)))
         .replace("@PINNED_UV@", shell_quote(str(uv)))
+        .replace("@PINNED_SDLC_PYTHON@", shell_quote(str(sdlc_python)))
     )
     return {
         "agentic-sdlc-statusline": statusline.read_bytes(),
@@ -614,6 +670,221 @@ def state_snapshot(path: Path) -> tuple[bool, bytes | None]:
     if path.is_symlink() or not path.is_file():
         raise OperatorToolsError(f"operator-tools state must be a regular file: {path}")
     return True, path.read_bytes()
+
+
+def _readonly_json_document(content: bytes, path: Path) -> dict[str, object]:
+    """Decode one ownership document without duplicate-key or non-finite ambiguity."""
+    def reject_duplicate(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> object:
+        raise ValueError(f"non-finite JSON value {value!r}")
+
+    try:
+        value = json.loads(
+            content.decode("utf-8"), object_pairs_hook=reject_duplicate, parse_constant=reject_constant
+        )
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        # Parser diagnostics can include document keys and values.  The read-only report is an
+        # external surface, so keep that untrusted state body out of it.
+        raise OperatorToolsError("operator-tools state is malformed") from exc
+    if not isinstance(value, dict):
+        raise OperatorToolsError("operator-tools state is malformed")
+    return value
+
+
+def _readonly_read_file(path: Path) -> tuple[str, bytes | None, str | None]:
+    """Read a regular file once and reject a changed inode/metadata witness as racy."""
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return "absent", None, None
+    except OSError:
+        return "unreadable", None, None
+    if stat.S_ISLNK(before.st_mode):
+        return "symlinked", None, None
+    if not stat.S_ISREG(before.st_mode):
+        return "unsupported", None, None
+    try:
+        content = path.read_bytes()
+        after = os.lstat(path)
+    except OSError:
+        return "unreadable", None, None
+    witness_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    witness_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    if witness_before != witness_after:
+        return "racy", None, None
+    return "present", content, None
+
+
+def _readonly_entry_state(path: Path, digest: str) -> tuple[str, str | None]:
+    observed, content, detail = _readonly_read_file(path)
+    if observed == "absent":
+        return "absent", None
+    if observed in {"symlinked", "unsupported", "unreadable", "racy"}:
+        return observed, detail
+    assert content is not None
+    return ("owned", None) if digest_bytes(content) == digest else ("modified", None)
+
+
+def _readonly_finding(code: str, message: str, path: Path) -> dict[str, str]:
+    return {"code": code, "component": "operator-tools", "message": message, "path": str(path)}
+
+
+def readonly_projection(config: Config) -> dict[str, object]:
+    """Return a pure, structured operator-tools observation.
+
+    This deliberately does not call the legacy lifecycle's status or pending-recovery helpers.
+    It neither acquires a lock nor normalizes/migrates/writes a state document.  Malformed and
+    racy evidence is preserved as a typed finding so the caller can remain read-only.
+    """
+    state_path = config.state_path
+    findings: list[dict[str, str]] = []
+    entries: list[dict[str, str]] = []
+    recovery: list[dict[str, str]] = []
+    observed, content, _detail = _readonly_read_file(state_path)
+    state: dict[str, object] | None = None
+    projection_state = "absent"
+
+    if observed == "present":
+        assert content is not None
+        try:
+            state = _readonly_json_document(content, state_path)
+        except OperatorToolsError:
+            findings.append(_readonly_finding("state-malformed", "operator-tools state is malformed", state_path))
+            projection_state = "unreadable"
+    elif observed != "absent":
+        code = f"state-{observed}"
+        findings.append(_readonly_finding(code, f"operator-tools state is {observed}", state_path))
+        projection_state = "unreadable" if observed == "unreadable" else "blocked"
+
+    records: dict[str, object] = {}
+    pending: object = None
+    if state is not None:
+        if set(state) != {"version", "entries", "pending"}:
+            findings.append(_readonly_finding("state-malformed", "operator-tools state has an unknown field", state_path))
+            projection_state = "unreadable"
+        elif state.get("version") != STATE_VERSION:
+            findings.append(
+                _readonly_finding(
+                    "state-unsupported",
+                    "operator-tools state version is not readable without migration",
+                    state_path,
+                )
+            )
+            projection_state = "blocked"
+        elif not isinstance(state.get("entries"), dict):
+            findings.append(_readonly_finding("state-malformed", "operator-tools entries are not an object", state_path))
+            projection_state = "unreadable"
+        else:
+            records = state["entries"]
+            pending = state["pending"]
+            for key, record in records.items():
+                if (
+                    not isinstance(key, str)
+                    or not valid_record(record, key)
+                    or Path(key).parent != config.bin_dir
+                    or Path(key).name not in RECOGNIZED_COMMANDS
+                ):
+                    findings.append(
+                        _readonly_finding("state-malformed", "operator-tools ownership record is invalid", state_path)
+                    )
+                    projection_state = "unreadable"
+                    records = {}
+                    break
+            if projection_state != "unreadable" and pending is not None:
+                try:
+                    validate_pending(config, {"version": STATE_VERSION, "entries": records, "pending": pending})
+                except OperatorToolsError:
+                    findings.append(
+                        _readonly_finding(
+                            "pending-invalid", "operator-tools pending transition is malformed", state_path
+                        )
+                    )
+                    projection_state = "blocked"
+                else:
+                    assert isinstance(pending, dict)
+                    recovery.append(
+                        {
+                            "action": "lifecycle-dry-run",
+                            "component": "operator-tools",
+                            "path": str(config.bin_dir / Path(pending["path"]).name),
+                            "state": "pending",
+                        }
+                    )
+                    findings.append(
+                        _readonly_finding(
+                            "pending-recovery",
+                            "operator-tools has an interrupted lifecycle transition; only a lifecycle dry run may propose recovery",
+                            state_path,
+                        )
+                    )
+                    projection_state = "blocked"
+
+    for name in DESIRED_COMMANDS:
+        path = config.bin_dir / name
+        record = records.get(str(path))
+        if isinstance(record, dict):
+            entry_state, _detail = _readonly_entry_state(path, str(record["digest"]))
+            entries.append({"name": name, "path": str(path), "state": entry_state})
+            if entry_state != "owned":
+                code = "owned-entry-racy" if entry_state == "racy" else "owned-entry-conflict"
+                findings.append(_readonly_finding(code, f"owned operator command is {entry_state}", path))
+                if projection_state not in {"blocked", "unreadable"}:
+                    projection_state = "degraded"
+        else:
+            observed, _content, _detail = _readonly_read_file(path)
+            entry_state = "foreign" if observed == "present" else observed
+            entries.append({"name": name, "path": str(path), "state": entry_state})
+            if entry_state != "absent":
+                findings.append(_readonly_finding("foreign-entry", f"unowned operator command is {entry_state}", path))
+                if projection_state not in {"blocked", "unreadable"}:
+                    projection_state = "degraded"
+
+    # Historical aliases are lifecycle evidence when an ownership record or a real file remains,
+    # but fresh installs deliberately neither create nor require them.  Keep their established
+    # status semantics: an unowned or missing historical alias is retained as information, while
+    # a changed owned alias is a conflict.
+    for name in HISTORICAL_ALIASES:
+        path = config.bin_dir / name
+        record = records.get(str(path))
+        if isinstance(record, dict):
+            entry_state, _detail = _readonly_entry_state(path, str(record["digest"]))
+            if entry_state == "absent":
+                # A retained historical ownership record is not a requirement to recreate the
+                # alias.  Match status: preserve the fact internally without reporting it as an
+                # absent command in this public projection.
+                continue
+            entries.append({"name": name, "path": str(path), "state": entry_state})
+            if entry_state != "owned" and entry_state != "absent":
+                code = "owned-entry-racy" if entry_state == "racy" else "owned-entry-conflict"
+                findings.append(_readonly_finding(code, f"owned historical alias is {entry_state}", path))
+                if projection_state not in {"blocked", "unreadable"}:
+                    projection_state = "degraded"
+            continue
+        observed, _content, _detail = _readonly_read_file(path)
+        if observed == "absent":
+            continue
+        entry_state = "foreign" if observed == "present" else observed
+        entries.append({"name": name, "path": str(path), "state": entry_state})
+
+    if projection_state == "absent" and records:
+        desired_entries = [entry for entry in entries if entry["name"] in DESIRED_COMMANDS]
+        projection_state = "healthy" if all(entry["state"] == "owned" for entry in desired_entries) else "degraded"
+    elif projection_state == "absent" and any(entry["state"] != "absent" for entry in entries):
+        projection_state = "degraded"
+    return {
+        "entries": entries,
+        "findings": findings,
+        "recovery": recovery,
+        "state": projection_state,
+        "state_paths": [str(state_path)],
+    }
 
 
 def status(config: Config) -> tuple[int, list[str]]:

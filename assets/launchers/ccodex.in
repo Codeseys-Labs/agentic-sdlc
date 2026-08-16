@@ -39,6 +39,7 @@ installed_root=@CANONICAL_ROOT@
 installed_ocx=@PINNED_OCX@
 installed_jq=@PINNED_JQ@
 installed_uv=@PINNED_UV@
+installed_sdlc_python=@PINNED_SDLC_PYTHON@
 root="${AGENTIC_SDLC_ROOT:-$installed_root}"
 launcher="$root/scripts/opencodex-claude.sh"
 export AGENTIC_SDLC_OCX="$installed_ocx"
@@ -76,6 +77,10 @@ Installed-bundle lifecycle:
   bundle <install|status|uninstall>
   libraries <list|status|install|migrate|uninstall> [args...]
   statusline <status|activate|deactivate> [args...]
+
+Checkout-development evidence (read-only, no gateway or lifecycle effects):
+  sdlc <inspect|status|doctor> [--json]
+  sdlc recover --dry-run [--json]
 
   version                     Report this command's resolved repository root and dependencies.
 
@@ -123,6 +128,23 @@ run_python() {
     exit 1
   }
   exec "$installed_uv" run --python 3.12.11 --script "$root/scripts/$script" "$@"
+}
+
+# `ccodex sdlc` intentionally does not share run_python: installation bound and verified a
+# UV-managed Python 3.12.11 interpreter, and daily checkout-development queries invoke it
+# directly with isolated, bytecode-free flags. That keeps this reader away from UV, Mise, OCX,
+# the gateway, ambient Python, and their corresponding network or lifecycle surfaces.
+run_sdlc_python() {
+  require_root
+  [ -x "$installed_sdlc_python" ] || {
+    printf 'error: the installed ccodex sdlc Python 3.12.11 interpreter is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+    exit 3
+  }
+  [ -f "$root/scripts/ccodex_sdlc.py" ] || {
+    printf 'error: the checkout-development read-only report is unavailable in this distribution\n' >&2
+    exit 3
+  }
+  exec "$installed_sdlc_python" -I -B "$root/scripts/ccodex_sdlc.py" "$@"
 }
 
 # Pinned ocx passthrough. Read-only catalog routes and the explicitly named fast-model mutation
@@ -348,6 +370,10 @@ case "$route" in
       *) printf 'error: ccodex statusline needs status|activate|deactivate\n' >&2; exit 2 ;;
     esac
     ;;
+  sdlc)
+    shift
+    run_sdlc_python "$@"
+    ;;
   version)
     printf 'ccodex (agentic-sdlc operator dispatcher)\n'
     printf '  repository root : %s%s\n' "$root" "$([ -d "$root" ] || printf ' (MISSING)')"
@@ -355,6 +381,7 @@ case "$route" in
     printf '  pinned ocx             : %s%s\n' "$AGENTIC_SDLC_OCX" "$([ -x "$AGENTIC_SDLC_OCX" ] || printf ' (MISSING)')"
     printf '  pinned jq              : %s%s\n' "$AGENTIC_SDLC_JQ" "$([ -x "$AGENTIC_SDLC_JQ" ] || printf ' (MISSING)')"
     printf '  pinned uv              : %s%s\n' "$installed_uv" "$([ -x "$installed_uv" ] || printf ' (MISSING)')"
+    printf '  pinned sdlc Python     : %s%s\n' "$installed_sdlc_python" "$([ -x "$installed_sdlc_python" ] || printf ' (MISSING)')"
     printf '\nThe clone is required: this command executes code inside the root above.\n'
     ;;
   -h|--help|help) usage ;;
