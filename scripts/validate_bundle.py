@@ -213,6 +213,96 @@ SECRETS_COMMAND_WINDOWS = f"uv.exe run --python {PYTHON_VERSION} --script {SECRE
 RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
 NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
 ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
+RELEASE_CONTRACT_RELATIVE_PATH = Path("policy") / "release-contract.v1.json"
+RELEASE_CONTRACT_TOP_LEVEL_KEYS = (
+    "schema_version",
+    "checkout",
+    "compatibility",
+    "channels",
+    "claim_lint",
+)
+RELEASE_CHECKOUT_KEYS = frozenset(
+    {
+        "certification_claim",
+        "plane",
+        "public_channel",
+        "release_topology_adr_status",
+        "version",
+    }
+)
+RELEASE_COMPATIBILITY_KEYS = frozenset(
+    {
+        "core",
+        "dated_references",
+        "known_incompatible_host_versions",
+        "optional_profile_floors",
+        "support_rows",
+        "support_tiers",
+        "tuple_dimensions",
+    }
+)
+RELEASE_CORE_KEYS = frozenset(
+    {
+        "certification_requires_current_capability_evidence",
+        "host",
+        "minimum_host_version",
+        "minimum_is_eligibility_only",
+        "required_capabilities",
+        "surface",
+    }
+)
+RELEASE_SUPPORT_TIERS = (
+    "certified",
+    "capability-qualified",
+    "experimental",
+    "unsupported",
+)
+RELEASE_TUPLE_DIMENSIONS = (
+    "product_release",
+    "surface",
+    "host",
+    "host_version",
+    "operating_system",
+    "architecture",
+    "runtime_boundary",
+    "installation_plane",
+    "capability_evidence",
+    "optional_profile_versions",
+    "dependency_versions",
+)
+RELEASE_SUPPORT_ROW_KEYS = frozenset((*RELEASE_TUPLE_DIMENSIONS, "tier"))
+RELEASE_CHANNELS_KEYS = frozenset({"preview", "public_channel_names", "stable"})
+RELEASE_STABLE_CHANNEL_KEYS = frozenset(
+    {
+        "allows_experimental_profiles",
+        "default_permission_bypass",
+        "requires_complete_core_release_gate",
+        "requires_current_certified_core",
+        "requires_migration_and_recovery",
+        "selection",
+    }
+)
+RELEASE_PREVIEW_CHANNEL_KEYS = frozenset(
+    {"inherits_stable_state", "install_mode", "may_overwrite_stable", "selection"}
+)
+RELEASE_CLAIM_LINT_KEYS = frozenset(
+    {"allowed_extensions", "fixture_root", "forbidden_claims"}
+)
+RELEASE_CLAIM_CATEGORIES = frozenset(
+    {
+        "asd_conformance",
+        "blanket_cross_platform_latest",
+        "bundled_companion",
+        "model_wide",
+        "official_product",
+        "provider_neutral_equal_parity",
+        "provider_wide",
+        "replacement",
+        "security_completeness",
+        "universal_gateway",
+        "unsupported_renderer",
+    }
+)
 PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
 RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "2ca7f36c728d324ab60f2b99d4b3fb03f064180496c0731aa33447a7dee4ba72"
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
@@ -624,6 +714,613 @@ def load_json_object(path: Path, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
     return value
+
+
+def _release_contract_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, member in pairs:
+        if key in value:
+            raise ValueError(f"duplicate member {key!r}")
+        value[key] = member
+    return value
+
+
+def _reject_release_contract_nonfinite(token: str) -> object:
+    raise ValueError(f"non-finite JSON value {token!r} is forbidden")
+
+
+def load_release_contract_json(path: Path) -> dict[str, object]:
+    """Load the new release contract with duplicate and non-finite values refused.
+
+    This parser deliberately scopes those stricter JSON rules to the release contract.
+    Legacy policy and manifest readers keep their existing compatibility behavior.
+    """
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_release_contract_object,
+            parse_constant=_reject_release_contract_nonfinite,
+        )
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid release contract: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("release contract must be a JSON object")
+    return value
+
+
+def _canonical_release_contract_value(value: object, *, top_level: bool = False) -> object:
+    if isinstance(value, dict):
+        keys = RELEASE_CONTRACT_TOP_LEVEL_KEYS if top_level else tuple(sorted(value))
+        ordered = {key: _canonical_release_contract_value(value[key]) for key in keys if key in value}
+        if top_level:
+            for key in sorted(set(value) - set(RELEASE_CONTRACT_TOP_LEVEL_KEYS)):
+                ordered[key] = _canonical_release_contract_value(value[key])
+        return ordered
+    if isinstance(value, list):
+        return [_canonical_release_contract_value(item) for item in value]
+    return value
+
+
+def canonical_release_contract_json(value: object) -> str:
+    """Render the release contract in its deterministic v1 JSON representation."""
+    return json.dumps(
+        _canonical_release_contract_value(value, top_level=True),
+        allow_nan=False,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=False,
+    ) + "\n"
+
+
+def _release_contract_mapping(
+    value: object, label: str, result: Validation
+) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        result.error(f"policy/release-contract.v1.json: {label} must be an object")
+        return None
+    return value
+
+
+def _release_contract_exact_keys(
+    value: dict[str, object], expected: frozenset[str], label: str, result: Validation
+) -> None:
+    if set(value) != expected:
+        result.error(
+            f"policy/release-contract.v1.json: {label} keys must be exactly {sorted(expected)}"
+        )
+
+
+def _release_contract_version(
+    value: object, label: str, result: Validation
+) -> tuple[int, int, int] | None:
+    if not isinstance(value, str) or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", value):
+        result.error(f"policy/release-contract.v1.json: {label} must be a three-part SemVer")
+        return None
+    return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
+
+
+def _release_contract_string(value: object, label: str, result: Validation) -> str | None:
+    if not isinstance(value, str) or not value:
+        result.error(f"policy/release-contract.v1.json: {label} must be a non-empty string")
+        return None
+    return value
+
+
+def _validate_release_version_map(
+    value: object, label: str, result: Validation
+) -> dict[str, object] | None:
+    versions = _release_contract_mapping(value, label, result)
+    if versions is None:
+        return None
+    for name, version in versions.items():
+        if not isinstance(name, str) or not name:
+            result.error(f"policy/release-contract.v1.json: {label} has an invalid name")
+        _release_contract_version(version, f"{label}.{name}", result)
+    return versions
+
+
+def _validate_release_checkout(
+    checkout: dict[str, object], rows: list[dict[str, object]], result: Validation
+) -> None:
+    _release_contract_exact_keys(checkout, RELEASE_CHECKOUT_KEYS, "checkout", result)
+    version = _release_contract_version(checkout.get("version"), "checkout.version", result)
+    plane = checkout.get("plane")
+    public_channel = checkout.get("public_channel")
+    certification_claim = checkout.get("certification_claim")
+    adr_status = checkout.get("release_topology_adr_status")
+
+    if plane not in {"checkout-development", "mise-release"}:
+        result.error("policy/release-contract.v1.json: checkout.plane must be checkout-development or mise-release")
+    if public_channel is not None and public_channel not in {"stable", "preview"}:
+        result.error("policy/release-contract.v1.json: checkout.public_channel must be stable, preview, or null")
+    if certification_claim not in {"none", "current-certified-core"}:
+        result.error("policy/release-contract.v1.json: checkout.certification_claim is invalid")
+    if adr_status not in {"proposed", "accepted"}:
+        result.error("policy/release-contract.v1.json: checkout.release_topology_adr_status is invalid")
+
+    if plane == "checkout-development":
+        if public_channel is not None:
+            result.error("policy/release-contract.v1.json: checkout-development has no public channel")
+        if certification_claim != "none":
+            result.error("policy/release-contract.v1.json: checkout-development has no certification claim")
+    if plane == "mise-release":
+        if public_channel not in {"stable", "preview"}:
+            result.error("policy/release-contract.v1.json: mise-release must select a public channel")
+        if adr_status != "accepted":
+            result.error("policy/release-contract.v1.json: mise-release requires an accepted release topology ADR")
+        if public_channel == "stable" and certification_claim != "current-certified-core":
+            result.error("policy/release-contract.v1.json: stable requires the current-certified-core claim")
+        if public_channel == "preview" and certification_claim != "none":
+            result.error("policy/release-contract.v1.json: preview cannot inherit a stable certification claim")
+
+    if version == (0, 7, 3):
+        if plane != "checkout-development":
+            result.error("policy/release-contract.v1.json: 0.7.3 must remain checkout-development")
+        if public_channel is not None:
+            result.error("policy/release-contract.v1.json: 0.7.3 must not have a public channel")
+        if certification_claim != "none":
+            result.error("policy/release-contract.v1.json: 0.7.3 must not make a certification claim")
+        if adr_status != "proposed":
+            result.error("policy/release-contract.v1.json: 0.7.3 keeps the release-topology ADR proposed")
+        if rows:
+            result.error("policy/release-contract.v1.json: 0.7.3 checkout-development has no support rows")
+
+
+def _validate_release_dated_references(
+    references: object, result: Validation
+) -> None:
+    reference_map = _release_contract_mapping(references, "compatibility.dated_references", result)
+    if reference_map is None:
+        return
+    expected = frozenset({"as_of", "stable", "latest"})
+    _release_contract_exact_keys(reference_map, expected, "compatibility.dated_references", result)
+    if reference_map.get("as_of") != "2026-08-15":
+        result.error("policy/release-contract.v1.json: dated references must retain their 2026-08-15 snapshot")
+    expected_versions = {"stable": "2.1.224", "latest": "2.1.233"}
+    for channel, expected_version in expected_versions.items():
+        reference = _release_contract_mapping(
+            reference_map.get(channel), f"compatibility.dated_references.{channel}", result
+        )
+        if reference is None:
+            continue
+        _release_contract_exact_keys(
+            reference,
+            frozenset({"ceiling", "certification", "role", "version"}),
+            f"compatibility.dated_references.{channel}",
+            result,
+        )
+        if reference.get("version") != expected_version:
+            result.error(
+                f"policy/release-contract.v1.json: dated reference {channel} version must be {expected_version}"
+            )
+        if reference.get("role") != "nomination-regression-reference":
+            result.error(
+                f"policy/release-contract.v1.json: dated reference {channel} must remain a nomination/regression reference"
+            )
+        if reference.get("certification") is not False or reference.get("ceiling") is not False:
+            result.error(
+                f"policy/release-contract.v1.json: dated reference {channel} cannot be a certification or ceiling"
+            )
+
+
+def _validate_release_capability_evidence(
+    evidence: object, index: int, result: Validation
+) -> dict[str, object] | None:
+    label = f"compatibility.support_rows[{index}].capability_evidence"
+    evidence_map = _release_contract_mapping(evidence, label, result)
+    if evidence_map is None:
+        return None
+    _release_contract_exact_keys(
+        evidence_map,
+        frozenset({"current", "evidence_id", "passed_capabilities", "published_journey"}),
+        label,
+        result,
+    )
+    _release_contract_string(evidence_map.get("evidence_id"), f"{label}.evidence_id", result)
+    if not isinstance(evidence_map.get("current"), bool):
+        result.error(f"policy/release-contract.v1.json: {label}.current must be boolean")
+    if not isinstance(evidence_map.get("published_journey"), bool):
+        result.error(f"policy/release-contract.v1.json: {label}.published_journey must be boolean")
+    passed = evidence_map.get("passed_capabilities")
+    if not isinstance(passed, list) or not all(isinstance(item, str) and item for item in passed):
+        result.error(f"policy/release-contract.v1.json: {label}.passed_capabilities must be a string list")
+    elif len(set(passed)) != len(passed):
+        result.error(f"policy/release-contract.v1.json: {label}.passed_capabilities must be unique")
+    return evidence_map
+
+
+def _validate_release_known_incompatible_versions(
+    records: object, result: Validation
+) -> set[str]:
+    if not isinstance(records, list):
+        result.error("policy/release-contract.v1.json: compatibility.known_incompatible_host_versions must be a list")
+        return set()
+    versions: set[str] = set()
+    for index, record in enumerate(records):
+        label = f"compatibility.known_incompatible_host_versions[{index}]"
+        record_map = _release_contract_mapping(record, label, result)
+        if record_map is None:
+            continue
+        _release_contract_exact_keys(record_map, frozenset({"reason", "version"}), label, result)
+        _release_contract_string(record_map.get("reason"), f"{label}.reason", result)
+        version = record_map.get("version")
+        if _release_contract_version(version, f"{label}.version", result) is None:
+            continue
+        assert isinstance(version, str)
+        if version in versions:
+            result.error("policy/release-contract.v1.json: known-incompatible host versions must be unique")
+        versions.add(version)
+    return versions
+
+
+def _validate_release_optional_profile_floors(
+    floors: object, core: dict[str, object], result: Validation
+) -> dict[str, dict[str, object]]:
+    floor_map = _release_contract_mapping(floors, "compatibility.optional_profile_floors", result)
+    if floor_map is None:
+        return {}
+    core_minimum = _release_contract_version(
+        core.get("minimum_host_version"), "compatibility.core.minimum_host_version", result
+    )
+    validated: dict[str, dict[str, object]] = {}
+    for profile, floor in floor_map.items():
+        if not isinstance(profile, str) or not profile:
+            result.error("policy/release-contract.v1.json: optional profile floors need non-empty names")
+            continue
+        label = f"compatibility.optional_profile_floors.{profile}"
+        floor_spec = _release_contract_mapping(floor, label, result)
+        if floor_spec is None:
+            continue
+        _release_contract_exact_keys(
+            floor_spec, frozenset({"minimum_host_version", "required_capabilities"}), label, result
+        )
+        minimum = _release_contract_version(
+            floor_spec.get("minimum_host_version"), f"{label}.minimum_host_version", result
+        )
+        if minimum is not None and core_minimum is not None and minimum <= core_minimum:
+            result.error(f"policy/release-contract.v1.json: {profile} profile minimum must exceed the Core minimum")
+        capabilities = floor_spec.get("required_capabilities")
+        if (
+            not isinstance(capabilities, list)
+            or not capabilities
+            or not all(isinstance(capability, str) and capability for capability in capabilities)
+            or len(set(capabilities)) != len(capabilities)
+        ):
+            result.error(f"policy/release-contract.v1.json: {profile} profile needs unique required capabilities")
+        validated[profile] = floor_spec
+    return validated
+
+
+def _validate_release_support_rows(
+    rows: object,
+    checkout: dict[str, object],
+    core: dict[str, object],
+    known_incompatible_versions: set[str],
+    optional_profile_floors: dict[str, dict[str, object]],
+    result: Validation,
+) -> list[dict[str, object]]:
+    if not isinstance(rows, list):
+        result.error("policy/release-contract.v1.json: compatibility.support_rows must be a list")
+        return []
+
+    checkout_version = checkout.get("version")
+    core_minimum = _release_contract_version(
+        core.get("minimum_host_version"), "compatibility.core.minimum_host_version", result
+    )
+    core_capabilities = core.get("required_capabilities")
+    required_capabilities = set(core_capabilities) if isinstance(core_capabilities, list) else set()
+    seen_tuples: set[str] = set()
+    row_maps: list[dict[str, object]] = []
+    for index, row in enumerate(rows):
+        row_map = _release_contract_mapping(row, f"compatibility.support_rows[{index}]", result)
+        if row_map is None:
+            continue
+        row_maps.append(row_map)
+        _release_contract_exact_keys(
+            row_map, RELEASE_SUPPORT_ROW_KEYS, f"compatibility.support_rows[{index}]", result
+        )
+        for field in (
+            "surface",
+            "host",
+            "operating_system",
+            "architecture",
+            "runtime_boundary",
+            "installation_plane",
+        ):
+            _release_contract_string(row_map.get(field), f"compatibility.support_rows[{index}].{field}", result)
+        product_version = _release_contract_version(
+            row_map.get("product_release"), f"compatibility.support_rows[{index}].product_release", result
+        )
+        host_version = _release_contract_version(
+            row_map.get("host_version"), f"compatibility.support_rows[{index}].host_version", result
+        )
+        if row_map.get("product_release") != checkout_version:
+            result.error(
+                f"policy/release-contract.v1.json: compatibility.support_rows[{index}] product_release must equal checkout.version"
+            )
+        optional_profiles = _validate_release_version_map(
+            row_map.get("optional_profile_versions"),
+            f"compatibility.support_rows[{index}].optional_profile_versions",
+            result,
+        )
+        _validate_release_version_map(
+            row_map.get("dependency_versions"),
+            f"compatibility.support_rows[{index}].dependency_versions",
+            result,
+        )
+        evidence = _validate_release_capability_evidence(
+            row_map.get("capability_evidence"), index, result
+        )
+        tier = row_map.get("tier")
+        if tier not in RELEASE_SUPPORT_TIERS:
+            result.error(f"policy/release-contract.v1.json: compatibility.support_rows[{index}].tier is invalid")
+
+        tuple_identity = canonical_release_contract_json(
+            {field: row_map.get(field) for field in RELEASE_TUPLE_DIMENSIONS}
+        )
+        if tuple_identity in seen_tuples:
+            result.error("policy/release-contract.v1.json: support tuples must be unique")
+        seen_tuples.add(tuple_identity)
+
+        if row_map.get("host_version") in known_incompatible_versions:
+            if tier != "unsupported":
+                result.error(
+                    f"policy/release-contract.v1.json: known-incompatible host version {row_map.get('host_version')} must be unsupported"
+                )
+            continue
+        surface = row_map.get("surface")
+        if surface == core.get("surface"):
+            if row_map.get("host") != core.get("host"):
+                result.error(
+                    f"policy/release-contract.v1.json: Core support row {index} must use the declared Claude Code host"
+                )
+            if optional_profiles != {}:
+                result.error(
+                    f"policy/release-contract.v1.json: Core support row {index} cannot inherit an optional profile"
+                )
+            if host_version is not None and core_minimum is not None and host_version < core_minimum:
+                if tier != "unsupported":
+                    result.error(
+                        f"policy/release-contract.v1.json: Core support row {index} below the Core minimum must be unsupported"
+                    )
+                continue
+            required_capabilities_for_surface = required_capabilities
+            surface_label = "Core"
+        elif isinstance(surface, str) and surface in optional_profile_floors:
+            floor = optional_profile_floors[surface]
+            profile_minimum = _release_contract_version(
+                floor.get("minimum_host_version"),
+                f"compatibility.optional_profile_floors.{surface}.minimum_host_version",
+                result,
+            )
+            if not isinstance(optional_profiles, dict) or surface not in optional_profiles:
+                result.error(
+                    f"policy/release-contract.v1.json: {surface} support row {index} must carry its optional profile version"
+                )
+            if host_version is not None and profile_minimum is not None and host_version < profile_minimum:
+                if tier != "unsupported":
+                    result.error(
+                        f"policy/release-contract.v1.json: support row {index} below the {surface} profile minimum must be unsupported"
+                    )
+                continue
+            floor_capabilities = floor.get("required_capabilities")
+            required_capabilities_for_surface = (
+                set(floor_capabilities) if isinstance(floor_capabilities, list) else set()
+            )
+            surface_label = f"{surface} profile"
+        else:
+            result.error(
+                f"policy/release-contract.v1.json: non-Core support row {index} must declare an optional profile floor"
+            )
+            continue
+        if tier in {"certified", "capability-qualified"}:
+            passed = evidence.get("passed_capabilities") if evidence is not None else None
+            passed_capabilities = set(passed) if isinstance(passed, list) else set()
+            if evidence is None or evidence.get("current") is not True:
+                result.error(
+                    f"policy/release-contract.v1.json: qualified {surface_label} support row {index} requires current capability evidence"
+                )
+            if not required_capabilities_for_surface.issubset(passed_capabilities):
+                result.error(
+                    f"policy/release-contract.v1.json: qualified {surface_label} support row {index} is missing a required capability canary"
+                )
+        if tier == "certified" and (evidence is None or evidence.get("published_journey") is not True):
+            result.error(
+                f"policy/release-contract.v1.json: certified {surface_label} support row {index} requires a current published journey"
+            )
+    return row_maps
+
+
+def _validate_release_compatibility(
+    compatibility: dict[str, object], checkout: dict[str, object], result: Validation
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    _release_contract_exact_keys(compatibility, RELEASE_COMPATIBILITY_KEYS, "compatibility", result)
+    if compatibility.get("support_tiers") != list(RELEASE_SUPPORT_TIERS):
+        result.error("policy/release-contract.v1.json: compatibility.support_tiers must be the closed support-tier vocabulary")
+    if compatibility.get("tuple_dimensions") != list(RELEASE_TUPLE_DIMENSIONS):
+        result.error("policy/release-contract.v1.json: compatibility.tuple_dimensions must preserve the exact tuple dimensions")
+    core = _release_contract_mapping(compatibility.get("core"), "compatibility.core", result)
+    if core is None:
+        return None, []
+    _release_contract_exact_keys(core, RELEASE_CORE_KEYS, "compatibility.core", result)
+    if core.get("surface") != "core" or core.get("host") != "claude-code":
+        result.error("policy/release-contract.v1.json: compatibility.core must identify the Claude Code Core surface")
+    if _release_contract_version(core.get("minimum_host_version"), "compatibility.core.minimum_host_version", result) != (2, 1, 154):
+        result.error("policy/release-contract.v1.json: Core minimum host version must be 2.1.154")
+    if core.get("required_capabilities") != ["dynamic-workflows-effectively-enabled"]:
+        result.error("policy/release-contract.v1.json: Core requires Dynamic Workflows effectively enabled")
+    if core.get("minimum_is_eligibility_only") is not True:
+        result.error("policy/release-contract.v1.json: Core minimum must be eligibility-only")
+    if core.get("certification_requires_current_capability_evidence") is not True:
+        result.error("policy/release-contract.v1.json: Core certification requires current capability evidence")
+    _validate_release_dated_references(compatibility.get("dated_references"), result)
+    known_incompatible_versions = _validate_release_known_incompatible_versions(
+        compatibility.get("known_incompatible_host_versions"), result
+    )
+    optional_profile_floors = _validate_release_optional_profile_floors(
+        compatibility.get("optional_profile_floors"), core, result
+    )
+    return core, _validate_release_support_rows(
+        compatibility.get("support_rows"),
+        checkout,
+        core,
+        known_incompatible_versions,
+        optional_profile_floors,
+        result,
+    )
+
+
+def _validate_release_stable_admission(
+    checkout: dict[str, object], rows: list[dict[str, object]], core: dict[str, object], result: Validation
+) -> None:
+    if checkout.get("public_channel") != "stable":
+        return
+    for row in rows:
+        evidence = row.get("capability_evidence")
+        if (
+            row.get("surface") == core.get("surface")
+            and row.get("tier") == "certified"
+            and isinstance(evidence, dict)
+            and evidence.get("current") is True
+        ):
+            return
+    result.error("policy/release-contract.v1.json: stable requires a current certified Core tuple")
+
+
+def _validate_release_channels(channels: dict[str, object], result: Validation) -> None:
+    _release_contract_exact_keys(channels, RELEASE_CHANNELS_KEYS, "channels", result)
+    if channels.get("public_channel_names") != ["stable", "preview"]:
+        result.error("policy/release-contract.v1.json: channels must name stable and preview exactly")
+
+    stable = _release_contract_mapping(channels.get("stable"), "channels.stable", result)
+    if stable is not None:
+        _release_contract_exact_keys(stable, RELEASE_STABLE_CHANNEL_KEYS, "channels.stable", result)
+        expected_stable = {
+            "allows_experimental_profiles": False,
+            "default_permission_bypass": False,
+            "requires_complete_core_release_gate": True,
+            "requires_current_certified_core": True,
+            "requires_migration_and_recovery": True,
+            "selection": "exact",
+        }
+        for field, expected in expected_stable.items():
+            if stable.get(field) != expected:
+                result.error(f"policy/release-contract.v1.json: channels.stable.{field} must be {expected!r}")
+
+    preview = _release_contract_mapping(channels.get("preview"), "channels.preview", result)
+    if preview is None:
+        return
+    _release_contract_exact_keys(preview, RELEASE_PREVIEW_CHANNEL_KEYS, "channels.preview", result)
+    if preview.get("selection") != "exact":
+        result.error("policy/release-contract.v1.json: channels.preview.selection must be 'exact'")
+    if preview.get("install_mode") != "side-by-side":
+        result.error("policy/release-contract.v1.json: preview must install side-by-side")
+    if preview.get("may_overwrite_stable") is not False:
+        result.error("policy/release-contract.v1.json: preview cannot overwrite stable state")
+    if preview.get("inherits_stable_state") is not False:
+        result.error("policy/release-contract.v1.json: preview cannot inherit stable state")
+
+
+def _validate_release_claim_lint(
+    root: Path, claim_lint: dict[str, object], result: Validation
+) -> None:
+    _release_contract_exact_keys(claim_lint, RELEASE_CLAIM_LINT_KEYS, "claim_lint", result)
+    fixture_root = claim_lint.get("fixture_root")
+    if fixture_root != "tests/fixtures/release-claims":
+        result.error("policy/release-contract.v1.json: claim lint must stay fixture-root-only")
+        return
+    extensions = claim_lint.get("allowed_extensions")
+    if extensions != [".md", ".txt"]:
+        result.error("policy/release-contract.v1.json: claim lint extensions must be .md and .txt")
+        return
+    forbidden = _release_contract_mapping(claim_lint.get("forbidden_claims"), "claim_lint.forbidden_claims", result)
+    if forbidden is None:
+        return
+    if set(forbidden) != RELEASE_CLAIM_CATEGORIES:
+        result.error("policy/release-contract.v1.json: claim lint categories must be the closed release-claim vocabulary")
+        return
+    patterns: dict[str, list[str]] = {}
+    for category in sorted(RELEASE_CLAIM_CATEGORIES):
+        phrases = forbidden.get(category)
+        if (
+            not isinstance(phrases, list)
+            or not phrases
+            or not all(isinstance(phrase, str) and phrase for phrase in phrases)
+            or len(set(phrases)) != len(phrases)
+        ):
+            result.error(f"policy/release-contract.v1.json: claim lint [{category}] needs unique non-empty phrases")
+            continue
+        patterns[category] = [phrase.casefold() for phrase in phrases]
+
+    candidate_root = root / fixture_root
+    if candidate_root.is_symlink():
+        result.error("policy/release-contract.v1.json: claim lint fixture root must not be a symlink")
+        return
+    try:
+        repository_root = root.resolve(strict=True)
+        physical_candidate_root = candidate_root.resolve(strict=True)
+    except OSError as exc:
+        result.error(f"policy/release-contract.v1.json: cannot resolve claim lint fixture root: {exc}")
+        return
+    if not physical_candidate_root.is_relative_to(repository_root):
+        result.error("policy/release-contract.v1.json: claim lint fixture root escapes the physical repository boundary")
+        return
+    if not candidate_root.is_dir():
+        result.error("policy/release-contract.v1.json: claim lint fixture root is required")
+        return
+    for path in sorted(candidate_root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            result.error(f"policy/release-contract.v1.json: claim lint fixture must not be a symlink: {relative}")
+            continue
+        if path.is_dir():
+            continue
+        if path.suffix not in extensions:
+            result.error(f"policy/release-contract.v1.json: claim lint fixture has unsupported extension: {relative}")
+            continue
+        try:
+            text = path.read_text(encoding="utf-8").casefold()
+        except (OSError, UnicodeError) as exc:
+            result.error(f"policy/release-contract.v1.json: cannot read claim lint fixture {relative}: {exc}")
+            continue
+        for category, phrases in patterns.items():
+            if any(phrase in text for phrase in phrases):
+                result.error(f"policy/release-contract.v1.json: claim lint [{category}] rejected {relative}")
+
+
+def validate_release_contract(root: Path, result: Validation) -> None:
+    path = root / RELEASE_CONTRACT_RELATIVE_PATH
+    try:
+        contract = load_release_contract_json(path)
+    except ValueError as exc:
+        result.error(str(exc))
+        return
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        result.error(f"cannot read release contract: {exc}")
+        return
+    if raw != canonical_release_contract_json(contract):
+        result.error("policy/release-contract.v1.json must use canonical JSON")
+    if set(contract) != set(RELEASE_CONTRACT_TOP_LEVEL_KEYS):
+        result.error("policy/release-contract.v1.json: top-level keys must be exactly "
+                     f"{list(RELEASE_CONTRACT_TOP_LEVEL_KEYS)}")
+    if contract.get("schema_version") != "release-contract/v1":
+        result.error("policy/release-contract.v1.json: schema_version must be 'release-contract/v1'")
+        return
+    checkout = _release_contract_mapping(contract.get("checkout"), "checkout", result)
+    compatibility = _release_contract_mapping(contract.get("compatibility"), "compatibility", result)
+    channels = _release_contract_mapping(contract.get("channels"), "channels", result)
+    claim_lint = _release_contract_mapping(contract.get("claim_lint"), "claim_lint", result)
+    if channels is not None:
+        _validate_release_channels(channels, result)
+    if claim_lint is not None:
+        _validate_release_claim_lint(root, claim_lint, result)
+    if checkout is not None and compatibility is not None:
+        core, rows = _validate_release_compatibility(compatibility, checkout, result)
+        _validate_release_checkout(checkout, rows, result)
+        if core is not None:
+            _validate_release_stable_admission(checkout, rows, core, result)
 
 
 def runtime_receipt_policy() -> dict[str, object]:
@@ -1650,6 +2347,7 @@ def validate(root: Path) -> Validation:
     result = Validation()
     validate_skills(root, result)
     validate_python(root, result)
+    validate_release_contract(root, result)
     validate_runtime_policy_contract(root, result)
     validate_agents(root, result)
     validate_managed_role_contract(root, result)
