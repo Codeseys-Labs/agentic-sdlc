@@ -266,6 +266,8 @@ class OperatorToolsTests(unittest.TestCase):
             # Substituted, not left as a placeholder.
             self.assertNotIn("@CANONICAL_ROOT@", body)
             self.assertNotIn("@CANONICAL_LAUNCHER@", body)
+            self.assertNotIn("@CANDIDATE_READONLY_PROFILE@", body)
+            self.assertIn("candidate_readonly_profile=false", body)
             self.assertIn(str(Path(__file__).parents[1]), body)
             # Root is overridable at run time, so a clone that later moves to a managed path can
             # be pointed at without reinstalling this file.

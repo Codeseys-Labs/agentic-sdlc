@@ -9,10 +9,12 @@ repairs it, and renders one closed semantic report in either human or canonical 
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
+import stat
 import sys
 from types import ModuleType
 from typing import Any
@@ -21,6 +23,8 @@ from typing import Any
 REPORT_SCHEMA_VERSION = "ccodex-sdlc-read-report/v1"
 POLICY_SCHEMA_VERSION = "ccodex-sdlc-read-report-policy/v1"
 POLICY_NAME = "ccodex-sdlc-read-report.v1.json"
+CANDIDATE_OBSERVATION_SCHEMA_VERSION = "ccodex-sdlc-candidate-observation/v1"
+CANDIDATE_OBSERVATION_FLAG = "--candidate-observation-v1"
 EXPECTED_CHECKOUT = {
     "certification_claim": "none",
     "plane": "checkout-development",
@@ -170,6 +174,50 @@ def load_policy(root: Path) -> dict[str, Any]:
     return policy
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise ReportInvariantError(f"cannot authenticate candidate file: {path}") from exc
+    return digest.hexdigest()
+
+
+def _candidate_root() -> Path:
+    script = Path(__file__)
+    try:
+        resolved = script.resolve(strict=True)
+        root = resolved.parents[1]
+        if script != resolved or (root / "scripts" / "ccodex_sdlc.py").resolve(strict=True) != resolved:
+            raise ReportInvariantError("candidate reader is not at its physical authenticated location")
+        item = root.lstat()
+    except OSError as exc:
+        raise ReportInvariantError("candidate root is unavailable") from exc
+    if not stat.S_ISDIR(item.st_mode) or root.is_symlink():
+        raise ReportInvariantError("candidate root identity is invalid")
+    return root
+
+
+def _candidate_manifest(root: Path) -> dict[str, Any]:
+    path = root / "manifest.json"
+    if path.is_symlink() or not path.is_file():
+        raise ReportInvariantError("candidate manifest is unavailable")
+    manifest = strict_json_document(path.read_bytes(), path)
+    runtime = manifest.get("runtime")
+    candidate_id = manifest.get("candidate_id")
+    if (
+        not isinstance(candidate_id, str)
+        or len(candidate_id) != 64
+        or any(character not in "0123456789abcdef" for character in candidate_id)
+        or not isinstance(runtime, dict)
+        or not isinstance(runtime.get("sha256"), str)
+    ):
+        raise ReportInvariantError("candidate manifest observation is invalid")
+    return manifest
+
+
 def load_checkout(root: Path) -> dict[str, Any]:
     path = root / "policy" / "release-contract.v1.json"
     if path.is_symlink() or not path.is_file():
@@ -240,6 +288,25 @@ def runtime_admission() -> tuple[bool, dict[str, Any], str | None]:
     if not isolated:
         details.append("expected direct -I -B execution")
     return False, runtime, "; ".join(details)
+
+
+def candidate_runtime_observation(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    admitted, runtime, reason = runtime_admission()
+    expected = root / "runtime" / "python" / "bin" / "python3.12"
+    try:
+        executable_matches = Path(sys.executable).resolve(strict=True) == expected.resolve(strict=True)
+    except OSError:
+        executable_matches = False
+    if not admitted or not executable_matches:
+        raise ReportInvariantError(reason or "candidate runtime executable does not match its projected root")
+    manifest_runtime = manifest["runtime"]
+    return {
+        "interpreter": "runtime/python/bin/python3.12",
+        "inventory_sha256": manifest_runtime["sha256"],
+        "isolated": True,
+        "state": "admitted",
+        "version": "3.12.11",
+    }
 
 
 def load_guard(script_path: Path) -> ModuleType:
@@ -347,6 +414,47 @@ def make_report(
     }
     validate_report(report, policy)
     return report
+
+
+def make_candidate_observation(
+    root: Path,
+    manifest: dict[str, Any],
+    command: str,
+    dry_run: bool,
+    runtime: dict[str, Any],
+    operator_tools: dict[str, Any],
+    bundle: dict[str, Any],
+) -> dict[str, Any]:
+    proposals = sorted(
+        [*operator_tools["recovery"], *bundle["recovery"]],
+        key=lambda item: (item["component"], item["path"], item["action"]),
+    )
+    recovery_state = "proposed" if command == "recover" and proposals else "pending" if proposals else "not-needed"
+    findings = sorted(
+        [*operator_tools["findings"], *bundle["findings"]],
+        key=lambda item: (item["component"], item["path"], item["code"], item["message"]),
+    )
+    root_item = root.lstat()
+    return {
+        "schema_version": CANDIDATE_OBSERVATION_SCHEMA_VERSION,
+        "authority": "unadmitted-subordinate",
+        "command": {"dry_run": dry_run, "verb": command},
+        "identity": {
+            "candidate_id": manifest["candidate_id"],
+            "dispatcher_sha256": _sha256_file(root / "bin" / "ccodex"),
+            "parent_process_id": os.getppid(),
+            "process_id": os.getpid(),
+            "root_device": root_item.st_dev,
+            "root_inode": root_item.st_ino,
+        },
+        "runtime": runtime,
+        "operator_tools": operator_tools,
+        "bundle": bundle,
+        "recovery": {"effect": "none", "proposals": proposals, "state": recovery_state},
+        "future_dimensions": {"activation": "unsupported", "release": "unpublished", "waves": "unsupported"},
+        "findings": findings,
+        "overall": {"exit_class": "ok", "state": overall_state(operator_tools, bundle)},
+    }
 
 
 def _require_string_list(value: object, label: str) -> list[str]:
@@ -468,6 +576,9 @@ def emit(report: dict[str, Any], json_output: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     selected = sys.argv[1:] if argv is None else argv
+    candidate_mode = bool(selected and selected[0] == CANDIDATE_OBSERVATION_FLAG)
+    if candidate_mode:
+        selected = selected[1:]
     try:
         command, dry_run, json_output = parse_command(selected)
     except UsageError as exc:
@@ -479,6 +590,25 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(__file__).parent.parent
     try:
+        if candidate_mode:
+            root = _candidate_root()
+            manifest = _candidate_manifest(root)
+            runtime = candidate_runtime_observation(root, manifest)
+            operator_tools, bundle = observe_projections(root)
+            observation = make_candidate_observation(
+                root,
+                manifest,
+                command,
+                dry_run,
+                runtime,
+                operator_tools,
+                bundle,
+            )
+            # Candidate output is always one canonical subordinate observation. It is explicitly
+            # unadmitted and non-authoritative; only the external release-candidate bridge may
+            # validate it and render a final admitted v2 human or JSON report.
+            sys.stdout.write(canonical_json(observation))
+            return 0
         policy = load_policy(root)
         checkout = load_checkout(root)
         admitted, runtime, reason = runtime_admission()
@@ -511,6 +641,9 @@ def main(argv: list[str] | None = None) -> int:
         emit(report, json_output)
         return 0
     except (ReportInvariantError, OSError, ValueError) as exc:
+        if candidate_mode:
+            print(f"candidate subordinate observation refused: {exc}", file=sys.stderr)
+            return 3
         print(f"internal report construction invariant failure: {exc}", file=sys.stderr)
         return 1
 

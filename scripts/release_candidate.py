@@ -21,13 +21,17 @@ import json
 import os
 from pathlib import Path
 import platform
+import pwd
 import re
+import selectors
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unicodedata
 import zlib
 from typing import Callable, Mapping, Sequence
@@ -37,6 +41,13 @@ SCHEMA_VERSION = "release-candidate/v1"
 POLICY_SCHEMA_VERSION = "release-candidate-policy/v1"
 PYTHON_VERSION = "3.12.11"
 POLICY_RELATIVE = "policy/release-candidate.v1.json"
+EXECUTION_POLICY_RELATIVE = "policy/release-candidate-execution.v1.json"
+EXECUTION_POLICY_SCHEMA_VERSION = "release-candidate-execution-policy/v1"
+ADMISSION_SCHEMA_VERSION = "release-candidate-execution-admission/v1"
+CANDIDATE_REPORT_POLICY_RELATIVE = "policy/ccodex-sdlc-read-report.v2.json"
+CANDIDATE_REPORT_POLICY_SHA256 = "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9"
+CANDIDATE_REPORT_SCHEMA_VERSION = "ccodex-sdlc-read-report/v2"
+CANDIDATE_OBSERVATION_SCHEMA_VERSION = "ccodex-sdlc-candidate-observation/v1"
 MANIFEST_NAME = "manifest.json"
 INVENTORY_SCOPE = "archive members excluding manifest.json and archive root"
 CANARY_OBSERVATION = {
@@ -53,14 +64,31 @@ UNSAFE_MODE_BITS = stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX | 0o022
 USTAR_BLOCK = 512
 CHUNK = 64 * 1024
 GZIP_HEADER = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
+PROCESS_GROUP_WITNESS = {
+    "cleanup": "retained",
+    "effect_state": "unknown",
+    "reason": "process-group-nonconvergence",
+    "schema_version": "release-candidate-effect-witness/v1",
+}
+
+
+@dataclass(frozen=True)
+class RetainedWitness:
+    locator: str
+    root_device: int
+    root_inode: int
+    witness_device: int
+    witness_inode: int
 
 
 class CandidateError(Exception):
     """A stable, content-minimized refusal code."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, retained_witness: RetainedWitness | None = None):
         super().__init__(code)
         self.code = code
+        self.retained_witness = retained_witness
+        self.witness_locator = retained_witness.locator if retained_witness is not None else None
 
 
 @dataclass(frozen=True)
@@ -103,6 +131,16 @@ class Publication:
     device: int
     inode: int
     digest: str
+
+
+@dataclass(frozen=True)
+class ExtractedCandidate:
+    private: Path
+    root: Path
+    archive_sha256: str
+    manifest: Mapping[str, object]
+    host_source: SourceSnapshot
+    host_policy: Mapping[str, object]
 
 
 def _fail(code: str) -> None:
@@ -281,6 +319,78 @@ def load_policy(path: Path) -> dict[str, object]:
         _fail("policy-missing")
     validate_policy(policy)
     return policy
+
+
+def load_execution_policy(snapshot: SourceSnapshot) -> tuple[dict[str, object], bytes]:
+    raw = _snapshot_blob(snapshot, EXECUTION_POLICY_RELATIVE)
+    policy = strict_json_object(raw, "execution-policy-json")
+    _exact_keys(
+        policy,
+        {"admission", "commands", "limits", "platform", "projection", "schema_version", "trusted_bash"},
+        "execution-policy-keys",
+    )
+    if policy.get("schema_version") != EXECUTION_POLICY_SCHEMA_VERSION or policy.get("platform") != "linux-x64":
+        _fail("execution-policy")
+    commands = policy.get("commands")
+    expected_commands = [
+        ["sdlc", "doctor"], ["sdlc", "doctor", "--json"],
+        ["sdlc", "inspect"], ["sdlc", "inspect", "--json"],
+        ["sdlc", "recover", "--dry-run"], ["sdlc", "recover", "--dry-run", "--json"],
+        ["sdlc", "status"], ["sdlc", "status", "--json"],
+    ]
+    if commands != expected_commands:
+        _fail("execution-policy")
+    admission = _mapping(policy.get("admission"), "execution-policy")
+    _exact_keys(admission, {"authenticated_files", "schema_version"}, "execution-policy")
+    expected_files = [
+        "assets/launchers/ccodex.in",
+        "policy/ccodex-sdlc-read-report.v2.json",
+        EXECUTION_POLICY_RELATIVE,
+        POLICY_RELATIVE,
+        "scripts/ccodex_sdlc.py",
+        "scripts/ccodex_sdlc_readonly.py",
+        "scripts/install_operator_tools.py",
+        "scripts/install_skill_bundle.py",
+    ]
+    if admission.get("schema_version") != ADMISSION_SCHEMA_VERSION or admission.get("authenticated_files") != expected_files:
+        _fail("execution-policy")
+    limits = _mapping(policy.get("limits"), "execution-policy")
+    _exact_keys(limits, {"max_child_output_bytes", "max_child_stderr_bytes", "max_seconds", "terminate_grace_seconds"}, "execution-policy")
+    if limits != {
+        "max_child_output_bytes": 1048576,
+        "max_child_stderr_bytes": 65536,
+        "max_seconds": 30,
+        "terminate_grace_seconds": 3,
+    }:
+        _fail("execution-policy")
+    projection = _mapping(policy.get("projection"), "execution-policy")
+    if projection != {"dispatcher": "bin/ccodex", "template": "assets/launchers/ccodex.in"}:
+        _fail("execution-policy")
+    bash = _mapping(policy.get("trusted_bash"), "execution-policy")
+    _exact_keys(bash, {"path", "sha256"}, "execution-policy")
+    if bash.get("path") != "/usr/bin/bash" or not isinstance(bash.get("sha256"), str) or not HEX_64.fullmatch(str(bash["sha256"])):
+        _fail("execution-policy")
+    if raw != canonical_json(policy).encode("ascii"):
+        _fail("execution-policy")
+    return policy, raw
+
+
+def validate_candidate_report_policy(policy: Mapping[str, object]) -> None:
+    try:
+        raw = canonical_json(dict(policy)).encode("ascii")
+    except CandidateError:
+        _fail("candidate-report-policy")
+    if _sha256_bytes(raw) != CANDIDATE_REPORT_POLICY_SHA256:
+        _fail("candidate-report-policy")
+
+
+def load_candidate_report_policy(snapshot: SourceSnapshot) -> tuple[dict[str, object], bytes]:
+    raw = _snapshot_blob(snapshot, CANDIDATE_REPORT_POLICY_RELATIVE)
+    policy = strict_json_object(raw, "candidate-report-policy")
+    validate_candidate_report_policy(policy)
+    if raw != canonical_json(policy).encode("ascii"):
+        _fail("candidate-report-policy")
+    return policy, raw
 
 
 def _linux_platform_kind(osrelease: str, version: str) -> str:
@@ -813,6 +923,93 @@ def _inventory_for_tree(root: Path) -> list[dict[str, object]]:
 
 def _entry_digest(entries: Sequence[Mapping[str, object]]) -> str:
     return _sha256_bytes(canonical_json(list(entries)).encode("ascii"))
+
+
+def _expected_authored_inventory(snapshot: SourceSnapshot, policy: Mapping[str, object]) -> list[dict[str, object]]:
+    entries: dict[str, dict[str, object]] = {}
+    for relative in _selected_paths(snapshot, policy):
+        parts = relative.split("/")
+        for index in range(1, len(parts)):
+            directory = "/".join(parts[:index])
+            entries[directory] = {"mode": 0o755, "path": directory, "size": 0, "type": "dir"}
+        source = snapshot.entries[relative]
+        blob = _snapshot_blob(snapshot, relative)
+        if source.mode in {0o100644, 0o100755}:
+            entries[relative] = {
+                "mode": _mode_for_file(source.mode),
+                "path": relative,
+                "sha256": _sha256_bytes(blob),
+                "size": len(blob),
+                "type": "file",
+            }
+        elif source.mode == 0o120000:
+            try:
+                target = _safe_link_target(blob.decode("utf-8"), relative, "source-tree")
+            except UnicodeDecodeError:
+                _fail("source-tree")
+            entries[relative] = {
+                "mode": 0o755,
+                "path": relative,
+                "size": len(target.encode("utf-8")),
+                "target": target,
+                "type": "symlink",
+            }
+        else:
+            _fail("source-tree")
+    return [entries[path] for path in sorted(entries)]
+
+
+def _expected_runtime_inventory(runtime_root: Path) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = [
+        {"mode": 0o755, "path": "runtime", "size": 0, "type": "dir"},
+        {"mode": 0o755, "path": "runtime/python", "size": 0, "type": "dir"},
+    ]
+    for entry in _inventory_for_tree(runtime_root):
+        result.append({**entry, "path": f"runtime/python/{entry['path']}"})
+    result.sort(key=lambda item: str(item["path"]))
+    return result
+
+
+def _authenticate_executable_candidate(
+    manifest: Mapping[str, object],
+    host_source: SourceSnapshot,
+    host_policy: Mapping[str, object],
+    runtime_root: Path,
+) -> tuple[str, str]:
+    source = _mapping(manifest.get("source"), "execution-source")
+    if source.get("commit") != host_source.commit or source.get("tree") != host_source.tree or source.get("epoch") != host_source.epoch:
+        _fail("execution-source-mismatch")
+    inventory = _validate_inventory(manifest.get("inventory"), _mapping(host_policy["limits"], "policy-limits"))
+    authored = [entry for entry in inventory if not _is_runtime(str(entry["path"]))]
+    runtime = [entry for entry in inventory if _is_runtime(str(entry["path"]))]
+    expected_authored = _expected_authored_inventory(host_source, host_policy)
+    if authored != expected_authored:
+        _fail("execution-payload-mismatch")
+    expected_runtime = _expected_runtime_inventory(runtime_root)
+    if runtime != expected_runtime:
+        _fail("execution-runtime-mismatch")
+    return _entry_digest(authored), _entry_digest(runtime)
+
+
+def _trusted_bash(execution_policy: Mapping[str, object]) -> tuple[Path, str]:
+    configured = _mapping(execution_policy["trusted_bash"], "execution-policy")
+    bash = Path(str(configured["path"]))
+    try:
+        item = bash.lstat()
+    except OSError:
+        _fail("execution-bash")
+    if (
+        bash != Path("/usr/bin/bash")
+        or not stat.S_ISREG(item.st_mode)
+        or item.st_uid != 0
+        or stat.S_IMODE(item.st_mode) & 0o022
+        or not item.st_mode & 0o111
+    ):
+        _fail("execution-bash")
+    digest = _sha256_file(bash)
+    if digest != configured["sha256"]:
+        _fail("execution-bash")
+    return bash, digest
 
 
 def _is_runtime(path: str) -> bool:
@@ -1704,6 +1901,809 @@ def _cleanup_verify_private(private: Path) -> None:
     _fail("verify-stage-unknown-effect")
 
 
+def _cleanup_run_private(private: Path) -> None:
+    try:
+        shutil.rmtree(private)
+    except OSError:
+        _fail("run-stage-unknown-effect")
+    try:
+        private.lstat()
+    except FileNotFoundError:
+        return
+    except OSError:
+        _fail("run-stage-unknown-effect")
+    _fail("run-stage-unknown-effect")
+
+
+def _validated_system_tmp() -> Path:
+    parent = Path("/tmp")
+    try:
+        identity = parent.lstat()
+    except OSError:
+        _fail("extract-create")
+    if (
+        not stat.S_ISDIR(identity.st_mode)
+        or stat.S_ISLNK(identity.st_mode)
+        or stat.S_IMODE(identity.st_mode) != 0o1777
+        or identity.st_uid != 0
+    ):
+        _fail("extract-create")
+    return parent
+
+
+def _retain_process_group_witness(private: Path) -> RetainedWitness:
+    witness = private / "effect-state.json"
+    root_fd: int | None = None
+    witness_fd: int | None = None
+    try:
+        root_before = private.lstat()
+        if (
+            not stat.S_ISDIR(root_before.st_mode)
+            or stat.S_ISLNK(root_before.st_mode)
+            or stat.S_IMODE(root_before.st_mode) != 0o700
+            or root_before.st_uid != os.geteuid()
+        ):
+            _fail("run-stage-unknown-effect")
+        root_fd = os.open(
+            private,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        root_open = os.fstat(root_fd)
+        if (root_open.st_dev, root_open.st_ino) != (root_before.st_dev, root_before.st_ino):
+            _fail("run-stage-unknown-effect")
+        witness_fd = os.open(
+            witness.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=root_fd,
+        )
+        payload = canonical_json(PROCESS_GROUP_WITNESS).encode("ascii")
+        offset = 0
+        while offset < len(payload):
+            written = os.write(witness_fd, payload[offset:])
+            if written <= 0:
+                _fail("run-stage-unknown-effect")
+            offset += written
+        os.fsync(witness_fd)
+        witness_open = os.fstat(witness_fd)
+        if (
+            not stat.S_ISREG(witness_open.st_mode)
+            or stat.S_IMODE(witness_open.st_mode) != 0o600
+            or witness_open.st_uid != os.geteuid()
+            or witness_open.st_nlink != 1
+        ):
+            _fail("run-stage-unknown-effect")
+        os.fsync(root_fd)
+    except OSError:
+        _fail("run-stage-unknown-effect")
+    finally:
+        if witness_fd is not None:
+            os.close(witness_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+    try:
+        root_after = private.lstat()
+        witness_after = witness.lstat()
+    except OSError:
+        _fail("run-stage-unknown-effect")
+    if (
+        (root_after.st_dev, root_after.st_ino) != (root_before.st_dev, root_before.st_ino)
+        or not stat.S_ISDIR(root_after.st_mode)
+        or stat.S_ISLNK(root_after.st_mode)
+        or (witness_after.st_dev, witness_after.st_ino)
+        != (witness_open.st_dev, witness_open.st_ino)
+        or not stat.S_ISREG(witness_after.st_mode)
+        or stat.S_ISLNK(witness_after.st_mode)
+        or stat.S_IMODE(witness_after.st_mode) != 0o600
+        or witness_after.st_uid != os.geteuid()
+        or witness_after.st_nlink != 1
+    ):
+        _fail("run-stage-unknown-effect")
+    return RetainedWitness(
+        locator=str(witness),
+        root_device=root_after.st_dev,
+        root_inode=root_after.st_ino,
+        witness_device=witness_after.st_dev,
+        witness_inode=witness_after.st_ino,
+    )
+
+
+def _public_witness_locator(retained: RetainedWitness | None) -> str | None:
+    if retained is None:
+        return None
+    witness = Path(retained.locator)
+    private = witness.parent
+    root_fd: int | None = None
+    witness_fd: int | None = None
+    try:
+        if (
+            not witness.is_absolute()
+            or witness.name != "effect-state.json"
+            or private.parent != _validated_system_tmp()
+            or not private.name.startswith(".release-candidate-run-")
+        ):
+            return None
+        root_identity = private.lstat()
+        witness_identity = witness.lstat()
+    except (CandidateError, OSError):
+        return None
+    if (
+        not stat.S_ISDIR(root_identity.st_mode)
+        or stat.S_ISLNK(root_identity.st_mode)
+        or stat.S_IMODE(root_identity.st_mode) != 0o700
+        or root_identity.st_uid != os.geteuid()
+        or (root_identity.st_dev, root_identity.st_ino)
+        != (retained.root_device, retained.root_inode)
+        or not stat.S_ISREG(witness_identity.st_mode)
+        or stat.S_ISLNK(witness_identity.st_mode)
+        or stat.S_IMODE(witness_identity.st_mode) != 0o600
+        or witness_identity.st_uid != os.geteuid()
+        or witness_identity.st_nlink != 1
+        or (witness_identity.st_dev, witness_identity.st_ino)
+        != (retained.witness_device, retained.witness_inode)
+    ):
+        return None
+    expected = canonical_json(PROCESS_GROUP_WITNESS).encode("ascii")
+    try:
+        root_fd = os.open(
+            private,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        root_open = os.fstat(root_fd)
+        if (root_open.st_dev, root_open.st_ino) != (
+            retained.root_device,
+            retained.root_inode,
+        ):
+            return None
+        witness_fd = os.open(
+            witness.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=root_fd,
+        )
+        witness_open = os.fstat(witness_fd)
+        if (
+            not stat.S_ISREG(witness_open.st_mode)
+            or stat.S_IMODE(witness_open.st_mode) != 0o600
+            or witness_open.st_uid != os.geteuid()
+            or witness_open.st_nlink != 1
+            or (witness_open.st_dev, witness_open.st_ino)
+            != (retained.witness_device, retained.witness_inode)
+        ):
+            return None
+        observed = bytearray()
+        while len(observed) <= len(expected):
+            chunk = os.read(witness_fd, len(expected) + 1 - len(observed))
+            if not chunk:
+                break
+            observed.extend(chunk)
+        if bytes(observed) != expected:
+            return None
+    except OSError:
+        return None
+    finally:
+        if witness_fd is not None:
+            os.close(witness_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+    return retained.locator
+
+
+def _render_candidate_dispatcher(root: Path) -> tuple[Path, str]:
+    template = root / "assets" / "launchers" / "ccodex.in"
+    try:
+        source = template.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        _fail("execution-dispatcher")
+    rendered = (
+        source.replace("@CANDIDATE_READONLY_PROFILE@", "true")
+        .replace("@CANONICAL_LAUNCHER@", "''")
+        .replace("@CANONICAL_ROOT@", "''")
+        .replace("@PINNED_OCX@", "''")
+        .replace("@PINNED_JQ@", "''")
+        .replace("@PINNED_UV@", "''")
+        .replace("@PINNED_SDLC_PYTHON@", "''")
+    )
+    if "@CANDIDATE_" in rendered or "@CANONICAL_" in rendered or "@PINNED_" in rendered:
+        _fail("execution-dispatcher")
+    dispatcher = root / "bin" / "ccodex"
+    try:
+        dispatcher.parent.mkdir(mode=0o755)
+        dispatcher.write_text(rendered, encoding="utf-8")
+        os.chmod(dispatcher, 0o755)
+    except OSError:
+        _fail("execution-dispatcher")
+    return dispatcher, _sha256_file(dispatcher)
+
+
+def _root_identity(root: Path) -> tuple[int, int]:
+    try:
+        item = root.lstat()
+    except OSError:
+        _fail("execution-root")
+    if not stat.S_ISDIR(item.st_mode) or root.is_symlink() or root.resolve(strict=True) != root:
+        _fail("execution-root")
+    return item.st_dev, item.st_ino
+
+
+def _admission_record(
+    root: Path,
+    archive_sha256: str,
+    manifest: Mapping[str, object],
+    execution_policy: Mapping[str, object],
+    command: Sequence[str],
+    dispatcher_sha256: str,
+    bash_sha256: str,
+    authored_inventory_sha256: str,
+    runtime_inventory_sha256: str,
+) -> dict[str, object]:
+    device, inode = _root_identity(root)
+    authenticated = _mapping(execution_policy["admission"], "execution-policy")["authenticated_files"]
+    assert isinstance(authenticated, list)
+    file_digests = {relative: _sha256_file(root / str(relative)) for relative in authenticated}
+    source = _mapping(manifest["source"], "manifest-source")
+    python = root / "runtime" / "python" / "bin" / "python3.12"
+    return {
+        "archive_sha256": archive_sha256,
+        "authenticated_files": file_digests,
+        "authored_inventory_sha256": authored_inventory_sha256,
+        "bash_sha256": bash_sha256,
+        "candidate_id": manifest["candidate_id"],
+        "command": list(command),
+        "dispatcher_sha256": dispatcher_sha256,
+        "manifest_sha256": _sha256_file(root / MANIFEST_NAME),
+        "parent_pid": os.getpid(),
+        "python_sha256": _sha256_file(python),
+        "root": str(root),
+        "root_device": device,
+        "root_inode": inode,
+        "runtime_inventory_sha256": runtime_inventory_sha256,
+        "schema_version": ADMISSION_SCHEMA_VERSION,
+        "source_commit": source["commit"],
+        "source_epoch": source["epoch"],
+        "source_tree": source["tree"],
+    }
+
+
+def _recheck_execution_root(root: Path, admission: Mapping[str, object]) -> None:
+    device, inode = _root_identity(root)
+    if device != admission["root_device"] or inode != admission["root_inode"]:
+        _fail("execution-root-drift")
+    authenticated = admission.get("authenticated_files")
+    if not isinstance(authenticated, dict):
+        _fail("execution-root-drift")
+    for relative, expected in authenticated.items():
+        if not isinstance(relative, str) or not isinstance(expected, str) or _sha256_file(root / relative) != expected:
+            _fail("execution-root-drift")
+    if (
+        _sha256_file(root / MANIFEST_NAME) != admission["manifest_sha256"]
+        or _sha256_file(root / "bin" / "ccodex") != admission["dispatcher_sha256"]
+        or _sha256_file(root / "runtime" / "python" / "bin" / "python3.12") != admission["python_sha256"]
+    ):
+        _fail("execution-root-drift")
+
+
+def _candidate_environment() -> dict[str, str]:
+    try:
+        home = Path(pwd.getpwuid(os.geteuid()).pw_dir).resolve(strict=True)
+    except (KeyError, OSError):
+        _fail("execution-environment")
+    return {
+        "HOME": str(home),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "",
+        "TZ": "UTC",
+    }
+
+
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        _fail("execution-group-unknown-effect")
+    return True
+
+
+def _wait_process_group_absent(process_group: int, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        if not _process_group_exists(process_group):
+            return True
+        time.sleep(0.02)
+    return not _process_group_exists(process_group)
+
+
+def _signal_process_group(process_group: int, signum: int) -> None:
+    if not _process_group_exists(process_group):
+        return
+    try:
+        os.killpg(process_group, signum)
+    except ProcessLookupError:
+        return
+    except OSError:
+        _fail("execution-group-unknown-effect")
+
+
+def _converge_process_group(process: subprocess.Popen[bytes], process_group: int, grace: int) -> None:
+    term_deadline = time.monotonic() + grace
+    _signal_process_group(process_group, signal.SIGTERM)
+    try:
+        process.wait(timeout=max(0.0, term_deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        pass
+    if _wait_process_group_absent(process_group, term_deadline):
+        if process.poll() is None:
+            _fail("execution-group-unknown-effect")
+        return
+
+    kill_deadline = time.monotonic() + grace
+    _signal_process_group(process_group, signal.SIGKILL)
+    try:
+        process.wait(timeout=max(0.0, kill_deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        _fail("execution-group-unknown-effect")
+    if not _wait_process_group_absent(process_group, kill_deadline) or process.poll() is None:
+        _fail("execution-group-unknown-effect")
+
+
+def _supervise_candidate(
+    dispatcher: Path,
+    command: Sequence[str],
+    external_admission: Mapping[str, object],
+    execution_policy: Mapping[str, object],
+) -> tuple[int, bytes, bytes, int]:
+    del external_admission
+    limits = _mapping(execution_policy["limits"], "execution-policy")
+    process: subprocess.Popen[bytes] | None = None
+    process_group: int | None = None
+    convergence_attempted = False
+    group_converged = False
+    previous_handlers: dict[int, object] = {}
+    forwarded: list[int] = []
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    stdout_total = 0
+    stderr_total = 0
+    try:
+        def converge_group() -> None:
+            nonlocal convergence_attempted, group_converged
+            if process is None or process_group is None:
+                return
+            convergence_attempted = True
+            _converge_process_group(
+                process, process_group, int(limits["terminate_grace_seconds"])
+            )
+            group_converged = True
+
+        def forward(signum: int, _frame: object) -> None:
+            forwarded.append(signum)
+            if process_group is not None:
+                try:
+                    os.killpg(process_group, signum)
+                except ProcessLookupError:
+                    pass
+
+        handled_signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        for signum in handled_signals:
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, forward)
+        try:
+            process = subprocess.Popen(
+                [str(dispatcher), *command],
+                cwd=dispatcher.parent.parent,
+                env=_candidate_environment(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError:
+            _fail("execution-start")
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+        try:
+            process_group = process.pid
+            for queued_signal in tuple(forwarded):
+                _signal_process_group(process_group, queued_signal)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        assert process.stdout is not None and process.stderr is not None
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        deadline = time.monotonic() + int(limits["max_seconds"])
+        try:
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    converge_group()
+                    _fail("execution-timeout")
+                for key, _events in selector.select(timeout=min(remaining, 0.25)):
+                    try:
+                        chunk = os.read(key.fileobj.fileno(), CHUNK)
+                    except OSError:
+                        converge_group()
+                        _fail("execution-child-output")
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if key.data == "stdout":
+                        stdout_total += len(chunk)
+                        if stdout_total > int(limits["max_child_output_bytes"]):
+                            converge_group()
+                            _fail("execution-child-output")
+                        stdout_chunks.append(chunk)
+                    else:
+                        stderr_total += len(chunk)
+                        if stderr_total > int(limits["max_child_stderr_bytes"]):
+                            converge_group()
+                            _fail("execution-child-output")
+                        stderr_chunks.append(chunk)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                converge_group()
+                _fail("execution-timeout")
+            result = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            converge_group()
+            _fail("execution-timeout")
+        finally:
+            selector.close()
+        assert process_group is not None
+        if _process_group_exists(process_group):
+            converge_group()
+            _fail("execution-descendant")
+        group_converged = True
+        if result < 0:
+            return 128 + (-result), b"".join(stdout_chunks), b"".join(stderr_chunks), process.pid
+        if forwarded and result == 0:
+            return 128 + forwarded[-1], b"".join(stdout_chunks), b"".join(stderr_chunks), process.pid
+        return result, b"".join(stdout_chunks), b"".join(stderr_chunks), process.pid
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        try:
+            if process is not None and not group_converged and not convergence_attempted:
+                converge_group()
+        finally:
+            if process is not None:
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
+
+
+def _report_object(value: object, expected: Sequence[str], code: str) -> dict[str, object]:
+    result = _mapping(value, code)
+    _exact_keys(result, set(expected), code)
+    return result
+
+
+def _report_string_list(value: object, code: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        _fail(code)
+    return value
+
+
+def _validate_report_finding(value: object, fields: Mapping[str, object], vocab: Mapping[str, object]) -> dict[str, object]:
+    finding = _report_object(value, fields["finding"], "candidate-observation")  # type: ignore[arg-type]
+    if (
+        finding.get("code") not in vocab["finding_codes"]  # type: ignore[operator]
+        or finding.get("component") not in vocab["finding_components"]  # type: ignore[operator]
+        or not all(isinstance(finding.get(key), str) and finding.get(key) for key in ("message", "path"))
+    ):
+        _fail("candidate-observation")
+    return finding
+
+
+def _validate_report_recovery(value: object, fields: Mapping[str, object], vocab: Mapping[str, object]) -> dict[str, object]:
+    recovery = _report_object(value, fields["recovery_item"], "candidate-observation")  # type: ignore[arg-type]
+    if (
+        recovery.get("action") not in vocab["recovery_actions"]  # type: ignore[operator]
+        or recovery.get("component") not in {"operator-tools", "bundle"}
+        or recovery.get("state") not in vocab["recovery_item_states"]  # type: ignore[operator]
+        or not isinstance(recovery.get("path"), str)
+        or not recovery["path"]
+    ):
+        _fail("candidate-observation")
+    return recovery
+
+
+def _validate_report_projection(value: object, fields: Mapping[str, object], vocab: Mapping[str, object]) -> dict[str, object]:
+    projection = _report_object(value, fields["bundle"], "candidate-observation")  # type: ignore[arg-type]
+    if projection.get("state") not in vocab["component_states"]:  # type: ignore[operator]
+        _fail("candidate-observation")
+    paths = _report_string_list(projection.get("state_paths"), "candidate-observation")
+    if paths != sorted(set(paths)):
+        _fail("candidate-observation")
+    entries = projection.get("entries")
+    findings = projection.get("findings")
+    recovery = projection.get("recovery")
+    if not isinstance(entries, list) or not isinstance(findings, list) or not isinstance(recovery, list):
+        _fail("candidate-observation")
+    for entry_value in entries:
+        entry = _report_object(entry_value, fields["projection_entry"], "candidate-observation")  # type: ignore[arg-type]
+        if (
+            entry.get("state") not in vocab["entry_states"]  # type: ignore[operator]
+            or not all(isinstance(entry.get(key), str) and entry.get(key) for key in ("name", "path"))
+        ):
+            _fail("candidate-observation")
+    if entries != sorted(entries, key=lambda item: (item["path"], item["name"])):
+        _fail("candidate-observation")
+    for finding in findings:
+        _validate_report_finding(finding, fields, vocab)
+    if findings != sorted(findings, key=lambda item: (item["component"], item["path"], item["code"], item["message"])):
+        _fail("candidate-observation")
+    for item in recovery:
+        _validate_report_recovery(item, fields, vocab)
+    if recovery != sorted(recovery, key=lambda item: (item["component"], item["path"], item["action"])):
+        _fail("candidate-observation")
+    return projection
+
+
+def _projection_overall_state(operator_tools: Mapping[str, object], bundle: Mapping[str, object]) -> str:
+    states = {operator_tools["state"], bundle["state"]}
+    if "unreadable" in states:
+        return "unreadable"
+    if "blocked" in states:
+        return "blocked"
+    if "degraded" in states:
+        return "degraded"
+    if states == {"absent"}:
+        return "absent"
+    return "healthy"
+
+
+def _validate_candidate_observation(
+    raw: bytes,
+    policy: Mapping[str, object],
+    manifest: Mapping[str, object],
+    command: Sequence[str],
+    admission: Mapping[str, object],
+    process_pid: int,
+) -> dict[str, object]:
+    observation = strict_json_object(raw, "candidate-observation")
+    _exact_keys(
+        observation,
+        {
+            "authority", "bundle", "command", "findings", "future_dimensions", "identity",
+            "operator_tools", "overall", "recovery", "runtime", "schema_version",
+        },
+        "candidate-observation",
+    )
+    if (
+        observation.get("schema_version") != CANDIDATE_OBSERVATION_SCHEMA_VERSION
+        or observation.get("authority") != "unadmitted-subordinate"
+    ):
+        _fail("candidate-observation")
+    fields = _mapping(policy["field_vocabularies"], "candidate-report-policy")
+    vocab = _mapping(policy["vocabularies"], "candidate-report-policy")
+    verb = str(command[1])
+    dry_run = verb == "recover"
+    observed_command = _report_object(observation.get("command"), fields["command"], "candidate-observation")  # type: ignore[arg-type]
+    if observed_command != {"dry_run": dry_run, "verb": verb}:
+        _fail("candidate-observation")
+    identity = _report_object(
+        observation.get("identity"),
+        ["candidate_id", "dispatcher_sha256", "parent_process_id", "process_id", "root_device", "root_inode"],
+        "candidate-observation",
+    )
+    if identity != {
+        "candidate_id": manifest["candidate_id"],
+        "dispatcher_sha256": admission["dispatcher_sha256"],
+        "parent_process_id": os.getpid(),
+        "process_id": process_pid,
+        "root_device": admission["root_device"],
+        "root_inode": admission["root_inode"],
+    }:
+        _fail("candidate-observation")
+    runtime = _report_object(observation.get("runtime"), fields["runtime"], "candidate-observation")  # type: ignore[arg-type]
+    if runtime != {
+        "interpreter": "runtime/python/bin/python3.12",
+        "inventory_sha256": admission["runtime_inventory_sha256"],
+        "isolated": True,
+        "state": "admitted",
+        "version": PYTHON_VERSION,
+    }:
+        _fail("candidate-observation")
+    operator_tools = _validate_report_projection(observation.get("operator_tools"), fields, vocab)
+    bundle = _validate_report_projection(observation.get("bundle"), fields, vocab)
+    recovery = _report_object(observation.get("recovery"), fields["recovery"], "candidate-observation")  # type: ignore[arg-type]
+    proposals = recovery.get("proposals")
+    if (
+        recovery.get("effect") != "none"
+        or recovery.get("state") not in vocab["recovery_states"]  # type: ignore[operator]
+        or not isinstance(proposals, list)
+    ):
+        _fail("candidate-observation")
+    for proposal in proposals:
+        _validate_report_recovery(proposal, fields, vocab)
+    expected_proposals = sorted(
+        [*operator_tools["recovery"], *bundle["recovery"]],  # type: ignore[misc]
+        key=lambda item: (item["component"], item["path"], item["action"]),
+    )
+    expected_recovery_state = "proposed" if dry_run and expected_proposals else "pending" if expected_proposals else "not-needed"
+    if proposals != expected_proposals or recovery["state"] != expected_recovery_state:
+        _fail("candidate-observation")
+    future = _report_object(observation.get("future_dimensions"), fields["future_dimensions"], "candidate-observation")  # type: ignore[arg-type]
+    if future != {"activation": "unsupported", "release": "unpublished", "waves": "unsupported"}:
+        _fail("candidate-observation")
+    findings = observation.get("findings")
+    if not isinstance(findings, list):
+        _fail("candidate-observation")
+    for finding in findings:
+        _validate_report_finding(finding, fields, vocab)
+    expected_findings = sorted(
+        [*operator_tools["findings"], *bundle["findings"]],  # type: ignore[misc]
+        key=lambda item: (item["component"], item["path"], item["code"], item["message"]),
+    )
+    if findings != expected_findings:
+        _fail("candidate-observation")
+    overall = _report_object(observation.get("overall"), fields["overall"], "candidate-observation")  # type: ignore[arg-type]
+    if overall != {"exit_class": "ok", "state": _projection_overall_state(operator_tools, bundle)}:
+        _fail("candidate-observation")
+    return observation
+
+
+def _candidate_final_report(
+    policy: Mapping[str, object],
+    manifest: Mapping[str, object],
+    admission: Mapping[str, object],
+    observation: Mapping[str, object],
+) -> dict[str, object]:
+    source = _mapping(manifest["source"], "manifest-source")
+    disclosures = _mapping(manifest["disclosures"], "manifest-label")
+    report = {
+        "schema_version": CANDIDATE_REPORT_SCHEMA_VERSION,
+        "command": observation["command"],
+        "distribution": {
+            "candidate_id": manifest["candidate_id"],
+            "licensing": disclosures["licensing"],
+            "lifecycle": "ephemeral",
+            "product_version": manifest["product_version"],
+            "provenance": disclosures["provenance"],
+            "public_channel": None,
+            "publication": "unpublished",
+            "release_claim": manifest["release_claim"],
+            "release_topology_adr_status": "proposed",
+            "sbom": disclosures["sbom"],
+            "source_commit": source["commit"],
+            "source_tree": source["tree"],
+            "support_tier": manifest["support_tier"],
+        },
+        "admission": {
+            "archive_sha256": admission["archive_sha256"],
+            "bash_sha256": admission["bash_sha256"],
+            "dispatcher_sha256": admission["dispatcher_sha256"],
+            "root_identity": f"{admission['root_device']}:{admission['root_inode']}",
+            "schema_version": ADMISSION_SCHEMA_VERSION,
+            "state": "admitted",
+        },
+        "runtime": observation["runtime"],
+        "operator_tools": observation["operator_tools"],
+        "bundle": observation["bundle"],
+        "recovery": observation["recovery"],
+        "future_dimensions": observation["future_dimensions"],
+        "findings": observation["findings"],
+        "overall": observation["overall"],
+    }
+    if list(report) != policy["report_top_level_fields"]:
+        _fail("candidate-report")
+    return report
+
+
+def _render_candidate_human(report: Mapping[str, object]) -> str:
+    command = _mapping(report["command"], "candidate-report")
+    distribution = _mapping(report["distribution"], "candidate-report")
+    admission = _mapping(report["admission"], "candidate-report")
+    runtime = _mapping(report["runtime"], "candidate-report")
+    operator_tools = _mapping(report["operator_tools"], "candidate-report")
+    bundle = _mapping(report["bundle"], "candidate-report")
+    recovery = _mapping(report["recovery"], "candidate-report")
+    overall = _mapping(report["overall"], "candidate-report")
+    lines = [
+        f"ccodex sdlc {command['verb']}: {overall['state']}",
+        f"candidate: {distribution['product_version']} ephemeral/unpublished; public_channel=null; support_tier={distribution['support_tier']}; release_claim={distribution['release_claim']}",
+        f"disclosures: provenance={distribution['provenance']}, sbom={distribution['sbom']}, licensing={distribution['licensing']}",
+        f"release topology: ADR-0021 {distribution['release_topology_adr_status']}",
+        f"admission: {admission['state']} ({admission['schema_version']}, host-finalized)",
+        f"runtime: {runtime['state']} ({runtime['version']}, isolated={str(runtime['isolated']).lower()})",
+        f"operator-tools: {operator_tools['state']}",
+        f"bundle: {bundle['state']}",
+        f"recovery: {recovery['state']} (no effects)",
+        "future dimensions: release=unpublished, activation=unsupported, waves=unsupported",
+    ]
+    findings = report["findings"]
+    proposals = recovery["proposals"]
+    assert isinstance(findings, list) and isinstance(proposals, list)
+    for finding_value in findings:
+        finding = _mapping(finding_value, "candidate-report")
+        lines.append(f"finding [{finding['component']}/{finding['code']}]: {finding['message']} ({finding['path']})")
+    for proposal_value in proposals:
+        proposal = _mapping(proposal_value, "candidate-report")
+        lines.append(f"recovery proposal [{proposal['component']}]: {proposal['action']} ({proposal['path']})")
+    return "\n".join(lines) + "\n"
+
+
+def run_readonly(
+    archive: Path,
+    command: Sequence[str],
+    *,
+    temp_parent: Path | None = None,
+    _host_snapshot: SourceSnapshot | None = None,
+    _runtime_root: Path | None = None,
+    _after_pin_copy: Callable[[], None] | None = None,
+) -> int:
+    _require_linux_x64()
+    host_source = admit_source() if _host_snapshot is None else _host_snapshot
+    host_policy, host_policy_bytes = _policy_from_snapshot(host_source)
+    execution_policy, _execution_policy_bytes = load_execution_policy(host_source)
+    report_policy, _report_policy_bytes = load_candidate_report_policy(host_source)
+    if list(command) not in execution_policy["commands"]:
+        _fail("execution-command")
+    runtime_root = _resolve_base_runtime(host_policy) if _runtime_root is None else _runtime_root
+    _validate_runtime_root(runtime_root, _runtime_license_paths(host_policy))
+    bash, bash_sha256 = _trusted_bash(execution_policy)
+    del bash
+    limits = _mapping(host_policy["limits"], "policy-limits")
+    archive_name = _archive_name(archive)
+    retain_private = False
+    try:
+        parent = temp_parent if temp_parent is not None else _validated_system_tmp()
+        private = Path(tempfile.mkdtemp(prefix=".release-candidate-run-", dir=parent))
+    except OSError:
+        _fail("extract-create")
+    try:
+        pinned, archive_sha256 = _pin_archive(archive, private, int(limits["max_archive_bytes"]), after_copy=_after_pin_copy)
+        raw = _inflate_gzip(pinned, private, int(limits["max_uncompressed_bytes"]))
+        manifest, members, manifest_raw = _archive_admission(raw, archive_name, host_policy, host_policy_bytes)
+        root = _manual_extract(raw, manifest, members, manifest_raw, host_policy, private)
+        _recompute_extracted(root, manifest)
+        authored_digest, runtime_digest = _authenticate_executable_candidate(manifest, host_source, host_policy, runtime_root)
+        dispatcher, dispatcher_sha256 = _render_candidate_dispatcher(root)
+        admission = _admission_record(
+            root,
+            archive_sha256,
+            manifest,
+            execution_policy,
+            command,
+            dispatcher_sha256,
+            bash_sha256,
+            authored_digest,
+            runtime_digest,
+        )
+        _final_source_recheck(host_source)
+        if _entry_digest(_expected_runtime_inventory(runtime_root)) != runtime_digest:
+            _fail("execution-runtime-drift")
+        result, child_stdout, child_stderr, child_pid = _supervise_candidate(
+            dispatcher, command, admission, execution_policy
+        )
+        if result != 0 or child_stderr:
+            _fail("execution-child-refused")
+        observation = _validate_candidate_observation(
+            child_stdout, report_policy, manifest, command, admission, child_pid
+        )
+        _final_source_recheck(host_source)
+        if _entry_digest(_expected_runtime_inventory(runtime_root)) != runtime_digest:
+            _fail("execution-runtime-drift")
+        _recheck_execution_root(root, admission)
+        report = _candidate_final_report(report_policy, manifest, admission, observation)
+        if command[-1] == "--json":
+            sys.stdout.write(canonical_json(report))
+        else:
+            sys.stdout.write(_render_candidate_human(report))
+        return 0
+    except CandidateError as error:
+        if error.code == "execution-group-unknown-effect":
+            retain_private = True
+            retained_witness = _retain_process_group_witness(private)
+            raise CandidateError(error.code, retained_witness) from None
+        raise
+    finally:
+        if not retain_private:
+            _cleanup_run_private(private)
+
+
 def verify_archive(archive: Path, *, temp_parent: Path | None = None, _host_snapshot: SourceSnapshot | None = None, _after_pin_copy: Callable[[], None] | None = None) -> str:
     _require_linux_x64()
     host_source = admit_source() if _host_snapshot is None else _host_snapshot
@@ -1732,11 +2732,40 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     build.add_argument("--output", required=True, type=Path)
     verify = actions.add_parser("verify", allow_abbrev=False)
     verify.add_argument("--archive", required=True, type=Path)
-    return parser.parse_args(argv)
+    readonly = actions.add_parser("run-readonly", allow_abbrev=False)
+    readonly.add_argument("--archive", required=True, type=Path)
+    readonly.add_argument("command", nargs=argparse.REMAINDER)
+    arguments = parser.parse_args(argv)
+    if arguments.action == "run-readonly":
+        raw = arguments.command
+        if not raw or raw[0] != "--":
+            parser.error("run-readonly requires a literal -- before the candidate command")
+        command = raw[1:]
+        admitted = (
+            command in (["sdlc", "inspect"], ["sdlc", "inspect", "--json"])
+            or command in (["sdlc", "status"], ["sdlc", "status", "--json"])
+            or command in (["sdlc", "doctor"], ["sdlc", "doctor", "--json"])
+            or command in (
+                ["sdlc", "recover", "--dry-run"],
+                ["sdlc", "recover", "--dry-run", "--json"],
+            )
+        )
+        if not admitted:
+            parser.error("run-readonly admits only the closed read-only ccodex sdlc grammar")
+        arguments.command = command
+    return arguments
 
 
 def _failure_exit_code(code: str) -> int:
-    return 4 if code in {"archive-unknown-effect", "stage-unknown-effect", "verify-stage-unknown-effect"} else 3
+    return 4 if code in {
+        "archive-unknown-effect",
+        "execution-group-unknown-effect",
+        "execution-orphan-unknown-effect",
+        "execution-termination-unknown-effect",
+        "run-stage-unknown-effect",
+        "stage-unknown-effect",
+        "verify-stage-unknown-effect",
+    } else 3
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1750,11 +2779,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"built {result.name} sha256={_sha256_file(result)}")
         elif arguments.action == "verify":
             print(f"verified {arguments.archive.name} sha256={verify_archive(arguments.archive)}")
+        elif arguments.action == "run-readonly":
+            return run_readonly(arguments.archive, arguments.command)
         else:
             _fail("usage")
     except CandidateError as error:
-        print(f"release-candidate: {error.code}", file=sys.stderr)
-        return _failure_exit_code(error.code)
+        exit_code = _failure_exit_code(error.code)
+        suffix = " effect_state=unknown" if exit_code == 4 else ""
+        locator = _public_witness_locator(error.retained_witness)
+        if locator is not None:
+            suffix += f" witness_locator={locator}"
+        print(f"release-candidate: {error.code}{suffix}", file=sys.stderr)
+        return exit_code
     except Exception:
         print("release-candidate: internal", file=sys.stderr)
         return 3

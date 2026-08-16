@@ -123,6 +123,8 @@ OPERATOR_TOOL_ARTIFACTS = frozenset(
         "assets/claude/session-inheritance.sh",
         "assets/launchers/ccodex.in",
         "policy/ccodex-sdlc-read-report.v1.json",
+        "policy/ccodex-sdlc-read-report.v2.json",
+        "policy/release-candidate-execution.v1.json",
         "scripts/ccodex_sdlc.py",
         "scripts/ccodex_sdlc_readonly.py",
         "scripts/install_operator_tools.py",
@@ -223,6 +225,9 @@ RELEASE_CANDIDATE_POLICY_SCHEMA = "release-candidate-policy/v1"
 CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v1.json"
 CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA = "ccodex-sdlc-read-report-policy/v1"
 CCODEX_SDLC_READ_REPORT_SCHEMA = "ccodex-sdlc-read-report/v1"
+RELEASE_CANDIDATE_EXECUTION_POLICY_RELATIVE_PATH = Path("policy") / "release-candidate-execution.v1.json"
+CCODEX_SDLC_CANDIDATE_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v2.json"
+CCODEX_SDLC_CANDIDATE_REPORT_POLICY_SHA256 = "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9"
 CCODEX_SDLC_READ_REPORT_TOP_LEVEL_FIELDS = [
     "schema_version",
     "command",
@@ -1561,6 +1566,78 @@ def validate_ccodex_sdlc_read_report_policy(root: Path, result: Validation) -> N
         result.error(f"{relative}: closed schema/vocabulary descriptor differs from the read-report contract")
 
 
+def validate_release_candidate_execution_policy(root: Path, result: Validation) -> None:
+    """Bind executable-candidate admission to one closed external policy."""
+    relative = RELEASE_CANDIDATE_EXECUTION_POLICY_RELATIVE_PATH
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        result.error(f"{relative}: required candidate execution policy is missing or linked")
+        return
+    try:
+        raw = path.read_bytes()
+        policy = _strict_json_object(raw, str(relative))
+    except (OSError, ValueError) as exc:
+        result.error(str(exc))
+        return
+    if raw != _canonical_read_report_policy_json(policy).encode("ascii"):
+        result.error(f"{relative}: policy must use canonical ASCII compact JSON")
+    expected = {
+        "admission": {
+            "authenticated_files": [
+                "assets/launchers/ccodex.in",
+                "policy/ccodex-sdlc-read-report.v2.json",
+                "policy/release-candidate-execution.v1.json",
+                "policy/release-candidate.v1.json",
+                "scripts/ccodex_sdlc.py",
+                "scripts/ccodex_sdlc_readonly.py",
+                "scripts/install_operator_tools.py",
+                "scripts/install_skill_bundle.py",
+            ],
+            "schema_version": "release-candidate-execution-admission/v1",
+        },
+        "commands": [
+            ["sdlc", "doctor"], ["sdlc", "doctor", "--json"],
+            ["sdlc", "inspect"], ["sdlc", "inspect", "--json"],
+            ["sdlc", "recover", "--dry-run"], ["sdlc", "recover", "--dry-run", "--json"],
+            ["sdlc", "status"], ["sdlc", "status", "--json"],
+        ],
+        "limits": {
+            "max_child_output_bytes": 1048576,
+            "max_child_stderr_bytes": 65536,
+            "max_seconds": 30,
+            "terminate_grace_seconds": 3,
+        },
+        "platform": "linux-x64",
+        "projection": {"dispatcher": "bin/ccodex", "template": "assets/launchers/ccodex.in"},
+        "schema_version": "release-candidate-execution-policy/v1",
+        "trusted_bash": {
+            "path": "/usr/bin/bash",
+            "sha256": "bc5945feb8bd26203ebfafea5ce1878bb2e32cb8fb50ab7ae395cfb1e1aaaef1",
+        },
+    }
+    if policy != expected:
+        result.error(f"{relative}: closed execution policy differs from the candidate bridge contract")
+
+
+def validate_ccodex_sdlc_candidate_report_policy(root: Path, result: Validation) -> None:
+    """Keep the ephemeral candidate-only v2 report schema closed and explicit."""
+    relative = CCODEX_SDLC_CANDIDATE_REPORT_POLICY_RELATIVE_PATH
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        result.error(f"{relative}: required candidate read-report policy is missing or linked")
+        return
+    try:
+        raw = path.read_bytes()
+        policy = _strict_json_object(raw, str(relative))
+    except (OSError, ValueError) as exc:
+        result.error(str(exc))
+        return
+    if raw != _canonical_read_report_policy_json(policy).encode("utf-8"):
+        result.error(f"{relative}: policy must use canonical JSON")
+    if hashlib.sha256(raw).hexdigest() != CCODEX_SDLC_CANDIDATE_REPORT_POLICY_SHA256:
+        result.error(f"{relative}: exact closed schema/vocabulary descriptor differs from the candidate report contract")
+
+
 def runtime_receipt_policy() -> dict[str, object]:
     return load_json_object(RECEIPT_POLICY_PATH, "runtime receipt policy")
 
@@ -2588,6 +2665,8 @@ def validate(root: Path) -> Validation:
     validate_release_contract(root, result)
     validate_release_candidate_policy(root, result)
     validate_ccodex_sdlc_read_report_policy(root, result)
+    validate_release_candidate_execution_policy(root, result)
+    validate_ccodex_sdlc_candidate_report_policy(root, result)
     validate_runtime_policy_contract(root, result)
     validate_agents(root, result)
     validate_managed_role_contract(root, result)

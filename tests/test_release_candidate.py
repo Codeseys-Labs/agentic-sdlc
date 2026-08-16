@@ -9,10 +9,12 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -20,6 +22,7 @@ from unittest import mock
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "release_candidate.py"
 POLICY_PATH = ROOT / "policy" / "release-candidate.v1.json"
+EXECUTION_POLICY_PATH = ROOT / "policy" / "release-candidate-execution.v1.json"
 
 
 def load_candidate_module():
@@ -91,6 +94,72 @@ def host_snapshot(directory: Path, policy_override: dict[str, object] | None = N
     return candidate.source_snapshot_for_testing(source, files), policy, policy_bytes
 
 
+def executable_snapshot(directory: Path) -> tuple[candidate.SourceSnapshot, dict[str, object]]:
+    policy = copy.deepcopy(candidate.load_policy(POLICY_PATH))
+    authored = [
+        "LICENSE",
+        "NOTICE",
+        "assets/launchers/ccodex.in",
+        "policy/ccodex-sdlc-read-report.v2.json",
+        "policy/release-candidate-execution.v1.json",
+        "policy/release-candidate.v1.json",
+        "scripts/ccodex_sdlc.py",
+        "scripts/ccodex_sdlc_readonly.py",
+        "scripts/install_operator_tools.py",
+        "scripts/install_skill_bundle.py",
+        "scripts/release_candidate.py",
+    ]
+    policy["payload"] = {
+        "files": ["LICENSE", "NOTICE"],
+        "trees": ["assets", "candidate-support", "policy", "scripts"],
+    }
+    candidate.validate_policy(policy)
+    files: dict[str, tuple[int, bytes]] = {}
+    for relative in authored:
+        source = ROOT / relative
+        data = source.read_bytes()
+        files[relative] = (0o100755 if source.stat().st_mode & 0o100 else 0o100644, data)
+    files["policy/release-candidate.v1.json"] = (
+        0o100644,
+        candidate.canonical_json(policy).encode("ascii"),
+    )
+    files["candidate-support/placeholder.txt"] = (0o100644, b"candidate support\n")
+    source = directory / "source"
+    for relative, (mode, data) in files.items():
+        write_file(source / relative, data, mode & 0o777)
+    return candidate.source_snapshot_for_testing(source, files), policy
+
+
+def candidate_report_policy_mutations() -> list[tuple[str, dict[str, object]]]:
+    original = json.loads((ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text())
+    mutations: list[tuple[str, dict[str, object]]] = []
+    for key in original:
+        changed = copy.deepcopy(original)
+        changed.pop(key)
+        mutations.append((f"top-level-{key}", changed))
+    for key in original["canonical_serialization"]:
+        changed = copy.deepcopy(original)
+        changed["canonical_serialization"].pop(key)
+        mutations.append((f"canonical-{key}", changed))
+    for key in original["field_vocabularies"]:
+        changed = copy.deepcopy(original)
+        changed["field_vocabularies"][key].append("drift")
+        mutations.append((f"field-vocabulary-{key}", changed))
+    for key in original["vocabularies"]:
+        changed = copy.deepcopy(original)
+        changed["vocabularies"][key].append("drift")
+        mutations.append((f"value-vocabulary-{key}", changed))
+    for key, value in (
+        ("schema_version", "drift"),
+        ("report_schema_version", "drift"),
+        ("report_top_level_fields", [*original["report_top_level_fields"], "drift"]),
+    ):
+        changed = copy.deepcopy(original)
+        changed[key] = value
+        mutations.append((f"identity-{key}", changed))
+    return mutations
+
+
 def build_for_test(directory: Path, *, host: bool = False, runtime_script: bytes = b"not-a-runtime\n") -> Path:
     if host:
         snapshot, policy, _ = host_snapshot(directory)
@@ -158,6 +227,14 @@ class PolicyAndPlatformTests(unittest.TestCase):
         assert isinstance(limits, dict)
         self.assertGreater(limits["max_uncompressed_bytes"], limits["max_total_bytes"])
 
+    def test_candidate_v2_runtime_policy_is_exactly_closed_in_every_dimension(self) -> None:
+        clean = json.loads((ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text())
+        candidate.validate_candidate_report_policy(clean)
+        for label, changed in candidate_report_policy_mutations():
+            with self.subTest(label=label), self.assertRaises(candidate.CandidateError) as raised:
+                candidate.validate_candidate_report_policy(changed)
+            self.assertEqual(raised.exception.code, "candidate-report-policy")
+
     def test_manifest_rejects_promotion_and_requires_unverified_build_observation(self) -> None:
         manifest = candidate.valid_manifest_fixture()
         manifest["support_tier"] = "certified"
@@ -181,6 +258,46 @@ class PolicyAndPlatformTests(unittest.TestCase):
     def test_exact_cli_grammar_rejects_abbreviations_before_effects(self) -> None:
         self.assertEqual(candidate.main(["build", "--out", "/tmp/not-read"]), 2)
         self.assertEqual(candidate.main(["verify", "--arch", "/tmp/not-read"]), 2)
+        self.assertEqual(
+            candidate.main(
+                ["run-readonly", "--arch", "/tmp/not-read", "--", "sdlc", "inspect"]
+            ),
+            2,
+        )
+
+    def test_run_readonly_parser_admits_only_the_closed_sdlc_grammar(self) -> None:
+        archive = Path(f"/tmp/agentic-sdlc-candidate-{'a' * 64}-linux-x64.tar.gz")
+        admitted = (
+            ["sdlc", "inspect"],
+            ["sdlc", "inspect", "--json"],
+            ["sdlc", "status"],
+            ["sdlc", "doctor", "--json"],
+            ["sdlc", "recover", "--dry-run"],
+            ["sdlc", "recover", "--dry-run", "--json"],
+        )
+        for command in admitted:
+            with self.subTest(command=command):
+                parsed = candidate.parse_args(
+                    ["run-readonly", "--archive", str(archive), "--", *command]
+                )
+                self.assertEqual(parsed.action, "run-readonly")
+                self.assertEqual(parsed.command, command)
+
+        refused = (
+            ["sdlc", "recover"],
+            ["sdlc", "recover", "--json", "--dry-run"],
+            ["sdlc", "install"],
+            ["status"],
+            ["sdlc", "inspect", "--json", "extra"],
+        )
+        for command in refused:
+            with self.subTest(command=command):
+                with self.assertRaises(SystemExit):
+                    candidate.parse_args(
+                        ["run-readonly", "--archive", str(archive), "--", *command]
+                    )
+        with self.assertRaises(SystemExit):
+            candidate.parse_args(["run-readonly", "--archive", str(archive), "sdlc", "inspect"])
 
     def test_non_linux_public_verify_refuses_before_archive_admission(self) -> None:
         for host in ("darwin", "win32"):
@@ -188,6 +305,133 @@ class PolicyAndPlatformTests(unittest.TestCase):
                 with self.assertRaises(candidate.CandidateError) as raised:
                     candidate.verify_archive(Path("/tmp/not-an-archive.tar.gz"))
             self.assertEqual(raised.exception.code, "platform-unsupported")
+
+    def test_exit_four_prints_only_a_resolvable_retained_witness_locator(self) -> None:
+        private = Path(tempfile.mkdtemp(prefix=".release-candidate-run-", dir="/tmp"))
+        try:
+            retained = candidate._retain_process_group_witness(private)
+            refusal = candidate.CandidateError("execution-group-unknown-effect", retained)
+            stderr = io.StringIO()
+            hostile_archive = Path(
+                f"/tmp/archive-parent-credential-canary/agentic-sdlc-candidate-{'a' * 64}-linux-x64.tar.gz"
+            )
+            with (
+                mock.patch.object(candidate, "run_readonly", side_effect=refusal),
+                mock.patch.object(candidate.sys, "stderr", stderr),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "HOME": "/home/credential-canary",
+                        "TMPDIR": "/tmp/tmpdir-credential-canary",
+                        "XDG_STATE_HOME": "/tmp/xdg-credential-canary",
+                    },
+                    clear=False,
+                ),
+            ):
+                result = candidate.main(
+                    [
+                        "run-readonly",
+                        "--archive",
+                        str(hostile_archive),
+                        "--",
+                        "sdlc",
+                        "inspect",
+                    ]
+                )
+            self.assertEqual(result, 4)
+            prefix = (
+                "release-candidate: execution-group-unknown-effect "
+                "effect_state=unknown witness_locator="
+            )
+            self.assertTrue(stderr.getvalue().startswith(prefix), stderr.getvalue())
+            locator = Path(stderr.getvalue().removeprefix(prefix).strip())
+            self.assertEqual(locator, private / "effect-state.json")
+            self.assertEqual(
+                json.loads(locator.read_text()),
+                {
+                    "cleanup": "retained",
+                    "effect_state": "unknown",
+                    "reason": "process-group-nonconvergence",
+                    "schema_version": "release-candidate-effect-witness/v1",
+                },
+            )
+            self.assertTrue(locator.is_file())
+            self.assertFalse(locator.is_symlink())
+            self.assertNotIn("credential-canary", stderr.getvalue())
+        finally:
+            candidate._cleanup_run_private(private)
+
+        private = Path(tempfile.mkdtemp(prefix=".release-candidate-run-", dir="/tmp"))
+        try:
+            retained = candidate._retain_process_group_witness(private)
+            Path(retained.locator).write_text("same-inode-tamper\n")
+            stderr = io.StringIO()
+            arguments = [
+                "run-readonly",
+                "--archive",
+                f"/tmp/agentic-sdlc-candidate-{'a' * 64}-linux-x64.tar.gz",
+                "--",
+                "sdlc",
+                "inspect",
+            ]
+            with (
+                mock.patch.object(
+                    candidate,
+                    "run_readonly",
+                    side_effect=candidate.CandidateError(
+                        "execution-group-unknown-effect", retained
+                    ),
+                ),
+                mock.patch.object(candidate.sys, "stderr", stderr),
+            ):
+                self.assertEqual(candidate.main(arguments), 4)
+            self.assertNotIn("witness_locator=", stderr.getvalue())
+            self.assertNotIn("same-inode-tamper", stderr.getvalue())
+        finally:
+            candidate._cleanup_run_private(private)
+
+    def test_success_and_failures_without_valid_retained_evidence_print_no_locator(self) -> None:
+        archive = Path(f"/tmp/agentic-sdlc-candidate-{'a' * 64}-linux-x64.tar.gz")
+        arguments = [
+            "run-readonly", "--archive", str(archive), "--", "sdlc", "inspect"
+        ]
+        for label, outcome, expected_code in (
+            ("success", 0, 0),
+            ("ordinary-refusal", candidate.CandidateError("execution-runtime-mismatch"), 3),
+            ("unknown-without-witness", candidate.CandidateError("run-stage-unknown-effect"), 4),
+        ):
+            stderr = io.StringIO()
+            patch = (
+                mock.patch.object(candidate, "run_readonly", return_value=outcome)
+                if isinstance(outcome, int)
+                else mock.patch.object(candidate, "run_readonly", side_effect=outcome)
+            )
+            with self.subTest(label=label), patch, mock.patch.object(candidate.sys, "stderr", stderr):
+                self.assertEqual(candidate.main(arguments), expected_code)
+            self.assertNotIn("witness_locator=", stderr.getvalue())
+
+        private = Path(tempfile.mkdtemp(prefix=".release-candidate-run-", dir="/tmp"))
+        try:
+            retained = candidate._retain_process_group_witness(private)
+            witness = Path(retained.locator)
+            witness.unlink()
+            witness.symlink_to("/etc/passwd")
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    candidate,
+                    "run_readonly",
+                    side_effect=candidate.CandidateError(
+                        "execution-group-unknown-effect", retained
+                    ),
+                ),
+                mock.patch.object(candidate.sys, "stderr", stderr),
+            ):
+                self.assertEqual(candidate.main(arguments), 4)
+            self.assertNotIn("witness_locator=", stderr.getvalue())
+            self.assertNotIn("/etc/passwd", stderr.getvalue())
+        finally:
+            candidate._cleanup_run_private(private)
 
 
 @unittest.skipUnless(sys.platform == "linux" and os.uname().machine in {"x86_64", "amd64"}, "candidate build needs Linux x64")
@@ -652,6 +896,432 @@ class VerifyTrustBoundaryTests(unittest.TestCase):
             with self.assertRaises(candidate.CandidateError) as raised:
                 candidate.verify_archive(archive, temp_parent=directory, _host_snapshot=host)
             self.assertEqual(raised.exception.code, "archive-gzip")
+
+
+@unittest.skipUnless(sys.platform == "linux" and os.uname().machine in {"x86_64", "amd64"}, "candidate execution needs Linux x64")
+class RunReadonlyTrustBoundaryTests(unittest.TestCase):
+    def test_signal_recorded_during_spawn_handoff_is_forwarded_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            dispatcher = directory / "dispatcher"
+            write_file(
+                dispatcher,
+                (
+                    "#!/usr/bin/bash\n"
+                    "trap 'exit 0' TERM INT HUP\n"
+                    "while :; do read -r -t 1 _ || :; done\n"
+                ).encode("utf-8"),
+                0o755,
+            )
+            policy = json.loads(EXECUTION_POLICY_PATH.read_text())
+            policy["limits"]["max_seconds"] = 1
+            real_popen = candidate.subprocess.Popen
+
+            def spawn_then_signal(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+                process = real_popen(*args, **kwargs)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return process
+
+            started = time.monotonic()
+            with mock.patch.object(candidate.subprocess, "Popen", side_effect=spawn_then_signal):
+                result, stdout, stderr, _process_id = candidate._supervise_candidate(
+                    dispatcher, [], {}, policy
+                )
+            self.assertEqual(result, 128 + signal.SIGTERM)
+            self.assertEqual(stdout, b"")
+            self.assertEqual(stderr, b"")
+            self.assertLess(time.monotonic() - started, 0.75)
+
+    def test_leader_exit_does_not_hide_a_term_ignoring_same_group_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            descendant_pid_path = directory / "descendant.pid"
+            dispatcher = directory / "dispatcher"
+            write_file(
+                dispatcher,
+                (
+                    "#!/usr/bin/bash\n"
+                    "(\n"
+                    "  trap '' TERM\n"
+                    f"  printf '%s\\n' \"$BASHPID\" > '{descendant_pid_path}'\n"
+                    "  exec 1>&-\n"
+                    "  exec 2>&-\n"
+                    "  while :; do :; done\n"
+                    ") &\n"
+                    "exit 0\n"
+                ).encode("utf-8"),
+                0o755,
+            )
+            policy = json.loads(EXECUTION_POLICY_PATH.read_text())
+            started = time.monotonic()
+            try:
+                with self.assertRaises(candidate.CandidateError) as raised:
+                    candidate._supervise_candidate(dispatcher, [], {}, policy)
+                self.assertEqual(raised.exception.code, "execution-descendant")
+                self.assertLess(time.monotonic() - started, 5)
+                descendant_pid = int(descendant_pid_path.read_text().strip())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(descendant_pid, 0)
+            finally:
+                if descendant_pid_path.exists():
+                    descendant_pid = int(descendant_pid_path.read_text().strip())
+                    try:
+                        os.kill(descendant_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_supervision_has_no_pre_child_blocking_transfer(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            dispatcher = directory / "dispatcher"
+            write_file(dispatcher, b"#!/usr/bin/bash\nprintf '{}\\n'\n", 0o755)
+            policy = json.loads(EXECUTION_POLICY_PATH.read_text())
+            with mock.patch.object(
+                candidate,
+                "_write_all",
+                side_effect=AssertionError("legacy pre-child blocking pipe was used"),
+            ):
+                result, stdout, stderr, process_id = candidate._supervise_candidate(
+                    dispatcher, [], {}, policy
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(stdout, b"{}\n")
+            self.assertEqual(stderr, b"")
+            self.assertGreater(process_id, 0)
+
+    def test_supervision_bounds_child_output_and_converges_without_hanging(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            dispatcher = directory / "dispatcher"
+            write_file(
+                dispatcher,
+                b"#!/usr/bin/bash\nfor ((i=0; i<4096; i++)); do printf x; done\n",
+                0o755,
+            )
+            policy = json.loads(EXECUTION_POLICY_PATH.read_text())
+            policy["limits"]["max_child_output_bytes"] = 1024
+            started = time.monotonic()
+            with self.assertRaises(candidate.CandidateError) as raised:
+                candidate._supervise_candidate(dispatcher, [], {}, policy)
+            self.assertEqual(raised.exception.code, "execution-child-output")
+            self.assertLess(time.monotonic() - started, 5)
+
+    def test_public_bridge_emits_one_candidate_v2_record_and_cleans_every_ephemeral_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            snapshot, _policy = executable_snapshot(directory / "repository")
+            repository = snapshot.root
+            for arguments in (
+                ["/usr/bin/git", "init", "-q", str(repository)],
+                ["/usr/bin/git", "-C", str(repository), "add", "."],
+                [
+                    "/usr/bin/git", "-C", str(repository), "-c", "user.name=test",
+                    "-c", "user.email=test@example.invalid", "commit", "-qm", "candidate",
+                ],
+            ):
+                completed = subprocess.run(arguments, capture_output=True, text=True, check=False)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = directory / "output"
+            output.mkdir()
+            temporary = directory / "temporary"
+            temporary.mkdir()
+            xdg = directory / "must-not-exist-xdg"
+            poison = directory / "poison"
+            poison.mkdir()
+            marker = directory / "ambient-tool-executed"
+            for name in ("python", "python3", "uv", "mise", "git", "curl", "ccodex"):
+                write_file(
+                    poison / name,
+                    f"#!/usr/bin/bash\nprintf '%s' '{name}' >> '{marker}'\nexit 91\n".encode("utf-8"),
+                    0o755,
+                )
+            environment = {
+                **os.environ,
+                "ALL_PROXY": "http://credential-canary.invalid",
+                "ANTHROPIC_API_KEY": "credential-canary",
+                "CODEX_HOME": str(directory / "poisoned-codex-home"),
+                "HOME": str(directory / "poisoned-home"),
+                "HTTPS_PROXY": "http://credential-canary.invalid",
+                "MISE_CONFIG_ROOT": str(directory / "poisoned-mise"),
+                "PATH": str(poison),
+                "PYTHONPATH": str(directory / "poisoned-python"),
+                "TMPDIR": str(temporary),
+                "UV_CACHE_DIR": str(directory / "poisoned-uv"),
+                "XDG_STATE_HOME": str(xdg),
+            }
+            script = repository / "scripts" / "release_candidate.py"
+            self.assertTrue(script.is_file())
+            python = candidate._resolve_base_runtime(_policy) / "bin" / "python3.12"
+            build = subprocess.run(
+                [str(python), "-I", "-B", str(script), "build", "--output", str(output)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+            archive = next(output.glob("*.tar.gz"))
+            verify = subprocess.run(
+                [str(python), "-I", "-B", str(script), "verify", "--archive", str(archive)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(verify.returncode, 0, verify.stderr)
+            direct_private = directory / "direct-private"
+            direct_private.mkdir()
+            source = candidate.admit_source(repository)
+            host_policy, host_policy_bytes = candidate._policy_from_snapshot(source)
+            limits = host_policy["limits"]
+            assert isinstance(limits, dict)
+            pinned, archive_digest = candidate._pin_archive(
+                archive, direct_private, limits["max_archive_bytes"]
+            )
+            raw_archive = candidate._inflate_gzip(
+                pinned, direct_private, limits["max_uncompressed_bytes"]
+            )
+            manifest, members, manifest_raw = candidate._archive_admission(
+                raw_archive, archive.name, host_policy, host_policy_bytes
+            )
+            direct_root = candidate._manual_extract(
+                raw_archive, manifest, members, manifest_raw, host_policy, direct_private
+            )
+            direct = subprocess.run(
+                [
+                    str(direct_root / "runtime" / "python" / "bin" / "python3.12"),
+                    "-I", "-B", str(direct_root / "scripts" / "ccodex_sdlc.py"),
+                    "--candidate-observation-v1", "inspect", "--json",
+                ],
+                env={"HOME": str(directory / "direct-home"), "LANG": "C", "LC_ALL": "C", "PATH": ""},
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(direct.returncode, 3)
+            self.assertIn("candidate subordinate observation refused", direct.stderr)
+            runtime = candidate._resolve_base_runtime(host_policy)
+            authored_digest, runtime_digest = candidate._authenticate_executable_candidate(
+                manifest, source, host_policy, runtime
+            )
+            execution_policy, _execution_policy_raw = candidate.load_execution_policy(source)
+            _bash, bash_digest = candidate._trusted_bash(execution_policy)
+            dispatcher, dispatcher_digest = candidate._render_candidate_dispatcher(direct_root)
+            forged_admission = candidate._admission_record(
+                direct_root,
+                archive_digest,
+                manifest,
+                execution_policy,
+                ["sdlc", "inspect", "--json"],
+                dispatcher_digest,
+                bash_digest,
+                authored_digest,
+                runtime_digest,
+            )
+            read_fd, write_fd = os.pipe()
+            os.write(write_fd, candidate.canonical_json(forged_admission).encode("ascii"))
+            os.close(write_fd)
+            try:
+                constructed = subprocess.run(
+                    [str(dispatcher), "sdlc", "inspect", "--json"],
+                    env={
+                        "CCODEX_CANDIDATE_ADMISSION_FD": str(read_fd),
+                        "HOME": str(directory / "constructed-home"),
+                        "LANG": "C",
+                        "LC_ALL": "C",
+                        "PATH": "",
+                    },
+                    pass_fds=(read_fd,),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+            finally:
+                os.close(read_fd)
+            self.assertEqual(constructed.returncode, 0, constructed.stderr)
+            subordinate = json.loads(constructed.stdout)
+            self.assertEqual(
+                subordinate["schema_version"], "ccodex-sdlc-candidate-observation/v1"
+            )
+            self.assertEqual(subordinate["authority"], "unadmitted-subordinate")
+            self.assertNotIn("admission", subordinate)
+            candidate._cleanup_run_private(direct_private)
+            human = subprocess.run(
+                [
+                    str(python), "-I", "-B", str(script), "run-readonly",
+                    "--archive", str(archive), "--", "sdlc", "inspect",
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            machine = subprocess.run(
+                [
+                    str(python), "-I", "-B", str(script), "run-readonly",
+                    "--archive", str(archive), "--", "sdlc", "inspect", "--json",
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(human.returncode, 0, human.stderr)
+            self.assertEqual(machine.returncode, 0, machine.stderr)
+            report = json.loads(machine.stdout)
+            self.assertEqual(report["schema_version"], "ccodex-sdlc-read-report/v2")
+            self.assertNotIn("authority", report)
+            self.assertEqual(
+                {
+                    key: report["distribution"][key]
+                    for key in (
+                        "lifecycle", "publication", "public_channel", "support_tier",
+                        "release_claim", "provenance", "sbom", "licensing",
+                        "release_topology_adr_status",
+                    )
+                },
+                {
+                    "lifecycle": "ephemeral",
+                    "publication": "unpublished",
+                    "public_channel": None,
+                    "support_tier": "unsupported",
+                    "release_claim": "none",
+                    "provenance": "unverified",
+                    "sbom": "absent",
+                    "licensing": "incomplete",
+                    "release_topology_adr_status": "proposed",
+                },
+            )
+            self.assertEqual(report["admission"]["schema_version"], "release-candidate-execution-admission/v1")
+            self.assertEqual(report["future_dimensions"]["activation"], "unsupported")
+            self.assertEqual(report["future_dimensions"]["waves"], "unsupported")
+            for value in (
+                "ephemeral/unpublished",
+                "public_channel=null",
+                "ADR-0021 proposed",
+                "host-finalized",
+            ):
+                self.assertIn(value, human.stdout)
+            self.assertNotIn("credential-canary", human.stdout + machine.stdout + human.stderr + machine.stderr)
+            self.assertFalse(marker.exists())
+            self.assertFalse(xdg.exists())
+            self.assertEqual(list(temporary.iterdir()), [])
+
+            with mock.patch.object(
+                candidate,
+                "_supervise_candidate",
+                side_effect=candidate.CandidateError("execution-group-unknown-effect"),
+            ), self.assertRaises(candidate.CandidateError) as raised:
+                candidate.run_readonly(
+                    archive,
+                    ["sdlc", "inspect", "--json"],
+                    temp_parent=directory,
+                    _host_snapshot=source,
+                    _runtime_root=runtime,
+                )
+            self.assertEqual(raised.exception.code, "execution-group-unknown-effect")
+            self.assertEqual(candidate._failure_exit_code(raised.exception.code), 4)
+            retained = list(directory.glob(".release-candidate-run-*"))
+            self.assertEqual(len(retained), 1)
+            witness_path = retained[0] / "effect-state.json"
+            self.assertEqual(Path(raised.exception.witness_locator), witness_path)
+            self.assertTrue(witness_path.is_file())
+            self.assertFalse(witness_path.is_symlink())
+            witness = json.loads(witness_path.read_text())
+            self.assertEqual(
+                witness,
+                {
+                    "cleanup": "retained",
+                    "effect_state": "unknown",
+                    "reason": "process-group-nonconvergence",
+                    "schema_version": "release-candidate-effect-witness/v1",
+                },
+            )
+            candidate._cleanup_run_private(retained[0])
+
+    def test_self_consistent_substituted_runtime_is_structural_but_not_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            snapshot, policy = executable_snapshot(directory / "snapshot")
+            marker = directory / "malicious-runtime-executed"
+            malicious = fake_runtime(
+                directory / "malicious-runtime",
+                f"#!/usr/bin/bash\nprintf x > '{marker}'\nexit 0\n".encode("utf-8"),
+            )
+            output = directory / "output"
+            output.mkdir()
+            with mock.patch.object(candidate, "_staging_runtime_canary"):
+                archive = candidate.build_candidate(
+                    output, snapshot=snapshot, policy=policy, runtime_root=malicious
+                )
+            self.assertEqual(
+                candidate.verify_archive(archive, temp_parent=directory, _host_snapshot=snapshot),
+                hashlib.sha256(archive.read_bytes()).hexdigest(),
+            )
+            actual_runtime = candidate._resolve_base_runtime(policy)
+            with self.assertRaises(candidate.CandidateError) as raised:
+                candidate.run_readonly(
+                    archive,
+                    ["sdlc", "inspect", "--json"],
+                    temp_parent=directory,
+                    _host_snapshot=snapshot,
+                    _runtime_root=actual_runtime,
+                )
+            self.assertEqual(raised.exception.code, "execution-runtime-mismatch")
+            self.assertFalse(marker.exists())
+            self.assertFalse(any(path.name.startswith(".release-candidate-run-") for path in directory.iterdir()))
+
+    def test_self_consistent_substituted_reader_refuses_before_candidate_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            host, policy = executable_snapshot(directory / "host")
+            files = dict(host.test_blobs or {})
+            marker = directory / "malicious-reader-executed"
+            files["scripts/ccodex_sdlc.py"] = (
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('x')\n".encode("utf-8")
+            )
+            source = directory / "substituted" / "source"
+            substituted_files: dict[str, tuple[int, bytes]] = {}
+            for relative, data in files.items():
+                mode = host.entries[relative].mode
+                substituted_files[relative] = (mode, data)
+                write_file(source / relative, data, mode & 0o777)
+            substituted = candidate.source_snapshot_for_testing(
+                source,
+                substituted_files,
+                commit=host.commit,
+                tree=host.tree,
+                epoch=host.epoch,
+            )
+            output = directory / "output"
+            output.mkdir()
+            with mock.patch.object(candidate, "_staging_runtime_canary"):
+                archive = candidate.build_candidate(
+                    output,
+                    snapshot=substituted,
+                    policy=policy,
+                    runtime_root=fake_runtime(directory / "runtime"),
+                )
+            with self.assertRaises(candidate.CandidateError) as raised:
+                candidate.run_readonly(
+                    archive,
+                    ["sdlc", "doctor"],
+                    temp_parent=directory,
+                    _host_snapshot=host,
+                    _runtime_root=candidate._resolve_base_runtime(policy),
+                )
+            self.assertEqual(raised.exception.code, "execution-payload-mismatch")
+            self.assertFalse(marker.exists())
+
+    def test_cleanup_uncertainty_is_exit_four_and_named_unknown_effect(self) -> None:
+        self.assertEqual(candidate._failure_exit_code("run-stage-unknown-effect"), 4)
+        self.assertEqual(candidate._failure_exit_code("execution-orphan-unknown-effect"), 4)
 
 
 if __name__ == "__main__":

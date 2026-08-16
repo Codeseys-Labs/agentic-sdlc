@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -35,6 +36,23 @@ validator_spec.loader.exec_module(validator)
 
 
 class CcodexSdlcTests(unittest.TestCase):
+    def make_shadow_reader(self, root: Path, *, manifest: bytes | None = None) -> Path:
+        shadow = root / "shadow-checkout"
+        for relative in (
+            "policy/ccodex-sdlc-read-report.v1.json",
+            "policy/release-contract.v1.json",
+            "scripts/ccodex_sdlc.py",
+            "scripts/ccodex_sdlc_readonly.py",
+            "scripts/install_operator_tools.py",
+            "scripts/install_skill_bundle.py",
+        ):
+            destination = shadow / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / relative, destination)
+        if manifest is not None:
+            (shadow / "manifest.json").write_bytes(manifest)
+        return shadow
+
     def make_dispatcher(self, root: Path) -> tuple[Path, dict[str, str], Path]:
         runtime = root / "runtime"
         runtime.mkdir()
@@ -155,6 +173,53 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertTrue(report["runtime"]["isolated"])
             self.assertEqual(report["runtime"]["state"], "admitted")
             self.assertFalse(query_state.exists())
+
+    def test_unrelated_root_manifest_does_not_select_candidate_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shadow = self.make_shadow_reader(root, manifest=b'{"application":"ordinary"}\n')
+            query_state = root / "query-state"
+            completed = subprocess.run(
+                [str(Path(sys.executable)), "-I", "-B", str(shadow / "scripts" / "ccodex_sdlc.py"), "inspect", "--json"],
+                env={
+                    "HOME": str(root / "query-home"),
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                    "PATH": "",
+                    "XDG_STATE_HOME": str(query_state),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = json.loads(completed.stdout)
+            self.assertEqual(report["schema_version"], "ccodex-sdlc-read-report/v1")
+            self.assertEqual(report["checkout"]["plane"], "checkout-development")
+            self.assertFalse(query_state.exists())
+
+    def test_internal_candidate_discriminator_refuses_a_normal_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shadow = self.make_shadow_reader(root)
+            completed = subprocess.run(
+                [
+                    str(Path(sys.executable)),
+                    "-I",
+                    "-B",
+                    str(shadow / "scripts" / "ccodex_sdlc.py"),
+                    "--candidate-observation-v1",
+                    "inspect",
+                    "--json",
+                ],
+                env={"HOME": str(root / "home"), "LANG": "C", "LC_ALL": "C", "PATH": ""},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 3)
+            self.assertIn("candidate subordinate observation refused", completed.stderr)
+            self.assertEqual(completed.stdout, "")
 
     def test_all_read_only_verbs_and_renderer_parity_share_one_semantic_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -525,6 +590,8 @@ class CcodexSdlcTests(unittest.TestCase):
     def test_validator_rejects_noncanonical_duplicate_or_drifted_read_report_policy(self) -> None:
         clean = validator.Validation()
         validator.validate_ccodex_sdlc_read_report_policy(ROOT, clean)
+        validator.validate_ccodex_sdlc_candidate_report_policy(ROOT, clean)
+        validator.validate_release_candidate_execution_policy(ROOT, clean)
         self.assertEqual(clean.errors, [])
 
         with tempfile.TemporaryDirectory() as temp:
@@ -542,6 +609,55 @@ class CcodexSdlcTests(unittest.TestCase):
             noncanonical = validator.Validation()
             validator.validate_ccodex_sdlc_read_report_policy(root, noncanonical)
             self.assertTrue(any("canonical JSON" in error for error in noncanonical.errors))
+
+        original = json.loads(
+            (ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text()
+        )
+        mutations: list[tuple[str, dict[str, object]]] = []
+        for key in original:
+            changed = copy.deepcopy(original)
+            changed.pop(key)
+            mutations.append((f"top-level-{key}", changed))
+        for key in original["canonical_serialization"]:
+            changed = copy.deepcopy(original)
+            changed["canonical_serialization"].pop(key)
+            mutations.append((f"canonical-{key}", changed))
+        for key in original["field_vocabularies"]:
+            changed = copy.deepcopy(original)
+            changed["field_vocabularies"][key].append("drift")
+            mutations.append((f"field-vocabulary-{key}", changed))
+        for key in original["vocabularies"]:
+            changed = copy.deepcopy(original)
+            changed["vocabularies"][key].append("drift")
+            mutations.append((f"value-vocabulary-{key}", changed))
+        for key, value in (
+            ("schema_version", "drift"),
+            ("report_schema_version", "drift"),
+            ("report_top_level_fields", [*original["report_top_level_fields"], "drift"]),
+        ):
+            changed = copy.deepcopy(original)
+            changed[key] = value
+            mutations.append((f"identity-{key}", changed))
+        for label, changed in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                policy_path = root / "policy" / "ccodex-sdlc-read-report.v2.json"
+                policy_path.parent.mkdir()
+                policy_path.write_text(json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n")
+                drift = validator.Validation()
+                validator.validate_ccodex_sdlc_candidate_report_policy(root, drift)
+                self.assertTrue(drift.errors, label)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            policy_path = root / "policy" / "ccodex-sdlc-read-report.v2.json"
+            policy_path.parent.mkdir()
+            policy_path.write_text(
+                (ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text() + " "
+            )
+            noncanonical_v2 = validator.Validation()
+            validator.validate_ccodex_sdlc_candidate_report_policy(root, noncanonical_v2)
+            self.assertTrue(any("canonical JSON" in error for error in noncanonical_v2.errors))
 
     def test_generated_dispatcher_does_not_fall_back_to_poisoned_external_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

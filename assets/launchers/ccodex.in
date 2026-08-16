@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # ccodex — the Agentic SDLC operator dispatcher for the USE surface.
 #
 # Installed by scripts/install_operator_tools.py into an existing user-owned PATH directory.
@@ -28,6 +28,36 @@
 #     caller cwd. Re-run the explicit operator-tools install after a reviewed toolchain upgrade to
 #     refresh them.
 set -euo pipefail
+
+# The release-candidate bridge renders this same authenticated template with the exact literal
+# `true`. Installed operator tools always render `false`, preserving their existing dispatch
+# behavior. Candidate mode is intentionally self-relative and exits before any installed route,
+# root override, tool binding, or gateway code can run.
+candidate_readonly_profile=@CANDIDATE_READONLY_PROFILE@
+if [ "$candidate_readonly_profile" = true ]; then
+  case "$#:$*" in
+    "2:sdlc inspect"|"3:sdlc inspect --json"|\
+    "2:sdlc status"|"3:sdlc status --json"|\
+    "2:sdlc doctor"|"3:sdlc doctor --json"|\
+    "3:sdlc recover --dry-run"|"4:sdlc recover --dry-run --json") ;;
+    *)
+      printf 'error: candidate ccodex admits only read-only sdlc inspection\n' >&2
+      exit 2
+      ;;
+  esac
+  candidate_bin=${BASH_SOURCE[0]%/*}
+  cd -P -- "$candidate_bin/.." || {
+    printf 'error: candidate ccodex cannot resolve its physical projection root\n' >&2
+    exit 3
+  }
+  candidate_root=$PWD
+  unset AGENTIC_SDLC_ROOT PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONBREAKPOINT \
+    UV_CONFIG_FILE UV_CACHE_DIR UV_PROJECT_ENVIRONMENT MISE_CONFIG_FILE MISE_CONFIG_ROOT \
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy \
+    CCODEX_CANDIDATE_ADMISSION_FD
+  exec "$candidate_root/runtime/python/bin/python3.12" -I -B \
+    "$candidate_root/scripts/ccodex_sdlc.py" --candidate-observation-v1 "${@:2}"
+fi
 
 # Repository root. AGENTIC_SDLC_ROOT wins, so an operator or a managed-clone installer can move
 # the checkout without reinstalling this command; the install-time path is the fallback.
