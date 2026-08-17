@@ -1,5 +1,17 @@
 # Build the Claude Code-first Agentic SDLC product
 
+**Source brief:** [Claude Code-first product and architecture brief](to-spec-handoff.md) —
+decision-complete, decided 2026-08-15
+**Source map:** [Wayfinder map](map.md) — resolved; no product or architecture choice remains open
+**Domain language:** [CONTEXT.md](../../../CONTEXT.md)
+**Durable decisions:** [ADR index](../../adr/README.md)
+
+This specification is derived from the source brief and does not supersede it. Decision ownership
+for each settled choice remains recorded in the brief. This specification may decide implementation
+details named under the brief's residual implementation discovery. It must return to product
+decision work if a proposed design would change a boundary, authority rule, ownership plane, public
+promise, or explicit non-goal in the brief.
+
 ## Problem Statement
 
 Experienced Claude Code users can assemble skills, subagents, model gateways, repository tooling,
@@ -29,11 +41,12 @@ brownfield repositories. Agentic SDLC Core will complete one native-Claude journ
 operator's paid Claude Code account. It will require no gateway, external provider, companion
 library, hosted service, renderer, or product telemetry.
 
-Package one operator CLI named `ccodex`. Its `sdlc` namespace will inspect, install, diagnose,
-update, recover, and remove exact Agentic SDLC releases. Its `routes` namespace will manage the
-optional routed-model profile through OCX. Installing the CLI will not activate Claude Code,
-modify a repository, trust configuration, start a gateway, configure a provider, install a
-companion library, or launch a session.
+Package one operator CLI named `ccodex`. Its `sdlc` namespace is the lifecycle front door for exact
+Agentic SDLC releases, with the eight verbs `inspect`, `doctor`, `install`, `status`, `update`,
+`recover`, `uninstall`, and `rightsize` enumerated in Implementation Decision 91. Its `routes`
+namespace will manage the optional routed-model profile through OCX. Installing the CLI will not
+activate Claude Code, modify a repository, trust configuration, start a gateway, configure a
+provider, install a companion library, or launch a session.
 
 Within an activated repository, `/sdlc-init` will assess existing operating contracts and produce
 a digest-approved activation plan. A deterministic planning compiler will turn immutable mission
@@ -420,6 +433,28 @@ installed through their own front doors.
 89. **ADR lifecycle.** Treat ADR-0017 through ADR-0020 and ADR-0022 through ADR-0027 as accepted
     product constraints. Keep the release-topology and initiative ADRs proposed until their stated
     evidence conditions close.
+90. **Core command surface.** Core owns exactly five Claude commands. `/sdlc-init` assesses and
+    activates one repository. `/sdlc-frame` records one bounded intent and run shape. `/sdlc-wave`
+    compiles and runs one approved wave. `/sdlc-mission` advances a durable objective through
+    bounded waves. `/sdlc-rightsize` is the interactive rightsizing front end. Other hosts invoke
+    the same portable intents through skills where capability evidence permits; the slash-command
+    and Dynamic Workflow experience is Claude Code-first.
+91. **`ccodex sdlc` namespace.** The product namespace is exactly:
+
+    ```text
+    ccodex sdlc inspect
+    ccodex sdlc doctor
+    ccodex sdlc install --host claude
+    ccodex sdlc status
+    ccodex sdlc update
+    ccodex sdlc recover
+    ccodex sdlc uninstall
+    ccodex sdlc rightsize
+    ```
+
+    Inspection, doctor, status, help, and dry-run are read-only. `ccodex sdlc rightsize` is the
+    CLI entry point to the rightsizing surface specified in Implementation Decisions 33 through 41;
+    the non-activation semantics of install are specified in Implementation Decision 6.
 
 ## Testing Decisions
 
@@ -524,6 +559,95 @@ installed through their own front doors.
     attribution, host-feature, and platform canaries are separate approved release evidence.
 38. A passing gate or canary is evidence only and must never authorize installation, provider
     mutation, fan-in, publication, deployment, or queue mutation.
+39. Every build slice carries offline positive, malformed, conflict, stale-prestate, substitution,
+    redaction, crash, partial-effect, recovery, and non-authority tests proportional to its
+    effects.
+
+## Build Slices
+
+The build is nine ordered slices, restated from the brief's tracer-bullet build sequence. Each
+slice names its scope and the exit artifact that shows it is done, and the order is the brief's
+recorded build order. Two ordering constraints are settled in the brief: slice 2 ships read-only
+verbs before any mutation, and slice 9 accepts ADR-0021 only after its evidence condition closes.
+Every slice carries the fixture classes required by Testing Decision 39.
+
+### Slice 1 — Release identity and claim floor
+
+- **Scope:** define release, manifest, and schema identity, support rows, and stable/preview semantics,
+  and add negative claim fixtures, while retaining the checkout plane.
+- **Exit artifact:** exact release/manifest/schema identity plus passing negative claim fixtures.
+
+### Slice 2 — Read-only `ccodex sdlc`
+
+- **Scope:** package the operator CLI over the current ownership and recovery substrate.
+- **Exit artifact:** `inspect`, `status`, `doctor`, and dry-run shipped before any mutating verb exists.
+
+### Slice 3 — Versioned lifecycle
+
+- **Scope:** implement install, update, recover, and uninstall over exact release payloads, with
+  stable/preview side-by-side state, foreign preservation, and old-schema readers.
+- **Exit artifact:** effect-aware lifecycle exits that preserve foreign state.
+
+### Slice 4 — Activation slice
+
+- **Scope:** compose one full greenfield and one brownfield assessed plan, a tracked repository manifest,
+  and a local receipt.
+- **Exit artifact:** a write-ready, remediation-ready, or refused activation result.
+
+### Slice 5 — Native-Claude Core wave
+
+- **Scope:** ship the smallest owned Dynamic Workflow that proves planning, exact native runtime
+  assignment, isolated custody, artifacts, pause/stop, review, authorized fan-in, integrated gate,
+  and adversarial disposition.
+- **Exit artifact:** one terminal wave receipt reaching honest `accepted` or intended
+  `remediation-progress`.
+
+### Slice 6 — Planning and observability
+
+- **Scope:** add mission, snapshot, plan, diff, and AutoEnvelope schemas, the deterministic compiler,
+  effect journals, and immutable receipt families.
+- **Exit artifact:** read-only projections rendering the recorded journals and receipts.
+
+### Slice 7 — Routed-model profile
+
+- **Scope:** add dimensional `ccodex routes`, provider-plan lifecycle, credential front-door handling,
+  exact probe, rightsizing qualification handoff, quarantine, and recovery.
+- **Exit artifact:** a demonstrated return to native-only state.
+
+### Slice 8 — Documentation and security capabilities
+
+- **Scope:** add `sdlc-documentarian`, the narrow SimpleEnglish adaptation and its donor notice, draw.io
+  source tooling, and the threat-modeling workflow.
+- **Exit artifact:** each capability selectable and none enabled by default.
+
+### Slice 9 — Dogfood and release
+
+- **Scope:** run exact installed-byte greenfield and brownfield journeys, refresh vendor evidence, and
+  reconcile historical Seeds under separate authority.
+- **Exit artifact:** stable published only with one certified Core tuple, with ADR-0021 accepted only
+  after its evidence condition closes.
+
+## Release Validity
+
+A stable Core release is invalid unless all of these are true, together with the migration,
+recovery, and certified-tuple requirement stated below them:
+
+- exact release identity, SBOM, licences, checksums, and packaged tools verify;
+- install/status/update/recovery/removal preserve foreign state and have effect-aware exits;
+- one clean greenfield and one occupied brownfield activation journey pass from installed bytes;
+- the native-Claude minimum and stable-reference Workflow canaries pass for the exact tuple;
+- one complete Core wave reaches an honest `accepted` or intended `remediation-progress` outcome;
+- runtime requests and observed identities remain separate and no silent fallback occurs;
+- write custody, independent review, authorized serial fan-in, and integrated gates pass;
+- status/doctor/inspect are read-only and render the same closed semantic record as JSON;
+- secrets, private content, undeclared egress, and incident fixtures remain redacted and fail closed;
+- product prose passes canonical vocabulary and prohibited-claim tests; and
+- no optional profile, companion, renderer, external provider, permission bypass, or product
+  telemetry is enabled by default.
+
+The stable channel additionally requires migration and recovery coverage and at least one current
+certified Core tuple. Preview is explicit, side-by-side, and cannot overwrite stable state. A
+passing gate remains evidence and never authorizes publication.
 
 ## Out of Scope
 
@@ -578,13 +702,10 @@ installed through their own front doors.
   calls, XDG file layout and locks, usage/readback fields, composition of current activation
   primitives, the first draw.io renderer tuple, and later historical Seed dispositions. These are
   implementation questions, not open product choices.
-- The build should proceed in tracer bullets: release identity and claims; read-only `ccodex sdlc`;
-  lifecycle mutations; greenfield/brownfield activation; one native-Claude Core wave; planning and
-  observability; routed-model profile; documentation/diagram/security capabilities; then dogfood
-  and stable release.
-- A stable release requires exact installed-byte greenfield and brownfield journeys, one certified
-  Core tuple, current compatibility evidence, negative safety tests, truthful claims, and no
-  optional routing, companion, renderer, telemetry, or bypass enabled by default.
+- The build proceeds in the nine ordered slices recorded under [Build Slices](#build-slices).
+- Stable release validity is the single conjunctive gate recorded under
+  [Release Validity](#release-validity). No other statement in this specification is the release
+  gate.
 - This specification is ready for decomposition into implementation tickets. Publishing it does
   not authorize implementation, queue mutation beyond the single spec issue, fan-in, or any
   outward effect.
