@@ -1339,7 +1339,7 @@ def _remove_stage(stage: Path) -> None:
     shutil.rmtree(stage)
 
 
-def build_candidate(output: Path, *, snapshot: SourceSnapshot | None = None, policy: Mapping[str, object] | None = None, runtime_root: Path | None = None) -> Path:
+def build_candidate(output: Path, *, snapshot: SourceSnapshot | None = None, policy: Mapping[str, object] | None = None, runtime_root: Path | None = None, on_publish: Callable[[str], None] | None = None) -> Path:
     _require_linux_x64()
     source = admit_source() if snapshot is None else snapshot
     source_root = _physical_directory(source.root, "source-layout")
@@ -1375,6 +1375,14 @@ def build_candidate(output: Path, *, snapshot: SourceSnapshot | None = None, pol
         _final_source_recheck(source)
         archive_name = f"agentic-sdlc-candidate-{manifest['candidate_id']}-linux-x64.tar.gz"
         publication = _publish_no_replace(stage_archive, admitted_output, archive_name)
+        # _publish_no_replace() already computed this digest from stage_archive
+        # (via _sha256_file) before hardlinking it into place, so publication.digest
+        # is the published file's digest without a second, unprotected read of it.
+        # Implementation Decision 9: a caller that re-reads the archive after this
+        # point is reading a file whose durable publish has already completed, so a
+        # read failure there can never be honestly reported as a clean refusal.
+        if on_publish is not None:
+            on_publish(publication.digest)
         return publication.destination
     except CandidateError:
         if publication is not None and publication.destination.exists() and not _rollback_publication(publication):
@@ -2821,8 +2829,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(error.code)
     try:
         if arguments.action == "build":
-            result = build_candidate(arguments.output)
-            print(f"built {result.name} sha256={_sha256_file(result)}")
+            # Capture the digest build_candidate() already computed before it
+            # published the archive, instead of re-reading the now-published file
+            # here: that second read would run strictly after the durable publish
+            # and its failure could never be honestly reported as a clean refusal.
+            published_digest: list[str] = []
+            result = build_candidate(arguments.output, on_publish=published_digest.append)
+            print(f"built {result.name} sha256={published_digest[0]}")
         elif arguments.action == "verify":
             print(f"verified {arguments.archive.name} sha256={verify_archive(arguments.archive)}")
         elif arguments.action == "run-readonly":
@@ -2840,8 +2853,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"release-candidate: {error.code}{suffix}", file=sys.stderr)
         return exit_code
     except Exception:
-        print("release-candidate: internal", file=sys.stderr)
-        return 3
+        # Implementation Decision 9: this handler is shared by every action above,
+        # including "build", where build_candidate() only returns after
+        # _publish_no_replace() has already renamed the archive into place — a
+        # durable product effect. An exception reaching here is therefore not
+        # provably "before any effect"; reporting a clean refusal (3) would be a
+        # false claim of no effect. Report unknown effect state (4), matching the
+        # CandidateError branch's own unknown-effect codes above.
+        print("release-candidate: internal effect_state=unknown", file=sys.stderr)
+        return 4
     return 0
 
 

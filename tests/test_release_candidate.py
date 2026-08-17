@@ -433,6 +433,72 @@ class PolicyAndPlatformTests(unittest.TestCase):
         finally:
             candidate._cleanup_run_private(private)
 
+    def test_unhandled_exception_after_a_durable_effect_is_reported_as_unknown_effect(self) -> None:
+        # build_candidate() only returns once _publish_no_replace() has already
+        # renamed the archive into the requested output directory (Implementation
+        # Decision 9's durable product effect). A later, unrelated failure in
+        # main()'s own post-return handling — here a bare AttributeError from
+        # formatting a return value with no ".name", not the module's
+        # CandidateError type — must not be reported as a clean pre-effect
+        # refusal (3); the publish already happened, so the honest answer is the
+        # same "admitted partial or unknown effect" code (4) the CandidateError
+        # branch already uses for unknown-effect codes. This does not pin down
+        # *which* post-return statement can fail (see the dedicated build-report
+        # tests below for that); it only pins the handler's own contract.
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(candidate, "build_candidate", return_value=object()),
+            mock.patch.object(candidate.sys, "stderr", stderr),
+        ):
+            result = candidate.main(["build", "--output", "/tmp/build-output-not-read"])
+        self.assertEqual(result, 4)
+        self.assertIn("effect_state=unknown", stderr.getvalue())
+
+    def test_build_report_reuses_the_pre_publish_digest_and_never_rereads_the_published_file(self) -> None:
+        # _publish_no_replace already computes the archive's digest via
+        # _sha256_file BEFORE the durable os.link() that publishes it
+        # (scripts/release_candidate.py:1307-1308) and carries it on the
+        # returned Publication (:1313). Re-reading the published file
+        # afterwards for main()'s "built ... sha256=" report opened a second,
+        # unprotected read of a file whose durable publish had already
+        # completed -- exactly the post-effect window Implementation Decision 9
+        # forbids reporting as a clean refusal. The fix removes that second
+        # read entirely instead of relabeling its failure: main() must report
+        # the digest _publish_no_replace already computed, and must never
+        # re-open the published archive -- proved here by pointing the
+        # (mocked) build result at a path that does not exist on disk at all,
+        # yet the build still reports success.
+        published = Path(f"/tmp/agentic-sdlc-candidate-file-read-fixture-{'a' * 64}-linux-x64.tar.gz")
+        self.assertFalse(published.exists())
+
+        def fake_build(output, *, on_publish=None, **_ignored):
+            if on_publish is not None:
+                on_publish("fixture-digest-from-publish")
+            return published
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(candidate, "build_candidate", side_effect=fake_build),
+            mock.patch.object(candidate.sys, "stdout", stdout),
+            mock.patch.object(candidate.sys, "stderr", stderr),
+        ):
+            result = candidate.main(["build", "--output", "/tmp/build-output-not-read"])
+        self.assertEqual(result, 0, stderr.getvalue())
+        self.assertEqual(stdout.getvalue(), f"built {published.name} sha256=fixture-digest-from-publish\n")
+
+    def test_file_read_before_any_publish_is_still_a_clean_refusal(self) -> None:
+        # The fix above only removes main()'s post-publish re-read of the
+        # archive; it must not touch what "file-read" means for a read that
+        # fails before anything has been published (e.g. inside
+        # build_candidate's own manifest/digest bookkeeping, well before
+        # _publish_no_replace runs).
+        self.assertEqual(candidate._failure_exit_code("file-read"), 3)
+        with self.assertRaises(candidate.CandidateError) as raised:
+            candidate._sha256_file(Path("/tmp/agentic-sdlc-candidate-file-read-fixture-does-not-exist"))
+        self.assertEqual(raised.exception.code, "file-read")
+        self.assertEqual(candidate._failure_exit_code(raised.exception.code), 3)
+
 
 @unittest.skipUnless(sys.platform == "linux" and os.uname().machine in {"x86_64", "amd64"}, "candidate build needs Linux x64")
 class BuildTests(unittest.TestCase):
