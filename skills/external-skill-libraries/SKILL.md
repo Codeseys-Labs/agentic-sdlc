@@ -76,7 +76,7 @@ instruction to run the installer:
 | `ecc` | 284 declared / 280 measured skills, 67 agents, 94 commands | flat `~/.claude/skills/` | `npx -y -p ecc-universal ecc install --target claude --profile full` |
 | `hyperresearch` | 17 skills + 14 agents, rendered | flat, `hyperresearch`-prefixed | `uv tool install hyperresearch` |
 
-**ECC's surface is the headline.** Against this bundle's 10 skills, 284 entries is a ~28×
+**ECC's surface is the headline.** Against this bundle's 12 skills, 284 entries is a ~24×
 multiplication of what a selector must reason over, in exchange for a firing rate nobody has
 measured for any individual entry. It writes flat into `~/.claude/skills/<skill-name>/` — the
 same namespace this bundle's entries occupy — so every name is a first-writer-wins claim. It is

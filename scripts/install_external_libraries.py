@@ -262,9 +262,9 @@ ECC = Library(
     uninstall=("npx", "-y", "-p", "ecc-universal", "ecc", "uninstall", "--target", "claude"),
     notes=(
         "The headline cost. Self-reported as 284 skills, 67 agents, and 94 command shims"
-        " against this bundle's 10 skills. A `--profile full --dry-run` against the"
-        " published 2.1.0 artifact measures 983 file operations: 280 flat skill names, 67"
-        " agents, 94 commands, 122 rules files, and 170 scripts.",
+        " against this bundle's {bundle_skill_count} skills. A `--profile full --dry-run`"
+        " against the published 2.1.0 artifact measures 983 file operations: 280 flat"
+        " skill names, 67 agents, 94 commands, 122 rules files, and 170 scripts.",
         "It writes each skill flat to `~/.claude/skills/<skill-name>/` — the same single"
         " namespace this bundle's own entries occupy, so every one of those names is a"
         " first-writer-wins claim.",
@@ -784,8 +784,15 @@ def render_plan(check: Precheck, config: Config) -> list[str]:
     )
     for caveat in library.caveats:
         lines.append(f"caveat:       {caveat}")
+    # `bundle_skill_count` is a note-text placeholder rather than a literal, so the count a
+    # library's cost is measured against is this bundle's actual skill count at run time, not
+    # a number that goes stale the next time a skill lands. Plain notes have no `{...}` to
+    # substitute, so `.format()` on them is a no-op.
+    bundle_skill_count = len(bundle_skill_names(config.repo_root))
     for note in library.notes:
-        lines.append(f"note:         {note}")
+        lines.append(
+            f"note:         {note.format(bundle_skill_count=bundle_skill_count)}"
+        )
     if library.uninstall:
         lines.append(f"uninstall:    {' '.join(library.uninstall)}")
     else:

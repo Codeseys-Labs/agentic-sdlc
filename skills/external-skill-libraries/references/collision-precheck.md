@@ -165,7 +165,7 @@ rather than by evidence. Two consequences worth stating, because both have alrea
 Collision is mechanical and checkable. **Selection-surface pressure is neither.** Every skill a
 library adds is a row an agent must reason over on every turn it selects a skill, and no check
 can tell whether an entry's share of that attention tracks its share of the sessions it fires
-in. Against a bundle of 9 skills, a 284-entry catalog is a roughly 31× multiplication of the
+in. Against a bundle of 12 skills, a 284-entry catalog is a ~24× multiplication of the
 surface in exchange for a firing rate nobody has measured for any individual entry. That
 arithmetic goes stale as soon as either side's count changes, so recompute it against the
 actual tree at decision time rather than reusing a number from this file.
