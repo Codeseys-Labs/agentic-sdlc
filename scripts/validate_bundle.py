@@ -228,7 +228,7 @@ RELEASE_CANDIDATE_ACQUISITION_POLICY_RELATIVE_PATH = (
 )
 RELEASE_CANDIDATE_ACQUISITION_POLICY_SCHEMA = "release-candidate-acquisition-policy/v1"
 RELEASE_CANDIDATE_ACQUISITION_POLICY_SHA256 = (
-    "ec2d4661fa1e83257035a4b0597ed4b5869f5613ee7a1b3b72f80e29830300d2"
+    "69804a1d476363ad2caea5ddf49ad042efc030d8a86c00de68fe4006e55e0f1c"
 )
 CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v1.json"
 CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA = "ccodex-sdlc-read-report-policy/v1"
@@ -1467,10 +1467,11 @@ def _acquisition_record_format_error(value: object, format_name: object) -> str 
         if (
             not isinstance(value, str)
             or not value.isascii()
-            or not 1 <= len(value.encode("ascii")) <= 256
-            or not re.fullmatch(r"journal:[A-Za-z0-9._:-]+", value)
+            or not re.fullmatch(
+                r"journal:v1:op-[0-9a-f]{32}:[0-9a-f]{64}", value
+            )
         ):
-            return "must be an opaque ASCII locator of at most 256 bytes"
+            return "must be a non-disclosing journal:v1 operation and digest handle"
     elif format_name == "absolute_physical_path":
         if (
             not isinstance(value, str)
@@ -1878,10 +1879,12 @@ def _expected_acquisition_record_contract() -> dict[str, object]:
     phases = ["opened", "pinned", "staged", "published", "receipted"]
     next_actions = [
         [
-            "acquire", "recover", "inspect", "--journal-locator", "<journal-locator>",
+            "acquire", "recover", "inspect", "--xdg-state-home",
+            "<absolute-xdg-state-home>", "--journal-locator", "<journal-locator>",
         ],
         [
-            "acquire", "recover", "finish", "--journal-locator", "<journal-locator>",
+            "acquire", "recover", "finish", "--xdg-state-home",
+            "<absolute-xdg-state-home>", "--journal-locator", "<journal-locator>",
             "--grant", "<absolute-grant>",
         ],
     ]
@@ -2149,7 +2152,7 @@ def _expected_acquisition_record_contract() -> dict[str, object]:
         "field_formats": {
             "absolute_physical_path": "absolute-no-dot-segments-runtime-no-symlink",
             "nonce": "ascii-32-to-128-bytes",
-            "opaque_locator": "opaque-ascii-1-to-256-bytes",
+            "opaque_locator": "journal-v1-operation-id-and-sha256",
             "operation_id": "op-lowerhex-32",
             "sha256": "lowerhex-64",
             "sha256_or_null": "lowerhex-64-or-null-genesis-only",
@@ -2424,7 +2427,8 @@ def validate_release_candidate_acquisition_policy(root: Path, result: Validation
             },
             {
                 "argv": [
-                    "acquire", "recover", "inspect", "--journal-locator",
+                    "acquire", "recover", "inspect", "--xdg-state-home",
+                    "<absolute-xdg-state-home>", "--journal-locator",
                     "<journal-locator>",
                 ],
                 "effects": "none",
@@ -2434,7 +2438,8 @@ def validate_release_candidate_acquisition_policy(root: Path, result: Validation
             },
             {
                 "argv": [
-                    "acquire", "recover", "finish", "--journal-locator",
+                    "acquire", "recover", "finish", "--xdg-state-home",
+                    "<absolute-xdg-state-home>", "--journal-locator",
                     "<journal-locator>",
                     "--grant", "<absolute-grant>",
                 ],
@@ -2463,10 +2468,12 @@ def validate_release_candidate_acquisition_policy(root: Path, result: Validation
                 "unexpected_internal_before_admitted_effect": 1,
             },
             "immutable_receipt": True,
+            "first_namespace_effect": "grant-bound-opened-bootstrap",
             "journal_before_candidate_data": True,
             "journal_open_phase": "opened",
             "no_replace_publication": ["stage", "final", "receipt"],
             "partial_or_unknown_exit": 4,
+            "recovery_first_new_namespace_effect": "grant-consumption-marker",
             "serialized_writer_count": 1,
             "serialized_writers": ["apply", "recover-finish"],
         },
@@ -2485,11 +2492,12 @@ def validate_release_candidate_acquisition_policy(root: Path, result: Validation
                 "candidate_root": "$XDG_DATA_HOME/agentic-sdlc/acquisition/candidates/<archive-sha256>/root",
                 "candidate_stage": "$XDG_DATA_HOME/agentic-sdlc/acquisition/staging/<operation-id>",
                 "data_root": "$XDG_DATA_HOME/agentic-sdlc/acquisition",
-                "grant_consumption": "$XDG_STATE_HOME/agentic-sdlc/acquisition/grants/<grant-sha256>.used",
+                "grant_consumption": "$XDG_STATE_HOME/.agentic-sdlc-acquisition-v1-<operation-id>-<grant-sha256>-<nonce-sha256>.opened.json",
                 "journal": "$XDG_STATE_HOME/agentic-sdlc/acquisition/journals/<operation-id>.json",
                 "receipt": "$XDG_STATE_HOME/agentic-sdlc/acquisition/receipts/<archive-sha256>.json",
+                "recovery_grant_consumption": "$XDG_STATE_HOME/.agentic-sdlc-acquisition-recovery-v1-<operation-id>-<grant-sha256>-<nonce-sha256>.used",
                 "state_root": "$XDG_STATE_HOME/agentic-sdlc/acquisition",
-                "writer_lock": "$XDG_STATE_HOME/agentic-sdlc/acquisition/writer.lock",
+                "writer_lock": "existing-explicit-xdg-state-home-directory-fd",
             },
             "physical_path_policy": "no-symlink-components",
             "root_arguments": "explicit-absolute-only",

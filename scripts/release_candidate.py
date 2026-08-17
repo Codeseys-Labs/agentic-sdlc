@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build or structurally verify one local, unpublished Agentic SDLC candidate.
+"""Build, verify, run, or durably acquire one local unpublished candidate.
 
 The only accepted grammar is:
 
     release_candidate.py build --output <existing-empty-absolute-physical-dir>
     release_candidate.py verify --archive <absolute-regular-candidate-tar-gz>
+    release_candidate.py acquire <the closed policy-defined acquisition grammar>
 
 Verification deliberately never executes code supplied by an archive.  A build runs the
 private-runtime canary while its staging tree is still locally controlled; that observation is
@@ -16,6 +17,7 @@ import argparse
 from dataclasses import dataclass
 import gzip
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -2735,6 +2737,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     readonly = actions.add_parser("run-readonly", allow_abbrev=False)
     readonly.add_argument("--archive", required=True, type=Path)
     readonly.add_argument("command", nargs=argparse.REMAINDER)
+    acquire = actions.add_parser("acquire", allow_abbrev=False)
+    acquire_actions = acquire.add_subparsers(dest="acquire_action", required=True)
+    acquire_plan = acquire_actions.add_parser("plan", allow_abbrev=False)
+    acquire_plan.add_argument("--archive", required=True, type=Path)
+    acquire_plan.add_argument("--trust-root", required=True, type=Path)
+    acquire_plan.add_argument("--xdg-data-home", required=True, type=Path)
+    acquire_plan.add_argument("--xdg-state-home", required=True, type=Path)
+    acquire_inspect = acquire_actions.add_parser("inspect", allow_abbrev=False)
+    acquire_inspect.add_argument("--plan", required=True, type=Path)
+    acquire_apply = acquire_actions.add_parser("apply", allow_abbrev=False)
+    acquire_apply.add_argument("--plan", required=True, type=Path)
+    acquire_apply.add_argument("--grant", required=True, type=Path)
+    acquire_recover = acquire_actions.add_parser("recover", allow_abbrev=False)
+    recover_actions = acquire_recover.add_subparsers(dest="recover_action", required=True)
+    recover_inspect = recover_actions.add_parser("inspect", allow_abbrev=False)
+    recover_inspect.add_argument("--xdg-state-home", required=True, type=Path)
+    recover_inspect.add_argument("--journal-locator", required=True)
+    recover_finish = recover_actions.add_parser("finish", allow_abbrev=False)
+    recover_finish.add_argument("--xdg-state-home", required=True, type=Path)
+    recover_finish.add_argument("--journal-locator", required=True)
+    recover_finish.add_argument("--grant", required=True, type=Path)
     arguments = parser.parse_args(argv)
     if arguments.action == "run-readonly":
         raw = arguments.command
@@ -2768,6 +2791,29 @@ def _failure_exit_code(code: str) -> int:
     } else 3
 
 
+def _load_acquisition_engine():
+    """Load the pinned sibling even when the dispatcher runs under Python ``-I``."""
+    name = "release_candidate_acquisition"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    try:
+        path = Path(__file__).resolve(strict=True).with_name("release_candidate_acquisition.py")
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            _fail("acquisition-dispatch")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+    except CandidateError:
+        raise
+    except Exception:
+        sys.modules.pop(name, None)
+        _fail("acquisition-dispatch")
+    raise AssertionError("unreachable")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         arguments = parse_args(argv)
@@ -2781,6 +2827,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"verified {arguments.archive.name} sha256={verify_archive(arguments.archive)}")
         elif arguments.action == "run-readonly":
             return run_readonly(arguments.archive, arguments.command)
+        elif arguments.action == "acquire":
+            return _load_acquisition_engine().run(arguments, candidate=sys.modules[__name__])
         else:
             _fail("usage")
     except CandidateError as error:
