@@ -127,8 +127,7 @@ class RepositoryContractTests(unittest.TestCase):
 
                 result, code = rc.inspect_command(self.target)
 
-                self.assertEqual(result["status"], "refused", result)
-                self.assertEqual(code, 2)
+                self.assertRefused(result, code, 2, "must not claim")
 
     def test_result_never_asserts_readiness(self) -> None:
         self.write(VALID)
@@ -178,12 +177,46 @@ class RepositoryContractTests(unittest.TestCase):
             self.skipTest("running with privileges that bypass directory permissions")
         self.assertRefused(result, code, 3, ".agentic-sdlc")
 
-    def test_fifo_contract_is_refused_without_blocking(self) -> None:
-        os.mkfifo(self.path)
+    def test_socket_contract_is_refused_without_blocking(self) -> None:
+        """A socket rather than a FIFO on purpose: opening a FIFO without O_NONBLOCK
+        HANGS, so a regression there stalls the suite instead of failing it. Opening a
+        socket returns ENXIO immediately, so this fails fast either way."""
+        import socket
+
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.bind(str(self.path))
+
+            result, code = rc.inspect_command(self.target)
+
+        self.assertRefused(result, code, 3, "repo.toml")
+
+    def test_other_writable_contract_is_refused(self) -> None:
+        """The reader must not report `valid` for a manifest the engine refuses."""
+        self.write(VALID)
+        os.chmod(self.path, 0o666)
 
         result, code = rc.inspect_command(self.target)
 
-        self.assertRefused(result, code, 3, "regular file")
+        self.assertRefused(result, code, 3, "unsafe")
+
+    def test_hardlinked_contract_is_refused(self) -> None:
+        self.write(VALID)
+        os.link(self.path, self.target / "decoy-hardlink.toml")
+
+        result, code = rc.inspect_command(self.target)
+
+        self.assertRefused(result, code, 3, "unsafe")
+
+    def test_group_writable_contract_is_admitted(self) -> None:
+        """Deliberate: Git materializes 0664 at umask 002. Refusing it would refuse
+        ordinary clones. The resulting shared-group exposure is documented, not denied."""
+        self.write(VALID)
+        os.chmod(self.path, 0o664)
+
+        result, code = rc.inspect_command(self.target)
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "valid")
 
     def test_non_utf8_contract_is_refused(self) -> None:
         self.path.write_bytes(b'schema = "\xff\xfe"\n')

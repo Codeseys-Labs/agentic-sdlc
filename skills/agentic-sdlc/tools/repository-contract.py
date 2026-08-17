@@ -28,10 +28,22 @@ a silently-tolerated claim is how a portable intent file turns into forged evide
 Local ownership, hashes, tool identities, and trust state live in the machine-local
 receipt plane instead, and readiness is a separate assessment this module does not make.
 
-Custody is exact and fd-based. Every component of the path is opened with `O_NOFOLLOW`
-and the bytes are read from the verified descriptor, because lstat-ing only the final
-component lets a symlinked *parent* redirect custody outside the repository entirely,
-and a second path lookup after a check can be swapped underneath it.
+Custody is fd-based. Every component of the path is opened with `O_NOFOLLOW` and the bytes
+are read from the verified descriptor, because lstat-ing only the final component lets a
+symlinked *parent* redirect custody outside the repository entirely, and a second path
+lookup after a check can be swapped underneath it. The manifest must also be a
+single-linked regular file owned by the caller and not other-writable, matching the
+activation engine's static custody so this reader cannot report `valid` for a manifest the
+engine refuses.
+
+Two limits, stated rather than implied. Group-write is PERMITTED, because Git materializes
+0664 at umask 002 and refusing it would refuse ordinary clones; on a shared-group checkout
+a group member can therefore modify the manifest in place, and this reader will report the
+modified content as `valid`. And custody of the path is not integrity of the content: this
+module runs no subprocess, so it cannot check whether the manifest is committed or dirty.
+The activation engine supplies that half by refusing a dirty manifest through its Git
+projection. Do not treat a `valid` result as evidence that the content is the committed
+content.
 
 Exit codes follow Implementation Decision 9: 0 valid, 1 internal, 2 grammar or schema,
 3 clean refusal before any effect. Custody refusals are clean refusals and return 3;
@@ -164,8 +176,17 @@ def read_manifest_bytes(target: Path) -> bytes | None:
             except OSError as exc:
                 raise ContractError("refused", f"unsafe {MANIFEST_RELATIVE_PATH}", CUSTODY_CODE) from exc
             try:
-                if not stat.S_ISREG(os.fstat(manifest_fd).st_mode):
+                info = os.fstat(manifest_fd)
+                if not stat.S_ISREG(info.st_mode):
                     raise ContractError("refused", f"{MANIFEST_RELATIVE_PATH} must be a regular file", CUSTODY_CODE)
+                # Match the activation engine's static custody, so the reader cannot
+                # report `valid` for a manifest the engine refuses as foreign-state.
+                # Checked on the descriptor already opened, so this costs no extra lookup.
+                # Group-write is permitted deliberately: Git materializes 0664 at umask
+                # 002, and refusing it would refuse ordinary clones. See the group-write
+                # limitation in the module docstring.
+                if info.st_uid != os.geteuid() or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) & 0o002:
+                    raise ContractError("refused", f"unsafe {MANIFEST_RELATIVE_PATH}", CUSTODY_CODE)
                 chunks: list[bytes] = []
                 while True:
                     chunk = os.read(manifest_fd, 65536)

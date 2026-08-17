@@ -1927,14 +1927,46 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
         self.assertEqual(result["status"], "foreign-state")
 
     def test_hardlinked_manifest_is_refused(self) -> None:
-        """Pins the st_nlink predicate, which was deletable with every test green."""
+        """Pins st_nlink. The link must live OUTSIDE the state root: a link inside it
+        trips `unknown private state path` first, so the nlink clause is never reached and
+        the test passes even with that clause deleted."""
         path = self._track_manifest()
-        os.link(path, self.target / ".agentic-sdlc" / "receipts-decoy")
+        os.link(path, self.target / "decoy-hardlink.txt")
 
         result, code = self._plan()
 
         self.assertEqual(code, 1, result)
         self.assertEqual(result["status"], "foreign-state")
+        self.assertIn(f"unsafe {ap.REPO_MANIFEST_NAME}", result["reasons"])
+
+    def test_regular_file_at_the_state_root_is_refused(self) -> None:
+        """Pins the expected-type clause. Without it a file named `.agentic-sdlc` passes
+        the predicate and then raises an uncaught NotADirectoryError from iterdir()."""
+        (self.target / ".agentic-sdlc").write_text("not a directory\n")
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe private state root", result["reasons"])
+
+    def test_manifest_on_a_foreign_mount_is_refused(self) -> None:
+        """Pins _private_identity_matches on the manifest, which a bind-mounted substitute
+        inode defeats. Only non-directories get the wrong mount id, so the state root still
+        passes and this fails for the manifest's own clause rather than the root's."""
+        self._track_manifest()
+        # `scripts/activation_planner.py` is a compat loader that copies references into
+        # its own globals, so the canonical module must be patched, not the loader.
+        planner = ap._module
+        original = planner._mount_id_fd
+        self.addCleanup(setattr, planner, "_mount_id_fd", original)
+        planner._mount_id_fd = lambda fd: original(fd) + (0 if stat.S_ISDIR(os.fstat(fd).st_mode) else 1)
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn(f"unsafe {ap.REPO_MANIFEST_NAME}", result["reasons"])
 
     def test_extended_acl_on_the_state_root_is_refused(self) -> None:
         """Group bits double as the ACL mask, so allowing group-write means the ACL must

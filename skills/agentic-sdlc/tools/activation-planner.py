@@ -1555,22 +1555,45 @@ def _assert_private_dir(path: Path, root: RootBinding, label: str) -> None:
 
 
 def _has_extended_acl(path: Path) -> bool:
-    """Whether the node carries a POSIX.1e access ACL.
+    """Whether the node carries an extended ACL this module refuses to reason about.
 
-    Needed because the traditional group bits double as the ACL *mask* when an extended
-    ACL is present, so a mode-only rule cannot tell "group-write from the caller's umask"
-    apart from "write granted to a named user". Detect the ACL directly instead of
-    inferring it from the mode. A filesystem without xattr support raises, and reports no
-    ACL: it cannot carry one.
+    Needed because the traditional group bits double as the POSIX.1e *mask* when an
+    extended ACL is present, so a mode-only rule cannot tell "group-write from the
+    caller's umask" apart from "write granted to a named user". Detect the ACL directly
+    instead of inferring it from the mode.
+
+    `posix_acl_default` counts too: an inherited default ACL is only harmless today
+    because `_mkdir_at` unconditionally chmods created subdirectories to 0700, which zeroes
+    the inherited mask (measured: an inherited `user:other:rwx` shows `#effective:---`).
+    That is an accident of the subtree modes, not an assertion, so refuse it here rather
+    than depend on it. `nfs4_acl` counts because NFSv4/richacl does not maintain the
+    POSIX mask-in-group-bits coupling at all, so on such a mount neither the mode rule nor
+    the POSIX probe can see a foreign write grant; POSIX.1e is the only ACL surface this
+    module reasons about, and anything else is refused rather than assumed absent.
+
+    Only "this filesystem cannot carry an ACL" reports False. Every other failure refuses,
+    because for this predicate a swallowed EACCES or ELOOP would fail OPEN.
     """
     try:
-        return "system.posix_acl_access" in os.listxattr(path, follow_symlinks=False)
-    except OSError:
-        return False
+        attributes = os.listxattr(path, follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+            return False
+        raise ActivationError("foreign-state", "cannot read ACL state") from exc
+    return any(name in attributes for name in ("system.posix_acl_access", "system.posix_acl_default", "system.nfs4_acl"))
 
 
 def _assert_cloneable_private_node(path: Path, root: RootBinding, label: str, *, directory: bool) -> None:
-    """Admit a node that Git materialized, while still refusing foreign write.
+    """Admit a node that Git materialized, refusing world-writable and foreign-owned ones.
+
+    NOT a claim that no other user can write. Group-write is permitted -- see below -- so
+    on a checkout whose group is shared (`chgrp -R devs`, a setgid project directory) a
+    group member can modify the manifest in place. The engine still refuses to act on that
+    edit, because the manifest is visible to the Git projection and an uncommitted change
+    fails `_require_clean`; but the node itself is admitted, and `repository-contract.py`
+    records the same limitation for readers. A `st_gid == os.getegid()` constraint would
+    close it and would also refuse legitimate group-owned checkouts, so the exposure is
+    recorded rather than silently traded away.
 
     ADR-0022 tracks `.agentic-sdlc/repo.toml`, and Git records no mode at all: a fresh
     clone creates both the state root and the manifest at the caller's umask. Measured
