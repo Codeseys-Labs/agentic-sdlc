@@ -3211,31 +3211,41 @@ def recover_finish_hardened(arguments, candidate, policy: dict[str, object], val
         )
         environment = {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"}
         _recheck_external_file(grant_pin, "grant-input")
-        completed = subprocess.run(
-            [
-                f"/proc/self/fd/{interpreter_fd}",
-                "-I",
-                "-B",
-                f"/proc/self/fd/{root.fd}/scripts/release_candidate.py",
-                "acquire",
-                "recover",
-                "finish",
-                "--xdg-state-home",
-                str(state.path),
-                "--journal-locator",
-                arguments.journal_locator,
-                "--grant",
-                str(arguments.grant),
-            ],
-            cwd=f"/proc/self/fd/{root.fd}",
-            env=environment,
-            pass_fds=(interpreter_fd, root.fd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=120,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    f"/proc/self/fd/{interpreter_fd}",
+                    "-I",
+                    "-B",
+                    f"/proc/self/fd/{root.fd}/scripts/release_candidate.py",
+                    "acquire",
+                    "recover",
+                    "finish",
+                    "--xdg-state-home",
+                    str(state.path),
+                    "--journal-locator",
+                    arguments.journal_locator,
+                    "--grant",
+                    str(arguments.grant),
+                ],
+                cwd=f"/proc/self/fd/{root.fd}",
+                env=environment,
+                pass_fds=(interpreter_fd, root.fd),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=120,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            _fail(
+                "recovery-child-uncertain",
+                4,
+                operation_id=operation,
+                journal_locator=arguments.journal_locator,
+                last_phase=phase,
+                classification="unavailable",
+            )
         # Candidate output and exit status are never authority.  Re-admit every final byte.
         del completed
         new_raw, new_journal, new_phase = _load_current_journal_at(

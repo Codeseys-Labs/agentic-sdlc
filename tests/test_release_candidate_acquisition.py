@@ -1726,6 +1726,105 @@ class AcquisitionEngineLifecycleTests(unittest.TestCase):
             for path in root.rglob("*")
         }
 
+    def _staged_recovery_case(
+        self,
+        case: Path,
+        *,
+        nonce: str,
+    ) -> tuple[SimpleNamespace, str, str, str, Path]:
+        arguments, operation, archive_sha = self._records(case)
+        output = io.BytesIO()
+        errors = io.BytesIO()
+        stdout = SimpleNamespace(
+            buffer=output,
+            write=lambda text: output.write(text.encode("utf-8")),
+        )
+        stderr = SimpleNamespace(
+            buffer=errors,
+            write=lambda text: errors.write(text.encode("utf-8")),
+        )
+
+        def fault(phase: str) -> None:
+            if phase == "staged":
+                raise RuntimeError("staged boundary")
+
+        trust = ROOT / "policy" / "release-candidate.v1.json"
+        with (
+            mock.patch.object(
+                self.engine,
+                "_trust_root",
+                return_value=(trust, hashlib.sha256(trust.read_bytes()).hexdigest()),
+            ),
+            mock.patch.object(self.engine, "_stage_candidate", side_effect=self._fake_stage),
+            mock.patch.object(self.engine, "_TEST_FAULT_HOOK", fault),
+            mock.patch.object(self.engine.sys, "stdout", stdout),
+            mock.patch.object(self.engine.sys, "stderr", stderr),
+        ):
+            self.assertEqual(
+                self.engine.apply_hardened(
+                    arguments,
+                    self.candidate,
+                    self.policy,
+                    self.validator,
+                    self.source_root,
+                ),
+                4,
+            )
+
+        locator = json.loads(errors.getvalue())["journal_locator"]
+        journal_path = (
+            case
+            / "state"
+            / "agentic-sdlc"
+            / "acquisition"
+            / "journals"
+            / f"{operation}.json"
+        )
+        plan_raw = arguments.plan.read_bytes()
+        plan = json.loads(plan_raw)
+        journal_raw = journal_path.read_bytes()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        grant = {
+            "archive_absolute_path": plan["archive_absolute_path"],
+            "archive_sha256": plan["archive_sha256"],
+            "archive_size_bytes": plan["archive_size_bytes"],
+            "decision": "finish",
+            "effects_sha256": plan["effects_sha256"],
+            "expires_at": (now + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "issued_at": (now - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "journal_absolute_physical_path": str(journal_path),
+            "journal_sha256": hashlib.sha256(journal_raw).hexdigest(),
+            "nonce": nonce,
+            "operation_id": operation,
+            "original_effects": list(self.engine.EFFECTS),
+            "plan_sha256": hashlib.sha256(plan_raw).hexdigest(),
+            "record_sha256": "",
+            "same_user_uid": os.geteuid(),
+            "schema_version": "release-candidate-acquisition-recover-finish-grant/v1",
+            "trust_root_absolute_path": plan["trust_root_absolute_path"],
+            "trust_root_sha256": plan["trust_root_sha256"],
+            "xdg_data_home_absolute_path": plan["xdg_data_home_absolute_path"],
+            "xdg_data_prestate_sha256": plan["xdg_data_prestate_sha256"],
+            "xdg_state_home_absolute_path": plan["xdg_state_home_absolute_path"],
+            "xdg_state_prestate_sha256": plan["xdg_state_prestate_sha256"],
+        }
+        recovery_grant = case / "recovery-timeout-grant.json"
+        recovery_grant.write_bytes(record_bytes(grant))
+        recovery_grant.chmod(0o600)
+        return (
+            SimpleNamespace(
+                acquire_action="recover",
+                recover_action="finish",
+                xdg_state_home=case / "state",
+                journal_locator=locator,
+                grant=recovery_grant,
+            ),
+            operation,
+            archive_sha,
+            locator,
+            journal_path,
+        )
+
     def test_external_plan_and_grant_records_are_bounded_descriptor_pins(self) -> None:
         def run_inspect(case: Path, plan: Path, hook=None) -> int:
             output = io.BytesIO(); errors = io.BytesIO()
@@ -2569,6 +2668,89 @@ class AcquisitionEngineLifecycleTests(unittest.TestCase):
             self.assertFalse((case / "state" / "agentic-sdlc" / "acquisition" / "receipts" / f"{archive_sha}.json").exists())
             self.assertFalse((case / "data" / "agentic-sdlc" / "acquisition" / "candidates" / archive_sha).exists())
             self.assertEqual(module_path.read_bytes(), b"post-child mutation\n")
+
+    def test_private_recovery_timeout_is_exit4_unknown_with_bounded_action(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            finish_args, operation, archive_sha, locator, journal_path = (
+                self._staged_recovery_case(case, nonce="7" * 64)
+            )
+            before = self._snapshot(case)
+            journal_before = journal_path.read_bytes()
+            output = io.BytesIO()
+            errors = io.BytesIO()
+            stdout = SimpleNamespace(
+                buffer=output,
+                write=lambda text: output.write(text.encode("utf-8")),
+            )
+            stderr = SimpleNamespace(
+                buffer=errors,
+                write=lambda text: errors.write(text.encode("utf-8")),
+            )
+            timeout = subprocess.TimeoutExpired(
+                cmd=["credential-canary-private-python"],
+                timeout=120,
+                output=b"credential-canary-output",
+                stderr=b"credential-canary-error",
+            )
+            with (
+                mock.patch.object(self.candidate, "validate_manifest"),
+                mock.patch.object(self.engine.subprocess, "run", side_effect=timeout),
+                mock.patch.object(self.engine.sys, "stdout", stdout),
+                mock.patch.object(self.engine.sys, "stderr", stderr),
+            ):
+                self.assertEqual(self.engine.run(finish_args, candidate=self.candidate), 4)
+
+            self.assertEqual(output.getvalue(), b"")
+            diagnostic = json.loads(errors.getvalue())
+            self.assertEqual(
+                errors.getvalue(),
+                canonical(diagnostic),
+            )
+            self.assertEqual(
+                diagnostic["schema_version"],
+                "release-candidate-acquisition-exit4-diagnostic/v1",
+            )
+            self.assertEqual(diagnostic["classification"], "unavailable")
+            self.assertEqual(diagnostic["effect_state"], "unknown")
+            self.assertEqual(diagnostic["last_proven_phase"], "staged")
+            self.assertEqual(diagnostic["operation_id"], operation)
+            self.assertEqual(diagnostic["journal_locator"], locator)
+            self.assertEqual(
+                diagnostic["next_action"],
+                [
+                    "acquire",
+                    "recover",
+                    "inspect",
+                    "--xdg-state-home",
+                    "<absolute-xdg-state-home>",
+                    "--journal-locator",
+                    "<journal-locator>",
+                ],
+            )
+            self.assertNotIn(b"credential-canary", errors.getvalue())
+            self.assertEqual(journal_path.read_bytes(), journal_before)
+            self.assertEqual(self._snapshot(case), before)
+            self.assertFalse(
+                (
+                    case
+                    / "state"
+                    / "agentic-sdlc"
+                    / "acquisition"
+                    / "receipts"
+                    / f"{archive_sha}.json"
+                ).exists()
+            )
+            self.assertFalse(
+                (
+                    case
+                    / "data"
+                    / "agentic-sdlc"
+                    / "acquisition"
+                    / "candidates"
+                    / archive_sha
+                ).exists()
+            )
 
 
 @unittest.skipUnless(
