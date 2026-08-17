@@ -41,6 +41,8 @@ RECEIPT_SCHEMA = "agentic-sdlc/activation-receipt@3"
 ROLLBACK_SCHEMA = "agentic-sdlc/activation-rollback@3"
 AUDIT_SCHEMA = "agentic-sdlc/activation-audit@2"
 RESULT_SCHEMA = "agentic-sdlc/activation-result@2"
+# ADR-0022 decision 2: the one tracked, public file inside the otherwise private state root.
+REPO_MANIFEST_NAME = "repo.toml"
 _HEX32 = re.compile(r"[0-9a-f]{32}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
@@ -735,6 +737,11 @@ def validate_internal_status_records(target: Path, raw: bytes) -> set[str]:
         except UnicodeDecodeError as exc:
             raise ActivationError("refused", "invalid porcelain-v2 path encoding") from exc
         for path in paths:
+            if path == f".agentic-sdlc/{REPO_MANIFEST_NAME}":
+                # Tracked portable intent stays VISIBLE to the Git projection. Hiding it
+                # would let a dirty manifest pass _require_clean, so an uncommitted edit
+                # to repository policy could ride along inside an approved activation.
+                continue
             if path == ".agentic-sdlc" or path.startswith(".agentic-sdlc/"):
                 filtered.add(path)
             elif re.fullmatch(r"\.agentic-sdlc\.noop\.[0-9a-f]{32}\.json", path):
@@ -1547,6 +1554,70 @@ def _assert_private_dir(path: Path, root: RootBinding, label: str) -> None:
         raise ActivationError("foreign-state", f"unsafe private {label}")
 
 
+def _has_extended_acl(path: Path) -> bool:
+    """Whether the node carries a POSIX.1e access ACL.
+
+    Needed because the traditional group bits double as the ACL *mask* when an extended
+    ACL is present, so a mode-only rule cannot tell "group-write from the caller's umask"
+    apart from "write granted to a named user". Detect the ACL directly instead of
+    inferring it from the mode. A filesystem without xattr support raises, and reports no
+    ACL: it cannot carry one.
+    """
+    try:
+        return "system.posix_acl_access" in os.listxattr(path, follow_symlinks=False)
+    except OSError:
+        return False
+
+
+def _assert_cloneable_private_node(path: Path, root: RootBinding, label: str, *, directory: bool) -> None:
+    """Admit a node that Git materialized, while still refusing foreign write.
+
+    ADR-0022 tracks `.agentic-sdlc/repo.toml`, and Git records no mode at all: a fresh
+    clone creates both the state root and the manifest at the caller's umask. Measured
+    shapes are directory 0755 / file 0644 at umask 022 and 0775 / 0664 at umask 002, so
+    any rule that refuses group-write refuses ordinary clones on RHEL-family hosts and
+    common CI images. Privacy stays enforced where the private data actually lives:
+    `receipts/` and `transactions/` keep the strict exact-0700 `_assert_private_dir`.
+
+    What this node must still prove:
+      * it is the expected type and not a symlink, so custody cannot be redirected;
+      * it is owned by the calling user -- the module carried no ownership check at all
+        before, which an exact-0700 rule made moot only by accident, because a
+        foreign-owned 0700 node denies us access and fails the identity probe anyway;
+      * no other-write, so a world-writable node is refused at any umask;
+      * no extended ACL, which is the fail-closed half of allowing group-write. A
+        read-only ACL is refused too. That is stricter than strictly necessary and is
+        deliberate: an ACL on an activation state root is unusual enough that refusing
+        beats reasoning about mask arithmetic per entry.
+      * it sits on the bound mount, by both `st_dev` and mount id.
+    """
+    try:
+        value = path.lstat()
+    except OSError as exc:
+        raise ActivationError("foreign-state", f"missing {label}") from exc
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (
+        stat.S_ISLNK(value.st_mode)
+        or not expected_type(value.st_mode)
+        or value.st_uid != os.geteuid()
+        or stat.S_IMODE(value.st_mode) & 0o002
+        or value.st_dev != root.identity["dev"]
+        or _has_extended_acl(path)
+        or not _private_identity_matches(path, root)
+    ):
+        raise ActivationError("foreign-state", f"unsafe {label}")
+    if not directory and value.st_nlink != 1:
+        raise ActivationError("foreign-state", f"unsafe {label}")
+
+
+def _assert_state_root(path: Path, root: RootBinding) -> None:
+    _assert_cloneable_private_node(path, root, "private state root", directory=True)
+
+
+def _assert_repository_manifest(path: Path, root: RootBinding) -> None:
+    _assert_cloneable_private_node(path, root, REPO_MANIFEST_NAME, directory=False)
+
+
 def _assert_private_file(path: Path, root: RootBinding, label: str, *, modes: set[int] = {0o600}) -> None:
     try:
         value = path.lstat()
@@ -1613,9 +1684,12 @@ def _validate_private_state(target: Path, root: RootBinding) -> None:
     state = target / ".agentic-sdlc"
     if not state.exists() and not state.is_symlink():
         return
-    _assert_private_dir(state, root, "state root")
-    if {item.name for item in state.iterdir()} - {"receipts", "transactions"}:
+    _assert_state_root(state, root)
+    if {item.name for item in state.iterdir()} - {"receipts", "transactions", REPO_MANIFEST_NAME}:
         raise ActivationError("foreign-state", "unknown private state path")
+    manifest = state / REPO_MANIFEST_NAME
+    if manifest.exists() or manifest.is_symlink():
+        _assert_repository_manifest(manifest, root)
     for name in ("receipts", "transactions"):
         if (state / name).exists() or (state / name).is_symlink():
             _assert_private_dir(state / name, root, name)

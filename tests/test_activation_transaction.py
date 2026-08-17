@@ -1820,5 +1820,159 @@ class ActivationTransactionTests(unittest.TestCase):
         return path
 
 
+class TrackedRepositoryManifestTests(unittest.TestCase):
+    """ADR-0022 decision 2 tracks `.agentic-sdlc/repo.toml` as portable repository intent.
+
+    The engine owns `.agentic-sdlc/` as its private namespace, so this one public tracked
+    file is admitted by exact name and exact shape. Privacy stays enforced where private
+    data lives: `receipts/` and `transactions/` remain strictly 0700. The state root drops
+    to a no-foreign-write check because Git records no directory mode, so a fresh clone
+    materializes the root at the umask default.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name) / "repo"
+        self.target.mkdir()
+        init_repo(self.target)
+        self.manifest = Path(self.tmp.name) / "manifest.json"
+        self.manifest.write_bytes(ap.canonical_bytes(manifest()))
+
+    def _state(self) -> Path:
+        state = self.target / ".agentic-sdlc"
+        state.mkdir(exist_ok=True)
+        return state
+
+    def _track_manifest(self, *, body: str = "schema = 1\n", mode: int = 0o755, file_mode: int = 0o644) -> Path:
+        """Modes are always set explicitly: inheriting the ambient umask made these
+        cases pass at umask 022 and fail at umask 002."""
+        state = self._state()
+        path = state / "repo.toml"
+        path.write_text(body)
+        git(self.target, "add", "--force", ".agentic-sdlc/repo.toml")
+        git(self.target, "commit", "-m", "repository contract manifest")
+        os.chmod(path, file_mode)
+        os.chmod(state, mode)
+        return path
+
+    def _plan(self) -> tuple[dict, int]:
+        return ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+    def test_tracked_manifest_is_admitted(self) -> None:
+        self._track_manifest()
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "planned")
+
+    def test_tracked_manifest_is_admitted_under_a_private_root(self) -> None:
+        self._track_manifest(mode=0o700)
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "planned")
+
+    def test_unknown_private_state_path_is_still_refused(self) -> None:
+        (self._state() / "stray.json").write_text("{}\n")
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+
+    def test_symlinked_manifest_is_refused(self) -> None:
+        state = self._state()
+        (state / "repo.toml").symlink_to(self.target / "tracked.txt")
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+
+    def test_manifest_directory_is_refused(self) -> None:
+        (self._state() / "repo.toml").mkdir()
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+
+    def test_umask_002_clone_shape_is_admitted(self) -> None:
+        """Git records no mode, so a clone at umask 002 yields 0775/0664. Refusing
+        group-write here refused ordinary clones on RHEL-family hosts and CI images."""
+        self._track_manifest(mode=0o775, file_mode=0o664)
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "planned")
+
+    def test_other_writable_state_root_is_refused(self) -> None:
+        self._track_manifest(mode=0o757)
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+
+    def test_other_writable_manifest_is_refused(self) -> None:
+        self._track_manifest(file_mode=0o646)
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+
+    def test_hardlinked_manifest_is_refused(self) -> None:
+        """Pins the st_nlink predicate, which was deletable with every test green."""
+        path = self._track_manifest()
+        os.link(path, self.target / ".agentic-sdlc" / "receipts-decoy")
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+
+    def test_extended_acl_on_the_state_root_is_refused(self) -> None:
+        """Group bits double as the ACL mask, so allowing group-write means the ACL must
+        be detected directly. Refused fail-closed, read-only grants included."""
+        if shutil.which("setfacl") is None:
+            self.skipTest("setfacl unavailable")
+        self._track_manifest()
+        state = self.target / ".agentic-sdlc"
+        done = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:rwx", str(state)], capture_output=True)
+        if done.returncode != 0:
+            self.skipTest("filesystem does not support POSIX ACLs")
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+
+    def test_dirty_tracked_manifest_stays_visible_to_git(self) -> None:
+        """The projection must not hide the manifest, or a dirty tree passes the clean check."""
+        path = self._track_manifest()
+        path.write_text("schema = 1\nedited = true\n")
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertIn("Git worktree is not clean", result["reasons"])
+
+    def test_untracked_manifest_is_refused(self) -> None:
+        """Only a tracked manifest is portable intent; an untracked one is foreign state."""
+        self._state()
+        (self.target / ".agentic-sdlc" / "repo.toml").write_text("schema = 1\n")
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertIn(result["status"], {"foreign-state", "refused"})
+
+
 if __name__ == "__main__":
     unittest.main()
