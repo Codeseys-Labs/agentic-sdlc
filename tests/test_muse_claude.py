@@ -85,9 +85,10 @@ class MuseClaudeTests(unittest.TestCase):
         curl_log = root / "curl.log"
         claude_log = root / "claude.log"
 
-        # The stub log variables are deliberately NOT named CLAUDE_*/ANTHROPIC_*: the launcher
-        # scrubs that whole namespace out of the child environment, which would take a stub's own
-        # log path with it. test_child_environment_is_scrubbed_and_repointed asserts that scrub.
+        # The stub log variables are deliberately NOT named CLAUDE_*/ANTHROPIC_*/AWS_*: the
+        # launcher scrubs those whole namespaces out of the child environment, which would take a
+        # stub's own log path with it. test_child_environment_is_scrubbed_and_repointed and
+        # test_bedrock_and_unprefixed_hazards_never_reach_the_child assert that scrub.
 
         # Stub curl: records the request it was given (including whether the credential arrived
         # in argv, which is what the ps-visibility assertion reads) and replays a canned body.
@@ -106,12 +107,17 @@ class MuseClaudeTests(unittest.TestCase):
 
         if with_claude:
             claude = bin_dir / "claude"
-            # Records argv plus the ANTHROPIC*/CLAUDE* slots it actually inherited, so a test can
-            # assert what survived the scrub and what was re-exported afterwards.
+            # Records argv plus every variable the scrub policy governs, so a test can assert what
+            # survived the scrub and what was re-exported afterwards. The recorded set is the whole
+            # of ADR-0010 Amendment A -- the ANTHROPIC/CLAUDE/AWS prefixes plus the three
+            # denied-by-name unprefixed hazards -- because a name the stub does not record cannot
+            # be asserted absent from the child.
             claude.write_text(
                 "#!/bin/sh\n"
                 'printf "%s\\n" "$*" >> "$MUSE_TEST_CLAUDE_LOG"\n'
-                'env | grep -E "^(ANTHROPIC|CLAUDE)" | sort >> "$MUSE_TEST_CLAUDE_LOG"\n'
+                'env | grep -E "^(ANTHROPIC|CLAUDE|AWS|NODE_TLS_REJECT_UNAUTHORIZED'
+                '|FALLBACK_FOR_ALL_PRIMARY_MODELS|API_TIMEOUT_MS)"'
+                ' | sort >> "$MUSE_TEST_CLAUDE_LOG"\n'
                 "exit 0\n"
             )
             claude.chmod(0o755)
@@ -346,6 +352,42 @@ class MuseClaudeTests(unittest.TestCase):
         self.assertIn("ANTHROPIC_SMALL_FAST_MODEL=muse-spark-1.1", inherited)
         # The credential reaches the child through the Anthropic auth slot and nowhere else.
         self.assertIn(f"ANTHROPIC_AUTH_TOKEN={PLACEHOLDER_KEY}", inherited)
+
+    def test_bedrock_and_unprefixed_hazards_never_reach_the_child(self) -> None:
+        # ADR-0010 Amendment A, which exists because an exported AWS_BEARER_TOKEN_BEDROCK reached
+        # the child intact: AWS_* is denied by prefix and these three unprefixed names by name. The
+        # constructed settings.json cannot cover this half of the boundary -- Claude Code resolves
+        # the shell environment ABOVE settings `env` -- so the scrub is the only control here.
+        credential_shaped = {
+            "AWS_BEARER_TOKEN_BEDROCK": "planted-bedrock-bearer-not-a-credential",
+            # Deliberately NOT an AKIA-shaped value: a realistic-looking fixture would trip the
+            # repository's own tracked-text secrets scan, and the scrub does not read the value.
+            "AWS_ACCESS_KEY_ID": "planted-access-key-id-not-a-credential",
+            "AWS_SECRET_ACCESS_KEY": "planted-bedrock-secret-not-a-credential",
+        }
+        planted = {
+            **credential_shaped,
+            "AWS_REGION": "us-east-1",
+            "NODE_TLS_REJECT_UNAUTHORIZED": "0",
+            "FALLBACK_FOR_ALL_PRIMARY_MODELS": "claude-opus-4-8",
+            "API_TIMEOUT_MS": "600000",
+        }
+        result, _, claude_log = self.run_launcher("launch", extra_env=planted)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        inherited = claude_log.read_text()
+        # Positive control first: the stub really does record the child's environment, so the
+        # absence assertions below cannot pass merely because nothing was recorded.
+        self.assertIn("ANTHROPIC_BASE_URL=https://api.meta.ai", inherited)
+        for name in planted:
+            with self.subTest(variable=name):
+                self.assertNotIn(name, inherited)
+        # Values as well as names, for the ones that are credentials. The short values above
+        # (a region, `0`, a timeout) are not asserted: they occur incidentally in a temp path.
+        for value in credential_shaped.values():
+            with self.subTest(value=value):
+                self.assertNotIn(value, inherited)
+        self.assertNotIn("planted-", result.stdout + result.stderr)
 
     def test_launch_does_not_print_forwarded_secret(self) -> None:
         secret = "MUSE_TEST_FORWARDED_SECRET"

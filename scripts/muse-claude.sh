@@ -245,9 +245,24 @@ scrub_anthropic_env() {
   # per-tier model slots, capability strings, and routing flags (CLAUDE_CODE_USE_BEDROCK among
   # them). Any one leaking into the child either re-routes it away from Meta or carries parent
   # session identity into it. The exact slots this route needs are re-exported afterwards.
+  # AWS_* is the third prefix and the one an earlier `^(ANTHROPIC|CLAUDE)` rule missed: it is
+  # the half that carried a live AWS_BEARER_TOKEN_BEDROCK into the child (ADR-0010 Amendment A,
+  # which also records why the constructed settings.json cannot cover this -- Claude Code
+  # resolves the shell environment ABOVE settings `env`).
   # Preserve an installer choice across the scrub so it wins over the opinionated default.
   local saved_pct="${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}"
-  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE)' || true); do
+  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true); do
+    unset "$name" || true
+  done
+  # Unprefixed hazards, denied by name (same ADR-0010 Amendment A list as the shared helper):
+  #   NODE_TLS_REJECT_UNAUTHORIZED     disables TLS verification process-wide.
+  #   FALLBACK_FOR_ALL_PRIMARY_MODELS  forces silent model substitution, which against this
+  #                                    route's restricted catalog is exactly the unattributable
+  #                                    response the identity ceiling above cannot detect.
+  #   API_TIMEOUT_MS                   inert, but a value tuned for api.anthropic.com is the
+  #                                    wrong number here, and a wrong timeout reads as a hung
+  #                                    model rather than as a misconfiguration.
+  for name in NODE_TLS_REJECT_UNAUTHORIZED FALLBACK_FOR_ALL_PRIMARY_MODELS API_TIMEOUT_MS; do
     unset "$name" || true
   done
   if [ -n "$saved_pct" ]; then
