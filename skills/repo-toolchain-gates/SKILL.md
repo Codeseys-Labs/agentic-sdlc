@@ -314,25 +314,120 @@ Reuse the existing helpers (`copied_repo`, `run_validator`, `assert_lock_mutatio
 ## Gate receipts (self-describing evidence)
 
 A gate's own evidence should be self-describing and tamper-evident by re-derivation. `scripts/gate_receipt.py`
-(stdlib-only) builds a canonical receipt after running a gate. Fields:
+(stdlib-only) both builds a canonical receipt and *is* the producer that runs a gate to make one. Fields:
+
+Every field is a **record** the producer made and any consumer can re-derive — tamper-evident, not
+proof against a forger who is the same OS user:
 
 - `gate` — the exact task string, e.g. `"mise run check"`.
-- `argv` — the exact argv executed (e.g. `["mise","run","check"]`), so the receipt proves *which*
-  command ran, not a paraphrase.
-- `status` — the integer exit code (0 = pass; the exit code IS the gate).
-- `log_digest` — `sha256` of captured combined stdout+stderr bytes (tamper-evident without storing
-  the whole log).
-- `toolchain_digest` — `sha256` of `mise.lock` bytes at run time, binding the receipt to the exact
-  pinned toolchain (catches "green on drifted pins").
-- `cwd` — the absolute path the gate ran in, tying the receipt to per-path worktree trust (above).
+- `argv` — the exact argv **executed** (e.g. `["mise","run","check"]`), so the receipt names *which*
+  command ran rather than a paraphrase of it — or `null` when nothing was executed. A populated
+  `argv` claims that this command ran, so it may sit beside `outcome: unobserved` only in the killed
+  state, where `signal` says why there is no verdict; the gate a skipped receipt is *about* is still
+  on record as `gate`.
+- `status` — the integer exit code, or `null` when no exit code was observed.
+- `signal` — the signal number that killed the gate, or `null`. A killed gate ran but produced no
+  verdict, which is neither an exit code nor "never ran"; a negative `status` would misreport it as
+  a failing verdict, so `status` stays `null` and the signal is recorded here.
+- `outcome` — `passed` | `failed` | `unobserved`, derived from `status`. **"The gate never ran" and
+  "the gate ran and failed" are different facts**, and a consumer that conflates them reads an
+  absent gate as a failing one — or a never-run gate as satisfiable. Because the value is derived,
+  no exit code can spell `unobserved`; only `status: null` can. `unobserved` says *no verdict was
+  observed*, which is weaker than "nothing ran": it covers the never-run and the killed state alike,
+  and only `argv`/`signal` separate those two.
+- `log_digest` — `sha256` of the captured combined stdout+stderr bytes: every byte captured, which
+  for a killed gate is what it emitted before the kill and for an unobserved run is nothing at all.
+  It makes a stored log tamper-evident without storing the whole log; it says nothing about whether
+  the log is complete.
+- `toolchain_digest` — `sha256` of the `mise.lock` bytes read for this receipt (for an observed gate,
+  read just before it ran), binding the receipt to the exact pinned toolchain. It is what *lets* a
+  consumer catch "green on drifted pins" by comparison; the binding on its own catches nothing.
+- `cwd` — the absolute path the gate ran in — for an unobserved receipt, the path it *would* have
+  run in, because nothing ran there. Either way it ties the receipt to per-path worktree trust
+  (above).
 - `self_digest` — `sha256` of the canonical JSON of every other field.
+
+Produce one with:
+
+```bash
+python scripts/gate_receipt.py record --gate "mise run check" --out <path|-> -- mise run check
+```
+
+`--out` is required and has **no default**: where a receipt belongs (machine-local, the ccodex XDG
+state plane, or target-local) is an open operator decision, so the producer takes its destination
+from the caller instead of picking a side. It never overwrites an existing receipt or log — occupied
+evidence is preserved and the run refuses before the gate starts, as it does for a destination that
+could not be created anyway (a missing or read-only parent directory) and for `--out` and `--log`
+naming one path.
+
+**Admit every effect at the instant it becomes true, never once the operation that caused it has
+returned.** Where an effect is recorded IS the contract, and getting it wrong is the same defect
+three times over:
+
+- *A destination exists from its `open()` onward.* Created and then not written, it is a truncated
+  non-receipt that verifies as nothing and — because the path is exclusive-create — blocks its own
+  destination for every later run, which then refuses it as "existing evidence". So the producer
+  admits the creation where it happens, removes its OWN half-written file (never a file it did not
+  create, and never the occupied evidence above), and names the disposition in the reason: *the
+  incomplete file was removed*, or *an INCOMPLETE file REMAINS at …* if the removal also failed.
+  Removing it launders nothing — the creation stays admitted, so the exit is `4`.
+- *A gate has RUN from its `Popen` onward, not from its `wait`.* Its side effects are already in the
+  worktree while its output is still streaming, and the mirror, the read, and `wait` itself can all
+  raise in between. Admitting the run after the call returns classified every one of those as
+  "nothing happened" (`1`) on top of a gate that provably ran, so the run is admitted inside the
+  runner, at the `Popen`, and the effects ledger is a required argument there rather than something
+  a caller can forget. Guarding each raise site instead only postpones the defect to the next one.
+
+Mirroring the gate's output to stderr is a display convenience `--quiet` switches off, never the
+evidence, so it must not be able to cost a completed gate its receipt: the sink is resolved once
+before the gate starts and a TEXT `sys.stderr` (what `unittest --buffer` and
+`contextlib.redirect_stderr` install, and it has no `.buffer`) is written as decoded text instead of
+raising. `log_digest` is over the raw captured bytes either way. A mirror write that genuinely fails
+still lands inside the run window and so still reports `4`.
+
+**The exit code describes the producer, and the receipt carries the verdict.** The two channels are
+deliberately separate, because an exit code cannot carry both: the producer's own codes follow the
+repository's effect-aware contract (product-spec Implementation Decision 9) —
+
+| code | meaning |
+| --- | --- |
+| `0` | the gate ran, passed, and its receipt was written |
+| `1` | unexpected internal failure, nothing done |
+| `2` | unusable arguments — including `--log -`, which would interleave raw log bytes with a receipt on stdout |
+| `3` | clean refusal *before* the gate ran and before any destination was created |
+| `4` | the gate ran, a destination was created (whether or not its bytes landed), and/or receipt bytes reached stdout, then something failed: the result is partial or unknown, and the producer names what already happened |
+| `5` | the gate ran and failed; its exact code is the receipt's `status` |
+| `6` | a receipt was written but no verdict was observed — `--unobserved`, a gate that could not be started, or a gate killed by a signal |
+
+A gate's own exit code is **never** passed through. Mirroring it looked honest and was not: a gate
+exiting `3` is byte-identical to the producer's own clean refusal, and `3` is this repository's
+canonical clean-refusal code, so that is a likely gate exit here rather than a theoretical one. The
+same collision would hit `1`, `2`, and `4`. So `outcome` (a derived, digest-covered field) is where
+the verdict lives, `status` keeps the gate's exact code, and the exit code answers only "what did
+the producer do?" — a red gate still never surfaces as a green producer exit. Codes `1`–`4` in
+particular must keep separating "I refused before touching anything" from "work happened and the
+evidence is incomplete"; reporting the latter as the former is the defect this producer is built
+not to have. The producer is deliberately **not** a leaf of `mise run check` — a receipt producer
+running inside the gate it receipts is circular, and `check`'s leaves are validator-pinned.
 
 This makes **worktree-green ≠ main-green** machine-checkable: the integrator's re-gate-on-MAIN
 (see the flagship skill's worktree-integration reference) produces one such receipt; a
 worktree-green receipt whose `cwd` ≠ main and whose `toolchain_digest` differs from main's is
-exactly the failure that reference warns about. `tests/test_gate_receipts.py` covers both the green
+exactly the failure that reference warns about. `tests/test_gate_receipts.py` covers the green
 path and the negative fixtures (`test_tampered_receipt_field_fails_self_digest`,
-`test_toolchain_digest_binds_lock`). This is doctrine + a helper, not a second task runner.
+`test_toolchain_digest_binds_lock`); `tests/test_gate_receipt_producer.py` covers the producer
+against injected fake gates (never the ~11-minute real one), the unobserved/failed/killed
+distinctions, the effect-aware exits (a marker file the fake gate writes is what proves a refusal
+happened *before* the gate ran; an `RLIMIT_FSIZE` cap is what makes a write fail *after* its
+destination was created; a `wait` that reaps the child and then raises is what puts a failure
+*inside* the run window, where an admission made after the runner returns reports `1` for work that
+already happened), and pre-`outcome` receipt compatibility. In any receipt that carries
+`outcome`, `verify_receipt` rejects `argv`/`status`/`signal` combinations that do not spell one of the
+four honest states, so a self-contradicting receipt fails verification instead of needing a careful
+reader; receipts written before `outcome` existed predate those invariants and are checked by
+re-derivation alone, which is what keeps them verifiable. This is doctrine
++ a helper, not a second task runner, and
+a receipt is evidence only — it authorizes no push, publication, PR mutation, merge, or deployment.
 
 ## Tier-1 self-hashing canonical-JSON evidence
 
