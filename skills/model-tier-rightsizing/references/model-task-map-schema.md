@@ -1,7 +1,7 @@
 # `model-task-map.json` v2 schema
 
 Companion to [`sdlc-rightsize`](../../../commands/sdlc-rightsize.md). The command emits a
-three-file recommendation at `<target>/.agentic-sdlc/model-task-map.{json,md}` plus
+three-file recommendation at `<target>/.agentic-sdlc/rightsize/model-task-map.{json,md}` plus
 `model-task-map.evidence.json`. Calibration owns semantic policy, the local evaluator owns
 measurement, and the external authenticated harness remains the only runtime admission and
 spawn authority.
@@ -91,7 +91,7 @@ policy admission remain distinct facts.
     "expected_peak_input_tokens": 100000,
     "allow_usage_credits": false,
     "target_data_egress_acknowledged": false,
-    "output": ".agentic-sdlc/model-task-map.json",
+    "output": ".agentic-sdlc/rightsize/model-task-map.json",
     "regenerate": false,
     "force": false
   },

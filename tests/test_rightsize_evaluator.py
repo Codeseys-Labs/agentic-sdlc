@@ -154,7 +154,7 @@ def run_spec(pack: str = "builtin:harness-smoke-v1") -> dict:
         "expected_peak_input_tokens": 100,
         "allow_usage_credits": False,
         "target_data_egress_acknowledged": False,
-        "output": ".agentic-sdlc/model-task-map.json",
+        "output": ".agentic-sdlc/rightsize/model-task-map.json",
         "regenerate": False,
         "force": False,
     }

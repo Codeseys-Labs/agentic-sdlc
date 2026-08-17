@@ -43,6 +43,9 @@ AUDIT_SCHEMA = "agentic-sdlc/activation-audit@2"
 RESULT_SCHEMA = "agentic-sdlc/activation-result@2"
 # ADR-0022 decision 2: the one tracked, public file inside the otherwise private state root.
 REPO_MANIFEST_NAME = "repo.toml"
+# ADR-0015's rendered model-task-map trio. Public like the manifest, but operator-named
+# rather than exact, so the subtree admits any NAME under closed CUSTODY.
+RIGHTSIZE_DIR_NAME = "rightsize"
 _HEX32 = re.compile(r"[0-9a-f]{32}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
@@ -741,6 +744,19 @@ def validate_internal_status_records(target: Path, raw: bytes) -> set[str]:
                 # Tracked portable intent stays VISIBLE to the Git projection. Hiding it
                 # would let a dirty manifest pass _require_clean, so an uncommitted edit
                 # to repository policy could ride along inside an approved activation.
+                continue
+            if path == f".agentic-sdlc/{RIGHTSIZE_DIR_NAME}" or path.startswith(f".agentic-sdlc/{RIGHTSIZE_DIR_NAME}/"):
+                # ADR-0015's rendered trio also stays VISIBLE, for a weaker but sufficient
+                # reason. It is not load-bearing activation input the way the manifest is, so
+                # nothing rides along; but suppressing a Git record has to be EARNED by the
+                # path being machine-local private state, and this one is not. `receipts/`
+                # and `transactions/` earn it -- per-checkout hashes, tool identities, trust,
+                # and `.gitignore` names exactly those two. A human-readable recommendation a
+                # reader may commit does not. Left visible, an uncommitted map obeys the
+                # engine's ordinary clean-tree rule, which the reader clears by committing or
+                # ignoring it. Hidden, activation would proceed against a tree carrying an
+                # uncommitted artifact and the same file would behave differently tracked
+                # than untracked, for no gain the engine can name.
                 continue
             if path == ".agentic-sdlc" or path.startswith(".agentic-sdlc/"):
                 filtered.add(path)
@@ -1641,6 +1657,59 @@ def _assert_repository_manifest(path: Path, root: RootBinding) -> None:
     _assert_cloneable_private_node(path, root, REPO_MANIFEST_NAME, directory=False)
 
 
+def _assert_rightsize_artifacts(path: Path, root: RootBinding) -> None:
+    """Admit ADR-0015's rendered trio: open NAMES, closed CUSTODY, cloneable modes.
+
+    Cloneable rather than exact-0700 for the same reason `_assert_cloneable_private_node`
+    gives the state root and the manifest. The reviewed writer creates this directory with a
+    plain umask-respecting `mkdir` and replaces artifacts through `write_text`, so what
+    `/sdlc-rightsize` itself produces is 0755/0644 at umask 022; and because the trio is a
+    human-readable recommendation a reader may commit, a fresh clone re-materializes it at
+    the caller's umask with no mode recorded at all. An exact-0700 rule here would refuse
+    both the writer's own output and ordinary clones, which is the defect it would look like
+    it was fixing. Privacy still lives where private data lives: `receipts/` and
+    `transactions/` keep the strict exact-0700 `_assert_private_dir`.
+
+    Names must stay open. `--output` is operator-chosen, the trio derives `<stem>.json`,
+    `<stem>.md`, and `<stem>.evidence.json` from it, that stem may itself sit in a
+    subdirectory the operator named, the saved run spec is a sibling, and an interrupted
+    render strands a `.<name>.<pid>.tmp`. A closed inner whitelist would refuse legitimate
+    output, so the whitelist widens by exactly one name at the state root and stops there.
+
+    Only rightsizing STATE lives here. A task pack is an operator-authored input carrying its
+    own fixture tree and resolves outside this root, which is what keeps the hand-edited
+    corpus -- the part most likely to acquire a stray mode or symlink -- out of this walk.
+
+    Custody does not open. Every node is proven non-symlink, expected-type, caller-owned,
+    not other-writable, ACL-free, single-linked when a file, and on the bound mount, one
+    level at a time into subdirectories. Symlink refusal is the load-bearing control for an
+    open namespace: a symlink is the only way this subtree could redirect custody outward,
+    and refusing it is also what keeps the walk loop-free without a visited set.
+
+    Breadth is deliberately unbounded, matching `receipts/`: a cap would invent a refusal the
+    engine cannot justify, and the cost is one lstat plus one listxattr per artifact on every
+    caller of `_validate_private_state`.
+
+    This subtree is advisory content the engine never reads. It is validated only so that
+    admitting the name cannot smuggle a foreign-owned or redirected node into the private
+    root -- never as a claim that the map itself carries authority.
+    """
+    _assert_cloneable_private_node(path, root, RIGHTSIZE_DIR_NAME, directory=True)
+    pending = [path]
+    while pending:
+        for item in sorted(pending.pop().iterdir()):
+            try:
+                # lstat first so the recursion decision comes from the link itself. A node
+                # swapped between this call and the validator's own lstat refuses either
+                # way, because both types cannot satisfy one `expected_type`.
+                directory = stat.S_ISDIR(item.lstat().st_mode)
+            except OSError as exc:
+                raise ActivationError("foreign-state", f"missing {RIGHTSIZE_DIR_NAME} artifact") from exc
+            _assert_cloneable_private_node(item, root, f"{RIGHTSIZE_DIR_NAME} artifact", directory=directory)
+            if directory:
+                pending.append(item)
+
+
 def _assert_private_file(path: Path, root: RootBinding, label: str, *, modes: set[int] = {0o600}) -> None:
     try:
         value = path.lstat()
@@ -1708,11 +1777,22 @@ def _validate_private_state(target: Path, root: RootBinding) -> None:
     if not state.exists() and not state.is_symlink():
         return
     _assert_state_root(state, root)
-    if {item.name for item in state.iterdir()} - {"receipts", "transactions", REPO_MANIFEST_NAME}:
+    # ACCEPTED COST, recorded for whoever hits `foreign-state` in a recovery: unlike the
+    # other three names, `rightsize/` holds operator-VISIBLE rendered artifacts, so a stray
+    # `chmod o+w`, a symlink, or a foreign-owned file in there refuses activation AND
+    # recovery, at every caller of this function. That is the deliberate price of one
+    # namespace with one validator -- fix the offending node's custody rather than
+    # special-casing recovery or exempting this subtree. `_assert_rightsize_artifacts` names
+    # the offender, and task packs deliberately live outside this root to keep the
+    # hand-edited half of rightsizing out of the walk.
+    if {item.name for item in state.iterdir()} - {"receipts", "transactions", REPO_MANIFEST_NAME, RIGHTSIZE_DIR_NAME}:
         raise ActivationError("foreign-state", "unknown private state path")
     manifest = state / REPO_MANIFEST_NAME
     if manifest.exists() or manifest.is_symlink():
         _assert_repository_manifest(manifest, root)
+    rightsize = state / RIGHTSIZE_DIR_NAME
+    if rightsize.exists() or rightsize.is_symlink():
+        _assert_rightsize_artifacts(rightsize, root)
     for name in ("receipts", "transactions"):
         if (state / name).exists() or (state / name).is_symlink():
             _assert_private_dir(state / name, root, name)

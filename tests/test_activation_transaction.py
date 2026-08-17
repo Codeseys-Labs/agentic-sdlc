@@ -2006,5 +2006,309 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
         self.assertIn(result["status"], {"foreign-state", "refused"})
 
 
+class RightsizeArtifactDirectoryTests(unittest.TestCase):
+    """ADR-0015 renders its model-task-map trio into `.agentic-sdlc/rightsize/`.
+
+    Before this carve-out the engine's closed whitelist refused every ADR-0015 output as
+    `unknown private state path`, so running `/sdlc-rightsize` with its own documented
+    default made activation status refuse in an already-activated repository.
+
+    The directory is admitted as a *cloneable* node, not an exact-0700 private one, for the
+    same reason ADR-0022 gave the state root and `repo.toml`: the reviewed writer creates it
+    at the ambient umask (`skills/model-tier-rightsizing/scripts/rightsize.py:1829`) and Git
+    records no mode, so a clone materializes 0755/0644 at umask 022 and 0775/0664 at umask
+    002. It also stays VISIBLE to the Git projection, because it is a human-readable
+    recommendation a reader may commit rather than machine-local private state -- unlike
+    `receipts/` and `transactions/`, which `.gitignore` ignores and which keep exact 0700.
+
+    Names inside are open, because `--output` is operator-chosen and the writer strands
+    `.<name>.<pid>.tmp` siblings on a crash. Custody is not open: every node inside is proven
+    non-symlink, expected-type, caller-owned, not other-writable, ACL-free, single-linked
+    when a file, and on the bound mount, recursively.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name) / "repo"
+        self.target.mkdir()
+        init_repo(self.target)
+        self.manifest = Path(self.tmp.name) / "manifest.json"
+        self.manifest.write_bytes(ap.canonical_bytes(manifest()))
+
+    def _state(self, *, mode: int = 0o755) -> Path:
+        """Modes are always explicit: inheriting the ambient umask makes these cases pass at
+        umask 022 and fail at umask 002."""
+        state = self.target / ".agentic-sdlc"
+        state.mkdir(exist_ok=True)
+        os.chmod(state, mode)
+        return state
+
+    def _activate(self) -> Path:
+        """The already-activated shape whose refusal is the severity of this defect."""
+        state = self._state()
+        for name in ("receipts", "transactions"):
+            (state / name).mkdir(exist_ok=True)
+            os.chmod(state / name, 0o700)
+        return state
+
+    def _rightsize(self, *, mode: int = 0o755, file_mode: int = 0o644, name: str = "model-task-map.json") -> Path:
+        state = self._state()
+        directory = state / "rightsize"
+        directory.mkdir(exist_ok=True)
+        path = directory / name
+        path.write_text("{}\n")
+        os.chmod(path, file_mode)
+        os.chmod(directory, mode)
+        return path
+
+    def _status(self) -> tuple[dict, int]:
+        """Status isolates the custody clause: it never calls `_require_clean`, so an
+        untracked artifact cannot mask a `foreign-state` refusal as `refused`."""
+        return ap.status_command(self.target)
+
+    def _plan(self) -> tuple[dict, int]:
+        return ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+    def test_rightsize_artifact_in_an_activated_repository_is_admitted(self) -> None:
+        self._activate()
+        self._rightsize()
+
+        result, code = self._status()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "inactive")
+
+    def test_rightsize_artifact_without_activation_is_admitted(self) -> None:
+        self._rightsize()
+
+        result, code = self._status()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "inactive")
+
+    def test_empty_rightsize_directory_is_admitted(self) -> None:
+        directory = self._state() / "rightsize"
+        directory.mkdir()
+        os.chmod(directory, 0o755)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "inactive")
+
+    def test_unknown_private_state_path_beside_rightsize_is_still_refused(self) -> None:
+        """The regression guard for the carve-out's width: exactly one new name, not a hole.
+        `rightsize/` present and valid must not license a sibling the engine does not own."""
+        self._activate()
+        self._rightsize()
+        (self._state() / "junk.json").write_text("{}\n")
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unknown private state path", result["reasons"])
+
+    def test_moved_evals_name_gained_no_privilege(self) -> None:
+        """Task packs moved OUT to `evaluations/` in the target. The old
+        `.agentic-sdlc/evals/` spelling must stay foreign, or the move is cosmetic and the
+        hand-edited corpus creeps back into the private root."""
+        self._activate()
+        self._rightsize()
+        evals = self._state() / "evals"
+        evals.mkdir()
+        (evals / "change-writing-v1.json").write_text("{}\n")
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unknown private state path", result["reasons"])
+
+    def test_task_pack_custody_outside_the_private_root_does_not_affect_activation(self) -> None:
+        """The payoff of the data-kind split, pinned. A task pack is the part an operator
+        hand-edits most, so the exact defects that refuse inside `rightsize/` -- world-write
+        and a symlink -- must be none of activation's business out here. If a later change
+        widens the walk beyond the private root, this goes red."""
+        self._activate()
+        self._rightsize()
+        packs = self.target / "evaluations"
+        packs.mkdir()
+        pack = packs / "change-writing-v1.json"
+        pack.write_text("{}\n")
+        os.chmod(pack, 0o646)
+        (packs / "leak.json").symlink_to("/etc/passwd")
+
+        result, code = self._status()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "inactive")
+
+    def test_unknown_name_inside_rightsize_is_admitted(self) -> None:
+        """Names inside are OPEN by decision: `--output` is operator-chosen and may name a
+        subdirectory, the saved run spec is a sibling, and a crashed render strands
+        `.<name>.<pid>.tmp`."""
+        self._activate()
+        self._rightsize(name="anything-the-operator-chose.json")
+        self._rightsize(name="rightsize-run.json")
+        self._rightsize(name=".model-task-map.json.4242.tmp")
+        dated = self._state() / "rightsize" / "2026-08-17"
+        dated.mkdir()
+        (dated / "model-task-map.json").write_text("{}\n")
+        os.chmod(dated / "model-task-map.json", 0o644)
+        os.chmod(dated, 0o755)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "inactive")
+
+    def test_rightsize_at_umask_002_clone_shape_is_admitted(self) -> None:
+        """Pins the cloneable-mode decision. An exact-0700 rule refuses ordinary clones on
+        RHEL-family hosts and CI images, and refuses what the reviewed writer itself creates."""
+        self._activate()
+        self._rightsize(mode=0o775, file_mode=0o664)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "inactive")
+
+    def test_symlinked_rightsize_directory_is_refused(self) -> None:
+        state = self._state()
+        outside = Path(self.tmp.name) / "elsewhere"
+        outside.mkdir()
+        (state / "rightsize").symlink_to(outside)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize", result["reasons"])
+
+    def test_regular_file_named_rightsize_is_refused(self) -> None:
+        """Pins the expected-type clause. Without it a file named `rightsize` passes the
+        predicate and then raises an uncaught NotADirectoryError from iterdir()."""
+        (self._state() / "rightsize").write_text("not a directory\n")
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize", result["reasons"])
+
+    def test_other_writable_rightsize_directory_is_refused(self) -> None:
+        self._rightsize(mode=0o757)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize", result["reasons"])
+
+    def test_other_writable_artifact_inside_rightsize_is_refused(self) -> None:
+        self._rightsize(file_mode=0o646)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize artifact", result["reasons"])
+
+    def test_symlinked_artifact_inside_rightsize_is_refused(self) -> None:
+        """The load-bearing control for an open namespace: a symlink is the only way this
+        subtree could redirect custody outward, and refusing it also keeps the walk loop-free."""
+        self._rightsize()
+        (self._state() / "rightsize" / "escape.json").symlink_to(self.target / "tracked.txt")
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize artifact", result["reasons"])
+
+    def test_hardlinked_artifact_inside_rightsize_is_refused(self) -> None:
+        """Pins st_nlink. The second link lives OUTSIDE the state root, or the extra name
+        inside would be walked as an ordinary admitted entry and the clause never reached."""
+        path = self._rightsize()
+        os.link(path, self.target / "decoy-hardlink.json")
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize artifact", result["reasons"])
+
+    def test_nested_directory_inside_rightsize_is_validated(self) -> None:
+        """Pins the recursion: a bad node one level down must not be admitted because its
+        parent was fine."""
+        self._rightsize()
+        nested = self._state() / "rightsize" / "2026-08-17"
+        nested.mkdir()
+        (nested / "model-task-map.json").write_text("{}\n")
+        os.chmod(nested / "model-task-map.json", 0o646)
+        os.chmod(nested, 0o755)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize artifact", result["reasons"])
+
+    def test_fifo_inside_rightsize_is_refused(self) -> None:
+        """Pins the expected-type clause on artifacts: only regular files and directories."""
+        self._rightsize()
+        os.mkfifo(self._state() / "rightsize" / "pipe.json", 0o644)
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize artifact", result["reasons"])
+
+    def test_extended_acl_inside_rightsize_is_refused(self) -> None:
+        """Group bits double as the POSIX.1e mask, so allowing group-write means the ACL must
+        be detected directly. Refused fail-closed, read-only grants included."""
+        if shutil.which("setfacl") is None:
+            self.skipTest("setfacl unavailable")
+        path = self._rightsize()
+        done = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:rw", str(path)], capture_output=True)
+        if done.returncode != 0:
+            self.skipTest("filesystem does not support POSIX ACLs")
+
+        result, code = self._status()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe rightsize artifact", result["reasons"])
+
+    def test_uncommitted_rightsize_artifact_stays_visible_to_git(self) -> None:
+        """Pins the projection decision. Hiding it would let activation proceed against a tree
+        carrying an uncommitted artifact; visible means it obeys the engine's ordinary
+        clean-tree rule, which the reader clears by committing or ignoring the file."""
+        self._rightsize()
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertIn("Git worktree is not clean", result["reasons"])
+
+    def test_committed_rightsize_artifact_is_admitted_by_plan(self) -> None:
+        """The artifact is tracked-capable: identical evidence re-renders byte-identically,
+        which only matters for a committed file. A clean tree carrying it must still plan."""
+        path = self._rightsize()
+        git(self.target, "add", "--force", ".agentic-sdlc/rightsize/model-task-map.json")
+        git(self.target, "commit", "-m", "rightsize model-task map")
+        os.chmod(path, 0o644)
+        os.chmod(path.parent, 0o755)
+
+        result, code = self._plan()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "planned")
+
+
 if __name__ == "__main__":
     unittest.main()

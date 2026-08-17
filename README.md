@@ -187,7 +187,7 @@ no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
   autonomous backlog-zero mission with concurrent critique and bounded backflow, and
   `/sdlc-rightsize` discovers the operator's live OCX routes plus usable Claude-subscription
   passthrough, asks only environment-relevant source/model/task/budget questions, and produces a
-  regenerable v2 `.agentic-sdlc/model-task-map.json` + `.md` + `.evidence.json` trio. Published
+  regenerable v2 `.agentic-sdlc/rightsize/model-task-map.json` + `.md` + `.evidence.json` trio. Published
   benchmarks nominate candidates; only an explicitly approved, bounded target-local evaluation
   can recommend `role-qualified`, and the checked-in runtime receipt policy still separately
   controls production admission. `mise run rightsize:evaluate -- plan ...` is read-only;

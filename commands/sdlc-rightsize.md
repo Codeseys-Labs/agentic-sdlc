@@ -21,7 +21,7 @@ Build or refresh ONE target's evidence-backed model-task map. Scope: $ARGUMENTS
    - `--attempts <n>`, `--max-calls <n>`, `--max-wall-seconds <n>`, `--max-api-equivalent-usd <amount>`, and `--expected-peak-input-tokens <n>`;
    - `--pareto-objective <reliability|api-equivalent-cost|tokens-or-quota|wall-time>`;
    - `--allow-usage-credits` and `--ack-target-data-egress` — explicit acknowledgements, never inferred;
-   - `--output <json-path>` — default `.agentic-sdlc/model-task-map.json`;
+   - `--output <json-path>` — default `.agentic-sdlc/rightsize/model-task-map.json`;
    - `--regenerate` and `--force` — `--force` requires `--regenerate` and never overrides failed evidence;
    - `--dry-run` — discover and plan only; no model calls or output writes.
 
@@ -127,6 +127,10 @@ Build or refresh ONE target's evidence-backed model-task map. Scope: $ARGUMENTS
 
    Never write raw prompts, completions, transcripts, repository content, credentials, PII, secret-shaped values, or mutable absolute paths. Identical evidence renders byte-identical output. Default creation refuses existing artifacts; regeneration requires a complete valid v2 trio. A partial set, v1 artifact, stale/generated-digest mismatch, or user edit requires `--regenerate --force`; failed evidence never replaces prior outputs.
 
+   `.agentic-sdlc/rightsize/` is the one subdirectory the activation engine admits for these artifacts, and it admits any name there under closed custody: no symlink, caller-owned, not other-writable, no extended ACL, on the target's own mount. A symlinked, foreign-owned, or world-writable artifact makes activation refuse `foreign-state`. Unlike `receipts/` and `transactions/`, the trio stays visible to Git because it is a recommendation a reader may commit, so an uncommitted map leaves the worktree dirty and activation refuses until it is committed or ignored.
+
+   Rendered output is the only rightsizing state that belongs in that private root. A task pack is an operator-authored **input** carrying its own fixture tree, so it stays outside: put one at `evaluations/<pack>.json` in the target, mirroring the builtin at `skills/model-tier-rightsizing/evaluations/harness-smoke-v1.json`. Fixtures resolve against the pack's own directory and may not escape it.
+
 12. Published evidence in [`model-benchmark-evidence-2026-08-12.json`](../skills/model-tier-rightsizing/references/model-benchmark-evidence-2026-08-12.json) may nominate or order already route-probed candidates for evaluation. It cannot raise a qualification rung, fill a scale-setter slot, prove context, or grant runtime admission. The full applicability/limitation record is in [`docs/research/2026-08-12-model-rightsizing-benchmarks.md`](../docs/research/2026-08-12-model-rightsizing-benchmarks.md).
 
 13. Stop after reporting the recommendation, blocked routes, provenance, and reproduction command. Do not mutate provider configuration, gateway configuration, Seeds, worktrees, trust, global settings, or production assignments. Do not spawn, merge, publish, deploy, or perform another outward operation. **Before spawn**, the authenticated external harness still builds and validates one `RuntimeAssignment` immediately before any separately authorized worker.
@@ -136,7 +140,7 @@ Examples:
 ```text
 /sdlc-rightsize --dry-run
 /sdlc-rightsize . --pilot --task-pack builtin:harness-smoke-v1
-/sdlc-rightsize /repo --qualify --task-pack .agentic-sdlc/evals/change-writing-v1.json
-/sdlc-rightsize /repo --spec .agentic-sdlc/rightsize-run.json --dry-run
-/sdlc-rightsize /repo --spec .agentic-sdlc/rightsize-run.json --regenerate --force
+/sdlc-rightsize /repo --qualify --task-pack evaluations/change-writing-v1.json
+/sdlc-rightsize /repo --spec .agentic-sdlc/rightsize/rightsize-run.json --dry-run
+/sdlc-rightsize /repo --spec .agentic-sdlc/rightsize/rightsize-run.json --regenerate --force
 ```
