@@ -15,3 +15,23 @@ build/
 .worktrees/
 .claude/worktrees/
 .gstack/
+
+# Machine-local activation state (ADR-0022 decision 3). These carry owned-path hashes,
+# tool identities, and trust state for THIS physical checkout, so committing them would
+# publish one machine's private receipt plane into a portable tree.
+#
+# Two siblings in that root are deliberately NOT listed here, and neither omission is an
+# oversight — do not "tidy" either one into the list, because doing so silently defeats a
+# decision the activation engine depends on:
+#   * `.agentic-sdlc/repo.toml` — ADR-0022 decision 2 makes it the one tracked, public file
+#     in that root. The engine relies on seeing it in its Git projection to refuse a DIRTY
+#     manifest; hidden, an uncommitted edit to repository policy rides along inside an
+#     approved activation.
+#   * `.agentic-sdlc/rightsize/` — rendered recommendation artifacts a reader may commit, so
+#     they stay visible for the same reason. Hiding them would let the same file behave
+#     differently tracked versus untracked.
+# Both carve-outs are enforced in the projection filter in
+# `skills/agentic-sdlc/tools/activation-planner.py`; search for "stays VISIBLE to the Git
+# projection" rather than a line number, which drifts.
+.agentic-sdlc/receipts/
+.agentic-sdlc/transactions/
