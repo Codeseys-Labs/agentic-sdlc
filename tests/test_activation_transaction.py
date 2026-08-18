@@ -3751,13 +3751,22 @@ class EffectLedgerDerivationTests(unittest.TestCase):
     derivation that make every raise site safe at once:
 
       * `test_every_mutating_step_admits_its_effect_in_order` pins the exact ordered ledger of a
-        complete apply, in both plane selections and for the no-op audit. Deleting ANY `_admit`
-        from any primitive changes that list, so an unadmitted mutating step is a test failure
-        rather than a defect waiting for the raise site that reaches it.
-      * `test_a_refusal_after_any_admitted_effect_is_never_a_clean_refusal` injects a refusal
-        after each admission in turn -- a code-3 `refused`, the exact thing a raise site may no
-        longer decide -- and requires the report to escalate. It is a sweep over the whole
-        program, not a sample of it.
+        complete apply, in both plane selections and for the no-op audit, and the pair right
+        after it pins `_mkdir_at`'s mode-normalization admission the same way, over its OWN
+        fixture. Deleting any `_admit` one of these four fixtures actually reaches changes the
+        matching expected list, so an unadmitted mutating step on any of those paths is a test
+        failure rather than a defect waiting for the raise site that reaches it. The one named
+        exception is `write_new_metadata`'s own default-argument branch: every remaining caller
+        in this module supplies `base`/`relative`, so that admission is unreachable from here by
+        construction, not by an oversight this class should be pretending to cover.
+      * `test_a_refusal_after_any_admitted_effect_is_never_a_clean_refusal` and
+        `test_a_recovery_refusal_after_any_admitted_effect_is_never_a_clean_refusal` inject a
+        refusal after each admission in turn -- a code-3 `refused`, the exact thing a raise site
+        may no longer decide -- over `apply_command` and the two recover verbs respectively, and
+        require the report to escalate. Between the two, every admission the first bullet's four
+        fixtures reach is swept by exactly one injection point; mode normalization is admitted
+        but not independently swept by either, for the same reason it is not claimed by the first
+        bullet.
 
     Neither case asserts "something refused". They assert the ledger's contents and the exact
     escalated classification, because a blanket answer in either direction passes an assertion
@@ -3767,7 +3776,7 @@ class EffectLedgerDerivationTests(unittest.TestCase):
     EXPECTED_DEFAULT = [
         "created directory <target>/.agentic-sdlc",
         "created private metadata plane.<digest>.json",
-        "created state plane ancestor <home>",
+        "created state plane ancestor <n> of <total> (plane <planekey>)",
         "created state plane ancestor ccodex",
         "created state plane ancestor activation",
         "created private directory <digest>",
@@ -3836,11 +3845,11 @@ class EffectLedgerDerivationTests(unittest.TestCase):
     EXPECTED_FIRST_NOOP = [
         "created directory <target>/.agentic-sdlc",
         "created private metadata plane.<digest>.json",
-        "created state plane ancestor <home>",
+        "created state plane ancestor <n> of <total> (plane <planekey>)",
         "created state plane ancestor ccodex",
         "created state plane ancestor activation",
         "created private directory <digest>",
-        "created <plane>/noop.<id>.json",
+        "created private metadata noop.<id>.json",
     ]
 
     def setUp(self) -> None:
@@ -3909,6 +3918,8 @@ class EffectLedgerDerivationTests(unittest.TestCase):
         text = effect.replace(str(plane_root(target)), "<plane>").replace(str(target), "<target>")
         text = re.sub(rf"\b{re.escape(home.name)}\b", "<home>", text)
         text = re.sub(r"\b[0-9a-f]{64}\b", "<digest>", text)
+        text = re.sub(r"\(plane [0-9a-f]{12}\)", "(plane <planekey>)", text)
+        text = re.sub(r"ancestor \d+ of \d+", "ancestor <n> of <total>", text)
         return re.sub(r"\b[0-9a-f]{32}\b", "<id>", text)
 
     def _sequence(self, target: Path) -> tuple[list[str], dict, int]:
@@ -3966,17 +3977,109 @@ class EffectLedgerDerivationTests(unittest.TestCase):
         self.assertEqual(audit_result["effect"], "audit_only")
         self.assertEqual(audit, self.EXPECTED_FIRST_NOOP)
 
+    def _watch_fchmod(self, path: Path) -> list[int]:
+        """Interpose `os.fchmod`, recording the mode of every call that lands on `path`.
+
+        A call's `fd` is resolved to its real path via `/proc/self/fd`, the same technique
+        this suite already uses to recover a path from a `dir_fd`-relative descriptor, so a
+        recorded hit is proof the SYSCALL reached this exact directory -- not merely that some
+        other admission happened to be skipped or present.
+        """
+        calls: list[int] = []
+        original = os.fchmod
+        marker = str(path)
+
+        def recording(fd: int, mode: int) -> None:
+            try:
+                resolved = os.readlink(f"/proc/self/fd/{fd}")
+            except OSError:
+                resolved = None
+            if resolved == marker:
+                calls.append(mode)
+            return original(fd, mode)
+
+        os.fchmod = recording
+        self.addCleanup(setattr, os, "fchmod", original)
+        return calls
+
+    def test_a_preexisting_repo_local_state_root_with_differing_mode_is_normalized_and_admitted(self) -> None:
+        """`_mkdir_at` fstats before it chmods: a pre-existing state root is never assumed 0700.
+
+        The fixture reproduces `_mkdir_at`'s own MEASURED comment exactly: a repo-local
+        `.agentic-sdlc/` a Git checkout materialized at the caller's umask (0755, the
+        documented clone shape) exists BEFORE the first apply ever runs. The unfixed engine
+        silently narrowed it to 0700 with nothing admitted; the fixed one admits exactly one
+        "changed ... mode" entry in place of the ordinary "created" entry, and only then
+        performs the `fchmod`. Same length as `EXPECTED_REPO_LOCAL` (28), one entry replaced
+        -- this is a substitution, not a growth, because `_mkdir_at` never admits both a
+        creation and a mode change for the same call. POSITIVE CONTROL for the matching-bits
+        case right below: the interposed `os.fchmod` must reach this pre-existing directory
+        exactly once, which is what proves that test's zero calls are the SYSCALL being
+        skipped and not an unrelated break in the fixture.
+        """
+        select_repo_local_plane(self)
+        target = self._target("repo-local-mode-differs")
+        state = target / ap.STATE_DIR_NAME
+        state.mkdir(mode=0o755)
+        os.chmod(state, 0o755)
+        self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o755, "fixture must start off-0700 to exercise the branch")
+        calls = self._watch_fchmod(state)
+
+        sequence, result, code = self._sequence(target)
+
+        self.assertEqual(code, 0, result)
+        expected = ["changed private directory .agentic-sdlc mode from 0755 to 0700", *self.EXPECTED_REPO_LOCAL[1:]]
+        self.assertEqual(sequence, expected)
+        self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o700, "the call must actually have run")
+        self.assertEqual(calls, [0o700], "the interposed fchmod must reach the pre-existing state root exactly once")
+
+    def test_a_preexisting_repo_local_state_root_with_matching_mode_admits_nothing_extra(self) -> None:
+        """POSITIVE CONTROL for the case above: matching bits admit nothing and skip the call.
+
+        A state root already at 0700 before the first apply -- the shape a prior activation's
+        own `_mkdir_at` would have left it in -- is not a state change, so `_mkdir_at` admits
+        no "created" and no "changed" entry for it at all. The ledger is exactly
+        `EXPECTED_REPO_LOCAL` with its first entry DROPPED, one shorter (27) rather than the
+        same length as the differing-bits case above: that difference is what proves the
+        `fchmod` call itself, not just its message, was skipped. `_watch_fchmod` makes that
+        proof direct rather than inferred from the ledger's length: it interposes the actual
+        SYSCALL and asserts zero calls ever reach this pre-existing directory, with the test
+        above recording exactly one over the same fixture shape as its positive control.
+        """
+        select_repo_local_plane(self)
+        target = self._target("repo-local-mode-matches")
+        state = target / ap.STATE_DIR_NAME
+        state.mkdir(mode=0o700)
+        os.chmod(state, 0o700)
+        calls = self._watch_fchmod(state)
+
+        sequence, result, code = self._sequence(target)
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(sequence, self.EXPECTED_REPO_LOCAL[1:])
+        self.assertEqual(calls, [], "no fchmod may reach a pre-existing state root whose mode already matches")
+
     def test_a_refusal_after_any_admitted_effect_is_never_a_clean_refusal(self) -> None:
-        """A refusal injected after EACH admission in turn, over the whole apply.
+        """A refusal injected after EACH admission of a complete APPLY, in turn.
+
+        Sweeps `apply_command` alone -- both plane selections, one injection per admission in
+        `EXPECTED_DEFAULT`/`EXPECTED_REPO_LOCAL`. The sibling
+        `test_a_recovery_refusal_after_any_admitted_effect_is_never_a_clean_refusal` below runs
+        the same injection over `recover finish` and `recover rollback`; between the two, every
+        admission this class's fixtures reach -- apply and both recover verbs -- is covered by
+        exactly one injection point apiece. Naming the scope here rather than calling it "the
+        whole program": mode normalization is a real admission this class exercises too (see the
+        pair of tests above), but only through its OWN dedicated fixture, not through this sweep
+        or its sibling, so it is deliberately not part of either claim.
 
         The injected error is `refused` at code 3 -- Decision 9's "clean refusal BEFORE any
         journal or product effect" -- raised at a point where that is false by construction. Not
         one of these may be reported as 3, or as 1 or 2, and each must carry the ledger.
 
         POSITIVE CONTROL, and it is the same control the class needs against a blanket answer:
-        the uninjected apply asserted in the case above commits at 0, and every injection here
-        is asserted to carry a NON-EMPTY ledger whose length matches the injection point, so a
-        change that reported 4 unconditionally would not satisfy the length.
+        the uninjected apply asserted in the case above commits at 0, and every injection here is
+        asserted to carry a ledger EXACTLY as long as the injection point, so a change that
+        reported 4 unconditionally would not satisfy the exact length either.
         """
         for selection in (None, ap.PLANE_REPO_LOCAL):
             expected = self.EXPECTED_DEFAULT if selection is None else self.EXPECTED_REPO_LOCAL
@@ -3994,21 +4097,137 @@ class EffectLedgerDerivationTests(unittest.TestCase):
 
                     target = self._target(f"sweep-{selection or 'default'}-{index}")
                     result, code = self._apply(target, hook=hook)
-                    self.assertNotIn(code, {1, 2, 3}, result)
-                    if code == 0:
-                        # An intermediate handler absorbed the injection and the operation
-                        # genuinely completed. That is a truthful terminal claim, not a defect.
-                        self.assertEqual(result["effect"], "committed", result)
-                        continue
+                    # An injected refusal that exits 0 is a defect this sweep must catch, not an
+                    # absorbed intermediate that gets to skip the assertions below: no admission
+                    # point in `apply_command` sits inside a handler that swallows a `refused`
+                    # status and completes anyway, so every one of these must escalate to 4.
                     self.assertEqual(code, 4, result)
                     self.assertEqual(result["status"], "effect-unknown", result)
                     self.assertEqual(result["effect"], "effect_unknown", result)
-                    self.assertGreaterEqual(len(result["admitted_effects"]), index + 1, result)
+                    # Exact, not a floor: the raise propagates the instant it fires, so nothing
+                    # downstream of the injection point can have admitted anything further.
+                    self.assertEqual(len(result["admitted_effects"]), index + 1, result)
                     # The entry at the injection point is the one the ledger has NOT yet
                     # revised: the raise lands between `admit` and `revise`, which is exactly
                     # the window where an effect is true and its outcome is not yet known.
                     self.assertEqual(self._normalize(result["admitted_effects"][index], target), expected[index], result)
         set_environment(self, ap.PLANE_SELECTION_ENV, None)
+
+    def _recover_after_publish_crash(self, target: Path) -> dict[str, Any]:
+        """Crash a fresh create apply right after publication, in a subprocess.
+
+        The crash must be out-of-process: `AGENTIC_SDLC_FAILPOINT` calls `os._exit`, which would
+        take this test process down with it. What is left behind is the shape `classify_recovery`
+        reports as `legal_recovery: ["finish", "rollback"]` -- published, not yet committed --
+        which is what makes both recover verbs legal against the same crashed operation.
+        """
+        plan_path, grant_path, _ = self._documents(target)
+        crashed = subprocess.run([
+            sys.executable, str(SCRIPT), "apply", "--plan", str(plan_path), "--manifest", str(self.manifest), "--grant", str(grant_path),
+        ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="publish"))
+        self.assertEqual(crashed.returncode, 97)
+        inspected, inspect_code = ap.recover_inspect_command(target)
+        self.assertEqual(inspect_code, 3, inspected)
+        self.assertEqual(inspected["legal_recovery"], ["finish", "rollback"], inspected)
+        return inspected["operation"]
+
+    def _recovery_grant_path(self, target: Path, operation: dict[str, Any], decision: str) -> Path:
+        instant = now()
+        grant = {
+            "schema": ap.GRANT_SCHEMA, "grant_id": "2" * 32, "operation": "recover",
+            "target": {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino},
+            "plan_digest": None, "operation_id": operation["operation_id"], "operation_digest": ap.digest_record(operation),
+            "decision": decision, "issued_at": stamp(instant), "expires_at": stamp(instant + timedelta(minutes=5)),
+        }
+        serial = self.serial
+        self.serial = serial + 1
+        path = self.root / f"recovery-{serial}.json"
+        path.write_bytes(ap.canonical_bytes(grant))
+        return path
+
+    def _recover_sequence(self, target: Path, decision: str, *, hook=None) -> tuple[list[str], dict, int]:
+        """One recovery command, with the SAME `_admit`-wrapping sweep seam `_apply` uses.
+
+        Reuses that seam rather than inventing a second one: recording and interrupting go
+        through the one place every admission in the module already passes.
+        """
+        operation = self._recover_after_publish_crash(target)
+        grant_path = self._recovery_grant_path(target, operation, decision)
+        planner_globals = ap._admit.__globals__
+        original = planner_globals["_admit"]
+        recorded: list[str] = []
+
+        def record(effect, hook=hook):
+            recorded.append(effect)
+            return original(effect) if hook is None else hook(original, effect)
+
+        planner_globals["_admit"] = record
+        try:
+            command = ap.recover_finish_command if decision == "finish" else ap.recover_rollback_command
+            result, code = command(target, grant_path)
+        finally:
+            planner_globals["_admit"] = original
+        return [self._normalize(item, target) for item in recorded], result, code
+
+    # Recovery resumes an already-established plane, so unlike `EXPECTED_DEFAULT` /
+    # `EXPECTED_REPO_LOCAL` there is no plane-pointer or ancestor admission here to distinguish a
+    # plane selection by -- both selections take the identical path once the crashed operation
+    # already exists, so one pair of expected lists covers both.
+    EXPECTED_RECOVER_FINISH = [
+        "created private metadata 0002.json",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000001.json (flags 1)",
+        "created private metadata commit.json",
+        "created private metadata receipt.json.next",
+        "renamed receipt.json.next onto <id>.json (flags 1)",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000002.json (flags 1)",
+    ]
+    EXPECTED_RECOVER_ROLLBACK = [
+        "created private metadata 0002.json",
+        "renamed AGENTS.md onto 0000.payload (flags 1)",
+        "created private metadata rollback.json",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000001.json (flags 1)",
+    ]
+
+    def test_a_recovery_refusal_after_any_admitted_effect_is_never_a_clean_refusal(self) -> None:
+        """The apply sweep's analogue for `recover finish` and `recover rollback`.
+
+        Same contract as `test_a_refusal_after_any_admitted_effect_is_never_a_clean_refusal`, over
+        a different admission sequence: a crashed-after-publish operation recovered by each verb
+        in turn, with a `refused` code-3 injected after every admission `EXPECTED_RECOVER_FINISH`
+        and `EXPECTED_RECOVER_ROLLBACK` name. Not one of these may be reported as 1, 2, or 3, and
+        a 4 must carry `effect_unknown` plus the un-revised ledger entry at the injection point --
+        exactly the escalation the apply sweep requires, reused rather than reinvented.
+        """
+        for decision, expected in (("finish", self.EXPECTED_RECOVER_FINISH), ("rollback", self.EXPECTED_RECOVER_ROLLBACK)):
+            for index in range(len(expected)):
+                with self.subTest(decision=decision, after=index, effect=expected[index]):
+                    state = {"count": 0}
+
+                    def hook(original, effect, state=state, index=index):
+                        token = original(effect)
+                        state["count"] += 1
+                        if state["count"] == index + 1:
+                            raise ap.ActivationError("refused", f"injected after recovery admission {index}", 3)
+                        return token
+
+                    target = self._target(f"recovery-sweep-{decision}-{index}")
+                    sequence, result, code = self._recover_sequence(target, decision, hook=hook)
+                    self.assertEqual(code, 4, result)
+                    self.assertEqual(result["status"], "effect-unknown", result)
+                    self.assertEqual(result["effect"], "effect_unknown", result)
+                    self.assertEqual(len(result["admitted_effects"]), index + 1, result)
+                    self.assertEqual(self._normalize(result["admitted_effects"][index], target), expected[index], result)
+                    # POSITIVE CONTROL, the same shape the apply sweep needs: the recorded
+                    # ledger up to and including the injection point matches the closed-form
+                    # expectation exactly, so a change that reported 4 unconditionally over an
+                    # empty or wrong-shaped ledger would not satisfy this.
+                    self.assertEqual(sequence[: index + 1], expected[: index + 1], result)
 
     def test_the_result_renderer_has_no_default_effect(self) -> None:
         """The structural half of the fix, pinned structurally because no input can reach it.
@@ -4097,6 +4316,109 @@ class EffectLedgerDerivationTests(unittest.TestCase):
         self.assertEqual(allowed_code, 0, allowed)
         self.assertEqual(allowed["status"], "no-op")
         self.assertEqual(allowed["effect"], "audit_only")
+
+    def test_admitted_effects_never_print_the_state_home_prefix(self) -> None:
+        """`admitted_effects` names a plane by leaf, role, or digest -- never its absolute path.
+
+        The module's `reasons` deliberately never print a plane path because it carries the
+        operator's home; `admitted_effects` is a second channel over the same information and
+        the no-op audit write was one instance of it leaking there anyway before this round.
+        Two REAL shapes are driven here, because either alone could pass by accident: a no-op
+        apply (the exact shape that leaked) and a mid-apply refusal that carries effects (so
+        the redaction is checked on the `effect_unknown` side too, not only the clean one).
+
+        A third shape below drives a MULTI-ancestor state home, because `assertNotIn(str(home),
+        ...)` above is a single contiguous-substring check: it would still pass if the engine
+        named each missing ancestor by its own filesystem leaf, since the operator's home would
+        then never appear as one contiguous string even though the ORDERED ledger reconstructs
+        it one component at a time. That case needs its own assertion over every admitted entry
+        individually, not over the whole serialized result.
+        """
+        target = self._noop_target("redact-noop")
+        home = Path(os.environ["XDG_STATE_HOME"])
+        noop_result, noop_code = self._apply(target)
+        self.assertEqual(noop_code, 0, noop_result)
+        self.assertEqual(noop_result["status"], "no-op")
+        self.assertTrue(noop_result["admitted_effects"], "an empty ledger would make this vacuous")
+        serialized = json.dumps(noop_result)
+        self.assertNotIn(str(home), serialized, serialized)
+        # POSITIVE CONTROL: the plane is still named in the ledger, just not by its absolute
+        # path -- proving the assertion above caught a redaction, not an empty result.
+        self.assertTrue(
+            any(re.fullmatch(r"wrote private metadata noop\.[0-9a-f]{32}\.json", item) for item in noop_result["admitted_effects"]),
+            noop_result,
+        )
+
+        refused_target = self._target("redact-refusal")
+        refused_home = Path(os.environ["XDG_STATE_HOME"])
+        state = {"count": 0}
+
+        def hook(original, effect, state=state):
+            token = original(effect)
+            state["count"] += 1
+            if state["count"] == 2:
+                raise ap.ActivationError("refused", "injected for the redaction sweep", 3)
+            return token
+
+        refused_result, refused_code = self._apply(refused_target, hook=hook)
+        self.assertEqual(refused_code, 4, refused_result)
+        self.assertEqual(refused_result["status"], "effect-unknown", refused_result)
+        self.assertTrue(refused_result["admitted_effects"], "an empty ledger would make this vacuous")
+        refused_serialized = json.dumps(refused_result)
+        self.assertNotIn(str(refused_home), refused_serialized, refused_serialized)
+        # POSITIVE CONTROL, same shape as above: the refusing result still names the plane.
+        self.assertTrue(
+            any(re.fullmatch(r"created private metadata plane\.[0-9a-f]{64}\.json", item) for item in refused_result["admitted_effects"]),
+            refused_result,
+        )
+
+        # STRENGTHENED: a state home with several missing ancestors, one of them shaped like a
+        # username, none of which this checkout's own plane namespace (`ccodex`, `activation`)
+        # would ever collide with. The sensitive components checked below are exactly the
+        # fixture-introduced suffix -- not the sandbox's own ambient tmp-directory prefix, which
+        # is test scaffolding rather than the operator's home this finding is about, and which
+        # `target`'s own admissions are already allowed to print (see `EXPECTED_DEFAULT`'s
+        # `created directory <target>/.agentic-sdlc`).
+        home_suffix = ("home", "operator-alice", "runtime-nest", "vaultdir")
+        multi_home = self.root.joinpath(*home_suffix)
+        set_environment(self, "XDG_STATE_HOME", str(multi_home))
+        multi_target = self.root / "multi-ancestor"
+        multi_target.mkdir()
+        init_repo(multi_target)
+        multi_result, multi_code = self._apply(multi_target)
+        self.assertEqual(multi_code, 0, multi_result)
+        multi_entries = multi_result["admitted_effects"]
+        self.assertTrue(multi_entries, "an empty ledger would make this vacuous")
+        sensitive_components = [part for part in home_suffix if part not in ap.PLANE_NAMESPACE]
+        self.assertTrue(sensitive_components, "fixture must actually contribute ancestor components")
+        # GUARD: the sweep below treats `assertNotIn(component, entry)` as proof the operator's
+        # home never leaked, but every admission entry's OWN wording already contains words
+        # like "state", "plane", "ancestor", "created", "private", and "directory" -- a fixture
+        # component that collides with one of those would make the sweep fail on every entry
+        # regardless of whether the home actually leaked. That reads as a confusing, unrelated
+        # sweep failure to whoever next edits `home_suffix`; this guard turns it into a named,
+        # actionable one instead.
+        admission_grammar_words = {"state", "plane", "ancestor", "created", "private", "directory"}
+        colliding = [part for part in sensitive_components if part in admission_grammar_words]
+        self.assertFalse(
+            colliding,
+            f"fixture component(s) {colliding!r} collide with the admission grammar itself "
+            "(state/plane/ancestor/created/private/directory) -- the sweep below cannot tell "
+            "that collision apart from a real leaked home-path component, so this fixture must "
+            "pick different words rather than trip a spurious assertNotIn failure below",
+        )
+        for entry in multi_entries:
+            for component in sensitive_components:
+                self.assertNotIn(component, entry, f"{entry!r} named ancestor component {component!r}")
+        # POSITIVE CONTROL: the ancestor admissions ARE present, in their ordinal-plus-digest
+        # form -- proving the sweep above caught a real redaction and not an empty ledger, and
+        # that the constant namespace leaves are still named literally.
+        self.assertTrue(
+            any(re.fullmatch(r"created state plane ancestor \d+ of \d+ \(plane [0-9a-f]{12}\)", entry) for entry in multi_entries),
+            multi_result,
+        )
+        self.assertIn("created state plane ancestor ccodex", multi_entries)
+        self.assertIn("created state plane ancestor activation", multi_entries)
 
 
 if __name__ == "__main__":

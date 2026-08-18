@@ -354,7 +354,7 @@ class _Effects:
     follows it classifies a failed readback as though the product were still private.
 
     Admission therefore lives in the PRIMITIVES -- `_mkdir_at`, `_mkdir_new_at`, `_safe_mkdir`,
-    `_write_new_at`, `write_new_metadata`, `_replace_metadata`, `_renameat2`, `_renameat2_at`,
+    `_write_new_at`, `write_new_metadata`, `_renameat2_at`,
     and `stage_payload`'s own staging open -- and not at the call sites that use them. That is
     what makes the next mutating step admit its effect for free: a per-raise-site `try/except`
     is the shape that failed twice in this project, because the next site added reintroduces the
@@ -386,9 +386,18 @@ def _effect_ledger() -> Iterator[_Effects]:
 
     Module-scoped for the same reason `_ACTIVE_PRIVATE` is: the effects are admitted six frames
     below the command handler, and threading a parameter through every helper is precisely the
-    per-site bookkeeping that a future helper forgets. Restoring rather than clearing keeps a
-    nested invocation -- a test driving two commands in one process, or a handler that calls
-    another -- from erasing an outer command's admitted effects.
+    per-site bookkeeping that a future helper forgets.
+
+    This REPLACES the ledger rather than nesting one inside another: a command's admitted
+    effects are visible only to its own `_report_failure`, and installing a fresh `_Effects`
+    hides whatever an OUTER invocation had already admitted for the duration of an inner one.
+    No handler calls another today (verified: no command-handler function in this module
+    contains a call to another command handler), so the only nested invocation this module
+    actually has is a test driving two commands in one process, and restoring rather than
+    clearing is what keeps that from erasing the outer command's already-admitted effects once
+    the inner one exits. The day a handler calls another handler, this has to nest instead of
+    replace, or the inner call's effects become invisible to the outer command's own
+    `_report_failure`.
     """
     global _EFFECTS
     previous = _EFFECTS
@@ -575,15 +584,27 @@ def _load_canonical_json_at(parent_fd: int, name: str, label: str) -> tuple[dict
 def _mkdir_at(parent_fd: int, name: str) -> int:
     try:
         os.mkdir(name, 0o700, dir_fd=parent_fd)
+        preexisted = False
     except FileExistsError:
         # Opening an already-present directory is not an effect of THIS invocation, so it
         # admits nothing: over-admitting would turn every ordinary re-entry into exit 4.
-        pass
+        preexisted = True
     else:
         _admit(f"created private directory {name}")
     child_fd = open_component_dir(parent_fd, name)
     try:
-        os.fchmod(child_fd, 0o700)
+        if preexisted:
+            # A pre-existing directory's mode is not this invocation's effect either -- unless
+            # forcing it to 0700 actually changes something. MEASURED: an unfixed `fchmod` here
+            # silently narrowed a pre-existing 0755 `.agentic-sdlc/` to 0700 with nothing
+            # admitted. `fchmod` to the mode a directory already has is not a state change, so
+            # only a real difference is admitted, and only a real difference performs the call.
+            mode = stat.S_IMODE(os.fstat(child_fd).st_mode)
+            if mode != 0o700:
+                _admit(f"changed private directory {name} mode from {mode:04o} to 0700")
+                os.fchmod(child_fd, 0o700)
+        else:
+            os.fchmod(child_fd, 0o700)
         os.fsync(child_fd)
         os.fsync(parent_fd)
         return child_fd
@@ -1930,101 +1951,88 @@ def write_new_metadata(path: Path, record: dict[str, Any], *, base: Path | None 
         os.close(parent_fd)
 
 
-def _replace_metadata(path: Path, record: dict[str, Any]) -> None:
-    temp = path.with_name(path.name + ".next")
-    if temp.exists():
-        raise ActivationError("effect-unknown", "unexpected metadata temp", 4)
-    write_new_metadata(temp, record)
-    os.replace(temp, path)
-    _admit(f"replaced {path}")
-    _fsync_dir(path.parent)
+def write_progress(operation_dir: Path, progress: dict[str, Any], target: Path) -> None:
+    """Publish one progress successor through the pinned private transaction.
 
-
-def write_progress(operation_dir: Path, progress: dict[str, Any], target: Path | None = None) -> None:
-    private = _ACTIVE_PRIVATE
-    if private is not None and target is not None and private.operation_id == operation_dir.name:
-        private.assert_intact()
-        previous, predecessor_identity = _load_canonical_json_at(private.operation_fd, "progress.json", "progress")
-        operation, _ = _load_canonical_json_at(private.operation_fd, "operation.json", "operation")
-        _validate_operation(operation)
-        _validate_progress(previous, operation)
-        _validate_progress_history_at(private, previous, operation)
-        progress = dict(progress, sequence=previous["sequence"] + 1)
-        _validate_progress(progress, operation)
-        try:
-            os.stat("progress.json.next", dir_fd=private.operation_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            pass
-        else:
-            raise ActivationError("effect-unknown", "unexpected pinned progress temp", 4)
-        data, successor_identity = _write_new_at(private.operation_fd, "progress.json.next", progress)
-        private.files[("operation", "progress.json.next")] = successor_identity
-        # Bind both sides just before the exchange. A substituted current record
-        # is never overwritten: the exchange is reversible and its exact moved
-        # witness is checked before any history transition.
-        _metadata_successor_read_at(private, private.operation_fd, "progress.json.next", data=data, identity=successor_identity, label="progress successor", before_rename=True)
-        predecessor_data = canonical_bytes(previous)
-        current_data, current_identity = _read_stable_at(private.operation_fd, "progress.json", "progress predecessor before exchange")
-        if current_data != predecessor_data or current_identity != predecessor_identity:
-            raise ActivationError("effect-unknown", "progress predecessor changed before exchange", 4)
-        _renameat2_at(private.operation_fd, "progress.json.next", private.operation_fd, "progress.json", 2)
-        private.untrack_file("operation", "progress.json")
-        private.untrack_file("operation", "progress.json.next")
-        current_data, current_identity = _read_stable_at(private.operation_fd, "progress.json", "progress successor after exchange")
-        moved_data, moved_identity = _read_stable_at(private.operation_fd, "progress.json.next", "progress predecessor after exchange")
-        successor_ok = current_data == data and _same_custody_identity(current_identity, successor_identity)
-        predecessor_ok = moved_data == predecessor_data and _same_custody_identity(moved_identity, predecessor_identity)
-        if not successor_ok or not predecessor_ok:
-            _renameat2_at(private.operation_fd, "progress.json.next", private.operation_fd, "progress.json", 2)
-            restored_current_data, restored_current_identity = _read_stable_at(private.operation_fd, "progress.json", "restored progress predecessor")
-            restored_temp_data, restored_temp_identity = _read_stable_at(private.operation_fd, "progress.json.next", "restored progress successor")
-            if (
-                restored_current_data != moved_data
-                or not _same_custody_identity(restored_current_identity, moved_identity)
-                or restored_temp_data != current_data
-                or not _same_custody_identity(restored_temp_identity, current_identity)
-            ):
-                raise ActivationError("effect-unknown", "progress exchange mismatch could not be restored", 4)
-            private.track_file("operation", "progress.json")
-            private.track_file("operation", "progress.json.next")
-            private.assert_intact()
-            raise ActivationError("effect-unknown", "progress exchange preserved substituted destination witness", 4)
-        history_name = f"{previous['sequence']:020d}.json"
-        try:
-            os.stat(history_name, dir_fd=private.progress_history_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            pass
-        else:
-            raise ActivationError("effect-unknown", "progress history destination already exists", 4)
-        # Never discard the exchanged predecessor. A replacement at the temp
-        # slot is preserved there and prevents a successful terminal result.
-        moved_data, moved_identity = _read_stable_at(private.operation_fd, "progress.json.next", "progress predecessor before history")
-        if moved_data != predecessor_data or not _same_custody_identity(moved_identity, predecessor_identity):
-            private.track_file("operation", "progress.json")
-            private.track_file("operation", "progress.json.next")
-            private.assert_intact()
-            raise ActivationError("effect-unknown", "progress predecessor changed before history retention", 4)
-        _renameat2_at(private.operation_fd, "progress.json.next", private.progress_history_fd, history_name, 1)
-        private.track_file("operation", "progress.json")
-        private.track_file("progress_history", history_name)
-        retained_data, retained_identity = _read_stable_at(private.progress_history_fd, history_name, "retained progress predecessor")
-        if retained_data != predecessor_data or not _same_custody_identity(retained_identity, predecessor_identity):
-            raise ActivationError("effect-unknown", "progress history retention lost predecessor custody", 4)
-        observed, observed_identity = _load_canonical_json_at(private.operation_fd, "progress.json", "progress")
-        if observed != progress or not _same_custody_identity(observed_identity, successor_identity):
-            raise ActivationError("effect-unknown", "progress successor final readback failed", 4)
-        _validate_progress_history_at(private, observed, operation)
-        private.assert_intact()
-        return
-    path = operation_dir / "progress.json"
-    if path.exists():
-        previous, _ = load_canonical_json(path, "progress")
-        progress = dict(progress, sequence=previous["sequence"] + 1)
-        _replace_metadata(path, progress)
-    elif target is None:
-        write_new_metadata(path, progress)
+    Every caller reaches this from inside a `_pin_private` frame that already pinned
+    `operation_dir`'s exact operation id -- `_require_private` is what proves that, and it
+    is the same check every other mutating primitive in this module makes first. There is
+    therefore no unpinned form to fall back to: an invocation that reaches here unpinned is
+    the same defect `_require_private` already refuses everywhere else, not a case this
+    function has to answer for itself.
+    """
+    private = _require_private(target, operation_dir)
+    previous, predecessor_identity = _load_canonical_json_at(private.operation_fd, "progress.json", "progress")
+    operation, _ = _load_canonical_json_at(private.operation_fd, "operation.json", "operation")
+    _validate_operation(operation)
+    _validate_progress(previous, operation)
+    _validate_progress_history_at(private, previous, operation)
+    progress = dict(progress, sequence=previous["sequence"] + 1)
+    _validate_progress(progress, operation)
+    try:
+        os.stat("progress.json.next", dir_fd=private.operation_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
     else:
-        write_new_metadata(path, progress, base=_resolve_plane(target).root, relative=f"transactions/{operation_dir.name}/progress.json")
+        raise ActivationError("effect-unknown", "unexpected pinned progress temp", 4)
+    data, successor_identity = _write_new_at(private.operation_fd, "progress.json.next", progress)
+    private.files[("operation", "progress.json.next")] = successor_identity
+    # Bind both sides just before the exchange. A substituted current record
+    # is never overwritten: the exchange is reversible and its exact moved
+    # witness is checked before any history transition.
+    _metadata_successor_read_at(private, private.operation_fd, "progress.json.next", data=data, identity=successor_identity, label="progress successor", before_rename=True)
+    predecessor_data = canonical_bytes(previous)
+    current_data, current_identity = _read_stable_at(private.operation_fd, "progress.json", "progress predecessor before exchange")
+    if current_data != predecessor_data or current_identity != predecessor_identity:
+        raise ActivationError("effect-unknown", "progress predecessor changed before exchange", 4)
+    _renameat2_at(private.operation_fd, "progress.json.next", private.operation_fd, "progress.json", 2)
+    private.untrack_file("operation", "progress.json")
+    private.untrack_file("operation", "progress.json.next")
+    current_data, current_identity = _read_stable_at(private.operation_fd, "progress.json", "progress successor after exchange")
+    moved_data, moved_identity = _read_stable_at(private.operation_fd, "progress.json.next", "progress predecessor after exchange")
+    successor_ok = current_data == data and _same_custody_identity(current_identity, successor_identity)
+    predecessor_ok = moved_data == predecessor_data and _same_custody_identity(moved_identity, predecessor_identity)
+    if not successor_ok or not predecessor_ok:
+        _renameat2_at(private.operation_fd, "progress.json.next", private.operation_fd, "progress.json", 2)
+        restored_current_data, restored_current_identity = _read_stable_at(private.operation_fd, "progress.json", "restored progress predecessor")
+        restored_temp_data, restored_temp_identity = _read_stable_at(private.operation_fd, "progress.json.next", "restored progress successor")
+        if (
+            restored_current_data != moved_data
+            or not _same_custody_identity(restored_current_identity, moved_identity)
+            or restored_temp_data != current_data
+            or not _same_custody_identity(restored_temp_identity, current_identity)
+        ):
+            raise ActivationError("effect-unknown", "progress exchange mismatch could not be restored", 4)
+        private.track_file("operation", "progress.json")
+        private.track_file("operation", "progress.json.next")
+        private.assert_intact()
+        raise ActivationError("effect-unknown", "progress exchange preserved substituted destination witness", 4)
+    history_name = f"{previous['sequence']:020d}.json"
+    try:
+        os.stat(history_name, dir_fd=private.progress_history_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise ActivationError("effect-unknown", "progress history destination already exists", 4)
+    # Never discard the exchanged predecessor. A replacement at the temp
+    # slot is preserved there and prevents a successful terminal result.
+    moved_data, moved_identity = _read_stable_at(private.operation_fd, "progress.json.next", "progress predecessor before history")
+    if moved_data != predecessor_data or not _same_custody_identity(moved_identity, predecessor_identity):
+        private.track_file("operation", "progress.json")
+        private.track_file("operation", "progress.json.next")
+        private.assert_intact()
+        raise ActivationError("effect-unknown", "progress predecessor changed before history retention", 4)
+    _renameat2_at(private.operation_fd, "progress.json.next", private.progress_history_fd, history_name, 1)
+    private.track_file("operation", "progress.json")
+    private.track_file("progress_history", history_name)
+    retained_data, retained_identity = _read_stable_at(private.progress_history_fd, history_name, "retained progress predecessor")
+    if retained_data != predecessor_data or not _same_custody_identity(retained_identity, predecessor_identity):
+        raise ActivationError("effect-unknown", "progress history retention lost predecessor custody", 4)
+    observed, observed_identity = _load_canonical_json_at(private.operation_fd, "progress.json", "progress")
+    if observed != progress or not _same_custody_identity(observed_identity, successor_identity):
+        raise ActivationError("effect-unknown", "progress successor final readback failed", 4)
+    _validate_progress_history_at(private, observed, operation)
+    private.assert_intact()
 
 
 def _progress(operation: dict[str, Any], *, phase: str, effect: str, direction: str = "apply", reasons: list[str] | None = None, staged_identity: dict[str, Any] | None = None, backup_identity: dict[str, Any] | None = None, terminal_evidence: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2878,8 +2886,13 @@ def _mkdir_plane_root(plane: StatePlane, root: RootBinding, target_fd: int) -> i
     Missing operator-owned ancestors are created at 0700 but an existing one is never
     chmodded: `~/.local/state` and `~/.local/state/ccodex` are shared with every other
     ccodex consumer, and rewriting their modes would be a side effect on state this engine
-    does not own. `_mkdir_at`'s unconditional 0700 is therefore reserved for the key
-    directory and its children, which only this engine creates.
+    does not own. `_mkdir_at` normalizes to 0700 -- unconditionally for a directory it just
+    created, and via `fchmod` only when a pre-existing one's mode is not already 0700 -- and
+    that normalization is reserved for the key directory and its children, not every
+    directory this engine touches -- but it is not reserved to directories this engine
+    itself created: a Git checkout pre-creates the repo-local root before the first apply
+    ever runs, and `_mkdir_at`'s own `fchmod` branch normalizes that pre-existing directory
+    the same way, which is exactly what the differing-bits admission proves.
 
     Containment of those ancestors is asserted BEFORE the first `mkdir` as well as after it.
     The second call alone was not a pre-effect check on this path: `_validate_plane_records`
@@ -2887,18 +2900,36 @@ def _mkdir_plane_root(plane: StatePlane, root: RootBinding, target_fd: int) -> i
     path -- the only path that writes to an unvalidated ancestor -- an other-writable or
     symlinked existing ancestor was detected after this function had already created
     directories beneath it.
+
+    The ancestors above the plane's own two constant namespace leaves (`ccodex`,
+    `activation`) belong to the operator's state home -- on the default plane that is
+    `~/.local/state` or an `XDG_STATE_HOME` override, and either one carries the operator's
+    home directory in its components. Naming one of those ancestors by its filesystem leaf in
+    an admission would let the ordered ledger reconstruct that home path one component at a
+    time even though no single entry contains it, so each is admitted by its ORDINAL position
+    plus the plane's own key digest instead; the two constant namespace leaves are exempt and
+    keep their literal names because they never vary with the operator's home.
     """
     if plane.repo_local:
         return _mkdir_at(target_fd, STATE_DIR_NAME)
     _assert_plane_ancestors(plane, root)
+    ancestor_parts = plane.root.parts[1:-1]
+    total_ancestors = len(ancestor_parts)
+    # Every part up to and including the state home's own last component is operator-home
+    # state; only the trailing `PLANE_NAMESPACE` leaves are this engine's own constant names.
+    home_ancestor_count = total_ancestors - len(PLANE_NAMESPACE)
+    plane_digest = plane.root.name[:12]
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
-        for part in plane.root.parts[1:-1]:
+        for index, part in enumerate(ancestor_parts, start=1):
             try:
                 child = open_component_dir(fd, part)
             except FileNotFoundError:
                 os.mkdir(part, 0o700, dir_fd=fd)
-                _admit(f"created state plane ancestor {part}")
+                if index <= home_ancestor_count:
+                    _admit(f"created state plane ancestor {index} of {total_ancestors} (plane {plane_digest})")
+                else:
+                    _admit(f"created state plane ancestor {part}")
                 os.fsync(fd)
                 child = open_component_dir(fd, part)
             os.close(fd)
@@ -3015,20 +3046,6 @@ def stage_payload(operation_dir: Path, operation: dict[str, Any], content: bytes
     return operation_dir / "stage" / "0000.payload"
 
 
-def _renameat2(source: Path, destination: Path, flags: int) -> None:
-    library = ctypes.CDLL(None, use_errno=True)
-    call = getattr(library, "renameat2", None)
-    if call is None:
-        raise ActivationError("unsupported", "Linux renameat2 is unavailable")
-    result = call(-100, os.fsencode(source), -100, os.fsencode(destination), flags)
-    if result:
-        error = ctypes.get_errno()
-        if error == errno.EEXIST:
-            raise ActivationError("stale", "publication compare-and-swap failed")
-        raise ActivationError("effect-unknown", f"renameat2 failed: {os.strerror(error)}", 4)
-    _admit(f"renamed {source} onto {destination} (flags {flags})")
-
-
 def _private_payload(path: Path, target: Path, label: str) -> tuple[bytes, dict[str, Any]]:
     """Read a private payload with the root's ordinary no-follow mount binding."""
     try:
@@ -3117,16 +3134,6 @@ def _restore_exchange_mismatch_at(private: PrivateTransaction, private_fd: int, 
     if raw != before or not _same_custody_identity(identity, moved_identity):
         raise ActivationError("effect-unknown", f"{label} mismatch could not be restored live", 4)
     private.assert_intact()
-
-
-def _restore_exchange_mismatch(live: Path, private: Path, target: Path, before: bytes, moved_identity: dict[str, Any], label: str) -> None:
-    """Put a detected exchanged-in external object back live without deleting it."""
-    _renameat2(private, live, 2)
-    _fsync_dir(private.parent)
-    _fsync_dir(live.parent)
-    raw, identity = _private_payload(live, target, f"restored {label}")
-    if raw != before or not _same_exchanged_identity(identity, moved_identity):
-        raise ActivationError("effect-unknown", f"{label} mismatch could not be restored live", 4)
 
 
 def _verify_staged_custody_before_publish(private: PrivateTransaction, operation: dict[str, Any]) -> None:
@@ -3548,7 +3555,12 @@ def _apply_noop(plan: dict[str, Any], manifest_path: Path, grant: dict[str, Any]
             os.close(_mkdir_plane_root(plane, binding, target_fd))
         finally:
             os.close(target_fd)
-    write_new_metadata(plane.anchor_dir / plane.audit_name(operation_id), audit)
+    # Through the base/relative form, not the bare path: that form's admission names only the
+    # leaf filename (`_write_new_at`'s "created private metadata {name}"), while the bare-path
+    # branch below admits `f"created {path}"` -- the plane's own absolute path, which carries
+    # the operator's home into `admitted_effects` exactly where `reasons` deliberately never
+    # puts it.
+    write_new_metadata(plane.anchor_dir / plane.audit_name(operation_id), audit, base=plane.anchor_dir, relative=plane.audit_name(operation_id))
     return _result("apply", "no-op", 0, target, effect="audit_only", plan_digest=digest_record(plan), operation_id=operation_id), 0
 
 
