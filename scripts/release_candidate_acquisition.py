@@ -1227,6 +1227,88 @@ def _assessment(kind: str, classification: str, phase: str, operation_id: str, l
     return _seal(record)
 
 
+def _diagnostic_sink() -> Callable[[bytes], None]:
+    """Settle this entrypoint's stderr sink ONCE, before anything runs, and never let it raise.
+
+    The governing rule is `gate_receipt._stderr_mirror`'s, applied to a channel that carries
+    diagnostics rather than a mirror: an optional display convenience must not be able to destroy
+    the mandatory artifact or corrupt the exit signal.  Here the artifacts at risk are the EXIT CODE
+    and the operator's ability to see WHY something failed, so what is preserved when the sink is
+    unusable is, in order: the exit code this entrypoint had already decided (Decision 9's 0/1/2/3/4
+    stay exactly as classified), every durable journal, receipt and lock effect already on disk, and
+    the reason itself for as long as any byte of it can still be delivered.  Only the display is
+    given up, silently, because by then there is nowhere left to report the loss.
+
+    Two hostile shapes are ordinary rather than exotic, and both used to land on the DIAGNOSTIC path
+    — the error reporter dying while reporting an error.  `unittest --buffer` and
+    `contextlib.redirect_stderr(io.StringIO())` each install a TEXT `sys.stderr`, which has no
+    `.buffer`, so the unguarded `sys.stderr.buffer.write` raised `AttributeError` out of an `except`
+    handler: the exit-4 diagnostic never reached the operator and the code became `run`'s generic 1
+    — a partial or unknown effect reported as a clean pre-effect internal failure.  `2>&-` leaves
+    CPython with `sys.stderr is None`, the same `AttributeError`.  A reader that goes away makes
+    every write `EPIPE`, and the pending bytes are enough for the interpreter's shutdown flush to
+    replace this family's exit code with CPython's 120, outside the declared exit space entirely —
+    so the failed stream is dropped exactly as `gate_receipt.abandon_broken_stream` drops it, which
+    loses no byte that the failing write had not already lost.
+
+    The shape is settled once, at the top of each entrypoint, because `.buffer` cannot safely be
+    reached for mid-run: a text stream is written as decoded text instead of being made to fail.  The
+    rule is re-expressed here rather than imported: this module is loaded by absolute path as a
+    top-level module (`release_candidate._load_acquisition_engine`), it runs under `-I` from the
+    acquired candidate's private interpreter, and the candidate manifest pins exactly two files by
+    digest — importing a third would widen that pinned dispatch surface for a display convenience.
+    """
+    stream = sys.stderr
+    if stream is None:  # `2>&-`: this process was handed no stderr to be diagnostic on
+        return lambda payload: None
+    try:
+        buffer = getattr(stream, "buffer", None)
+        if buffer is None:
+            target: object = stream
+            write: Callable[[bytes], object] = lambda payload: stream.write(
+                payload.decode("utf-8", "replace")
+            )
+        else:
+            target = buffer
+            write = buffer.write
+        flush = getattr(target, "flush", None)
+        if not callable(flush):  # `write` without `flush` is a shape an entrypoint may be handed
+            flush = lambda: None  # noqa: E731 - a no-op stand-in, not a named behavior
+    except Exception:
+        # RESOLVING the shape is display work too, so a stream whose attribute access raises may
+        # cost the channel and nothing else. Settling this here rather than at the call sites is
+        # what keeps `report` unable to fail: an entrypoint that had to guard its own reporter
+        # would be back to a reporter that can die while reporting.
+        return lambda payload: None
+    live = [True]
+
+    def report(payload: bytes) -> None:
+        if not live[0]:  # the channel is already retired; there is nowhere to say so
+            return
+        try:
+            write(payload)
+            flush()
+        except (OSError, ValueError):  # EPIPE/ENOSPC, a closed stream, an unencodable byte
+            live[0] = False
+            if getattr(sys, "stderr", None) is stream:
+                # Only the stream that actually failed may be dropped: this module's entrypoints are
+                # importable, so the current `sys.stderr` may belong to a caller who swapped it.
+                sys.stderr = None
+
+    return report
+
+
+def _diagnostic_line(code: str) -> bytes:
+    """The stable one-line refusal, as bytes for the settled sink.
+
+    `print(..., file=sys.stderr)` cannot serve this: with `2>&-` CPython's `sys.stderr` is `None`
+    and `print` treats a `None` file as `sys.stdout`, which would put a diagnostic on the wire this
+    family reserves for canonical machine-readable records.  Stable codes contain no path,
+    environment, credential, or untrusted content.
+    """
+    return f"release-candidate-acquisition: {code}\n".encode("utf-8")
+
+
 def _diagnostic(failure: AcquisitionFailure) -> bytes:
     classification = failure.classification if failure.classification in {"exact", "unavailable"} else "unavailable"
     phase = failure.last_phase
@@ -1901,6 +1983,10 @@ def _load_grant(
 
 def apply_hardened(arguments, candidate, policy: dict[str, object], validator, source_root: Path) -> int:
     """Effect-free admission followed by descriptor-custodied journaled acquisition."""
+    # Settled before anything runs, and unable to fail afterwards: see `_diagnostic_sink`. Reaching
+    # for `sys.stderr.buffer` from the `except` handlers below is how the error reporter used to die
+    # while reporting an error, turning an admitted exit 4 into something else entirely.
+    report = _diagnostic_sink()
     candidate._require_linux_x64()
     plan_raw, plan_record, plan_pin = _load_plan(
         arguments.plan, policy, validator
@@ -2218,12 +2304,12 @@ def apply_hardened(arguments, candidate, policy: dict[str, object], validator, s
                 failure.last_phase if failure.last_phase != "absent" else phase,
                 failure.classification,
             )
-            sys.stderr.buffer.write(_diagnostic(enriched))
+            report(_diagnostic(enriched))
             return 4
         raise
     except Exception:
         if effects_started or phase != "absent":
-            sys.stderr.buffer.write(
+            report(
                 _diagnostic(
                     AcquisitionFailure(
                         "internal", 4, operation, locator, phase, "unavailable"
@@ -3046,6 +3132,8 @@ def _recover_opened_external(
 
 
 def recover_finish_hardened(arguments, candidate, policy: dict[str, object], validator, source_root: Path) -> int:
+    # Settled before anything runs; the `except` handler below writes only through it.
+    report = _diagnostic_sink()
     candidate._require_linux_x64()
     state = _root_pin(arguments.xdg_state_home, "xdg-state-home")
     data: RootPin | None = None
@@ -3287,7 +3375,7 @@ def recover_finish_hardened(arguments, candidate, policy: dict[str, object], val
                 else failed_phase,
                 "unavailable" if failure.classification != "exact" else failure.classification,
             )
-            sys.stderr.buffer.write(_diagnostic(enriched))
+            report(_diagnostic(enriched))
             return 4
         raise
     finally:
@@ -3304,6 +3392,9 @@ def recover_finish_hardened(arguments, candidate, policy: dict[str, object], val
 
 
 def run(arguments, *, candidate) -> int:
+    # Settled before the first action is dispatched: every handler below reports through it, and a
+    # sink resolved inside an `except` handler is a reporter that can die while reporting.
+    report = _diagnostic_sink()
     try:
         policy, validator, source_root = _load_policy(candidate)
         if arguments.acquire_action == "plan":
@@ -3319,12 +3410,11 @@ def run(arguments, *, candidate) -> int:
         _fail("usage", 2)
     except AcquisitionFailure as failure:
         if failure.exit_code == 4:
-            sys.stderr.buffer.write(_diagnostic(failure))
+            report(_diagnostic(failure))
         else:
-            # Stable codes contain no path, environment, credential, or untrusted content.
-            print(f"release-candidate-acquisition: {failure.code}", file=sys.stderr)
+            report(_diagnostic_line(failure.code))
         return failure.exit_code
     except Exception:
-        print("release-candidate-acquisition: internal", file=sys.stderr)
+        report(_diagnostic_line("internal"))
         return 1
     return 1

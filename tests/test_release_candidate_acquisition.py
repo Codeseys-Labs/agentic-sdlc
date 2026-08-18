@@ -1,7 +1,9 @@
 """Closed contract tests for developer-only candidate acquisition."""
 from __future__ import annotations
 
+import contextlib
 import copy
+import errno
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
@@ -2401,6 +2403,212 @@ class AcquisitionEngineLifecycleTests(unittest.TestCase):
                 self.assertEqual(self.validator.validate_release_candidate_acquisition_record("operation_journal", journal_raw, self.policy), [])
                 self.assertEqual(json.loads(journal_raw)["entries"][-1]["phase"], fault_phase)
 
+    def test_a_text_stderr_costs_apply_neither_its_exit_code_nor_its_diagnostic(self) -> None:
+        """The four `sys.stderr.buffer` sites were the error reporter dying while reporting an error.
+
+        A text `sys.stderr` has no `.buffer`, and `unittest --buffer` and
+        `contextlib.redirect_stderr(io.StringIO())` each install exactly that, so an in-process
+        caller reached `AttributeError` INSIDE the `except` handlers below: the exit-4 diagnostic was
+        never delivered and the code became `run`'s generic 1 — a partial effect reported as a clean
+        pre-effect internal failure. Both handlers are exercised: an `AcquisitionFailure` raised past
+        the first durable effect (exact/partial) and an unexpected `RuntimeError` (unavailable/
+        unknown), because they build different diagnostics and only the specific one is evidence.
+        """
+        trust = ROOT / "policy" / "release-candidate.v1.json"
+
+        def staged_fault(phase: str) -> None:
+            # `_fault_after_phase` turns any hook exception into an exact `AcquisitionFailure`, so
+            # this reaches the FIRST handler and never the second.
+            if phase == "staged":
+                raise RuntimeError("test-injected fault at the staged boundary")
+
+        shapes = {
+            # (extra injection, expected classification, expected effect_state)
+            "acquisition-failure": (
+                lambda: mock.patch.object(self.engine, "_TEST_FAULT_HOOK", staged_fault),
+                "exact",
+                "partial",
+            ),
+            "unexpected-exception": (
+                # A genuine non-`AcquisitionFailure` escaping the body after the staged journal is
+                # durable, which is the ONLY way to reach the `except Exception` handler.
+                lambda: mock.patch.object(
+                    self.engine,
+                    "_rename_noreplace_at",
+                    side_effect=RuntimeError("test-injected internal after staged"),
+                ),
+                "unavailable",
+                "unknown",
+            ),
+        }
+
+        def run_apply(case: Path, sink: object, inject) -> tuple[int, str]:
+            arguments, operation, _archive_sha = self._records(case)
+            with contextlib.ExitStack() as stack:
+                for patcher in (
+                    mock.patch.object(
+                        self.engine,
+                        "_trust_root",
+                        return_value=(trust, hashlib.sha256(trust.read_bytes()).hexdigest()),
+                    ),
+                    mock.patch.object(
+                        self.engine, "_stage_candidate", side_effect=self._fake_stage
+                    ),
+                    inject(),
+                    mock.patch.object(self.engine.sys, "stderr", sink),
+                ):
+                    stack.enter_context(patcher)
+                return (
+                    self.engine.apply_hardened(
+                        arguments, self.candidate, self.policy, self.validator, self.source_root
+                    ),
+                    operation,
+                )
+
+        def comparable(record: dict[str, object]) -> dict[str, object]:
+            """Everything two runs of the same injection must agree on.
+
+            `journal_locator` embeds the journal digest and `record_sha256` seals the record, so both
+            legitimately differ between two runs over two state roots; their SHAPE is asserted
+            separately rather than dropped.
+            """
+            return {k: v for k, v in record.items() if k not in {"journal_locator", "record_sha256"}}
+
+        for label, (inject, classification, effect_state) in shapes.items():
+            with self.subTest(shape=label), tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                case = Path(raw)
+                text = io.StringIO()
+                result, operation = run_apply(case, text, inject)
+                self.assertEqual(result, 4)  # not 1, and not an escaping AttributeError
+                diagnostic = json.loads(text.getvalue())
+                self.assertEqual(
+                    diagnostic["schema_version"],
+                    "release-candidate-acquisition-exit4-diagnostic/v1",
+                )
+                self.assertEqual(diagnostic["classification"], classification)
+                self.assertEqual(diagnostic["effect_state"], effect_state)
+                self.assertEqual(diagnostic["last_proven_phase"], "staged")
+                self.assertEqual(diagnostic["operation_id"], operation)
+                self.assertRegex(diagnostic["journal_locator"], r"^journal:v1:op-[0-9a-f]{32}:[0-9a-f]{64}$")
+                journal = case / "state" / "agentic-sdlc" / "acquisition" / "journals" / f"{operation}.json"
+                self.assertTrue(journal.is_file())  # the durable artifact is untouched by all this
+                # POSITIVE CONTROL: the same injection over a BYTE stderr reports the same record, so
+                # the text path above lost nothing and this channel really does carry the value.
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw_control:
+                    errors = io.BytesIO()
+                    stderr = SimpleNamespace(
+                        buffer=errors, write=lambda t: errors.write(t.encode("utf-8"))
+                    )
+                    control_result, _operation = run_apply(Path(raw_control), stderr, inject)
+                self.assertEqual(control_result, 4)
+                self.assertEqual(
+                    comparable(json.loads(errors.getvalue())), comparable(diagnostic)
+                )
+                self.assertRegex(
+                    json.loads(errors.getvalue())["journal_locator"],
+                    r"^journal:v1:op-[0-9a-f]{32}:[0-9a-f]{64}$",
+                )
+
+    def test_an_unwritable_stderr_costs_apply_only_its_diagnostic(self) -> None:
+        """A sink that FAILS mid-write is the second shape, and it may cost only the display.
+
+        Settling the shape cannot help here: the write fails for a reason no shape check can see. So
+        the exit code, the journal, and the receipt-bearing state on disk must all survive it, and
+        the failed stream is dropped so the interpreter's shutdown flush cannot replace the code
+        with CPython's 120.
+        """
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            arguments, operation, _archive_sha = self._records(case)
+            trust = ROOT / "policy" / "release-candidate.v1.json"
+
+            def fault(phase: str) -> None:
+                if phase == "staged":
+                    raise RuntimeError("test-injected internal")
+
+            broken = SimpleNamespace(
+                buffer=mock.Mock(**{"write.side_effect": OSError(errno.EPIPE, "broken pipe")}),
+                write=lambda text: None,
+            )
+            with (
+                mock.patch.object(
+                    self.engine,
+                    "_trust_root",
+                    return_value=(trust, hashlib.sha256(trust.read_bytes()).hexdigest()),
+                ),
+                mock.patch.object(self.engine, "_stage_candidate", side_effect=self._fake_stage),
+                mock.patch.object(self.engine, "_TEST_FAULT_HOOK", fault),
+                mock.patch.object(self.engine.sys, "stderr", broken),
+            ):
+                result = self.engine.apply_hardened(
+                    arguments, self.candidate, self.policy, self.validator, self.source_root
+                )
+                # POSITIVE CONTROL on the injection: the sink was REACHED and it DID fail. Without
+                # this, the assertions below would also pass on a run that never wrote a byte.
+                self.assertTrue(broken.buffer.write.called)
+                self.assertIsNone(sys.stderr)  # the stream that failed was dropped, not kept
+            self.assertEqual(result, 4)
+            journal = case / "state" / "agentic-sdlc" / "acquisition" / "journals" / f"{operation}.json"
+            self.assertTrue(journal.is_file())
+            self.assertEqual(
+                self.validator.validate_release_candidate_acquisition_record(
+                    "operation_journal", journal.read_bytes(), self.policy
+                ),
+                [],
+            )
+
+    def test_recover_finish_reports_its_exit4_reason_onto_a_text_stderr(self) -> None:
+        """The third site, in `recover_finish_hardened`, reached through its own `except` handler."""
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            state = case / "state"
+            state.mkdir(mode=0o700)
+            locator = f"journal:v1:op-{'0' * 32}:{'c' * 64}"
+            arguments = SimpleNamespace(
+                acquire_action="recover",
+                recover_action="finish",
+                xdg_state_home=state,
+                journal_locator=locator,
+                grant=case / "grant.json",
+            )
+            injected = self.engine.AcquisitionFailure(
+                "test-injected-journal",
+                4,
+                f"op-{'0' * 32}",
+                locator,
+                "published",
+                "exact",
+            )
+            text = io.StringIO()
+            with (
+                mock.patch.object(self.engine, "_load_journal_at", side_effect=injected),
+                mock.patch.object(self.engine.sys, "stderr", text),
+            ):
+                result = self.engine.recover_finish_hardened(
+                    arguments, self.candidate, self.policy, self.validator, self.source_root
+                )
+            self.assertEqual(result, 4)
+            diagnostic = json.loads(text.getvalue())
+            self.assertEqual(
+                diagnostic["schema_version"], "release-candidate-acquisition-exit4-diagnostic/v1"
+            )
+            self.assertEqual(diagnostic["last_proven_phase"], "published")
+            self.assertEqual(diagnostic["effect_state"], "partial")
+            self.assertEqual(diagnostic["journal_locator"], locator)
+            # POSITIVE CONTROL: the byte-stderr shape yields the identical bytes, so the text sink
+            # above is a translation of a live channel and not an empty one.
+            errors = io.BytesIO()
+            stderr = SimpleNamespace(buffer=errors, write=lambda t: errors.write(t.encode("utf-8")))
+            with (
+                mock.patch.object(self.engine, "_load_journal_at", side_effect=injected),
+                mock.patch.object(self.engine.sys, "stderr", stderr),
+            ):
+                control = self.engine.recover_finish_hardened(
+                    arguments, self.candidate, self.policy, self.validator, self.source_root
+                )
+            self.assertEqual(control, 4)
+            self.assertEqual(errors.getvalue(), text.getvalue().encode("utf-8"))
+
     def test_receipt_publication_crash_window_is_exactly_idempotent(self) -> None:
         points = {
             "receipt-before-create": "absent",
@@ -3023,6 +3231,375 @@ class AcquisitionGenuineEndToEndTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(source_evidence(admitted_source), before_build)
+
+
+ENGINE_PATH = ROOT / "scripts" / "release_candidate_acquisition.py"
+
+# Every diagnostic-bearing exit this family declares, plus the codes that must stay unreachable
+# on the diagnostic path: CPython's 120 (a shutdown flush of a broken stderr) above all.
+DECLARED_ACQUISITION_EXITS = frozenset({0, 1, 2, 3, 4})
+
+
+def _injected_failures(engine) -> dict[str, tuple[object, int]]:
+    """One injection per handler arm in `run`, with the exit code each arm must still return."""
+    locator = f"journal:v1:op-{'0' * 32}:{'d' * 64}"
+    return {
+        "exit4": (
+            engine.AcquisitionFailure(
+                "test-injected", 4, f"op-{'0' * 32}", locator, "published", "exact"
+            ),
+            4,
+        ),
+        "exit3": (engine.AcquisitionFailure("test-injected-refusal", 3), 3),
+        "internal": (RuntimeError("test-injected internal"), 1),
+    }
+
+
+class AcquisitionRunDiagnosticSinkTests(unittest.TestCase):
+    """`run`'s own handlers: a diagnostic channel may cost the display and nothing else.
+
+    `run` is where a diagnostic failure used to be worst: an `AttributeError` from
+    `sys.stderr.buffer` inside the exit-4 arm escaped into the dispatcher, and the stable one-line
+    arm used `print(..., file=sys.stderr)` — which, with `2>&-` making `sys.stderr` `None`, CPython
+    redirects to `sys.stdout`, putting a diagnostic on the wire this family reserves for canonical
+    records.  Both are asserted here, per arm.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.engine = load_module("release_candidate_acquisition_sink_under_test", ENGINE_PATH)
+
+    def _run(self, *, sink: object, failure: object) -> tuple[int, io.BytesIO]:
+        """Drive `run` with one injected failure and one stderr shape. Returns (code, stdout bytes).
+
+        `_load_policy` and `plan` are the only injections: the sink under test lives in `run`'s own
+        handlers, so no lifecycle fixture is needed to reach it, and none is used — a fixture failing
+        for its own reasons is exactly the trap these assertions must not fall into.
+        """
+        captured = io.BytesIO()
+        stdout = SimpleNamespace(
+            buffer=captured, write=lambda text: captured.write(text.encode("utf-8"))
+        )
+        with (
+            mock.patch.object(
+                self.engine, "_load_policy", return_value=({}, None, Path("/nonexistent"))
+            ),
+            mock.patch.object(self.engine, "plan", side_effect=failure),
+            mock.patch.object(self.engine.sys, "stdout", stdout),
+            mock.patch.object(self.engine.sys, "stderr", sink),
+        ):
+            code = self.engine.run(SimpleNamespace(acquire_action="plan"), candidate=None)
+        return code, captured
+
+    def _expected_reason(self, arm: str, failure: object) -> bytes:
+        if arm == "exit4":
+            return self.engine._diagnostic(failure)
+        if arm == "exit3":
+            return b"release-candidate-acquisition: test-injected-refusal\n"
+        return b"release-candidate-acquisition: internal\n"
+
+    def test_a_text_stderr_keeps_every_arms_exit_code_and_its_reason(self) -> None:
+        for arm, (failure, expected) in _injected_failures(self.engine).items():
+            with self.subTest(arm=arm):
+                text = io.StringIO()
+                code, stdout = self._run(sink=text, failure=failure)
+                self.assertEqual(code, expected)  # the AttributeError used to make this 1
+                self.assertIn(code, DECLARED_ACQUISITION_EXITS)
+                self.assertEqual(
+                    text.getvalue().encode("utf-8"), self._expected_reason(arm, failure)
+                )
+                self.assertEqual(stdout.getvalue(), b"")  # diagnostics never touch the wire
+                # POSITIVE CONTROL: the byte-stderr shape produces byte-identical output for the
+                # same arm, so the comparison above is against a live channel.
+                errors = io.BytesIO()
+                stderr = SimpleNamespace(
+                    buffer=errors, write=lambda t: errors.write(t.encode("utf-8"))
+                )
+                control_code, control_stdout = self._run(sink=stderr, failure=failure)
+                self.assertEqual(control_code, expected)
+                self.assertEqual(errors.getvalue(), text.getvalue().encode("utf-8"))
+                self.assertEqual(control_stdout.getvalue(), b"")
+
+    def test_a_closed_fd_2_costs_the_reason_and_never_the_exit_code_or_the_wire(self) -> None:
+        """`2>&-` in-process is `sys.stderr is None`, which is how CPython itself represents it."""
+        for arm, (failure, expected) in _injected_failures(self.engine).items():
+            with self.subTest(arm=arm):
+                code, stdout = self._run(sink=None, failure=failure)
+                self.assertEqual(code, expected)
+                self.assertIn(code, DECLARED_ACQUISITION_EXITS)
+                # The stable one-line arms went through `print(..., file=sys.stderr)`, and `print`
+                # treats a `None` file as `sys.stdout`: this is the assertion that catches it.
+                self.assertEqual(stdout.getvalue(), b"")
+        # POSITIVE CONTROL: with a usable stderr the same arms DO deliver their reason, so the
+        # emptiness asserted above is the missing stream and not a silent engine.
+        for arm, (failure, expected) in _injected_failures(self.engine).items():
+            errors = io.BytesIO()
+            stderr = SimpleNamespace(buffer=errors, write=lambda t: errors.write(t.encode("utf-8")))
+            code, stdout = self._run(sink=stderr, failure=failure)
+            self.assertEqual(code, expected)
+            self.assertEqual(errors.getvalue(), self._expected_reason(arm, failure))
+            self.assertEqual(stdout.getvalue(), b"")
+
+    def test_a_failing_write_retires_the_channel_and_drops_the_stream(self) -> None:
+        """EPIPE mid-write: the code survives, and the stream is dropped so 120 cannot replace it."""
+        for arm, (failure, expected) in _injected_failures(self.engine).items():
+            with self.subTest(arm=arm):
+                broken = SimpleNamespace(
+                    buffer=mock.Mock(**{"write.side_effect": OSError(errno.EPIPE, "broken pipe")}),
+                    write=lambda text: None,
+                )
+                original = sys.stderr
+                try:
+                    code, stdout = self._run(sink=broken, failure=failure)
+                finally:
+                    sys.stderr = original
+                # POSITIVE CONTROL on the injection: the sink was REACHED and it DID fail.
+                self.assertTrue(broken.buffer.write.called)
+                self.assertEqual(code, expected)
+                self.assertEqual(stdout.getvalue(), b"")
+
+    def test_the_settled_sink_writes_where_it_can_and_never_raises_where_it_cannot(self) -> None:
+        """The primitive itself, across every stream shape an importable entrypoint may be handed."""
+        payload = b"diagnostic-bytes\n"
+        text = io.StringIO()
+        with mock.patch.object(sys, "stderr", text):
+            self.engine._diagnostic_sink()(payload)
+        self.assertEqual(text.getvalue(), payload.decode("utf-8"))
+        raw = io.BytesIO()
+        with mock.patch.object(
+            sys, "stderr", SimpleNamespace(buffer=raw, write=lambda t: None)
+        ):
+            self.engine._diagnostic_sink()(payload)
+        self.assertEqual(raw.getvalue(), payload)
+        # A `write` with no `flush` is a shape a caller may hand an entrypoint, and it must not
+        # become a new way to lose the reason.
+        flushless: list[str] = []
+        with mock.patch.object(
+            sys, "stderr", SimpleNamespace(write=lambda t: flushless.append(t))
+        ):
+            self.engine._diagnostic_sink()(payload)
+        self.assertEqual(flushless, [payload.decode("utf-8")])
+        with mock.patch.object(sys, "stderr", None):
+            self.engine._diagnostic_sink()(payload)  # nowhere to write, and not a failure
+            self.assertIsNone(sys.stderr)
+
+    def test_a_stream_whose_shape_cannot_even_be_resolved_costs_only_the_channel(self) -> None:
+        """The narrowest shape, and the one that would put the reporter back inside a `try`.
+
+        `getattr(stream, "buffer", ...)` suppresses only `AttributeError`; a `.buffer` that raises
+        anything else would otherwise escape the sink's own construction, which happens outside every
+        handler — so the resolution is settled defensively and the arm keeps its exit code.
+        """
+
+        class _UnresolvableStderr:
+            @property
+            def buffer(self) -> object:
+                raise RuntimeError("this stream cannot describe itself")
+
+            def write(self, text: str) -> int:
+                raise AssertionError("a stream that cannot be resolved must never be written to")
+
+        hostile = _UnresolvableStderr()
+        with mock.patch.object(sys, "stderr", hostile):
+            self.engine._diagnostic_sink()(b"nowhere\n")  # neither raises nor writes
+        for arm, (failure, expected) in _injected_failures(self.engine).items():
+            with self.subTest(arm=arm):
+                code, stdout = self._run(sink=hostile, failure=failure)
+                self.assertEqual(code, expected)
+                self.assertEqual(stdout.getvalue(), b"")
+        # POSITIVE CONTROL: the resolution is not simply always giving up — a resolvable stream on
+        # the same code path still receives the reason.
+        errors = io.BytesIO()
+        with mock.patch.object(
+            sys, "stderr", SimpleNamespace(buffer=errors, write=lambda t: None)
+        ):
+            self.engine._diagnostic_sink()(b"nowhere\n")
+        self.assertEqual(errors.getvalue(), b"nowhere\n")
+
+    def test_only_the_stream_that_failed_is_ever_dropped(self) -> None:
+        """These entrypoints are importable, so the caller may have swapped the stream since."""
+        settled = SimpleNamespace(
+            buffer=mock.Mock(**{"write.side_effect": OSError(errno.EPIPE, "broken pipe")}),
+            write=lambda text: None,
+        )
+        replacement = io.StringIO()
+        with mock.patch.object(sys, "stderr", settled):
+            report = self.engine._diagnostic_sink()
+            sys.stderr = replacement  # a caller swaps it after the sink settled
+            report(b"lost\n")
+            self.assertIs(sys.stderr, replacement)  # not ours to drop
+        with mock.patch.object(sys, "stderr", settled):
+            self.engine._diagnostic_sink()(b"lost\n")
+            self.assertIsNone(sys.stderr)  # this one failed, so it goes
+        # POSITIVE CONTROL: the replacement stream is writable, so the first case really could have
+        # been written to had the sink wrongly re-resolved it.
+        replacement.write("proof\n")
+        self.assertEqual(replacement.getvalue(), "proof\n")
+
+    def test_a_retired_channel_is_never_written_to_again(self) -> None:
+        stream = SimpleNamespace(
+            buffer=mock.Mock(**{"write.side_effect": OSError(errno.EPIPE, "broken pipe")}),
+            write=lambda text: None,
+        )
+        original = sys.stderr
+        try:
+            with mock.patch.object(sys, "stderr", stream):
+                report = self.engine._diagnostic_sink()
+                report(b"first\n")  # fails, and retires the channel
+                report(b"second\n")  # never attempted
+        finally:
+            sys.stderr = original
+        self.assertEqual(stream.buffer.write.call_count, 1)
+        self.assertEqual(stream.buffer.write.call_args_list[0].args, (b"first\n",))
+
+
+def _acquisition_driver(directory: Path) -> Path:
+    """A child that reaches ONE `run` handler arm with real file descriptors.
+
+    In-process shapes cover the stream objects; only a real child can carry a real `2>&-` and a real
+    broken pipe, which is where CPython's 120 comes from. The injections are the same two module
+    attributes the in-process tests patch, so the arm under test is the engine's own.
+    """
+    driver = directory / "acquisition_stderr_driver.py"
+    driver.write_text(
+        "import importlib.util, sys\n"
+        "from pathlib import Path\n"
+        "from types import SimpleNamespace\n"
+        "engine_path, arm = Path(sys.argv[1]), sys.argv[2]\n"
+        "spec = importlib.util.spec_from_file_location('release_candidate_acquisition', engine_path)\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "sys.modules[spec.name] = module\n"
+        "spec.loader.exec_module(module)\n"
+        "locator = 'journal:v1:op-' + '0' * 32 + ':' + 'd' * 64\n"
+        "failures = {\n"
+        "    'exit4': module.AcquisitionFailure(\n"
+        "        'test-injected', 4, 'op-' + '0' * 32, locator, 'published', 'exact'\n"
+        "    ),\n"
+        "    'exit3': module.AcquisitionFailure('test-injected-refusal', 3),\n"
+        "    'internal': RuntimeError('test-injected internal'),\n"
+        "}\n"
+        "def raiser(*args, **kwargs):\n"
+        "    raise failures[arm]\n"
+        "module._load_policy = lambda candidate: ({}, None, Path('/nonexistent'))\n"
+        "module.plan = raiser\n"
+        "code = module.run(SimpleNamespace(acquire_action='plan'), candidate=None)\n"
+        "sys.stdout.write('code=%d\\n' % code)\n"
+        "sys.stdout.flush()\n"
+        "sys.exit(code)\n",
+        encoding="utf-8",
+    )
+    return driver
+
+
+def _run_with_hostile_stderr(argv: list[str], *, mode: str, cwd: Path) -> tuple[int, bytes]:
+    """Run argv with a stderr the child CANNOT write to. Returns (exit code, stdout bytes).
+
+    Re-expressed from `tests/test_gate_receipt_producer.py`'s harness for the same two shapes, kept
+    local so neither test module can break the other:
+
+        closed  `exec 2>&-`, so the interpreter starts with `sys.stderr is None` and the first
+                `sys.stderr.buffer` raises `AttributeError` rather than `OSError`.
+        epipe   fd 2 is the write end of a pipe whose reader is already closed, so every write
+                raises EPIPE AND leaves bytes pending that the interpreter flushes again while
+                finalizing — which is what replaces the exit code with 120.
+
+    Stderr is deliberately not captured: capturing it would hand the child a writable stream.
+    """
+    if mode == "closed":
+        proc = subprocess.run(
+            ["sh", "-c", 'exec 2>&-; exec "$@"', "sh", *argv],
+            stdout=subprocess.PIPE,
+            cwd=str(cwd),
+            check=False,
+        )
+        return proc.returncode, proc.stdout
+    if mode != "epipe":
+        raise AssertionError(f"unknown hostile stderr mode: {mode}")
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)  # the reader is gone BEFORE the child starts
+    try:
+        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=write_fd, cwd=str(cwd))
+    finally:
+        os.close(write_fd)
+    assert child.stdout is not None
+    with child.stdout as stream:
+        out = stream.read()
+    return child.wait(), out
+
+
+def _stderr_is_really_hostile(mode: str, cwd: Path) -> str:
+    """What a canary child OBSERVES about its own stderr, reported over stdout."""
+    canary = (
+        "import sys\n"
+        "if sys.stderr is None:\n"
+        "    print('none')\n"
+        "else:\n"
+        "    try:\n"
+        "        sys.stderr.write('x')\n"
+        "        sys.stderr.flush()\n"
+        "        print('writable')\n"
+        "    except OSError as exc:\n"
+        "        print(type(exc).__name__)\n"
+    )
+    code, out = _run_with_hostile_stderr([sys.executable, "-B", "-c", canary], mode=mode, cwd=cwd)
+    return f"{code}:{out.decode('utf-8', 'replace').strip()}"
+
+
+@unittest.skipUnless(os.name == "posix", "fd-level stderr hostility is POSIX-only")
+class AcquisitionHostileStderrTests(unittest.TestCase):
+    """With REAL file descriptors: 120 must be unreachable, not merely unlikely."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.driver = _acquisition_driver(self.tmp)
+
+    def test_the_hostile_stderr_fixture_is_actually_hostile(self) -> None:
+        """The control for every negative assertion below.
+
+        The canary's own exit codes are the second half of it: under a broken pipe the canary
+        CATCHES its `BrokenPipeError` and still exits 120, because the bytes it left pending are
+        flushed again during finalization — which is why swallowing the write is not enough on its
+        own, and why the sink also stops claiming the stream.
+        """
+        self.assertEqual(_stderr_is_really_hostile("closed", self.tmp), "0:none")
+        self.assertEqual(_stderr_is_really_hostile("epipe", self.tmp), "120:BrokenPipeError")
+
+    def test_no_hostile_stderr_can_change_an_arms_exit_code(self) -> None:
+        for mode in ("closed", "epipe"):
+            for arm, expected in (("exit4", 4), ("exit3", 3), ("internal", 1)):
+                with self.subTest(mode=mode, arm=arm):
+                    code, stdout = _run_with_hostile_stderr(
+                        [sys.executable, "-B", str(self.driver), str(ENGINE_PATH), arm],
+                        mode=mode,
+                        cwd=self.tmp,
+                    )
+                    # The engine's own decision, carried out over stdout, versus what the shell saw:
+                    # 120 is exactly the case where those two disagree.
+                    self.assertEqual(stdout, f"code={expected}\n".encode("utf-8"))
+                    self.assertEqual(code, expected)
+                    self.assertIn(code, DECLARED_ACQUISITION_EXITS)
+                    self.assertNotEqual(code, 120)
+
+    def test_the_same_arms_over_a_working_stderr_do_report_their_reason(self) -> None:
+        """POSITIVE CONTROL for the whole class: the driver reaches the site and it does write."""
+        expectations = {
+            "exit4": b'"schema_version":"release-candidate-acquisition-exit4-diagnostic/v1"',
+            "exit3": b"release-candidate-acquisition: test-injected-refusal\n",
+            "internal": b"release-candidate-acquisition: internal\n",
+        }
+        for arm, expected_reason in expectations.items():
+            with self.subTest(arm=arm):
+                proc = subprocess.run(
+                    [sys.executable, "-B", str(self.driver), str(ENGINE_PATH), arm],
+                    capture_output=True,
+                    cwd=str(self.tmp),
+                    check=False,
+                )
+                self.assertIn(expected_reason, proc.stderr)
+                self.assertEqual(proc.stdout, b"code=%d\n" % proc.returncode)
+                self.assertNotEqual(proc.returncode, 120)
 
 
 if __name__ == "__main__":

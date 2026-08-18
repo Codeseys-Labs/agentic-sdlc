@@ -802,6 +802,75 @@ def _stderr_mirror(*, quiet: bool) -> Callable[[bytes], None]:
     return _guarded_stderr_sink(stream, buffer.write, _flush_of(buffer))
 
 
+_REAP_GRACE_SECONDS = 5.0
+
+
+def _reap_abandoned_gate(
+    proc: subprocess.Popen[bytes], *, ran: str, token: int, effects: _Effects
+) -> None:
+    """Reap a gate child abandoned by an exception, in BOUNDED time, changing no verdict.
+
+    THE DECISION, because the obvious fix is the wrong one. An unreaped child costs a file handle
+    and a `ResourceWarning: subprocess N is still running` raised from `__del__` — which no test can
+    fail on and which changes no exit code and no receipt field. An UNBOUNDED `proc.wait()` in a
+    `finally` costs something worse: this producer wraps an eleven-minute gate, so a gate that
+    ignores `SIGPIPE` and keeps writing after we closed its pipe would park the failure report here
+    for as long as it likes, and a hung producer is indistinguishable from a slow gate. The leak is
+    visible and bounded; the hang is invisible and unbounded. So the wait is bounded and escalates.
+
+    Three stages, each capped at `_REAP_GRACE_SECONDS`, for a ceiling of 15s added to a failure that
+    is already unwinding: poll (the usual case — closing the pipe already ended it), then `SIGTERM`,
+    then `SIGKILL`. `SIGKILL` cannot be ignored, so the last wait is bounded in practice and capped
+    anyway for the uninterruptible-sleep case; if even that times out the child is reported as
+    possibly still running, which is the leak we started with plus an honest sentence about it.
+
+    WHAT THIS DOES NOT DO, and the comment exists so nobody reads more into it: it signals the direct
+    child only. A gate like `mise run check` is a process tree, and killing its root can orphan
+    grandchildren that keep running. Signalling the group is NOT an option here — the child is not
+    put in its own session or process group, so `killpg` would hit this process and the operator's
+    own shell with it. Bounding OUR wait is the whole claim.
+
+    WHAT HAPPENS TO THE RECEIPT: nothing, and that is deliberate. This runs only while an exception
+    is already propagating out of `_run_gate`, so `_run_gate` never returns a status and no receipt
+    is written at all; `main` classifies the run as an admitted effect and exits `EXIT_PARTIAL`. The
+    module's killed-gate receipt shape (`status: null`, `signal: N`, `outcome: unobserved`) is NOT
+    reused for a signal WE sent: that shape records a negative `wait` status observed for the gate's
+    own death, and writing our own `SIGKILL` into it would forge an observation. What the operator
+    gets instead is the already-admitted effect, re-described through `effects.revise`, so the
+    exit-4 report says the gate ran AND how it was ended. Reaping is cleanup: it may not raise, may
+    not replace the in-flight exception, and may not change the exit code, so every failure here —
+    including a second `KeyboardInterrupt` landing inside a bounded wait — is swallowed.
+    """
+    if proc.returncode is not None:  # `wait` already returned: there is nothing left to reap
+        return
+    try:
+        if proc.poll() is not None:
+            # It had already exited and this poll reaped it. No signal was sent, so there is no new
+            # effect to describe: the admitted "the gate ran" line is still exactly true.
+            return
+        for send, sent in ((None, ""), (proc.terminate, "SIGTERM"), (proc.kill, "SIGKILL")):
+            if send is not None:
+                send()
+            try:
+                proc.wait(timeout=_REAP_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                continue
+            if sent:
+                effects.revise(
+                    token,
+                    f"{ran}; it was still running when this producer failed, so it was ended with "
+                    f"{sent} and its verdict was never observed",
+                )
+            return
+        effects.revise(
+            token,
+            f"{ran}; it was still running when this producer failed and survived SIGKILL for "
+            f"{_REAP_GRACE_SECONDS:g}s, so it MAY STILL BE RUNNING",
+        )
+    except BaseException:  # cleanup may not become the failure it was cleaning up after
+        return
+
+
 def _run_gate(argv: list[str], cwd: Path, *, quiet: bool, effects: _Effects) -> tuple[int, bytes]:
     """Run the gate, streaming its merged output while capturing the exact bytes hashed.
 
@@ -815,6 +884,10 @@ def _run_gate(argv: list[str], cwd: Path, *, quiet: bool, effects: _Effects) -> 
 
     A gate that could not be STARTED never ran, so the failure below admits nothing and stays a
     pre-effect refusal.
+
+    Every one of those raise sites also abandons a RUNNING child, so the child is reaped in a
+    `finally` — bounded, and never able to raise. `_reap_abandoned_gate` argues that choice against
+    the hang it would be if the wait were unbounded.
     """
     mirror = _stderr_mirror(quiet=quiet)
     try:
@@ -827,17 +900,21 @@ def _run_gate(argv: list[str], cwd: Path, *, quiet: bool, effects: _Effects) -> 
     except OSError as exc:
         raise FileNotFoundError(str(exc)) from exc
     # Nothing above this line has run the gate; nothing below it has not.
-    effects.admit(f"the gate ran in {cwd}: {' '.join(argv)}")
-    chunks: list[bytes] = []
-    assert proc.stdout is not None
-    with proc.stdout as stream:
-        while True:
-            chunk = stream.read(65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            mirror(chunk)
-    return proc.wait(), b"".join(chunks)
+    ran = f"the gate ran in {cwd}: {' '.join(argv)}"
+    token = effects.admit(ran)
+    try:
+        chunks: list[bytes] = []
+        assert proc.stdout is not None
+        with proc.stdout as stream:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                mirror(chunk)
+        return proc.wait(), b"".join(chunks)
+    finally:
+        _reap_abandoned_gate(proc, ran=ran, token=token, effects=effects)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -13,14 +13,19 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import gc
 import hashlib
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -2658,6 +2663,408 @@ class AbandonBrokenStreamTests(unittest.TestCase):
             mirror = gate_receipt._stderr_mirror(quiet=False)
             mirror(b"nor can this\n")
             self.assertIsNone(sys.stderr)
+
+
+class AbandonedGateChildTests(_ProducerTestCase):
+    """A gate child abandoned by an exception is reaped in BOUNDED time, changing no verdict.
+
+    Before `_reap_abandoned_gate` existed, an exception between `Popen` and `wait` left the child
+    behind: in-process that surfaced as `ResourceWarning: subprocess N is still running` from
+    `__del__` — which no assertion can fail on — and for a child that had NOT yet exited it left a
+    genuinely running process behind the returned exit code. Both are asserted here directly:
+    the child's own reaped status, and the absence of the warning.
+    """
+
+    GRACE = 0.25  # the production ceiling is 15s of unwinding; these tests only need the shape
+
+    # The flood is fixture MECHANICS, and each test below asserts exactly ONE way for its child to
+    # end, so the flood must not be a second way. A pipe holds 64 KiB, `_run_gate` reads one 65536-
+    # byte block and then abandons the child, closing the read end — which leaves the child's
+    # residue unwritable. Through `sys.stdout` that residue sits in a buffer CPython flushes AGAIN
+    # at shutdown, so the child raced its own `BrokenPipeError` against the reap and under CPU load
+    # won: it exited 120, CPython's cannot-flush-std-streams code, before any signal arrived and
+    # instead of its own clean exit. Writing straight to fd 1 and dropping the `EPIPE` leaves
+    # `sys.stdout`'s buffer empty and nothing for shutdown to fail on, so the flood cannot end the
+    # child at all. Dropping it is sound because the producer has its block by then, which is the
+    # only thing the flood is for.
+    _FLOOD = (
+        "data = b'x' * 70000",
+        "try:",
+        "    while data:",
+        "        data = data[os.write(1, data):]",
+        "except OSError:",  # EPIPE: the read this fixture exists to feed has already happened
+        "    pass",
+    )
+
+    def _write_blocking_gate(
+        self, *, release: Path, name: str, ignore_sigterm: bool = False
+    ) -> list[str]:
+        """A gate that floods a first read and then WAITS, so it is alive when the mirror runs.
+
+        `_run_gate` reads in 65536-byte blocks and a `read` returns only at that boundary or EOF, so
+        a short gate is always finished before the mirror is reached — a gate that is still running
+        has to write more than one block and then stay up. `release` is how a test lets it finish
+        normally (its positive control); the deadline is a self-limit so no fixture can outlive the
+        suite even if a test fails before its cleanup. Once the flood is out this child can only be
+        ended by a signal or by `release`; see `_FLOOD`.
+        """
+        body = ["import os, sys, time"]
+        if ignore_sigterm:
+            body += ["import signal", "signal.signal(signal.SIGTERM, signal.SIG_IGN)"]
+        body += [
+            *self._FLOOD,
+            "deadline = time.monotonic() + 30.0",
+            f"while not os.path.exists({str(release)!r}) and time.monotonic() < deadline:",
+            "    time.sleep(0.02)",
+            "sys.exit(0)",
+        ]
+        script = self.tmp / name
+        script.write_text("\n".join(body) + "\n", encoding="utf-8")
+        return [sys.executable, str(script)]
+
+    def _write_self_finishing_gate(self, *, name: str, seconds: float) -> list[str]:
+        """Alive when the mirror runs, then finished on its own a moment later — and ONLY so.
+
+        The sleep is the whole point of this fixture, so the flood may not pre-empt it; see `_FLOOD`.
+        """
+        script = self.tmp / name
+        script.write_text(
+            "\n".join(
+                [
+                    "import os, sys, time",
+                    *self._FLOOD,
+                    f"time.sleep({seconds})",
+                    "sys.exit(0)",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return [sys.executable, str(script)]
+
+    def _args(self, out: Path, argv: list[str]) -> list[str]:
+        return [
+            "record",
+            "--gate",
+            "blocking fake gate",
+            "--out",
+            str(out),
+            "--lock",
+            str(self.lock),
+            "--",  # NOT --quiet: the mirror is the raise site these tests use
+            *argv,
+        ]
+
+    @staticmethod
+    def _raising_mirror(*, quiet: bool) -> object:
+        """A raise inside the run window that the mirror's own guard cannot swallow.
+
+        `MemoryError` from `chunks.append` is the realistic shape; `RuntimeError` is the same
+        control flow without an unreproducible precondition. `_guarded_stderr_sink` catches only
+        `OSError`/`ValueError`, so this escapes exactly as an unexpected failure would.
+        """
+        del quiet
+
+        def mirror(chunk: bytes) -> None:
+            raise RuntimeError("boom inside the run window, with the gate still running")
+
+        return mirror
+
+    @contextlib.contextmanager
+    def _watch_children(self):
+        created: list[subprocess.Popen[bytes]] = []
+        real_popen = subprocess.Popen
+
+        def spy(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            created.append(proc)
+            return proc
+
+        try:
+            with mock.patch.object(gate_receipt.subprocess, "Popen", spy):
+                yield created
+        finally:
+            for proc in created:  # no test may leave a gate behind, pass or fail
+                if proc.returncode is None:
+                    with contextlib.suppress(OSError):
+                        proc.kill()
+                    with contextlib.suppress(Exception):
+                        proc.wait(timeout=10)
+
+    def test_the_recorded_resourcewarning_symptom_is_gone(self) -> None:
+        """The symptom this finding was RECORDED as, asserted with its own positive control.
+
+        `ResourceWarning: subprocess N is still running` comes from `Popen.__del__`, so it can only
+        be observed by a test that holds NO reference to the child — which is also why nothing in
+        this file could ever fail on it. Only pids are kept here, and the reap is disabled for the
+        control run: that control is the whole point, because an assertion that no warning was
+        raised passes just as well when the warning channel is dead.
+        """
+        release = self.tmp / "release-warning"
+        argv = self._write_blocking_gate(release=release, name="warning_gate.py")
+        args = self._args(self.tmp / "warned.json", argv)
+        real_popen = subprocess.Popen
+
+        def observe(reaping: bool) -> tuple[list[int], list[str]]:
+            pids: list[int] = []
+
+            def spy(*call_args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+                proc = real_popen(*call_args, **kwargs)  # type: ignore[arg-type]
+                pids.append(proc.pid)  # the PID only: a strong reference would suppress `__del__`
+                return proc
+
+            reap = (
+                gate_receipt._reap_abandoned_gate
+                if reaping
+                else (lambda *a, **k: None)  # the pre-fix behaviour, injected
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with (
+                    mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", self.GRACE),
+                    mock.patch.object(gate_receipt, "_stderr_mirror", self._raising_mirror),
+                    mock.patch.object(gate_receipt, "_reap_abandoned_gate", reap),
+                    mock.patch.object(gate_receipt.subprocess, "Popen", spy),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    gate_receipt.main(args)
+                gc.collect()  # `__del__` is what warns, so the frames holding the child must go
+                messages = [f"{w.category.__name__}: {w.message}" for w in caught]
+            for pid in pids:  # no test may leave a gate behind, pass or fail
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+                with contextlib.suppress(OSError):
+                    os.waitpid(pid, 0)
+            return pids, messages
+
+        reaped_pids, reaped_messages = observe(reaping=True)
+        leaked_pids, leaked_messages = observe(reaping=False)
+        self.assertEqual(len(reaped_pids), 1)
+        self.assertEqual(len(leaked_pids), 1)
+        # POSITIVE CONTROL: with the reap disabled the warning IS observed here, naming the leaked
+        # child — so the empty list below is a reaped child and not a deaf warning channel.
+        self.assertIn(
+            f"ResourceWarning: subprocess {leaked_pids[0]} is still running", leaked_messages
+        )
+        self.assertEqual(reaped_messages, [])
+
+    def test_a_gate_still_running_when_the_producer_fails_is_ended_with_sigterm(self) -> None:
+        release = self.tmp / "release-sigterm"
+        argv = self._write_blocking_gate(release=release, name="blocking_gate.py")
+        out = self.tmp / "receipt.json"
+        args = self._args(out, argv)
+        with (
+            mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", self.GRACE),
+            mock.patch.object(gate_receipt, "_stderr_mirror", self._raising_mirror),
+            self._watch_children() as created,
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            code = gate_receipt.main(args)
+        text = err.getvalue()
+        self.assertEqual(len(created), 1, text)
+        child = created[0]
+        # The child was ALIVE when the producer failed — otherwise the poll stage would have reaped
+        # it with its own status — and it was reaped here, with the signal this producer sent.
+        self.assertEqual(child.returncode, -signal.SIGTERM)
+        self.assertEqual(code, gate_receipt.EXIT_PARTIAL, text)
+        self.assertNotEqual(code, gate_receipt.EXIT_INTERNAL)
+        self.assertNotEqual(code, gate_receipt.EXIT_REFUSED)
+        self.assertFalse(out.exists())  # a killed gate has no verdict, so it gets no receipt
+        self.assertIn("already happened: the gate ran", text)
+        self.assertIn("it was ended with SIGTERM and its verdict was never observed", text)
+        # POSITIVE CONTROL: the identical fixture, released and un-injected, runs to a verifiable
+        # receipt — so the assertions above come from the injected raise, not from a broken gate,
+        # and every channel they read (exit code, receipt, report text) does carry values.
+        release.write_text("go\n", encoding="utf-8")
+        with (
+            self._watch_children() as ok_created,
+            contextlib.redirect_stderr(io.StringIO()) as ok_err,
+        ):
+            ok_code = gate_receipt.main(args)
+        self.assertEqual(ok_code, gate_receipt.EXIT_OK, ok_err.getvalue())
+        self.assertEqual(ok_created[0].returncode, 0)
+        self.assertNotIn("SIGTERM", ok_err.getvalue())
+        self.assertTrue(gate_receipt.verify_receipt(json.loads(out.read_text(encoding="utf-8"))))
+
+    def test_a_gate_that_finishes_inside_the_grace_window_is_never_signalled(self) -> None:
+        """The first stage's SUCCESS path: alive at abandonment, gone before the grace expired.
+
+        Closing the pipe is usually enough to end a gate, so this is the ordinary case, and it must
+        not be described as a kill: the child died of its own accord and its status was collected.
+        An unconditional re-description would report a child "still running" that had just exited.
+        """
+        argv = self._write_self_finishing_gate(name="brief_gate.py", seconds=0.3)
+        out = self.tmp / "receipt.json"
+        args = self._args(out, argv)
+        with (
+            mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", 10.0),
+            mock.patch.object(gate_receipt, "_stderr_mirror", self._raising_mirror),
+            self._watch_children() as created,
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            started = time.monotonic()
+            code = gate_receipt.main(args)
+            elapsed = time.monotonic() - started
+        text = err.getvalue()
+        # It was ALIVE when the producer failed (so the poll stage could not have reaped it) and it
+        # exited on its own (so the status is its own, not a signal), well inside the grace window.
+        self.assertEqual(created[0].returncode, 0)
+        self.assertLess(elapsed, 10.0)
+        self.assertEqual(code, gate_receipt.EXIT_PARTIAL, text)
+        self.assertIn("already happened: the gate ran", text)
+        self.assertNotIn("it was still running", text)  # nothing was killed, so nothing is claimed
+        self.assertNotIn("SIGTERM", text)
+        self.assertNotIn("SIGKILL", text)
+        self.assertFalse(out.exists())
+        # POSITIVE CONTROL: un-injected, the same gate records a verifiable receipt — so the report
+        # text asserted against above is a live channel that simply has nothing extra to say.
+        with contextlib.redirect_stderr(io.StringIO()) as ok_err:
+            ok_code = gate_receipt.main(args)
+        self.assertEqual(ok_code, gate_receipt.EXIT_OK, ok_err.getvalue())
+        self.assertTrue(gate_receipt.verify_receipt(json.loads(out.read_text(encoding="utf-8"))))
+
+    def test_a_gate_that_ignores_sigterm_is_killed_and_never_hangs_the_producer(self) -> None:
+        """The reason the wait is bounded: an unbounded `finally` reap is a hang, not a leak.
+
+        A gate that ignores `SIGTERM` and stays up is exactly the shape that would park the failure
+        report for as long as the gate lives, and a hung producer is indistinguishable from a slow
+        gate. So the producer is run on a thread and JOINED with a timeout: an unbounded wait leaves
+        the thread alive and fails here, where the mutation is visible, instead of stalling the run.
+        """
+        release = self.tmp / "release-sigkill"
+        argv = self._write_blocking_gate(
+            release=release, name="deaf_gate.py", ignore_sigterm=True
+        )
+        out = self.tmp / "receipt.json"
+        args = self._args(out, argv)
+        captured: dict[str, object] = {}
+
+        def run() -> None:
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                captured["code"] = gate_receipt.main(args)
+            captured["text"] = err.getvalue()
+
+        with (
+            mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", self.GRACE),
+            mock.patch.object(gate_receipt, "_stderr_mirror", self._raising_mirror),
+            self._watch_children() as created,
+        ):
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            worker.join(timeout=10.0)
+            finished = not worker.is_alive()
+            if not finished:  # unblock the mutant so the suite still terminates
+                release.write_text("go\n", encoding="utf-8")
+                worker.join(timeout=30.0)
+        self.assertTrue(finished, "the producer did not return: the reap wait was not bounded")
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].returncode, -signal.SIGKILL)  # SIGTERM was ignored, so escalate
+        text = str(captured.get("text", ""))
+        self.assertEqual(captured.get("code"), gate_receipt.EXIT_PARTIAL, text)
+        self.assertIn("it was ended with SIGKILL and its verdict was never observed", text)
+        self.assertFalse(out.exists())
+        # POSITIVE CONTROL: the same deaf gate, released and un-injected, still records a receipt.
+        release.write_text("go\n", encoding="utf-8")
+        with (
+            self._watch_children() as ok_created,
+            contextlib.redirect_stderr(io.StringIO()) as ok_err,
+        ):
+            ok_code = gate_receipt.main(args)
+        self.assertEqual(ok_code, gate_receipt.EXIT_OK, ok_err.getvalue())
+        self.assertEqual(ok_created[0].returncode, 0)
+        self.assertNotIn("SIGKILL", ok_err.getvalue())
+        self.assertTrue(gate_receipt.verify_receipt(json.loads(out.read_text(encoding="utf-8"))))
+
+    def test_a_gate_that_already_exited_is_reaped_with_its_own_status_and_no_signal(self) -> None:
+        """The common shape: `wait` itself raises, after the gate has already finished.
+
+        Nothing here may be signalled — the child's own status is still there to be collected — and
+        the admitted effect must stay exactly "the gate ran", because no new effect occurred.
+        """
+        marker = self.tmp / "exited.marker"
+        argv = _write_fake_gate(self.tmp, exit_code=0, marker=marker)
+        out = self.tmp / "receipt.json"
+        args = [
+            "record",
+            "--gate",
+            "short fake gate",
+            "--out",
+            str(out),
+            "--lock",
+            str(self.lock),
+            "--quiet",  # quiet, so the raise below is unambiguously `wait`
+            "--",
+            *argv,
+        ]
+        real_wait = subprocess.Popen.wait
+        raised: list[int] = []
+
+        def raise_once_without_reaping(
+            proc: subprocess.Popen[bytes], *rest: object, **kwargs: object
+        ) -> int:
+            if not raised:
+                raised.append(proc.pid)
+                raise RuntimeError("boom at wait, with the gate already exited")
+            return real_wait(proc, *rest, **kwargs)  # type: ignore[arg-type]
+
+        with (
+            mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", 2.0),
+            mock.patch.object(subprocess.Popen, "wait", raise_once_without_reaping),
+            self._watch_children() as created,
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            started = time.monotonic()
+            code = gate_receipt.main(args)
+            elapsed = time.monotonic() - started
+        text = err.getvalue()
+        self.assertEqual(raised and len(raised), 1, text)  # the injection was REACHED
+        self.assertTrue(marker.exists())  # and the gate really ran
+        self.assertEqual(created[0].returncode, 0)  # reaped, with the gate's OWN status
+        self.assertEqual(code, gate_receipt.EXIT_PARTIAL, text)
+        self.assertIn("already happened: the gate ran", text)
+        self.assertNotIn("SIGTERM", text)  # nothing was signalled...
+        self.assertNotIn("SIGKILL", text)
+        self.assertNotIn("MAY STILL BE RUNNING", text)
+        # ...and the effect was not re-described at all: an unconditional revision would report a
+        # child that was still running, which this one provably was not.
+        self.assertNotIn("it was still running", text)
+        # ...which the clock corroborates: no bounded wait was needed for a child already gone.
+        self.assertLess(elapsed, 2.0)
+        # POSITIVE CONTROL: same args, real `wait`, verifiable receipt and a clean exit.
+        with contextlib.redirect_stderr(io.StringIO()) as ok_err:
+            ok_code = gate_receipt.main(args)
+        self.assertEqual(ok_code, gate_receipt.EXIT_OK, ok_err.getvalue())
+        self.assertTrue(gate_receipt.verify_receipt(json.loads(out.read_text(encoding="utf-8"))))
+
+    def test_the_reap_grace_is_a_finite_positive_bound(self) -> None:
+        """`None` here is the hang this design rejected: `wait(timeout=None)` blocks forever."""
+        self.assertIsInstance(gate_receipt._REAP_GRACE_SECONDS, float)
+        self.assertGreater(gate_receipt._REAP_GRACE_SECONDS, 0.0)
+        self.assertLessEqual(gate_receipt._REAP_GRACE_SECONDS, 30.0)
+
+    def test_reaping_never_replaces_the_failure_it_was_cleaning_up_after(self) -> None:
+        """Cleanup that raises would rewrite the classification, so its own failures are swallowed."""
+        effects = gate_receipt._Effects()
+        token = effects.admit("the gate ran somewhere")
+        exploding = mock.Mock()
+        type(exploding).returncode = mock.PropertyMock(return_value=None)
+        exploding.poll.side_effect = OSError(errno.ECHILD, "no child processes")
+        gate_receipt._reap_abandoned_gate(
+            exploding, ran="the gate ran somewhere", token=token, effects=effects
+        )
+        self.assertEqual(effects.admitted, ["the gate ran somewhere"])  # unchanged, and no raise
+        # POSITIVE CONTROL: the same call on a process that survives SIGKILL DOES re-describe the
+        # effect, so the observation channel asserted above is live rather than inert.
+        stubborn = mock.Mock()
+        type(stubborn).returncode = mock.PropertyMock(return_value=None)
+        stubborn.poll.return_value = None
+        stubborn.wait.side_effect = subprocess.TimeoutExpired("gate", 0.25)
+        with mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", 0.25):
+            gate_receipt._reap_abandoned_gate(
+                stubborn, ran="the gate ran somewhere", token=token, effects=effects
+            )
+        self.assertEqual(len(effects.admitted), 1)  # re-described, never a second admission
+        self.assertIn("MAY STILL BE RUNNING", effects.admitted[0])
 
 
 if __name__ == "__main__":
