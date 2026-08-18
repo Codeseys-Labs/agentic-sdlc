@@ -8,6 +8,11 @@
 The module deliberately supports no greenfield, readiness, Seeds, trust, Git, or
 multi-file activation behavior.  A procedural grant is a same-user, single-use
 record; it is not an authenticated approval.
+
+Every result's reported `effect` is DERIVED, never chosen at the point of failure. Mutating
+primitives admit each effect to `_Effects` at the instant it becomes true, and
+`_report_failure` is the single point where any refusal's status, exit code, and effect are
+settled from that ledger. Read `_Effects` before adding a mutating step or a raise site.
 """
 from __future__ import annotations
 
@@ -40,7 +45,10 @@ COMMIT_SCHEMA = "agentic-sdlc/activation-commit@3"
 RECEIPT_SCHEMA = "agentic-sdlc/activation-receipt@3"
 ROLLBACK_SCHEMA = "agentic-sdlc/activation-rollback@3"
 AUDIT_SCHEMA = "agentic-sdlc/activation-audit@2"
-RESULT_SCHEMA = "agentic-sdlc/activation-result@2"
+# @3 adds `admitted_effects`: the ordered ledger of what this invocation actually did, carried
+# by every result rather than only by a refusal, so a consumer never has to know which statuses
+# have it. The reported `effect` is derived from it -- see `_Effects` and `_report_failure`.
+RESULT_SCHEMA = "agentic-sdlc/activation-result@3"
 # ADR-0022 decision 2: the one tracked, public file inside the otherwise private state root.
 REPO_MANIFEST_NAME = "repo.toml"
 # ADR-0015's rendered model-task-map trio. Public like the manifest, but operator-named
@@ -307,6 +315,98 @@ class ActivationError(ValueError):
         self.status, self.reason, self.code = status, reason, code
 
 
+EFFECT_NONE = "none"
+EFFECT_UNKNOWN = "effect_unknown"
+
+
+class _Effects:
+    """What THIS invocation has already done, so no refusal can be reported as no effect.
+
+    Decision 9 separates "I refused before touching anything" (3) from "something happened and
+    the result is partial or unknown" (4). Those are indistinguishable to an operator unless the
+    engine tracks its own effects, so it records each one and escalates any later refusal.
+
+    THE DEFECT THIS CLOSES, and it is the sixth instance of one class in this project. Every
+    refusal in this module travels as an `ActivationError` through one `except` clause per
+    command, and those clauses decided the reported effect from a DEFAULT argument or from the
+    raise site's own `code`. 312 raise sites are reachable from `apply_command` and the recover
+    verbs, so "the site decides" means 312 independent decisions, and every one of them that
+    fires after a product is published reports `effect: none` over bytes on disk. MEASURED on
+    the unmodified engine, with `.agentic-sdlc/receipts/` injected between publication and
+    `write_commit`'s poststate capture -- the one window `_validate_private_state` is reachable
+    in after publication, through `capture_git_observation` ->
+    `validate_internal_status_records`:
+
+        control, no injection      -> 0 committed  effect=committed     published=True
+        repo-local state injected  -> 3 refused    effect=none          published=True
+
+    Exit 3 promises no journal or product effect. `AGENTS.md` was on disk. The trigger needs
+    concurrent external mutation of a managed path, which this bundle declares unsupported, so
+    the severity was bounded -- but the HANDLER'S SHAPE was the defect, and the same shape
+    reported `effect: none` for every `stale`, `foreign-state`, and schema refusal raised after
+    publication too.
+
+    WHERE each effect is recorded is the whole contract: at the instant it becomes true, never
+    once the operation that caused it has returned successfully. A file exists from its `open`
+    onward, so admitting its creation after the write completes leaves the failing case --
+    created, not written -- classified as though nothing had happened. A rename has happened
+    from the instant `renameat2` returns 0, so admitting publication after the readback that
+    follows it classifies a failed readback as though the product were still private.
+
+    Admission therefore lives in the PRIMITIVES -- `_mkdir_at`, `_mkdir_new_at`, `_safe_mkdir`,
+    `_write_new_at`, `write_new_metadata`, `_replace_metadata`, `_renameat2`, `_renameat2_at`,
+    and `stage_payload`'s own staging open -- and not at the call sites that use them. That is
+    what makes the next mutating step admit its effect for free: a per-raise-site `try/except`
+    is the shape that failed twice in this project, because the next site added reintroduces the
+    defect.
+    """
+
+    def __init__(self) -> None:
+        self.admitted: list[str] = []
+
+    def admit(self, effect: str) -> int:
+        """Record an effect at the moment it happens; the token allows only re-describing it."""
+        self.admitted.append(effect)
+        return len(self.admitted) - 1
+
+    def revise(self, token: int, effect: str) -> None:
+        """Sharpen an admitted effect's description. It can be re-described, never withdrawn."""
+        self.admitted[token] = effect
+
+    def any(self) -> bool:
+        return bool(self.admitted)
+
+
+_EFFECTS = _Effects()
+
+
+@contextlib.contextmanager
+def _effect_ledger() -> Iterator[_Effects]:
+    """Install one fresh ledger for one command invocation, then restore the previous one.
+
+    Module-scoped for the same reason `_ACTIVE_PRIVATE` is: the effects are admitted six frames
+    below the command handler, and threading a parameter through every helper is precisely the
+    per-site bookkeeping that a future helper forgets. Restoring rather than clearing keeps a
+    nested invocation -- a test driving two commands in one process, or a handler that calls
+    another -- from erasing an outer command's admitted effects.
+    """
+    global _EFFECTS
+    previous = _EFFECTS
+    _EFFECTS = _Effects()
+    try:
+        yield _EFFECTS
+    finally:
+        _EFFECTS = previous
+
+
+def _admit(effect: str) -> int:
+    return _EFFECTS.admit(effect)
+
+
+def _revise(token: int, effect: str) -> None:
+    _EFFECTS.revise(token, effect)
+
+
 def canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8") + b"\n"
 
@@ -476,7 +576,11 @@ def _mkdir_at(parent_fd: int, name: str) -> int:
     try:
         os.mkdir(name, 0o700, dir_fd=parent_fd)
     except FileExistsError:
+        # Opening an already-present directory is not an effect of THIS invocation, so it
+        # admits nothing: over-admitting would turn every ordinary re-entry into exit 4.
         pass
+    else:
+        _admit(f"created private directory {name}")
     child_fd = open_component_dir(parent_fd, name)
     try:
         os.fchmod(child_fd, 0o700)
@@ -493,6 +597,9 @@ def _mkdir_new_at(parent_fd: int, name: str) -> int:
         os.mkdir(name, 0o700, dir_fd=parent_fd)
     except FileExistsError as exc:
         raise ActivationError("effect-unknown", f"private {name} already exists", 4) from exc
+    # Admitted here rather than left to `_mkdir_at`: this call already created the directory, so
+    # `_mkdir_at`'s own `mkdir` will take the FileExistsError branch and admit nothing.
+    _admit(f"created private directory {name}")
     return _mkdir_at(parent_fd, name)
 
 
@@ -506,6 +613,10 @@ def _renameat2_at(source_fd: int, source: str, destination_fd: int, destination:
         if error == errno.EEXIST:
             raise ActivationError("stale", "publication compare-and-swap failed")
         raise ActivationError("effect-unknown", f"renameat2 failed: {os.strerror(error)}", 4)
+    # The namespace changed the instant this returned 0 -- before the fsyncs, before any
+    # readback. A publication is exactly this call, so admitting it later would let a failed
+    # post-publication readback report a clean pre-effect refusal over live bytes.
+    _admit(f"renamed {source} onto {destination} (flags {flags})")
     os.fsync(source_fd)
     if destination_fd != source_fd:
         os.fsync(destination_fd)
@@ -1705,6 +1816,7 @@ def _safe_mkdir(path: Path) -> None:
     parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
         os.mkdir(path.name, 0o700, dir_fd=parent_fd)
+        _admit(f"created directory {path}")
         child_fd = os.open(path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=parent_fd)
         try:
             os.fchmod(child_fd, 0o700)
@@ -1744,7 +1856,10 @@ def _open_parent_dirfd(target: Path, relative: str) -> tuple[int, str]:
 def _write_new_at(parent_fd: int, name: str, record: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     """Create one canonical private metadata record and bind its exact successor."""
     data = canonical_bytes(record)
+    # A failure at the `open` itself admits nothing: an EEXIST or ENOENT here created no file,
+    # so it stays the pre-effect refusal it is. Everything after the open is post-effect.
     fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+    token = _admit(f"created private metadata {name}")
     try:
         offset = 0
         while offset < len(data):
@@ -1760,6 +1875,7 @@ def _write_new_at(parent_fd: int, name: str, record: dict[str, Any]) -> tuple[by
     raw, identity = _read_stable_at(parent_fd, name, f"new metadata {name}")
     if raw != data or identity["mode"] != 0o600 or identity["sha256"] != hashlib.sha256(data).hexdigest():
         raise ActivationError("effect-unknown", f"new private metadata {name} lost custody", 4)
+    _revise(token, f"wrote private metadata {name}")
     return data, identity
 
 
@@ -1799,11 +1915,13 @@ def write_new_metadata(path: Path, record: dict[str, Any], *, base: Path | None 
     if base is None or relative is None:
         data = canonical_bytes(record)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+        token = _admit(f"created {path}")
         try:
             os.write(fd, data); os.fsync(fd)
         finally:
             os.close(fd)
         os.chmod(path, 0o600); _fsync_dir(path.parent)
+        _revise(token, f"wrote {path}")
         return
     parent_fd, name = _open_parent_dirfd(base, relative)
     try:
@@ -1818,6 +1936,7 @@ def _replace_metadata(path: Path, record: dict[str, Any]) -> None:
         raise ActivationError("effect-unknown", "unexpected metadata temp", 4)
     write_new_metadata(temp, record)
     os.replace(temp, path)
+    _admit(f"replaced {path}")
     _fsync_dir(path.parent)
 
 
@@ -2020,10 +2139,71 @@ def _failpoint(name: str) -> None:
         os._exit(97)
 
 
-def _result(command: str, status: str, code: int, target: Path, *, effect: str = "none", plan_digest: str | None = None, operation_id: str | None = None, operation_digest: str | None = None, receipt_digest: str | None = None, legal: list[str] | None = None, reasons: list[str] | None = None, **extra: Any) -> dict[str, Any]:
-    result = {"schema": RESULT_SCHEMA, "command": command, "status": status, "effect": effect, "exit_code": code, "target": str(target), "plan_digest": plan_digest, "operation_id": operation_id, "operation_digest": operation_digest, "receipt_digest": receipt_digest, "legal_recovery": legal or [], "reasons": reasons or [], "approval_authenticated": False}
+def _result(command: str, status: str, code: int, target: Path, *, effect: str, plan_digest: str | None = None, operation_id: str | None = None, operation_digest: str | None = None, receipt_digest: str | None = None, legal: list[str] | None = None, reasons: list[str] | None = None, **extra: Any) -> dict[str, Any]:
+    """Render one command result. `effect` is REQUIRED, and that is the structural half of the fix.
+
+    It used to default to `"none"`, which is how every refusal in this module -- 312 raise sites
+    reachable from `apply_command` and the recover verbs -- claimed no effect from one `except`
+    clause that had never looked at what happened. There is no default to fall back on now: a
+    success states the effect it completed, and a refusal gets its effect from `_report_failure`,
+    which reads the ledger.
+    """
+    result = {"schema": RESULT_SCHEMA, "command": command, "status": status, "effect": effect, "exit_code": code, "target": str(target), "plan_digest": plan_digest, "operation_id": operation_id, "operation_digest": operation_digest, "receipt_digest": receipt_digest, "legal_recovery": legal or [], "reasons": reasons or [], "admitted_effects": list(_EFFECTS.admitted), "approval_authenticated": False}
     result.update(extra)
     return result
+
+
+def _normalize_failure(command: str, exc: ActivationError) -> tuple[str, int]:
+    """Per-command status and code for a refusal, BEFORE the ledger has its say.
+
+    This is the only surviving per-command policy, and it is deliberately not about effects: it
+    is about what each surface can honestly say when it cannot complete a READ. `recover inspect`
+    is the one surface that widens `foreign-state` and a schema failure to `effect-unknown`,
+    because a private tree it cannot parse is exactly the state that must not be reported as
+    "nothing to recover". `_report_failure` may only escalate what this returns.
+    """
+    if command == "recover inspect":
+        if exc.status == "inactive":
+            return "inactive", 0
+        if exc.status == "foreign-state" or exc.code == 2:
+            return "effect-unknown", 4
+    return exc.status, exc.code
+
+
+def _report_failure(command: str, exc: ActivationError, target: Path) -> tuple[dict[str, Any], int]:
+    """THE single escalation choke point: every refusal's effect is DERIVED here, by every command.
+
+    Two inputs, and the rule between them is escalate-only:
+
+    1. THE LEDGER IS THE FLOOR. Once this invocation has admitted any effect, no refusal may
+       exit as a clean pre-effect refusal (3), a pre-effect internal failure (1), or a grammar
+       or schema verdict (2), because on disk the result is partial or unknown. Decision 9's 4
+       is the only honest answer, and `admitted_effects` names what already happened.
+    2. A RAISE SITE MAY ONLY ESCALATE. `exc.code == 4` reports an unknown effect this invocation
+       merely OBSERVED -- a prior crash's journal, a plane nothing can resolve -- which the
+       ledger cannot know about because this process did not cause it. So a site can still widen
+       an empty ledger to `effect_unknown`; what it can no longer do is claim `none` over
+       something that happened. That direction is the whole defect, and it is now unreachable:
+       the effect is not a parameter of any raise.
+
+    This also unifies the residual the plane work recorded. At exit 4 `status` and
+    `recover inspect` reported `effect: effect_unknown` while `plan` and `apply` reported
+    `effect: none` from their shared handler; both statements were true, but the disagreement
+    existed only because two handlers each decided the effect for themselves. One derivation
+    point cannot disagree with itself, so the difference is gone rather than documented.
+    """
+    status, code = _normalize_failure(command, exc)
+    effect = EFFECT_NONE
+    if _EFFECTS.any():
+        status, code, effect = "effect-unknown", 4, EFFECT_UNKNOWN
+    elif code == 4:
+        effect = EFFECT_UNKNOWN
+    # `recover inspect` alone reports an inactive target with no reason, because "there is
+    # nothing to recover" is its ordinary answer rather than a refusal. Every other command
+    # keeps the reason it was given; suppressing it by STATUS instead of by command would have
+    # silently dropped `recover finish`'s explanation of an inactive target.
+    reasons = [] if (command == "recover inspect" and status == "inactive") else [exc.reason]
+    return _result(command, status, code, Path(target), effect=effect, reasons=reasons), code
 
 
 def _plan_data(target: Path, manifest_path: Path, selected_path: str) -> dict[str, Any]:
@@ -2056,12 +2236,13 @@ def _plan_data(target: Path, manifest_path: Path, selected_path: str) -> dict[st
 
 
 def plan_command(target: Path, manifest_path: Path, selected_path: str) -> tuple[dict[str, Any], int]:
-    try:
-        target = Path(target)
-        plan = _plan_data(target, manifest_path, selected_path)
-        return _result("plan", "planned", 0, target, plan_digest=digest_record(plan), plan=plan), 0
-    except ActivationError as exc:
-        return _result("plan", exc.status, exc.code, Path(target), reasons=[exc.reason]), exc.code
+    with _effect_ledger():
+        try:
+            target = Path(target)
+            plan = _plan_data(target, manifest_path, selected_path)
+            return _result("plan", "planned", 0, target, effect=EFFECT_NONE, plan_digest=digest_record(plan), plan=plan), 0
+        except ActivationError as exc:
+            return _report_failure("plan", exc, Path(target))
 
 
 def _private_identity_matches(path: Path, root: RootBinding) -> bool:
@@ -2284,14 +2465,19 @@ def _validate_private_state(target: Path, root: RootBinding, *, admission: bool 
 
     `admission=False` is for the ONE caller that runs after a product is already
     published: `validate_internal_status_records`, reached through
-    `capture_git_observation` when `write_commit` captures the poststate. A refusal raised
-    there surfaces through `apply_command` as `refused` with `effect: none`, which would be
-    a no-effect claim over published bytes -- MEASURED, and already true of
-    `LEGACY_STATE_REASON` and the plane device/ancestor guards at this same site, which is a
-    separate pre-existing defect at `apply_command`'s handler and not this one. The
-    unselected-plane probe does not join them: it is an admission decision, every admission
-    surface calls this function directly before any effect, and nothing this caller observes
-    could change the answer anyway.
+    `capture_git_observation` when `write_commit` captures the poststate.
+
+    A refusal raised there used to surface through `apply_command` as `refused` with
+    `effect: none` -- a no-effect claim over published bytes, MEASURED for
+    `LEGACY_STATE_REASON` and true of the plane device/ancestor guards at this same site. That
+    was a defect in `apply_command`'s handler rather than in this function, and it is CLOSED:
+    every refusal now derives its effect at `_report_failure` from the effect ledger, so a
+    refusal raised from here reports exit 4 `effect_unknown` and names the publication. See
+    `test_a_post_publication_refusal_is_never_reported_as_a_clean_refusal`.
+
+    The unselected-plane probe still does not run here, and the reason is unchanged by that
+    fix: it is an admission decision, every admission surface calls this function directly
+    before any effect, and nothing this caller observes could change the answer anyway.
     """
     plane = _resolve_plane(target)
     _assert_plane_device(plane, root)
@@ -2712,6 +2898,7 @@ def _mkdir_plane_root(plane: StatePlane, root: RootBinding, target_fd: int) -> i
                 child = open_component_dir(fd, part)
             except FileNotFoundError:
                 os.mkdir(part, 0o700, dir_fd=fd)
+                _admit(f"created state plane ancestor {part}")
                 os.fsync(fd)
                 child = open_component_dir(fd, part)
             os.close(fd)
@@ -2745,6 +2932,14 @@ def _make_layout(target: Path, operation: dict[str, Any]) -> Path:
     target_fd = open_root_chain(target)
     anchor = plane.anchor_name(operation["operation_id"])
     try:
+        # Read-only, and it has to run before the POINTER as well as before the plane root.
+        # A pointer is durable machine-local state that changes what every later invocation
+        # reports about this target -- with one, a moved checkout is exit 4 `effect-unknown`
+        # instead of `inactive` -- so writing one and then discovering the plane's own home is
+        # other-writable turns an honest pre-effect refusal into an admitted effect. It is
+        # cheaper to refuse before the write than to classify it afterwards. `_mkdir_plane_root`
+        # still asserts the same containment on both sides of its own `mkdir`.
+        _assert_plane_ancestors(plane, root_binding)
         # Before the plane root, so no record in it can be orphaned by a later rename.
         _record_plane_pointer(target, plane, root_binding)
         state_fd = _mkdir_plane_root(plane, root_binding, target_fd)
@@ -2797,6 +2992,7 @@ def _consume_grant(operation_dir: Path, grant: dict[str, Any], target: Path) -> 
 def stage_payload(operation_dir: Path, operation: dict[str, Any], content: bytes, target: Path) -> Path:
     private = _require_private(target, operation_dir)
     fd = os.open("0000.payload.next", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=private.stage_fd)
+    token = _admit("created the staged payload")
     try:
         os.write(fd, content)
         os.fchmod(fd, 0o644)
@@ -2808,6 +3004,7 @@ def stage_payload(operation_dir: Path, operation: dict[str, Any], content: bytes
     raw, identity = _read_stable_at(private.stage_fd, "0000.payload", "staged payload")
     if raw != content or identity["mode"] != 0o644:
         raise ActivationError("effect-unknown", "staged payload readback failed", 4)
+    _revise(token, "wrote the staged payload")
     private.staged_custody = identity
     private.track_file("stage", "0000.payload")
     # Durable custody comes before the observable stage boundary: recovery may
@@ -2829,6 +3026,7 @@ def _renameat2(source: Path, destination: Path, flags: int) -> None:
         if error == errno.EEXIST:
             raise ActivationError("stale", "publication compare-and-swap failed")
         raise ActivationError("effect-unknown", f"renameat2 failed: {os.strerror(error)}", 4)
+    _admit(f"renamed {source} onto {destination} (flags {flags})")
 
 
 def _private_payload(path: Path, target: Path, label: str) -> tuple[bytes, dict[str, Any]]:
@@ -3343,6 +3541,9 @@ def _apply_noop(plan: dict[str, Any], manifest_path: Path, grant: dict[str, Any]
         binding = bind_target(target)
         target_fd = open_root_chain(target)
         try:
+            # Same order as `_make_layout`, for the same reason: refuse an unsafe plane home
+            # before the pointer exists rather than admitting the pointer and reporting it.
+            _assert_plane_ancestors(plane, binding)
             _record_plane_pointer(target, plane, binding)
             os.close(_mkdir_plane_root(plane, binding, target_fd))
         finally:
@@ -3352,27 +3553,28 @@ def _apply_noop(plan: dict[str, Any], manifest_path: Path, grant: dict[str, Any]
 
 
 def apply_command(plan_path: Path, manifest_path: Path, grant_path: Path) -> tuple[dict[str, Any], int]:
-    try:
-        plan, _ = load_canonical_json(plan_path, "plan")
-        _validate_plan(plan)
-        target = Path(plan["target"]["path"])
-        binding = bind_target(target)
-        _validate_private_state(target, binding)
-        grant, _ = load_canonical_json(grant_path, "grant")
-        validate_grant(grant, operation="apply")
-        if grant["plan_digest"] != digest_record(plan) or grant["target"] != {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino}:
-            raise ActivationError("refused", "grant does not bind exact plan target")
-        with activation_lock(target):
-            locked_binding = bind_target(target)
-            _validate_private_state(target, locked_binding)
-            _scan_operation_exclusion(target, locked_binding)
-            scan_grant_ledger(target, grant)
-            if plan["entries"]:
-                return _apply_effectful(plan, manifest_path, grant)
-            return _apply_noop(plan, manifest_path, grant)
-    except ActivationError as exc:
-        target = Path(plan["target"]["path"]) if "plan" in locals() and isinstance(plan, dict) and isinstance(plan.get("target"), dict) else Path("/")
-        return _result("apply", exc.status, exc.code, target, reasons=[exc.reason]), exc.code
+    with _effect_ledger():
+        try:
+            plan, _ = load_canonical_json(plan_path, "plan")
+            _validate_plan(plan)
+            target = Path(plan["target"]["path"])
+            binding = bind_target(target)
+            _validate_private_state(target, binding)
+            grant, _ = load_canonical_json(grant_path, "grant")
+            validate_grant(grant, operation="apply")
+            if grant["plan_digest"] != digest_record(plan) or grant["target"] != {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino}:
+                raise ActivationError("refused", "grant does not bind exact plan target")
+            with activation_lock(target):
+                locked_binding = bind_target(target)
+                _validate_private_state(target, locked_binding)
+                _scan_operation_exclusion(target, locked_binding)
+                scan_grant_ledger(target, grant)
+                if plan["entries"]:
+                    return _apply_effectful(plan, manifest_path, grant)
+                return _apply_noop(plan, manifest_path, grant)
+        except ActivationError as exc:
+            target = Path(plan["target"]["path"]) if "plan" in locals() and isinstance(plan, dict) and isinstance(plan.get("target"), dict) else Path("/")
+            return _report_failure("apply", exc, target)
 
 
 def _load_operation(target: Path) -> tuple[Path, dict[str, Any]]:
@@ -3445,13 +3647,13 @@ def classify_recovery(target: Path) -> tuple[Path, dict[str, Any], list[str]]:
 
 
 def recover_inspect_command(target: Path) -> tuple[dict[str, Any], int]:
-    try:
-        target = Path(target)
-        directory, operation, legal = classify_recovery(target)
-        return _result("recover inspect", "recovery-required", 3, target, effect="product_partial", operation_id=operation["operation_id"], operation_digest=digest_record(operation), legal=legal, operation=operation), 3
-    except ActivationError as exc:
-        if exc.status in {"inactive", "foreign-state"}: return _result("recover inspect", "inactive" if exc.status == "inactive" else "effect-unknown", 0 if exc.status == "inactive" else 4, Path(target), effect="none" if exc.status == "inactive" else "effect_unknown", reasons=[] if exc.status == "inactive" else [exc.reason]), 0 if exc.status == "inactive" else 4
-        return _result("recover inspect", "effect-unknown" if exc.code == 2 else exc.status, 4 if exc.code == 2 else exc.code, Path(target), effect="effect_unknown" if exc.code in {2, 4} else "none", reasons=[exc.reason]), 4 if exc.code == 2 else exc.code
+    with _effect_ledger():
+        try:
+            target = Path(target)
+            directory, operation, legal = classify_recovery(target)
+            return _result("recover inspect", "recovery-required", 3, target, effect="product_partial", operation_id=operation["operation_id"], operation_digest=digest_record(operation), legal=legal, operation=operation), 3
+        except ActivationError as exc:
+            return _report_failure("recover inspect", exc, Path(target))
 
 
 def _validate_recovery_grant(target: Path, operation_dir: Path, operation: dict[str, Any], grant_path: Path, decision: str) -> dict[str, Any]:
@@ -3677,17 +3879,19 @@ def _recover(target: Path, grant_path: Path, decision: str) -> tuple[dict[str, A
 
 
 def recover_finish_command(target: Path, grant_path: Path) -> tuple[dict[str, Any], int]:
-    try:
-        with activation_lock(Path(target)): return _recover(Path(target), grant_path, "finish")
-    except ActivationError as exc:
-        return _result("recover finish", exc.status, exc.code, Path(target), effect="effect_unknown" if exc.code == 4 else "none", reasons=[exc.reason]), exc.code
+    with _effect_ledger():
+        try:
+            with activation_lock(Path(target)): return _recover(Path(target), grant_path, "finish")
+        except ActivationError as exc:
+            return _report_failure("recover finish", exc, Path(target))
 
 
 def recover_rollback_command(target: Path, grant_path: Path) -> tuple[dict[str, Any], int]:
-    try:
-        with activation_lock(Path(target)): return _recover(Path(target), grant_path, "rollback")
-    except ActivationError as exc:
-        return _result("recover rollback", exc.status, exc.code, Path(target), effect="effect_unknown" if exc.code == 4 else "none", reasons=[exc.reason]), exc.code
+    with _effect_ledger():
+        try:
+            with activation_lock(Path(target)): return _recover(Path(target), grant_path, "rollback")
+        except ActivationError as exc:
+            return _report_failure("recover rollback", exc, Path(target))
 
 
 def _validate_receipt_custody(private: PrivateTransaction, receipt: dict[str, Any]) -> None:
@@ -3842,36 +4046,40 @@ def _validate_existing_terminal_operation(target: Path, directory: Path, operati
 
 
 def status_command(target: Path) -> tuple[dict[str, Any], int]:
-    try:
-        target = Path(target)
-        root = bind_target(target)
-        _validate_private_state(target, root)
-        active = []
-        committed = []
-        for directory in _operation_dirs(target, root):
-            try:
-                operation, _ = load_canonical_json(directory / "operation.json", "operation")
-                state, receipt = _validate_existing_terminal_operation(target, directory, operation)
-            except ActivationError as exc:
-                return _result("status", "effect-unknown", 4, target, effect="effect_unknown", reasons=[exc.reason]), 4
-            if state == "recovery-required": active.append((operation, ["recovery required"]))
-            elif state == "committed": committed.append((operation, receipt))
-        if active:
-            operation, reasons = active[0]
-            return _result("status", "recovery-required", 3, target, effect="product_partial", operation_id=operation["operation_id"], operation_digest=digest_record(operation), legal=["finish", "rollback"], reasons=reasons), 3
-        owners: dict[str, str] = {}
-        for operation, _ in committed:
-            path = operation["entry"]["path"]
-            if path in owners:
-                raise ActivationError("effect-unknown", "multiple committed operations manage one path", 4)
-            owners[path] = operation["operation_id"]
-        if committed:
-            operation, record = committed[-1]
-            assert record is not None
-            return _result("status", "committed", 0, target, effect="committed", operation_id=operation["operation_id"], operation_digest=digest_record(operation), receipt_digest=digest_record(record)), 0
-        return _result("status", "inactive", 0, target), 0
-    except ActivationError as exc:
-        return _result("status", exc.status, exc.code, Path(target), effect="effect_unknown" if exc.code == 4 else "none", reasons=[exc.reason]), exc.code
+    with _effect_ledger():
+        try:
+            target = Path(target)
+            root = bind_target(target)
+            _validate_private_state(target, root)
+            active = []
+            committed = []
+            for directory in _operation_dirs(target, root):
+                try:
+                    operation, _ = load_canonical_json(directory / "operation.json", "operation")
+                    state, receipt = _validate_existing_terminal_operation(target, directory, operation)
+                except ActivationError as exc:
+                    # An unparseable or diverged terminal witness is an effect this command only
+                    # OBSERVED, so it is escalated at the raise site's own code and reported
+                    # through the one derivation point like every other refusal.
+                    raise ActivationError("effect-unknown", exc.reason, 4) from exc
+                if state == "recovery-required": active.append((operation, ["recovery required"]))
+                elif state == "committed": committed.append((operation, receipt))
+            if active:
+                operation, reasons = active[0]
+                return _result("status", "recovery-required", 3, target, effect="product_partial", operation_id=operation["operation_id"], operation_digest=digest_record(operation), legal=["finish", "rollback"], reasons=reasons), 3
+            owners: dict[str, str] = {}
+            for operation, _ in committed:
+                path = operation["entry"]["path"]
+                if path in owners:
+                    raise ActivationError("effect-unknown", "multiple committed operations manage one path", 4)
+                owners[path] = operation["operation_id"]
+            if committed:
+                operation, record = committed[-1]
+                assert record is not None
+                return _result("status", "committed", 0, target, effect="committed", operation_id=operation["operation_id"], operation_digest=digest_record(operation), receipt_digest=digest_record(record)), 0
+            return _result("status", "inactive", 0, target, effect=EFFECT_NONE), 0
+        except ActivationError as exc:
+            return _report_failure("status", exc, Path(target))
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1332,7 +1333,21 @@ class ActivationTransactionTests(unittest.TestCase):
             globals_["_renameat2_at"] = original
 
         self.assertTrue(injected)
-        self.assertEqual(stale_code, 1, stale)
+        # MEASURED as exit 1 `effect: none` before this class was closed, and that was the worst
+        # of the six instances because it needs no concurrent external mutation at all: the
+        # replace exchange has ALREADY put the new bytes at `AGENTS.md`, and the refusal comes
+        # from the following move of the exchanged prestate into an occupied `backup/`. Exit 1
+        # promises an internal failure before any admitted effect. The product was live.
+        self.assertEqual(stale_code, 4, stale)
+        self.assertEqual(stale["status"], "effect-unknown")
+        self.assertEqual(stale["effect"], "effect_unknown")
+        self.assertEqual(stale["reasons"], ["publication compare-and-swap failed"], stale)
+        self.assertIn("renamed 0000.payload onto AGENTS.md (flags 2)", stale["admitted_effects"], stale)
+        # The effect the ledger names, observed independently of the ledger: live holds the
+        # planned bytes and not the committed original, so `effect_unknown` is a statement about
+        # this tree and not an artifact of the reporting change.
+        self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), plan["entries"][0]["desired"]["sha256"])
+        self.assertNotEqual(output.read_bytes(), b"# original\n")
         operation_dir = next((plane_transactions(self.target)).iterdir())
         operation, _ = ap.load_canonical_json(operation_dir / "operation.json", "operation")
         backup = operation_dir / "backup" / "0000.payload"
@@ -3060,11 +3075,13 @@ class ActivationPlaneSwitchTests(unittest.TestCase):
 
         `write_commit` captures the poststate through `capture_git_observation`, which reaches
         `validate_internal_status_records` -> `_validate_private_state` AFTER the product is
-        published. A refusal raised from there is reported by `apply_command` as `refused`
+        published. A refusal raised from there was reported by `apply_command` as `refused`
         with `effect: none` over published bytes -- the exact class this project keeps
-        relearning. That is already MEASURABLY true of `LEGACY_STATE_REASON` at the same site
-        and is a separate pre-existing defect at `apply_command`'s handler; this test pins
-        that the unselected-plane probe does not join it.
+        relearning. That was MEASURABLY true of `LEGACY_STATE_REASON` at the same site, and the
+        case immediately below now closes it at `apply_command`'s handler. This test remains the
+        narrower property, and it is not made redundant by that fix: the probe must still not
+        RUN here at all, because a refusal that is honestly reported is still a refusal, and
+        this one would refuse an activation that has already succeeded.
 
         The two halves are each other's control: the identical injection BEFORE the apply is
         a clean exit-3 refusal, and DURING the apply it is not a refusal at all.
@@ -3103,6 +3120,89 @@ class ActivationPlaneSwitchTests(unittest.TestCase):
         self.assertEqual(code, 0, result)
         self.assertEqual(result["status"], "committed")
         self.assertEqual(result["effect"], "committed")
+
+    def test_a_post_publication_refusal_is_never_reported_as_a_clean_refusal(self) -> None:
+        """THE MEASURED SIXTH INSTANCE, at the site the case above named and left open.
+
+        `_validate_private_state` is reachable AFTER publication -- `write_commit` ->
+        `capture_git_observation` -> `validate_internal_status_records` -- and
+        `LEGACY_STATE_REASON` fires there for a repo-local `receipts/` or `transactions/` that
+        appears inside the window. MEASURED on the unmodified engine:
+
+            control, no injection      -> 0 committed  effect=committed  published=True
+            repo-local state injected  -> 3 refused    effect=none       published=True
+
+        Exit 3 is a clean refusal BEFORE any journal or product effect. `AGENTS.md` was on disk,
+        the journal was complete, and the operator was told nothing had happened. Per Decision 9
+        that is a 4.
+
+        THREE arms, because the fix must be a derivation and not a blanket answer:
+
+          * CONTROL ONE, positive, on the observation channel: with no injection the same apply
+            commits at 0 with `effect: committed`, so the exit-4 arm below is not the fixture
+            refusing for some unrelated reason.
+          * CONTROL TWO, positive, on the guard's own reason BEFORE any effect: the identical
+            injection planted before the apply is still a clean exit-3 refusal naming
+            `LEGACY_STATE_REASON`, with an empty ledger. A change that made every refusal
+            `effect_unknown` would fail here.
+          * THE CASE: the same injection inside the window is exit 4 `effect-unknown` with
+            `effect: effect_unknown`, the SAME reason -- so the refusal still comes from the
+            guard it names and not from a broken fixture -- and an `admitted_effects` ledger
+            that names the publication rename.
+        """
+        # CONTROL ONE.
+        control_plan, control_grant = self._documents()
+        control, control_code = ap.apply_command(control_plan, self.manifest, control_grant)
+        self.assertEqual(control_code, 0, control)
+        self.assertEqual(control["effect"], "committed")
+        self.assertTrue((self.target / "AGENTS.md").is_file())
+
+        # Back to an unactivated tree, keeping the pointer the first apply wrote: the state
+        # plane's own records are what a fresh apply must not find, and the injected
+        # `.agentic-sdlc/receipts` below is a target-local surface, not a plane one.
+        shutil.rmtree(plane_root(self.target))
+        (self.target / "AGENTS.md").unlink()
+
+        def inject_repo_local_state() -> None:
+            (self.target / ".agentic-sdlc" / "receipts").mkdir(mode=0o700, parents=True, exist_ok=True)
+
+        # CONTROL TWO, on the same command with the same documents: no surface hands out a plan
+        # once the injected state is present, so the documents are captured while the tree is
+        # clean and the state is planted between the plan and the apply.
+        clean_plan, clean_grant = self._documents()
+        inject_repo_local_state()
+        before, before_code = ap.apply_command(clean_plan, self.manifest, clean_grant)
+        self.assertEqual(before_code, 3, before)
+        self.assertEqual(before["status"], "refused")
+        self.assertEqual(before["effect"], "none")
+        self.assertEqual(before["reasons"], [ap.LEGACY_STATE_REASON], before)
+        self.assertEqual(before["admitted_effects"], [])
+        self.assertFalse((self.target / "AGENTS.md").exists(), "a clean refusal must publish nothing")
+        shutil.rmtree(self.target / ".agentic-sdlc" / "receipts")
+
+        # THE CASE. The plan and grant are captured while the tree is clean, because no surface
+        # hands out a plan once the injected state is present.
+        plan_path, grant_path = self._documents()
+        original = ap.write_commit
+        planner_globals = original.__globals__
+
+        def inject(operation_dir: Path, operation: dict, poststate: dict, target: Path) -> dict:
+            inject_repo_local_state()
+            return original(operation_dir, operation, poststate, target)
+
+        planner_globals["write_commit"] = inject
+        try:
+            result, code = ap.apply_command(plan_path, self.manifest, grant_path)
+        finally:
+            planner_globals["write_commit"] = original
+
+        self.assertTrue((self.target / ".agentic-sdlc" / "receipts").is_dir(), "the injection must have happened")
+        self.assertTrue((self.target / "AGENTS.md").is_file(), "the product is published; a clean refusal would be a lie")
+        self.assertEqual(code, 4, result)
+        self.assertEqual(result["status"], "effect-unknown")
+        self.assertEqual(result["effect"], "effect_unknown")
+        self.assertEqual(result["reasons"], [ap.LEGACY_STATE_REASON], result)
+        self.assertIn("renamed 0000.payload onto AGENTS.md (flags 1)", result["admitted_effects"], result)
 
     def _pointer(self, target: Path, root: Path | None = None) -> Path:
         return target / ".agentic-sdlc" / pointer_name(plane_root(target) if root is None else root)
@@ -3244,7 +3344,16 @@ class ActivationPlaneSwitchTests(unittest.TestCase):
         finally:
             planner_globals["_mkdir_plane_root"] = original
 
-        self.assertEqual(refused_code, 3, refused)
+        # Exit 4, and it is derived rather than injected: the double raises a code-3 `refused`,
+        # which is exactly what a raise site may no longer decide for itself. The pointer is on
+        # disk by the time it fires, so `_report_failure` escalates the refusal and NAMES the
+        # pointer as the effect already admitted. Asserting the named effect rather than only the
+        # code is what keeps this from passing on a blanket "everything is 4" answer.
+        self.assertEqual(refused_code, 4, refused)
+        self.assertEqual(refused["status"], "effect-unknown")
+        self.assertEqual(refused["effect"], "effect_unknown")
+        self.assertEqual(refused["reasons"], ["injected crash at the plane root"], refused)
+        self.assertIn(f"wrote private metadata {pointer_name(plane_root(self.target))}", refused["admitted_effects"], refused)
         self.assertTrue(self._pointer(self.target).is_file(), "the pointer must precede the plane root")
         self.assertEqual(plane_root(self.target).exists(), after)
         self.assertFalse((self.target / "AGENTS.md").exists())
@@ -3254,11 +3363,15 @@ class ActivationPlaneSwitchTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(result["reasons"], [ap.RECORDED_PLANE_UNRESOLVED_REASON], result)
-        # `effect` names the effect of THIS command, so `status` and `recover inspect` widen it to
-        # `effect_unknown` while `plan` and `apply` report `none` from their shared handler. Both
-        # are true here -- neither produced an effect -- and the pre-existing difference in shape
-        # is asserted as the closed set it is rather than papered over with one expected value.
-        self.assertIn(result["effect"], {"effect_unknown", "none"}, result)
+        # The residual this case used to record as a closed SET is gone. `status` and
+        # `recover inspect` reported `effect_unknown` here while `plan` and `apply` reported
+        # `none`, and both were true -- the disagreement existed only because each handler
+        # decided the effect for itself. All four now derive it at one point, so the exact value
+        # is asserted. `admitted_effects` is present and empty on every one of them, which is the
+        # positive control that the wider `effect_unknown` comes from the raise site's own
+        # observation of a plane nothing can resolve and NOT from anything this command did.
+        self.assertEqual(result["effect"], "effect_unknown", result)
+        self.assertEqual(result["admitted_effects"], [], result)
 
     def test_a_pointer_to_a_plane_that_never_materialized_does_not_strand_the_target(self) -> None:
         """A pointer is not itself evidence of state: an empty plane probes clean.
@@ -3580,15 +3693,21 @@ class ActivationPlaneSwitchTests(unittest.TestCase):
         self.assertIn("unsafe state plane home", refused["reasons"])
         self.assertEqual(sorted(item.name for item in self.state_home.iterdir()), [], "nothing may be created under an unsafe ancestor")
         self.assertFalse((self.target / "AGENTS.md").exists())
-        # PINNED, because it is the one thing in this change that becomes true while the result
-        # says `effect: none`: the pointer is written before the plane, so a refusal from the
-        # plane's own creation leaves one behind. `effect` names journal and product effects, and
-        # a pointer is neither -- it holds no operation, grant, receipt, or payload. It also
-        # cannot produce a later false report, which the next two assertions demonstrate: the
-        # plane it names does not exist, so the probe finds nothing and the retry below is
-        # admitted rather than stranded.
-        self.assertTrue(self._pointer(self.target).is_file())
+        # `effect: none` here is now DERIVED from an empty effect ledger rather than asserted
+        # about a pointer that had already been written. The earlier revision of this case pinned
+        # the opposite -- pointer present, `effect: none` -- on the argument that a pointer holds
+        # no operation, grant, receipt, or payload. That argument does not survive this class's
+        # own evidence: a pointer changes what every later invocation REPORTS about this target,
+        # because with one a moved checkout is exit 4 `effect-unknown` where without one it is
+        # `inactive` at 0 (see `test_a_recorded_plane_root_that_cannot_be_resolved_...`). So the
+        # pointer write is an admitted effect, and the fix is to refuse BEFORE it rather than to
+        # reclassify the refusal: `_make_layout` now asserts the plane's ancestors before writing
+        # the pointer. `admitted_effects` is the positive control on the channel -- it is present
+        # and empty, so `effect: none` is a derived statement about a ledger this result carries,
+        # not the absence of a field.
+        self.assertFalse(self._pointer(self.target).exists(), "no pointer may precede the ancestor check")
         self.assertEqual(refused["effect"], "none")
+        self.assertEqual(refused["admitted_effects"], [])
         self.assertFalse(plane_root(self.target).exists())
 
         os.chmod(self.state_home, 0o700)
@@ -3619,6 +3738,365 @@ class ActivationPlaneSwitchTests(unittest.TestCase):
                 self.assertEqual(inspected["status"], "inactive")
                 self.assertEqual(status_code, 0, observed)
                 self.assertEqual(observed["status"], "inactive")
+
+
+class EffectLedgerDerivationTests(unittest.TestCase):
+    """Every mutating step admits its effect, and no refusal after one is a clean refusal.
+
+    This class exists because targeted review does not find this defect class. Six instances of
+    it have landed in this project across five surfaces, twice as the fix for the previous one,
+    and every raise site is a fresh chance to reintroduce it: 312 `ActivationError` raises are
+    reachable from `apply_command` and the recover verbs. Reviewing them one at a time is what
+    failed. So instead of one case per raise site, these cases pin the two halves of the
+    derivation that make every raise site safe at once:
+
+      * `test_every_mutating_step_admits_its_effect_in_order` pins the exact ordered ledger of a
+        complete apply, in both plane selections and for the no-op audit. Deleting ANY `_admit`
+        from any primitive changes that list, so an unadmitted mutating step is a test failure
+        rather than a defect waiting for the raise site that reaches it.
+      * `test_a_refusal_after_any_admitted_effect_is_never_a_clean_refusal` injects a refusal
+        after each admission in turn -- a code-3 `refused`, the exact thing a raise site may no
+        longer decide -- and requires the report to escalate. It is a sweep over the whole
+        program, not a sample of it.
+
+    Neither case asserts "something refused". They assert the ledger's contents and the exact
+    escalated classification, because a blanket answer in either direction passes an assertion
+    that only counts refusals.
+    """
+
+    EXPECTED_DEFAULT = [
+        "created directory <target>/.agentic-sdlc",
+        "created private metadata plane.<digest>.json",
+        "created state plane ancestor <home>",
+        "created state plane ancestor ccodex",
+        "created state plane ancestor activation",
+        "created private directory <digest>",
+        "created private metadata intent.<id>.json",
+        "created private directory receipts",
+        "created private directory transactions",
+        "created private directory <id>",
+        "created private directory grants",
+        "created private directory stage",
+        "created private directory backup",
+        "created private directory progress-history",
+        "created private directory discard",
+        "renamed intent.<id>.json onto operation.json (flags 1)",
+        "created private metadata progress.json",
+        "created private metadata 0001.json",
+        "created the staged payload",
+        "renamed 0000.payload.next onto 0000.payload (flags 1)",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000000.json (flags 1)",
+        "renamed 0000.payload onto AGENTS.md (flags 1)",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000001.json (flags 1)",
+        "created private metadata commit.json",
+        "created private metadata receipt.json.next",
+        "renamed receipt.json.next onto <id>.json (flags 1)",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000002.json (flags 1)",
+    ]
+    # The repo-local override is the same journal without the plane pointer or the plane's
+    # operator-owned ancestors, because that plane IS the target's own subdirectory. It is kept
+    # as a second expected list rather than derived from the first, so that a change which
+    # quietly moves an effect from one selection to the other cannot pass both.
+    EXPECTED_REPO_LOCAL = [
+        "created private directory .agentic-sdlc",
+        "created private metadata .agentic-sdlc.intent.<id>.json",
+        "created private directory receipts",
+        "created private directory transactions",
+        "created private directory <id>",
+        "created private directory grants",
+        "created private directory stage",
+        "created private directory backup",
+        "created private directory progress-history",
+        "created private directory discard",
+        "renamed .agentic-sdlc.intent.<id>.json onto operation.json (flags 1)",
+        "created private metadata progress.json",
+        "created private metadata 0001.json",
+        "created the staged payload",
+        "renamed 0000.payload.next onto 0000.payload (flags 1)",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000000.json (flags 1)",
+        "renamed 0000.payload onto AGENTS.md (flags 1)",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000001.json (flags 1)",
+        "created private metadata commit.json",
+        "created private metadata receipt.json.next",
+        "renamed receipt.json.next onto <id>.json (flags 1)",
+        "created private metadata progress.json.next",
+        "renamed progress.json.next onto progress.json (flags 2)",
+        "renamed progress.json.next onto 00000000000000000002.json (flags 1)",
+    ]
+    EXPECTED_FIRST_NOOP = [
+        "created directory <target>/.agentic-sdlc",
+        "created private metadata plane.<digest>.json",
+        "created state plane ancestor <home>",
+        "created state plane ancestor ccodex",
+        "created state plane ancestor activation",
+        "created private directory <digest>",
+        "created <plane>/noop.<id>.json",
+    ]
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.manifest = self.root / "manifest.json"
+        self.manifest.write_bytes(ap.canonical_bytes(manifest()))
+        self.serial = 0
+        # One scratch activation, only to capture the exact bytes the manifest renders. A target
+        # already holding them plans as a no-op, which is the one way to reach `_apply_noop`
+        # without a prior effectful apply having already created the plane.
+        scratch = self._target("scratch")
+        scratch_result, scratch_code = self._apply(scratch)
+        self.assertEqual(scratch_code, 0, scratch_result)
+        self.rendered = (scratch / "AGENTS.md").read_bytes()
+
+    def _target(self, name: str) -> Path:
+        """A fresh repository under a fresh state plane home, both inside this case's tree."""
+        home = self.root / f"state-{name}"
+        set_environment(self, "XDG_STATE_HOME", str(home))
+        target = self.root / name
+        target.mkdir()
+        init_repo(target)
+        return target
+
+    def _documents(self, target: Path) -> tuple[Path, Path, dict]:
+        planned, code = ap.plan_command(target, self.manifest, "AGENTS.md")
+        self.assertEqual(code, 0, planned)
+        plan = planned["plan"]
+        serial = self.serial
+        self.serial = serial + 1
+        plan_path = self.root / f"plan-{serial}.json"
+        plan_path.write_bytes(ap.canonical_bytes(plan))
+        instant = now()
+        grant = {
+            "schema": ap.GRANT_SCHEMA, "grant_id": "5" * 30 + format(serial, "02x"), "operation": "apply",
+            "target": {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino},
+            "plan_digest": ap.digest_record(plan), "operation_id": None, "operation_digest": None, "decision": None,
+            "issued_at": stamp(instant), "expires_at": stamp(instant + timedelta(minutes=5)),
+        }
+        grant_path = self.root / f"grant-{serial}.json"
+        grant_path.write_bytes(ap.canonical_bytes(grant))
+        return plan_path, grant_path, plan
+
+    def _apply(self, target: Path, *, hook=None) -> tuple[dict, int]:
+        """One apply, optionally with the engine's own admission seam wrapped.
+
+        The seam is `_admit` itself, in the planner's globals. Wrapping it is what makes this a
+        sweep rather than a sample: it observes and interrupts EVERY mutating step, including any
+        added later, without a test-only hook in the engine.
+        """
+        plan_path, grant_path, _ = self._documents(target)
+        planner_globals = ap._admit.__globals__
+        original = planner_globals["_admit"]
+        if hook is not None:
+            planner_globals["_admit"] = lambda effect: hook(original, effect)
+        try:
+            return ap.apply_command(plan_path, self.manifest, grant_path)
+        finally:
+            planner_globals["_admit"] = original
+
+    def _normalize(self, effect: str, target: Path) -> str:
+        """Strip the one-run identities so the ledger can be asserted as an exact ordered list."""
+        home = Path(os.environ["XDG_STATE_HOME"])
+        text = effect.replace(str(plane_root(target)), "<plane>").replace(str(target), "<target>")
+        text = re.sub(rf"\b{re.escape(home.name)}\b", "<home>", text)
+        text = re.sub(r"\b[0-9a-f]{64}\b", "<digest>", text)
+        return re.sub(r"\b[0-9a-f]{32}\b", "<id>", text)
+
+    def _sequence(self, target: Path) -> tuple[list[str], dict, int]:
+        recorded: list[str] = []
+
+        def record(original, effect):
+            recorded.append(effect)
+            return original(effect)
+
+        result, code = self._apply(target, hook=record)
+        return [self._normalize(item, target) for item in recorded], result, code
+
+    def _noop_target(self, name: str) -> Path:
+        target = self._target(name)
+        (target / "AGENTS.md").write_bytes(self.rendered)
+        git(target, "add", "AGENTS.md")
+        git(target, "commit", "-m", "already rendered")
+        return target
+
+    def test_every_mutating_step_admits_its_effect_in_order(self) -> None:
+        """The exact ledger of a complete apply, which is what makes every admission required.
+
+        A step that mutates the tree without admitting is invisible to `_report_failure`, so the
+        next refusal downstream of it reports a clean 3 over its effect. That is the whole
+        defect, and it cannot be found by reading raise sites. Here it is found by the shape of
+        the ledger: this list is the closed inventory of what one apply does, in order.
+        """
+        target = self._target("default")
+        default, result, code = self._sequence(target)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["effect"], "committed")
+        self.assertEqual(default, self.EXPECTED_DEFAULT)
+        # The SAME inventory read off the result the command actually returns, in its revised
+        # wording. Two assertions rather than one, because `admit` and `revise` are separate
+        # steps and only the second one proves an effect's outcome was recorded: deleting a
+        # `revise` leaves a "created" entry for a file that was written, and this catches it.
+        self.assertEqual(
+            [self._normalize(item, target) for item in result["admitted_effects"]],
+            [item.replace("created private metadata", "wrote private metadata").replace("created the staged payload", "wrote the staged payload") for item in self.EXPECTED_DEFAULT],
+        )
+
+        select_repo_local_plane(self)
+        local_target = self._target("local")
+        repo_local, local_result, local_code = self._sequence(local_target)
+        self.assertEqual(local_code, 0, local_result)
+        self.assertEqual(repo_local, self.EXPECTED_REPO_LOCAL)
+        set_environment(self, ap.PLANE_SELECTION_ENV, None)
+
+        # The no-op audit path writes its own smaller journal, and it is the ONE apply shape
+        # whose first effect is the plane pointer with no transaction behind it.
+        noop = self._noop_target("noop")
+        audit, audit_result, audit_code = self._sequence(noop)
+        self.assertEqual(audit_code, 0, audit_result)
+        self.assertEqual(audit_result["status"], "no-op")
+        self.assertEqual(audit_result["effect"], "audit_only")
+        self.assertEqual(audit, self.EXPECTED_FIRST_NOOP)
+
+    def test_a_refusal_after_any_admitted_effect_is_never_a_clean_refusal(self) -> None:
+        """A refusal injected after EACH admission in turn, over the whole apply.
+
+        The injected error is `refused` at code 3 -- Decision 9's "clean refusal BEFORE any
+        journal or product effect" -- raised at a point where that is false by construction. Not
+        one of these may be reported as 3, or as 1 or 2, and each must carry the ledger.
+
+        POSITIVE CONTROL, and it is the same control the class needs against a blanket answer:
+        the uninjected apply asserted in the case above commits at 0, and every injection here
+        is asserted to carry a NON-EMPTY ledger whose length matches the injection point, so a
+        change that reported 4 unconditionally would not satisfy the length.
+        """
+        for selection in (None, ap.PLANE_REPO_LOCAL):
+            expected = self.EXPECTED_DEFAULT if selection is None else self.EXPECTED_REPO_LOCAL
+            set_environment(self, ap.PLANE_SELECTION_ENV, selection)
+            for index in range(len(expected)):
+                with self.subTest(selection=selection or "default", after=index, effect=expected[index]):
+                    state = {"count": 0}
+
+                    def hook(original, effect, state=state, index=index):
+                        token = original(effect)
+                        state["count"] += 1
+                        if state["count"] == index + 1:
+                            raise ap.ActivationError("refused", f"injected after admission {index}", 3)
+                        return token
+
+                    target = self._target(f"sweep-{selection or 'default'}-{index}")
+                    result, code = self._apply(target, hook=hook)
+                    self.assertNotIn(code, {1, 2, 3}, result)
+                    if code == 0:
+                        # An intermediate handler absorbed the injection and the operation
+                        # genuinely completed. That is a truthful terminal claim, not a defect.
+                        self.assertEqual(result["effect"], "committed", result)
+                        continue
+                    self.assertEqual(code, 4, result)
+                    self.assertEqual(result["status"], "effect-unknown", result)
+                    self.assertEqual(result["effect"], "effect_unknown", result)
+                    self.assertGreaterEqual(len(result["admitted_effects"]), index + 1, result)
+                    # The entry at the injection point is the one the ledger has NOT yet
+                    # revised: the raise lands between `admit` and `revise`, which is exactly
+                    # the window where an effect is true and its outcome is not yet known.
+                    self.assertEqual(self._normalize(result["admitted_effects"][index], target), expected[index], result)
+        set_environment(self, ap.PLANE_SELECTION_ENV, None)
+
+    def test_the_result_renderer_has_no_default_effect(self) -> None:
+        """The structural half of the fix, pinned structurally because no input can reach it.
+
+        `_result`'s `effect` parameter used to default to `"none"`, and that default is what let
+        one `except` clause answer for 312 raise sites. Restoring it changes no current behaviour
+        -- every call site passes the argument -- so there is no distinguishing INPUT and no
+        ordinary test can hold the line. What the default actually costs is paid by the NEXT
+        result added: without it, omitting the effect is a `TypeError` at the call, and with it
+        the omission silently claims no effect. So the signature itself is the assertion.
+
+        `_report_failure` is asserted to be the only place a refusal's effect is settled, by the
+        same reasoning: a second such site is how the class came back twice before.
+        """
+        import inspect
+
+        signature = inspect.signature(ap._result)
+        effect = signature.parameters["effect"]
+        self.assertIs(effect.default, inspect.Parameter.empty, "`effect` must have no default")
+        self.assertIs(effect.kind, inspect.Parameter.KEYWORD_ONLY)
+        source = Path(ap.__file__).read_text() if not ap.__file__.endswith("activation_planner.py") else (ROOT / "skills" / "agentic-sdlc" / "tools" / "activation-planner.py").read_text()
+        # Every `except ActivationError` in a command handler must delegate; a handler that
+        # renders its own `_result` is a second decision point, which is the defect's shape.
+        self.assertEqual(source.count("def _report_failure("), 1)
+        self.assertEqual(source.count("_report_failure("), 1 + 6, "plan, apply, status, inspect, finish, rollback, and the definition")
+
+    def test_an_inactive_target_keeps_its_reason_on_every_command_but_inspect(self) -> None:
+        """`recover inspect` alone answers `inactive` with no reason; the others keep theirs.
+
+        Suppressing the reason by STATUS rather than by command would drop `recover finish`'s
+        explanation of why it did nothing. The two arms are each other's control.
+        """
+        target = self._target("inactive")
+        instant = now()
+        grant = {
+            "schema": ap.GRANT_SCHEMA, "grant_id": "9" * 32, "operation": "recover",
+            "target": {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino},
+            "plan_digest": None, "operation_id": "a" * 32, "operation_digest": "b" * 64, "decision": "finish",
+            "issued_at": stamp(instant), "expires_at": stamp(instant + timedelta(minutes=5)),
+        }
+        path = self.root / "inactive-recovery.json"
+        path.write_bytes(ap.canonical_bytes(grant))
+
+        finished, finish_code = ap.recover_finish_command(target, path)
+        inspected, inspect_code = ap.recover_inspect_command(target)
+
+        self.assertEqual(finish_code, 0, finished)
+        self.assertEqual(finished["status"], "inactive")
+        self.assertEqual(finished["effect"], "none")
+        self.assertEqual(finished["reasons"], ["no unique active transaction"], finished)
+        self.assertEqual(inspect_code, 0, inspected)
+        self.assertEqual(inspected["status"], "inactive")
+        self.assertEqual(inspected["effect"], "none")
+        self.assertEqual(inspected["reasons"], [], inspected)
+        for result in (finished, inspected):
+            self.assertEqual(result["admitted_effects"], [], result)
+
+    def test_a_no_op_apply_refuses_an_unsafe_plane_home_before_writing_a_pointer(self) -> None:
+        """`_apply_noop` takes the same order as `_make_layout`, and for the same reason.
+
+        The audit path creates the pointer and the plane root exactly as the effectful path does,
+        so it needs the ancestor check in front of the pointer too. Without it the refusal lands
+        after a pointer write and is honestly exit 4 -- correct, but worse for the operator than
+        refusing before writing anything.
+        """
+        target = self._noop_target("unsafe")
+        home = Path(os.environ["XDG_STATE_HOME"])
+        home.mkdir(parents=True)
+        os.chmod(home, 0o757)
+        self.assertTrue(stat.S_IMODE(home.stat().st_mode) & 0o002)
+
+        result, code = self._apply(target)
+
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe state plane home", result["reasons"])
+        self.assertEqual(result["effect"], "none")
+        self.assertEqual(result["admitted_effects"], [], result)
+        self.assertFalse((target / ".agentic-sdlc").exists(), "no pointer may precede the ancestor check")
+        self.assertEqual(sorted(item.name for item in home.iterdir()), [])
+
+        # POSITIVE CONTROL: the same no-op apply at 0700 completes, so the refusal above came
+        # from the mode and not from an unrelated break in the fixture.
+        os.chmod(home, 0o700)
+        allowed, allowed_code = self._apply(target)
+        self.assertEqual(allowed_code, 0, allowed)
+        self.assertEqual(allowed["status"], "no-op")
+        self.assertEqual(allowed["effect"], "audit_only")
 
 
 if __name__ == "__main__":
