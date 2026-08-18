@@ -54,6 +54,14 @@ XDG state plane, or target-local) is a pending operator decision, so the produce
 destination from its caller rather than picking a side. A receipt is evidence of whether a gate ran
 and what it returned; it authorizes nothing — not push, publication, PR mutation, merge, or
 deployment.
+
+`--harness unittest` additionally records WHICH tests failed, as the optional `failures` field. That
+field is what makes a receipt a *baseline*: "exact non-worsening" is defined over the SET of named
+failing tests (operator decision, 2026-08-17), and `scripts/gate_baseline.py` compares two of them.
+A status or a count cannot express it — a wave that fixes one failure and breaks a different one
+holds the count and flips the set, which is precisely what "exact" exists to catch. The field is
+additive and absent unless requested, so receipts written before it existed keep verifying, and it
+is inside `self_digest` like every other field, so a failure cannot be edited out afterwards.
 """
 
 from __future__ import annotations
@@ -62,15 +70,30 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 OUTCOME_PASSED = "passed"
 OUTCOME_FAILED = "failed"
 OUTCOME_UNOBSERVED = "unobserved"
+
+#: The only harness whose output this producer can identify failures in.
+HARNESS_UNITTEST = "unittest"
+#: No failure identification was requested, so the receipt carries no `failures` field at all.
+HARNESS_NONE = "none"
+#: The failing set was read out of the harness's own report and is exact.
+FAILURES_IDENTIFIED = "identified"
+#: Identification was attempted and FAILED. Deliberately not spelled as an empty identified set: a
+#: red gate whose failing set reads as empty makes every later subset comparison vacuously
+#: non-worsening, which is the worst available outcome, so the receipt says "unknown" out loud.
+FAILURES_UNPARSED = "unparsed"
+FAILURE_STATES = (FAILURES_IDENTIFIED, FAILURES_UNPARSED)
+#: The three keys a `failures` record carries — exactly these, always.
+FAILURE_RECORD_KEYS = frozenset({"harness", "state", "names"})
 
 # The producer's exit codes follow the repository's effect-aware exit contract (product-spec
 # Implementation Decision 9): 0 success or exact no-effect, 1 unexpected internal failure before
@@ -122,6 +145,159 @@ def derive_outcome(status: int | None) -> str:
     return OUTCOME_PASSED if int(status) == 0 else OUTCOME_FAILED
 
 
+# --------------------------------------------------------------------------------------------
+# Failure identities: WHICH tests failed, named stably enough to compare two runs as sets.
+#
+# A failing test is identified by its fully-qualified dotted test id — `module.Class.method` — and
+# by nothing else. Three constraints pick that identity:
+#
+#   * A method name alone is ambiguous: two modules may both define `test_install`, and a set built
+#     from bare names would silently merge them, so a fix in one would mask a break in the other.
+#   * It must be stable across runs on the same tree. The dotted id is; a file path, a line number,
+#     a duration, and a traceback are not.
+#   * It must embed no mutable absolute path. This is not hypothetical: unittest prints subtest
+#     parameters in the header, and a real one in this repository reads
+#     `FAIL: test_many (m.C.test_many) (label='/tmp/moves/every/run')`. Those parameters are
+#     therefore STRIPPED, which deliberately coarsens the identity to the test method: two subtests
+#     of one method collapse to one name, so a wave that breaks one subtest while fixing another
+#     *inside the same method* reads as non-worsening. That is a named limit of this identity, taken
+#     because the alternative embeds temp paths and object addresses that change every run and would
+#     make the same tree produce a different baseline each time.
+#
+# What is scraped is cross-checked against the harness's own tally, because a scrape that silently
+# under-reports is indistinguishable from a green run. Anything the two disagree about is
+# `unparsed`, never a shortened set. Two limits remain: a harness killed before it printed its
+# summary contributes no headers and no tally, so its absence cannot be detected from its own
+# missing output; and a task runner that prefixes each line makes the whole log unparseable rather
+# than wrong. In both cases the gate's own `status` and `outcome` stay authoritative for redness.
+# --------------------------------------------------------------------------------------------
+
+#: `FAIL: test_a (m.C.test_a)`, `ERROR: setUpClass (m.C)`, `UNEXPECTED SUCCESS: test_a (m.C.test_a)`,
+#: each optionally followed by subtest parameters in a second parenthesis.
+_HEADER_PREFIXES = ("FAIL: ", "ERROR: ", "UNEXPECTED SUCCESS: ")
+_HEADER = re.compile(r"^(?:FAIL|ERROR|UNEXPECTED SUCCESS): (\S+) \(([^()]*)\)(?: \(.*\))?$")
+#: `OK`, `OK (skipped=13)`, `FAILED (failures=2, errors=1)`.
+_SUMMARY = re.compile(r"^(?:OK|FAILED)(?: \((?P<tally>[^()]*)\))?$")
+_TALLY_ITEM = re.compile(r"^(?P<key>[a-z][a-z ]*)=(?P<count>\d+)$")
+#: An unexpected success is a non-pass that turns the run red, and unittest prints its name, so it
+#: is counted here exactly like a failure or an error. `skipped` and `expected failures` are not
+#: non-passes; note that a naive `failures=(\d+)` search would read `expected failures=1` as one.
+_TALLY_NONPASS = frozenset({"failures", "errors", "unexpected successes"})
+_TALLY_IGNORED = frozenset({"skipped", "expected failures"})
+#: A dotted test id: at least two segments, each a Python identifier. Rejects paths, `::` selectors,
+#: subtest parameters, and bare method names in one pattern.
+_TEST_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
+
+
+def _header_identity(line: str) -> str | None:
+    """The dotted test id a unittest failure header names, or None if it names none.
+
+    Older CPython printed `FAIL: test_a (m.C)`; 3.11+ prints `FAIL: test_a (m.C.test_a)`; a class or
+    module fixture prints `ERROR: setUpClass (m.C)`. One rule covers all three: append the leading
+    word unless the parenthesised id already ends with it.
+    """
+    match = _HEADER.match(line)
+    if match is None:
+        return None
+    leading, dotted = match.group(1), match.group(2)
+    if not dotted:
+        return None
+    if dotted.split(".")[-1] != leading:
+        dotted = f"{dotted}.{leading}"
+    return dotted if _TEST_ID.match(dotted) else None
+
+
+def _summary_nonpass_count(tally: str | None) -> int | None:
+    """How many non-passes a summary line declares, or None if the line cannot be read exactly."""
+    if not tally:
+        return 0
+    total = 0
+    for item in tally.split(", "):
+        match = _TALLY_ITEM.match(item)
+        if match is None:
+            return None
+        key = match.group("key")
+        if key in _TALLY_NONPASS:
+            total += int(match.group("count"))
+        elif key not in _TALLY_IGNORED:
+            return None  # an unrecognised key may or may not be a non-pass: do not guess
+    return total
+
+
+def extract_unittest_failures(log_bytes: bytes) -> dict[str, Any]:
+    """Read the failing set out of captured unittest output. A pure function of the bytes.
+
+    Returns a ready-to-store `failures` record. `identified` means the scraped headers and the
+    harness's own tally agree exactly — including on zero, which is what a green run looks like.
+    Everything else is `unparsed` with an empty `names`, and the two are told apart by `state`, never
+    by an empty list. Undecodable bytes are replaced rather than raised: the run still owes a
+    receipt.
+    """
+    text = log_bytes.decode("utf-8", "replace")
+    headers = 0
+    declared = 0
+    summaries = 0
+    names: list[str] = []
+    identifiable = True
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(_HEADER_PREFIXES):
+            headers += 1
+            identity = _header_identity(line)
+            if identity is None:
+                identifiable = False  # counted by the harness, nameable by nobody
+            else:
+                names.append(identity)
+            continue
+        summary = _SUMMARY.match(line)
+        if summary is None:
+            continue
+        count = _summary_nonpass_count(summary.group("tally"))
+        if count is None:
+            identifiable = False
+            continue
+        summaries += 1
+        declared += count
+    if not identifiable or summaries == 0 or declared != headers:
+        return {"harness": HARNESS_UNITTEST, "state": FAILURES_UNPARSED, "names": []}
+    return {
+        "harness": HARNESS_UNITTEST,
+        "state": FAILURES_IDENTIFIED,
+        "names": sorted(set(names)),
+    }
+
+
+def _normalized_failures(failures: dict[str, Any], argv: list[str] | None) -> dict[str, Any]:
+    """Validate and canonicalize a `failures` record for storage, or raise ValueError.
+
+    Order and duplicates are normalized the way `status` is coerced with `int()`: a caller mistake
+    about presentation must not produce a receipt that fails its own verification. A mistake about
+    CONTENT — an unknown state, a path-shaped identity, names beside `unparsed`, names with nothing
+    executed — is raised instead, because silently storing it would produce exactly that
+    unverifiable receipt.
+    """
+    if not isinstance(failures, dict) or set(failures) != FAILURE_RECORD_KEYS:
+        raise ValueError(f"failures must carry exactly {sorted(FAILURE_RECORD_KEYS)}")
+    harness = failures["harness"]
+    state = failures["state"]
+    raw_names = failures["names"]
+    if not isinstance(harness, str) or not harness:
+        raise ValueError("failures.harness must be a non-empty string")
+    if state not in FAILURE_STATES:
+        raise ValueError(f"failures.state must be one of {list(FAILURE_STATES)}")
+    if isinstance(raw_names, str) or not isinstance(raw_names, Sequence):
+        raise ValueError("failures.names must be a list of dotted test ids")
+    names = sorted({str(name) for name in raw_names} if raw_names else set())
+    for name in raw_names:
+        if not isinstance(name, str) or not _TEST_ID.match(name):
+            raise ValueError(f"failures.names holds a value that is not a dotted test id: {name!r}")
+    if names and state != FAILURES_IDENTIFIED:
+        raise ValueError("failures.names must be empty unless the failing set was identified")
+    if names and argv is None:
+        raise ValueError("failures.names cannot name a test when nothing was executed")
+    return {"harness": harness, "state": state, "names": names}
+
+
 def build_receipt(
     *,
     gate: str,
@@ -131,6 +307,7 @@ def build_receipt(
     lock_bytes: bytes,
     cwd: str,
     signal: int | None = None,
+    failures: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Construct a self-hashing gate receipt.
 
@@ -159,7 +336,13 @@ def build_receipt(
       nothing.
     - cwd: absolute path the gate ran in — for an unobserved receipt, the path it WOULD have run
       in, since nothing ran there. Either way it ties the receipt to per-path worktree trust.
-    - self_digest: sha256 of the canonical JSON of every other field.
+    - failures: OPTIONAL, and ABSENT unless a caller asked for failure identification. When present
+      it is `{harness, state, names}`: `state: identified` with the exact set of dotted test ids
+      (empty for a green run), or `state: unparsed` with no names when the harness's output could
+      not be read exactly. This is the field that makes a receipt a baseline; `unparsed` is not an
+      empty failing set and must never be compared as one.
+    - self_digest: sha256 of the canonical JSON of every other field — including `failures`, so a
+      recorded failure cannot be edited out of a baseline afterwards.
     """
     body = {
         "gate": gate,
@@ -171,6 +354,10 @@ def build_receipt(
         "toolchain_digest": _sha256_hex(lock_bytes),
         "cwd": cwd,
     }
+    if failures is not None:
+        # Absent unless requested: adding a key changes the digest of NEW receipts only, so every
+        # receipt written before this field existed still re-derives.
+        body["failures"] = _normalized_failures(failures, body["argv"])
     receipt = dict(body)
     receipt["self_digest"] = canonical_digest(body)
     return receipt
@@ -198,12 +385,42 @@ def _states_are_consistent(body: dict[str, Any]) -> bool:
     return True
 
 
+def _failures_are_consistent(body: dict[str, Any]) -> bool:
+    """True iff a stored `failures` record is one this producer could honestly have written.
+
+    A set is only comparable if it is well-formed, so the invariants are the comparison's floor:
+    exactly the three keys, a known state, canonically ordered unique dotted ids, no names beside
+    `unparsed`, and no names at all when `argv` says nothing was executed.
+    """
+    failures = body.get("failures")
+    if not isinstance(failures, dict) or set(failures) != FAILURE_RECORD_KEYS:
+        return False
+    harness, state, names = failures["harness"], failures["state"], failures["names"]
+    if not isinstance(harness, str) or not harness:
+        return False
+    if state not in FAILURE_STATES:
+        return False
+    if not isinstance(names, list):
+        return False
+    if not all(isinstance(name, str) and _TEST_ID.match(name) for name in names):
+        return False
+    if names != sorted(set(names)):
+        return False  # canonical order and uniqueness: a set, stored deterministically
+    if names and state != FAILURES_IDENTIFIED:
+        return False  # `unparsed` is not a short failing set
+    if names and body.get("argv") is None:
+        return False  # nothing executed, yet a failing test is named
+    return True
+
+
 def verify_receipt(receipt: dict[str, Any]) -> bool:
     """True iff self_digest re-derives, outcome agrees with status, and the state is honest.
 
     Receipts written before `outcome` existed carry no such field and still verify: the digest is
     re-derived over whatever non-self_digest fields are present, so the added fields change the
     digest of NEW receipts only, and the state invariants apply only where `outcome` is present.
+    `failures` is scoped the same way — its invariants bind receipts that CARRY it, and its absence
+    is an honest receipt that simply is not a baseline.
     """
     stored = receipt.get("self_digest")
     if not isinstance(stored, str):
@@ -216,6 +433,8 @@ def verify_receipt(receipt: dict[str, Any]) -> bool:
             return False
         if body["outcome"] != derive_outcome(body.get("status")):
             return False
+    if "failures" in body and not _failures_are_consistent(body):
+        return False
     return True
 
 
@@ -281,8 +500,12 @@ class _Effects:
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:  # pragma: no cover - exercised via subprocess
-        self.print_usage(sys.stderr)
-        sys.stderr.write(f"{self.prog}: error: {message}\n")
+        # The usage goes through the guarded sink too, rather than through argparse's own
+        # `print_usage`: argparse swallows the failed write, but the bytes it leaves pending are
+        # enough for the interpreter's shutdown flush to replace this usage error's 2 with 120.
+        note = advisory_stderr()
+        note(self.format_usage())
+        note(f"{self.prog}: error: {message}\n")
         raise SystemExit(EXIT_USAGE)
 
 
@@ -328,6 +551,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="also persist the captured log bytes to this file path (`-` is not accepted)",
     )
     record.add_argument("--cwd", default=None, help="directory to run the gate in (default: current)")
+    record.add_argument(
+        "--harness",
+        choices=(HARNESS_NONE, HARNESS_UNITTEST),
+        default=HARNESS_NONE,
+        help=(
+            "identify WHICH tests failed from the captured output and record them as `failures`, "
+            "making this receipt a baseline for scripts/gate_baseline.py. Default `none` records no "
+            "such field. An output that cannot be read exactly is recorded as `unparsed`, never as "
+            "an empty failing set."
+        ),
+    )
     record.add_argument(
         "--unobserved",
         action="store_true",
@@ -456,6 +690,84 @@ def _write_new_file(target: str, data: bytes, *, effects: _Effects, what: str) -
     effects.revise(token, f"the {what} was written to {target}")
 
 
+def abandon_broken_stream(name: str, stream: object) -> None:
+    """Stop the interpreter from retrying a write this process has ALREADY reported as failed.
+
+    Catching the write is not enough by itself. A failed `write`/`flush` leaves those bytes PENDING
+    in the stream's buffer, and CPython flushes `sys.stdout` and `sys.stderr` once more while
+    finalizing; that second failure replaces the process's exit code with 120 — outside this
+    module's closed exit set entirely, so the honest code the caller computed never reaches the
+    shell. Measured on CPython 3.12.11: a receipt written to a broken pipe printed the correct
+    PARTIAL classification and exited 4, and the shell still saw 120.
+
+    Dropping the module attribute is how CPython itself represents a stream this process does not
+    have — `2>&-` starts the interpreter with `sys.stderr is None` — and it loses no byte that was
+    not already lost, because the write that would have carried them is the one that failed. The
+    identity check is load-bearing: `main` is importable, so the current `sys.stdout`/`sys.stderr`
+    may belong to a caller who swapped it, and only the stream that actually failed may be dropped.
+    `sys.__stdout__`/`sys.__stderr__` still reference it either way.
+    """
+    if getattr(sys, name, None) is stream:
+        setattr(sys, name, None)
+
+
+def _flush_of(stream: object) -> Callable[[], Any]:
+    """The stream's own `flush`, or a no-op when it has none.
+
+    Flushing is what makes a broken channel announce itself HERE, while its failure can still be
+    contained, instead of during finalization where it becomes exit 120 — so it is not optional
+    where it exists. But `write` without `flush` is a shape a caller may hand an importable `main`,
+    and it worked before these lines were guarded, so its absence must not become a new way to lose
+    a receipt: that would trade one display-channel defect for another.
+    """
+    flush = getattr(stream, "flush", None)
+    return flush if callable(flush) else (lambda: None)
+
+
+def _guarded_stderr_sink(
+    stream: object, write: Callable[[Any], Any], flush: Callable[[], Any]
+) -> Callable[[Any], None]:
+    """Wrap an ALREADY-SETTLED display sink so a failed write costs the channel, never the verdict.
+
+    A display channel is allowed to fail. What it may not do is destroy the mandatory artifact or
+    corrupt the exit signal, so the first failure retires the channel — silently, because there is
+    by definition nowhere left to report it — and every later line is a no-op.
+    """
+    live = [True]
+
+    def emit(payload: Any) -> None:
+        if not live[0]:
+            return
+        try:
+            write(payload)
+            flush()
+        except (OSError, ValueError):  # EPIPE/ENOSPC, or a stream closed underneath us
+            live[0] = False
+            abandon_broken_stream("stderr", stream)
+
+    return emit
+
+
+def advisory_stderr() -> Callable[[str], None]:
+    """Settle the display-only sink for this module's own LINES, and drop it if a write fails.
+
+    The rule `_stderr_mirror` states, applied to every advisory line these entrypoints write — the
+    running notes and the failure report itself: the channel is a convenience, never the evidence,
+    so it may neither destroy the mandatory artifact nor change the exit code. Two hostile shapes
+    exist and neither is exotic. `2>&-` leaves CPython with `sys.stderr is None`, so the very first
+    `sys.stderr.write` raises `AttributeError`; a reader that goes away makes every write `EPIPE`.
+    Both used to land in `main`'s `except Exception`, whose reporter OPENED with another
+    `sys.stderr.write` and raised again — so `record` against a red gate that HAD RUN exited 1 with
+    no receipt at all, and the same run down a broken pipe exited 120.
+
+    `scripts/gate_baseline.py` shares this sink rather than growing a second copy of the rule.
+    """
+    stream = sys.stderr
+    if stream is None:  # `2>&-`: this process was handed no stderr to be advisory on
+        return lambda line: None
+    return _guarded_stderr_sink(stream, stream.write, _flush_of(stream))
+
+
 def _stderr_mirror(*, quiet: bool) -> Callable[[bytes], None]:
     """Resolve the display-only sink for the gate's captured bytes, BEFORE the gate starts.
 
@@ -467,28 +779,27 @@ def _stderr_mirror(*, quiet: bool) -> Callable[[bytes], None]:
     run, so the shape of the sink is settled here, once, before anything runs, and a text stream is
     written as decoded text rather than made to fail.
 
+    Settling the SHAPE is not enough on its own, because the write can fail for reasons no shape
+    check can see: the mirror runs inside the window where the gate has already run, so an `EPIPE`
+    there used to strand the receipt for work that provably happened. The writes are therefore
+    guarded as well — a mirror that dies is dropped and the run continues to its receipt.
+
     Undecodable bytes become replacement characters, and a read boundary can split a multi-byte
     sequence, so a text mirror may DISPLAY a character the byte mirror would not. Nothing is
     dropped, and `log_digest` is over the raw captured bytes either way, so no mirror — byte, text,
-    or suppressed — can change what the receipt says.
+    suppressed, or retired mid-run — can change what the receipt says.
     """
     if quiet:
         return lambda chunk: None
     stream = sys.stderr
+    if stream is None:  # `2>&-`: there is nothing to mirror to, which is not a failure
+        return lambda chunk: None
     buffer = getattr(stream, "buffer", None)
     if buffer is None:
-
-        def mirror_text(chunk: bytes) -> None:
-            stream.write(chunk.decode("utf-8", "replace"))
-            stream.flush()
-
-        return mirror_text
-
-    def mirror_bytes(chunk: bytes) -> None:
-        buffer.write(chunk)
-        buffer.flush()
-
-    return mirror_bytes
+        return _guarded_stderr_sink(
+            stream, lambda chunk: stream.write(chunk.decode("utf-8", "replace")), _flush_of(stream)
+        )
+    return _guarded_stderr_sink(stream, buffer.write, _flush_of(buffer))
 
 
 def _run_gate(argv: list[str], cwd: Path, *, quiet: bool, effects: _Effects) -> tuple[int, bytes]:
@@ -535,6 +846,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(own)
     effects = _Effects()
+    # Settled once, before anything runs, and never able to fail afterwards: these notes are
+    # display, and the receipt below is the evidence. See `advisory_stderr`.
+    note = advisory_stderr()
     status: int | None = None
     try:
         if not gate_argv:
@@ -562,7 +876,7 @@ def main(argv: list[str] | None = None) -> int:
         signal_number: int | None = None
         if args.unobserved:
             log_bytes = b""
-            sys.stderr.write("gate not run: recording an unobserved receipt\n")
+            note("gate not run: recording an unobserved receipt\n")
         else:
             try:
                 raw_status, log_bytes = _run_gate(gate_argv, cwd, quiet=args.quiet, effects=effects)
@@ -570,7 +884,7 @@ def main(argv: list[str] | None = None) -> int:
                 # The gate could not be started, so it never ran: no argv is recorded as executed,
                 # and recording an exit code would assert a verdict nobody observed.
                 log_bytes = b""
-                sys.stderr.write(f"gate could not be started ({exc}): recording an unobserved receipt\n")
+                note(f"gate could not be started ({exc}): recording an unobserved receipt\n")
             else:
                 # The run itself was admitted inside `_run_gate`, at the `Popen` that made it true —
                 # admitting it here instead would miss every failure while the output streamed.
@@ -578,12 +892,23 @@ def main(argv: list[str] | None = None) -> int:
                 if raw_status < 0:
                     # Killed before it could return an exit code. It ran, but produced no verdict.
                     signal_number = -raw_status
-                    sys.stderr.write(
+                    note(
                         f"gate was killed by signal {signal_number}: it produced no exit code, so "
                         "the receipt records no verdict\n"
                     )
                 else:
                     status = raw_status
+        failures: dict[str, Any] | None = None
+        if args.harness == HARNESS_UNITTEST:
+            failures = extract_unittest_failures(log_bytes)
+            if failures["state"] != FAILURES_IDENTIFIED:
+                # Said at record time, where it is still cheap to fix, rather than left for the
+                # comparison to discover. The receipt is still written: it is honest evidence that
+                # this gate ran and that its failing set is unknown.
+                note(
+                    "no failing test could be identified in the captured unittest output: "
+                    "recording an unparsed failing set, which no baseline comparison will accept\n"
+                )
         receipt = build_receipt(
             gate=args.gate,
             argv=executed_argv,
@@ -592,6 +917,7 @@ def main(argv: list[str] | None = None) -> int:
             lock_bytes=lock_bytes,
             cwd=str(cwd),
             signal=signal_number,
+            failures=failures,
         )
         payload = canonical_json(receipt) + b"\n"
         if args.log is not None:
@@ -606,6 +932,9 @@ def main(argv: list[str] | None = None) -> int:
                 # internal failure. Admitting it before the write would claim an effect that had
                 # not happened yet, so it is admitted at the failure, where the doubt begins.
                 effects.admit("an unknown prefix of the receipt may already have reached stdout")
+                # Admitted first, then abandoned: the classification below is worthless if the
+                # interpreter's shutdown flush of the same broken stream overwrites its exit code.
+                abandon_broken_stream("stdout", sys.stdout)
                 raise _ProducerError(
                     f"cannot write the receipt to stdout: {exc}", EXIT_INTERNAL
                 ) from exc
@@ -625,13 +954,20 @@ def _report_failure(message: str, code: int, effects: _Effects) -> int:
 
     The single escalation point: once ANY effect is admitted, no failure may exit as a clean
     refusal or a pre-effect internal failure, because on disk the result is partial or unknown.
+
+    Reporting is a display act and the returned code is the evidence, so the sink is settled before
+    the first line rather than reached for per write. This function used to OPEN with a bare
+    `sys.stderr.write`, which made it the one place a broken stderr could not be reported from: the
+    write raised on its way out of `except Exception`, nothing below ran, and the classification it
+    exists to produce never reached the caller.
     """
-    sys.stderr.write(f"gate_receipt.py: {message}\n")
+    note = advisory_stderr()
+    note(f"gate_receipt.py: {message}\n")
     if effects.any():
         code = EXIT_PARTIAL
-        sys.stderr.write("gate_receipt.py: this is a PARTIAL result, not a clean refusal:\n")
+        note("gate_receipt.py: this is a PARTIAL result, not a clean refusal:\n")
         for effect in effects.admitted:
-            sys.stderr.write(f"gate_receipt.py:   already happened: {effect}\n")
+            note(f"gate_receipt.py:   already happened: {effect}\n")
     return code
 
 

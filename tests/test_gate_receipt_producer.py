@@ -1066,12 +1066,18 @@ class EffectAwareExitTests(_ProducerTestCase):
         self.assertNotIn("PARTIAL", ok_err.getvalue())
         self.assertTrue(gate_receipt.verify_receipt(json.loads(out.read_text(encoding="utf-8"))))
 
-    def test_a_mirror_write_failure_after_the_gate_ran_is_partial_not_effect_free(self) -> None:
-        """Tolerating a text stream must not SILENCE a mirror that genuinely fails.
+    def test_a_mirror_write_failure_after_the_gate_ran_still_writes_the_receipt(self) -> None:
+        """A mirror that genuinely fails costs the MIRROR, never the receipt of a gate that ran.
 
-        The stream's shape can no longer strand a receipt, but a real write failure still can, and
-        it lands in the same window: `EPIPE` on a byte-capable stderr must report 4, never 1. This
-        keeps the exit-4 path reachable for a raise site other than `wait`.
+        This test previously asserted the opposite — 4, with no receipt — and that was the defect
+        rather than the contract. `_stderr_mirror` states the rule it broke: the mirror is a
+        convenience `--quiet` switches off, never the evidence. Under `EPIPE` the gate had still
+        run, its bytes were still captured, and `log_digest` was still exact, so the only honest
+        outcome is the receipt plus the gate's real verdict; escalating to 4 let an optional
+        DISPLAY channel destroy a mandatory artifact and hand back a partial-effect code for a
+        complete one. The exit-4 path stays reachable through the failures that genuinely leave the
+        result unknown: `wait` raising inside the run window (above) and a destination created but
+        not written (`_write_new_file`).
         """
         marker = self.tmp / "mirror.marker"
         argv = _write_fake_gate(self.tmp, exit_code=0, marker=marker)
@@ -1106,12 +1112,21 @@ class EffectAwareExitTests(_ProducerTestCase):
         with mock.patch.object(sys, "stderr", broken):
             code = gate_receipt.main(args)
         text = broken.text.getvalue()
-        self.assertTrue(marker.exists())
-        self.assertFalse(out.exists())
-        self.assertEqual(code, gate_receipt.EXIT_PARTIAL, text)
+        # POSITIVE CONTROL on the injection: the mirror was REACHED and it DID fail. Without this
+        # the assertions below would also pass on a run that never mirrored a byte.
+        self.assertTrue(broken.buffer.write.called)
+        self.assertIsInstance(broken.buffer.write.side_effect, OSError)
+        self.assertTrue(marker.exists())  # the gate ran...
+        self.assertEqual(code, gate_receipt.EXIT_OK, text)  # ...and its verdict is what came back
+        self.assertNotEqual(code, gate_receipt.EXIT_PARTIAL)
         self.assertNotEqual(code, gate_receipt.EXIT_INTERNAL)
-        self.assertIn("unexpected BrokenPipeError", text)  # not laundered into an unobserved gate
-        self.assertIn("already happened: the gate ran", text)
+        receipt = json.loads(out.read_text(encoding="utf-8"))
+        self.assertTrue(gate_receipt.verify_receipt(receipt))
+        self.assertEqual(receipt["outcome"], "passed")
+        # The mirror is display, so losing it changed nothing about what was hashed.
+        self.assertEqual(receipt["log_digest"], _sha256_hex(b"fake gate stdout\nfake gate stderr\n"))
+        self.assertNotIn("PARTIAL", text)  # nothing partial happened: the receipt is complete
+        self.assertNotIn("BrokenPipeError", text)
 
     def test_producer_exit_codes_never_replay_the_gates_own_code(self) -> None:
         """A gate exiting 3 must not read as the producer's clean refusal (and 3 is common here)."""
@@ -1547,6 +1562,1102 @@ class UnobservedOutcomeTests(unittest.TestCase):
         self.assertIn("signal", fresh)
         self.assertNotEqual(fresh["self_digest"], legacy["self_digest"])
         self.assertTrue(gate_receipt.verify_receipt(fresh))
+
+
+# --------------------------------------------------------------------------------------------
+# `baselined` = a receipt that carries the SET of named failing tests (operator decision,
+# 2026-08-17). These tests exercise the identity extraction on GENUINE unittest output wherever
+# possible: the "fake gate" is a real `python -m unittest` run over a generated module, so the
+# parser is checked against the harness rather than against a hand-written imitation of it.
+# --------------------------------------------------------------------------------------------
+
+
+def _write_unittest_gate(directory: Path, module: str, source: str) -> list[str]:
+    """A gate that IS a real unittest invocation. Returns the argv that runs it."""
+    (directory / f"{module}.py").write_text(source, encoding="utf-8")
+    # `-B` keeps a stale .pyc from a same-second rewrite out of the picture; `-m unittest`
+    # puts the gate's cwd on sys.path, which is where the generated module lives.
+    return [sys.executable, "-B", "-m", "unittest", module]
+
+
+def _suite(failing: tuple[str, ...] = (), passing: tuple[str, ...] = ()) -> str:
+    lines = ["import unittest", "", "", "class Suite(unittest.TestCase):"]
+    for name in failing:
+        lines += [f"    def {name}(self):", "        self.fail('injected')"]
+    for name in passing:
+        lines += [f"    def {name}(self):", "        pass"]
+    return "\n".join(lines) + "\n"
+
+
+def _write_canned_gate(directory: Path, *, text: str, exit_code: int, name: str) -> list[str]:
+    """A gate that replays exact bytes, for harness shapes this Python cannot produce."""
+    script = directory / name
+    script.write_text(
+        f"import sys\nsys.stdout.write({text!r})\nsys.exit({exit_code})\n", encoding="utf-8"
+    )
+    return [sys.executable, "-B", str(script)]
+
+
+def _unittest_log(headers: tuple[str, ...], summary: str, *, ran: int = 3) -> str:
+    """A unittest-shaped log with caller-chosen header lines and a caller-chosen tally line."""
+    parts: list[str] = []
+    for header in headers:
+        parts += [
+            "=" * 70,
+            header,
+            "-" * 70,
+            "Traceback (most recent call last):",
+            "AssertionError: injected",
+            "",
+        ]
+    parts += ["-" * 70, f"Ran {ran} tests in 0.001s", "", summary, ""]
+    return "\n".join(parts)
+
+
+class FailureIdentityTests(_ProducerTestCase):
+    """The receipt records WHICH tests failed, by a stable path-free identity, or says it cannot."""
+
+    def _record(
+        self, argv: list[str], *, out: Path, harness: str | None = "unittest"
+    ) -> subprocess.CompletedProcess[str]:
+        args = ["record", "--gate", "fake gate", "--out", str(out), "--lock", str(self.lock), "--quiet"]
+        if harness is not None:
+            args += ["--harness", harness]
+        return self._run([*args, "--", *argv])
+
+    def _receipt(self, out: Path) -> dict[str, object]:
+        receipt = json.loads(out.read_text(encoding="utf-8"))
+        self.assertTrue(gate_receipt.verify_receipt(receipt))
+        return receipt
+
+    def test_a_failing_run_records_the_named_failing_set(self) -> None:
+        argv = _write_unittest_gate(
+            self.tmp, "red_suite", _suite(failing=("test_alpha", "test_beta"), passing=("test_ok",))
+        )
+        out = self.tmp / "receipt.json"
+        proc = self._record(argv, out=out)
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_GATE_FAILED, proc.stderr)
+        receipt = self._receipt(out)
+        self.assertEqual(receipt["outcome"], "failed")
+        self.assertEqual(
+            receipt["failures"],
+            {
+                "harness": "unittest",
+                "state": "identified",
+                # A method name alone is ambiguous across modules, so the identity is the
+                # fully-qualified dotted test id: module, class, and method.
+                "names": ["red_suite.Suite.test_alpha", "red_suite.Suite.test_beta"],
+            },
+        )
+
+    def test_the_failing_set_is_covered_by_the_self_digest(self) -> None:
+        argv = _write_unittest_gate(self.tmp, "sealed_suite", _suite(failing=("test_one",)))
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        receipt = self._receipt(out)  # positive control: it verifies as written
+        edited = json.loads(json.dumps(receipt))
+        edited["failures"]["names"] = []  # the whole point: dropping a failure must be detectable
+        self.assertFalse(gate_receipt.verify_receipt(edited))
+        renamed = json.loads(json.dumps(receipt))
+        renamed["failures"]["names"] = ["sealed_suite.Suite.test_other"]
+        self.assertFalse(gate_receipt.verify_receipt(renamed))
+        rehashed = json.loads(json.dumps(receipt))
+        del rehashed["failures"]  # removing the field wholesale is caught too
+        self.assertFalse(gate_receipt.verify_receipt(rehashed))
+
+    def test_the_identity_is_stable_across_runs_on_the_same_tree(self) -> None:
+        argv = _write_unittest_gate(self.tmp, "stable_suite", _suite(failing=("test_x", "test_y")))
+        first = self.tmp / "first.json"
+        second = self.tmp / "second.json"
+        self._record(argv, out=first)
+        self._record(argv, out=second)
+        one, two = self._receipt(first), self._receipt(second)
+        self.assertEqual(one["failures"], two["failures"])
+        self.assertEqual(one["failures"]["names"], ["stable_suite.Suite.test_x", "stable_suite.Suite.test_y"])
+        # POSITIVE CONTROL: the field is not a constant that would match anything. Rewriting the
+        # module so a DIFFERENT test fails changes the recorded identities, so the equality above is
+        # stability across runs rather than a channel that never varies.
+        moved = self.tmp / "moved.json"
+        self._record(_write_unittest_gate(self.tmp, "stable_suite", _suite(failing=("test_z",))), out=moved)
+        self.assertEqual(self._receipt(moved)["failures"]["names"], ["stable_suite.Suite.test_z"])
+
+    def test_subtest_parameters_are_stripped_so_no_identity_embeds_a_mutable_path(self) -> None:
+        """Real subtest headers carry their parameters — and those can contain absolute paths."""
+        source = "\n".join(
+            [
+                "import unittest",
+                "",
+                "",
+                "class Suite(unittest.TestCase):",
+                "    def test_many(self):",
+                "        for label in ('/tmp/moves/every/run', 'second'):",
+                "            with self.subTest(label=label):",
+                "                self.fail('injected')",
+                "",
+            ]
+        )
+        argv = _write_unittest_gate(self.tmp, "sub_suite", source)
+        out = self.tmp / "receipt.json"
+        log = self.tmp / "gate.log"
+        proc = self._run(
+            [
+                "record",
+                "--gate",
+                "fake gate",
+                "--out",
+                str(out),
+                "--lock",
+                str(self.lock),
+                "--log",
+                str(log),
+                "--harness",
+                "unittest",
+                "--quiet",
+                "--",
+                *argv,
+            ]
+        )
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_GATE_FAILED, proc.stderr)
+        receipt = self._receipt(out)
+        # POSITIVE CONTROL for the observation channel: the harness really did print the path, so
+        # its absence from the identity is the stripping at work and not an empty channel.
+        self.assertIn(b"/tmp/moves/every/run", log.read_bytes())
+        self.assertEqual(receipt["failures"]["names"], ["sub_suite.Suite.test_many"])
+        for name in receipt["failures"]["names"]:
+            self.assertNotIn("/", name)
+
+    def test_a_class_fixture_error_is_named_by_the_fixture_it_ran_in(self) -> None:
+        """`ERROR: setUpClass (mod.Cls)` names no method, so the identity has to be composed."""
+        source = "\n".join(
+            [
+                "import unittest",
+                "",
+                "",
+                "class Suite(unittest.TestCase):",
+                "    @classmethod",
+                "    def setUpClass(cls):",
+                "        raise RuntimeError('injected')",
+                "",
+                "    def test_never_runs(self):",
+                "        pass",
+                "",
+            ]
+        )
+        argv = _write_unittest_gate(self.tmp, "fixture_suite", source)
+        out = self.tmp / "receipt.json"
+        proc = self._record(argv, out=out)
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_GATE_FAILED, proc.stderr)
+        self.assertEqual(
+            self._receipt(out)["failures"]["names"], ["fixture_suite.Suite.setUpClass"]
+        )
+
+    def test_an_unexpected_success_is_a_named_non_pass_not_a_silent_one(self) -> None:
+        """It turns the run red and unittest prints its name, so it belongs in the set."""
+        source = "\n".join(
+            [
+                "import unittest",
+                "",
+                "",
+                "class Suite(unittest.TestCase):",
+                "    @unittest.expectedFailure",
+                "    def test_should_have_failed(self):",
+                "        pass",
+                "",
+            ]
+        )
+        argv = _write_unittest_gate(self.tmp, "unexpected_suite", source)
+        out = self.tmp / "receipt.json"
+        proc = self._record(argv, out=out)
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_GATE_FAILED, proc.stderr)
+        receipt = self._receipt(out)
+        self.assertEqual(receipt["failures"]["state"], "identified")
+        self.assertEqual(
+            receipt["failures"]["names"], ["unexpected_suite.Suite.test_should_have_failed"]
+        )
+
+    def test_a_green_run_records_an_empty_identified_set(self) -> None:
+        """Skips and EXPECTED failures are not failures — and `expected failures=1` is not a tally."""
+        source = "\n".join(
+            [
+                "import unittest",
+                "",
+                "",
+                "class Suite(unittest.TestCase):",
+                "    def test_ok(self):",
+                "        pass",
+                "",
+                "    def test_skipped(self):",
+                "        self.skipTest('injected')",
+                "",
+                "    @unittest.expectedFailure",
+                "    def test_expected(self):",
+                "        self.fail('injected')",
+                "",
+            ]
+        )
+        argv = _write_unittest_gate(self.tmp, "green_suite", source)
+        out = self.tmp / "receipt.json"
+        log = self.tmp / "gate.log"
+        proc = self._run(
+            [
+                "record",
+                "--gate",
+                "fake gate",
+                "--out",
+                str(out),
+                "--lock",
+                str(self.lock),
+                "--log",
+                str(log),
+                "--harness",
+                "unittest",
+                "--quiet",
+                "--",
+                *argv,
+            ]
+        )
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_OK, proc.stderr)
+        receipt = self._receipt(out)
+        # POSITIVE CONTROL: the tally line really does say `expected failures=1`, so reading it as
+        # one failure would be an observable defect rather than a hypothetical one.
+        self.assertIn(b"expected failures=1", log.read_bytes())
+        self.assertEqual(
+            receipt["failures"], {"harness": "unittest", "state": "identified", "names": []}
+        )
+
+    def test_unparseable_harness_output_is_never_a_silently_empty_failure_set(self) -> None:
+        """A red gate with no readable tally must SAY so; an empty set would read as clean."""
+        argv = _write_canned_gate(
+            self.tmp, text="make: *** [check] Error 2\n", exit_code=2, name="opaque.py"
+        )
+        out = self.tmp / "receipt.json"
+        proc = self._record(argv, out=out)
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_GATE_FAILED, proc.stderr)
+        receipt = self._receipt(out)
+        self.assertEqual(
+            receipt["failures"], {"harness": "unittest", "state": "unparsed", "names": []}
+        )
+        self.assertNotEqual(receipt["failures"]["state"], "identified")
+        # The operator is told at record time, not left to discover it at comparison time.
+        self.assertIn("no failing test could be identified", proc.stderr)
+        # POSITIVE CONTROL: a real harness run through the identical invocation IS identified, so
+        # `unparsed` above is about this gate's output and not about the option being inert.
+        ok_out = self.tmp / "identified.json"
+        self._record(_write_unittest_gate(self.tmp, "control_suite", _suite(failing=("test_a",))), out=ok_out)
+        self.assertEqual(self._receipt(ok_out)["failures"]["state"], "identified")
+
+    def test_a_tally_that_disagrees_with_the_named_headers_is_unparsed(self) -> None:
+        """The harness's own count is the integrity check on the scrape: 2 declared, 1 named."""
+        text = _unittest_log(("FAIL: test_a (mod.Suite.test_a)",), "FAILED (failures=2)")
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="mismatch.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        receipt = self._receipt(out)
+        self.assertEqual(receipt["failures"]["state"], "unparsed")
+        self.assertEqual(receipt["failures"]["names"], [])
+        # POSITIVE CONTROL: the same log with an agreeing tally IS identified, so the rejection is
+        # the cross-check and not a parser that cannot read this shape at all.
+        agreeing = _unittest_log(("FAIL: test_a (mod.Suite.test_a)",), "FAILED (failures=1)")
+        ok_out = self.tmp / "agree.json"
+        self._record(
+            _write_canned_gate(self.tmp, text=agreeing, exit_code=1, name="agree.py"), out=ok_out
+        )
+        self.assertEqual(self._receipt(ok_out)["failures"]["names"], ["mod.Suite.test_a"])
+
+    def test_a_log_with_no_tally_line_at_all_is_unparsed(self) -> None:
+        """Headers without a summary mean the harness never finished reporting."""
+        text = "=" * 70 + "\nFAIL: test_a (mod.Suite.test_a)\n" + "-" * 70 + "\nkilled\n"
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="truncated.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        self.assertEqual(self._receipt(out)["failures"]["state"], "unparsed")
+
+    def test_an_unknown_tally_key_is_unparsed_rather_than_guessed(self) -> None:
+        text = _unittest_log(("FAIL: test_a (mod.Suite.test_a)",), "FAILED (failures=1, quarantined=4)")
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="unknown_key.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        self.assertEqual(self._receipt(out)["failures"]["state"], "unparsed")
+
+    def test_a_tally_item_that_is_not_key_equals_count_is_unparsed_not_partly_read(self) -> None:
+        """An unreadable tally ITEM voids the whole tally; the readable items are not summed alone.
+
+        `quarantined=4` above is an unknown KEY that still has the `key=count` shape. This is the
+        weaker case: an item that does not even have that shape, so nothing can be concluded about
+        whether it declares non-passes. Summing only the items that happened to parse would produce
+        a tally that agrees with the headers by accident and seal a failing set the harness never
+        confirmed.
+        """
+        text = _unittest_log(("FAIL: test_a (mod.Suite.test_a)",), "FAILED (failures=1, bogus)")
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="bogus_item.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        receipt = self._receipt(out)
+        self.assertEqual(receipt["failures"]["state"], "unparsed")
+        self.assertEqual(receipt["failures"]["names"], [])
+        # POSITIVE CONTROL: drop the unreadable item and the SAME log identifies the same one
+        # failure, so the refusal is the unreadable item and not this log shape.
+        readable = _unittest_log(("FAIL: test_a (mod.Suite.test_a)",), "FAILED (failures=1)")
+        ok_out = self.tmp / "readable.json"
+        self._record(
+            _write_canned_gate(self.tmp, text=readable, exit_code=1, name="readable_item.py"),
+            out=ok_out,
+        )
+        self.assertEqual(self._receipt(ok_out)["failures"]["state"], "identified")
+        self.assertEqual(self._receipt(ok_out)["failures"]["names"], ["mod.Suite.test_a"])
+
+    def test_one_runs_unreadable_tally_voids_the_whole_log_not_just_that_run(self) -> None:
+        """A gate runs several suites; one unreadable tally makes the WHOLE failing set unknown.
+
+        The dangerous shape is an unreadable tally on a run that reported no headers, beside a second
+        run whose tally and headers agree. Skipping the unreadable run instead of voiding the log
+        leaves a set that is internally consistent and SHORT — it silently omits whatever the first
+        run failed — which is the under-reporting a later subset comparison cannot detect.
+        """
+        text = _unittest_log((), "FAILED (bogus)") + _unittest_log(
+            ("FAIL: test_b (two.Suite.test_b)",), "FAILED (failures=1)"
+        )
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="one_void_run.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        receipt = self._receipt(out)
+        self.assertEqual(receipt["failures"]["state"], "unparsed")
+        self.assertEqual(receipt["failures"]["names"], [])
+        # POSITIVE CONTROL: make the first run's tally readable and the very same two-run log is
+        # identified, naming the second run's failure. So the refusal is the unreadable tally, not
+        # the multi-run shape and not the headerless first run.
+        readable = _unittest_log((), "OK") + _unittest_log(
+            ("FAIL: test_b (two.Suite.test_b)",), "FAILED (failures=1)"
+        )
+        ok_out = self.tmp / "both_readable.json"
+        self._record(
+            _write_canned_gate(self.tmp, text=readable, exit_code=1, name="both_readable.py"),
+            out=ok_out,
+        )
+        self.assertEqual(self._receipt(ok_out)["failures"]["state"], "identified")
+        self.assertEqual(self._receipt(ok_out)["failures"]["names"], ["two.Suite.test_b"])
+
+    def test_a_header_shape_that_cannot_be_identified_forces_unparsed(self) -> None:
+        """Counting a header we cannot name and then omitting it is the silent-loss defect."""
+        text = _unittest_log(("FAIL: some description with no dotted id",), "FAILED (failures=1)")
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="unnamed.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        receipt = self._receipt(out)
+        self.assertEqual(receipt["failures"]["state"], "unparsed")
+        self.assertEqual(receipt["failures"]["names"], [])
+
+    def test_an_older_harness_header_without_the_method_still_composes_an_identity(self) -> None:
+        """Python <=3.10 printed `FAIL: test_a (mod.Suite)`; the method is the leading word."""
+        text = _unittest_log(
+            ("FAIL: test_a (mod.Suite)", "ERROR: test_b (mod.Suite)"), "FAILED (failures=1, errors=1)"
+        )
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="legacy_shape.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        self.assertEqual(
+            self._receipt(out)["failures"]["names"], ["mod.Suite.test_a", "mod.Suite.test_b"]
+        )
+
+    def test_a_single_segment_identity_is_refused_as_ambiguous(self) -> None:
+        """A bare name is ambiguous across modules, which is why the identity is qualified."""
+        text = _unittest_log(("FAIL: test_a (test_a)",), "FAILED (failures=1)")
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="bare.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        self.assertEqual(self._receipt(out)["failures"]["state"], "unparsed")
+
+    def test_two_harness_runs_in_one_gate_are_summed(self) -> None:
+        """`mise run check` runs several suites, so one gate log carries several tallies."""
+        text = _unittest_log(("FAIL: test_a (one.Suite.test_a)",), "FAILED (failures=1)") + _unittest_log(
+            ("ERROR: test_b (two.Suite.test_b)",), "FAILED (errors=1)"
+        )
+        argv = _write_canned_gate(self.tmp, text=text, exit_code=1, name="two_runs.py")
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out)
+        self.assertEqual(
+            self._receipt(out)["failures"]["names"], ["one.Suite.test_a", "two.Suite.test_b"]
+        )
+
+    def test_an_unobserved_gate_names_no_failures(self) -> None:
+        """Nothing ran, so there is no failing set to name — and `unparsed` says exactly that."""
+        out = self.tmp / "receipt.json"
+        proc = self._run(
+            [
+                "record",
+                "--gate",
+                "fake gate",
+                "--out",
+                str(out),
+                "--lock",
+                str(self.lock),
+                "--harness",
+                "unittest",
+                "--unobserved",
+                "--",
+                *_write_unittest_gate(self.tmp, "never_suite", _suite(failing=("test_a",))),
+            ]
+        )
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_UNOBSERVED, proc.stderr)
+        receipt = self._receipt(out)
+        self.assertIsNone(receipt["argv"])
+        self.assertEqual(receipt["failures"], {"harness": "unittest", "state": "unparsed", "names": []})
+
+    def test_without_the_harness_option_the_receipt_is_byte_identical_to_before(self) -> None:
+        """Additive: an unrequested field is ABSENT, so the digest of an old-shaped receipt holds."""
+        argv = _write_unittest_gate(self.tmp, "silent_suite", _suite(failing=("test_a",)))
+        out = self.tmp / "receipt.json"
+        self._record(argv, out=out, harness=None)
+        receipt = self._receipt(out)
+        self.assertNotIn("failures", receipt)
+        explicit = self.tmp / "explicit-none.json"
+        self._record(argv, out=explicit, harness="none")
+        self.assertNotIn("failures", self._receipt(explicit))
+        # The pre-change digest still re-derives over the same inputs.
+        rebuilt = gate_receipt.build_receipt(
+            gate=receipt["gate"],
+            argv=receipt["argv"],
+            status=receipt["status"],
+            log_bytes=b"",
+            lock_bytes=LOCK_BYTES,
+            cwd=receipt["cwd"],
+        )
+        self.assertNotIn("failures", rebuilt)
+        self.assertEqual(
+            gate_receipt.canonical_digest({k: v for k, v in receipt.items() if k != "self_digest"}),
+            receipt["self_digest"],
+        )
+
+    def test_pre_failures_receipts_keep_verifying(self) -> None:
+        """A receipt written before this field existed carries no `failures` and still verifies."""
+        legacy = gate_receipt.build_receipt(
+            gate="mise run check",
+            argv=["mise", "run", "check"],
+            status=1,
+            log_bytes=b"FAILED (failures=1)\n",
+            lock_bytes=LOCK_BYTES,
+            cwd="/tmp/fixture",
+        )
+        self.assertNotIn("failures", legacy)
+        self.assertTrue(gate_receipt.verify_receipt(legacy))
+        fresh = gate_receipt.build_receipt(
+            gate="mise run check",
+            argv=["mise", "run", "check"],
+            status=1,
+            log_bytes=b"FAILED (failures=1)\n",
+            lock_bytes=LOCK_BYTES,
+            cwd="/tmp/fixture",
+            failures={"harness": "unittest", "state": "identified", "names": ["m.C.t"]},
+        )
+        self.assertTrue(gate_receipt.verify_receipt(fresh))
+        self.assertNotEqual(fresh["self_digest"], legacy["self_digest"])
+        # POSITIVE CONTROL: re-derivation still protects the legacy receipt from tampering.
+        self.assertFalse(gate_receipt.verify_receipt(dict(legacy, status=0)))
+
+    def test_the_producer_exit_space_is_unchanged_by_the_harness_option(self) -> None:
+        """Recording failure identities is not a verdict: the seven codes keep their meanings."""
+        cases = (
+            (_suite(passing=("test_ok",)), gate_receipt.EXIT_OK, "pass_suite"),
+            (_suite(failing=("test_bad",)), gate_receipt.EXIT_GATE_FAILED, "fail_suite"),
+        )
+        for source, expected, module in cases:
+            with self.subTest(module=module):
+                out = self.tmp / f"{module}.json"
+                proc = self._record(_write_unittest_gate(self.tmp, module, source), out=out)
+                self.assertEqual(proc.returncode, expected, proc.stderr)
+
+    def test_an_unknown_harness_is_an_input_error_before_the_gate_runs(self) -> None:
+        marker = self.tmp / "harness.marker"
+        argv = _write_fake_gate(self.tmp, exit_code=0, marker=marker)
+        proc = self._run(
+            [
+                "record",
+                "--gate",
+                "fake gate",
+                "--out",
+                str(self.tmp / "receipt.json"),
+                "--lock",
+                str(self.lock),
+                "--harness",
+                "pytest",
+                "--",
+                *argv,
+            ]
+        )
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_USAGE, proc.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.tmp / "receipt.json").exists())
+
+
+class FailureSetInvariantTests(unittest.TestCase):
+    """A stored failing set must be well-formed, or it cannot be compared as a set at all."""
+
+    def _sealed(self, failures: object, **overrides: object) -> dict[str, object]:
+        body = {
+            "gate": "mise run check",
+            "argv": ["mise", "run", "check"],
+            "status": 1,
+            "signal": None,
+            "outcome": gate_receipt.OUTCOME_FAILED,
+            "log_digest": _sha256_hex(b""),
+            "toolchain_digest": _sha256_hex(LOCK_BYTES),
+            "cwd": "/tmp/fixture",
+            "failures": failures,
+        }
+        body.update(overrides)
+        return _reseal(body)
+
+    def test_a_well_formed_failing_set_verifies(self) -> None:
+        """POSITIVE CONTROL for every rejection below: this channel does accept a good record."""
+        self.assertTrue(
+            gate_receipt.verify_receipt(
+                self._sealed({"harness": "unittest", "state": "identified", "names": ["m.C.t"]})
+            )
+        )
+
+    def test_malformed_failing_sets_fail_verification(self) -> None:
+        cases = {
+            "not an object": ["m.C.t"],
+            "a bare list of names": {"names": ["m.C.t"]},
+            "an unknown state": {"harness": "unittest", "state": "guessed", "names": []},
+            "an extra key": {
+                "harness": "unittest",
+                "state": "identified",
+                "names": [],
+                "reason": "why",
+            },
+            "a missing harness": {"state": "identified", "names": []},
+            "an empty harness": {"harness": "", "state": "identified", "names": []},
+            "names that are not a list": {"harness": "unittest", "state": "identified", "names": "m.C.t"},
+            "names out of canonical order": {
+                "harness": "unittest",
+                "state": "identified",
+                "names": ["m.C.z", "m.C.a"],
+            },
+            "duplicate names": {
+                "harness": "unittest",
+                "state": "identified",
+                "names": ["m.C.a", "m.C.a"],
+            },
+            "a name that is not a string": {"harness": "unittest", "state": "identified", "names": [1]},
+            "an empty name": {"harness": "unittest", "state": "identified", "names": [""]},
+            "a name embedding an absolute path": {
+                "harness": "unittest",
+                "state": "identified",
+                "names": ["/mnt/e/repo/tests/test_x.py::test_a"],
+            },
+            "a single-segment name": {"harness": "unittest", "state": "identified", "names": ["test_a"]},
+            "a subtest-parameterised name": {
+                "harness": "unittest",
+                "state": "identified",
+                "names": ["m.C.t (label='x')"],
+            },
+            "names beside an unparsed state": {
+                "harness": "unittest",
+                "state": "unparsed",
+                "names": ["m.C.t"],
+            },
+            # JSON can carry this, and without the list check the per-name loop raises TypeError out
+            # of verify_receipt instead of returning False — which a consumer reads as an internal
+            # failure rather than as an unusable receipt.
+            "names that are not iterable at all": {
+                "harness": "unittest",
+                "state": "identified",
+                "names": 7,
+            },
+        }
+        for label, failures in cases.items():
+            with self.subTest(label=label):
+                self.assertFalse(gate_receipt.verify_receipt(self._sealed(failures)), label)
+
+    def test_nothing_executed_cannot_name_a_failing_test(self) -> None:
+        """`argv: null` means nothing ran, so a named failure would have come from nowhere."""
+        nothing_ran = self._sealed(
+            {"harness": "unittest", "state": "identified", "names": ["m.C.t"]},
+            argv=None,
+            status=None,
+            outcome=gate_receipt.OUTCOME_UNOBSERVED,
+        )
+        self.assertFalse(gate_receipt.verify_receipt(nothing_ran))
+        # The two honest readings of that receipt both verify, so the rejection is about the
+        # contradiction and not about `unobserved` or about an empty set per se.
+        self.assertTrue(
+            gate_receipt.verify_receipt(
+                self._sealed(
+                    {"harness": "unittest", "state": "unparsed", "names": []},
+                    argv=None,
+                    status=None,
+                    outcome=gate_receipt.OUTCOME_UNOBSERVED,
+                )
+            )
+        )
+        self.assertTrue(
+            gate_receipt.verify_receipt(
+                self._sealed({"harness": "unittest", "state": "identified", "names": ["m.C.t"]})
+            )
+        )
+
+    def test_build_receipt_normalizes_a_callers_unordered_names(self) -> None:
+        """The `int()`-coercion precedent: never emit a receipt that fails its own verification."""
+        receipt = gate_receipt.build_receipt(
+            gate="mise run check",
+            argv=["mise", "run", "check"],
+            status=1,
+            log_bytes=b"",
+            lock_bytes=LOCK_BYTES,
+            cwd="/tmp/fixture",
+            failures={
+                "harness": "unittest",
+                "state": "identified",
+                "names": ["m.C.z", "m.C.a", "m.C.z"],
+            },
+        )
+        self.assertEqual(receipt["failures"]["names"], ["m.C.a", "m.C.z"])
+        self.assertTrue(gate_receipt.verify_receipt(receipt))
+
+    def test_build_receipt_refuses_a_failing_set_it_could_not_seal_honestly(self) -> None:
+        """Emitting an unverifiable receipt would be worse than raising on caller error."""
+        cases = (
+            ({"harness": "unittest", "state": "identified", "names": ["/abs/path.py::t"]}, ["x"]),
+            ({"harness": "unittest", "state": "guessed", "names": []}, ["x"]),
+            ({"harness": "unittest", "state": "unparsed", "names": ["m.C.t"]}, ["x"]),
+            ({"state": "identified", "names": []}, ["x"]),
+            ({"harness": "unittest", "state": "identified", "names": 7}, ["x"]),
+            # Nothing executed, yet a failing test is named: the receipt would fail its own
+            # verification, so raising is the only honest response.
+            ({"harness": "unittest", "state": "identified", "names": ["m.C.t"]}, None),
+        )
+        for failures, argv in cases:
+            with self.subTest(failures=failures, argv=argv):
+                with self.assertRaises(ValueError):
+                    gate_receipt.build_receipt(
+                        gate="mise run check",
+                        argv=argv,
+                        status=1 if argv else None,
+                        log_bytes=b"",
+                        lock_bytes=LOCK_BYTES,
+                        cwd="/tmp/fixture",
+                        failures=failures,
+                    )
+        # POSITIVE CONTROL: the same names WITH something executed are sealed and verify, so the
+        # last rejection is the argv cross-check and not the names themselves.
+        sealed = gate_receipt.build_receipt(
+            gate="mise run check",
+            argv=["mise", "run", "check"],
+            status=1,
+            log_bytes=b"",
+            lock_bytes=LOCK_BYTES,
+            cwd="/tmp/fixture",
+            failures={"harness": "unittest", "state": "identified", "names": ["m.C.t"]},
+        )
+        self.assertTrue(gate_receipt.verify_receipt(sealed))
+
+    def test_extraction_of_a_captured_log_is_a_pure_function_of_its_bytes(self) -> None:
+        red = gate_receipt.extract_unittest_failures(
+            _unittest_log(("FAIL: test_a (m.C.test_a)",), "FAILED (failures=1)").encode("utf-8")
+        )
+        self.assertEqual(red, {"harness": "unittest", "state": "identified", "names": ["m.C.test_a"]})
+        green = gate_receipt.extract_unittest_failures(b"Ran 1 test in 0.001s\n\nOK\n")
+        self.assertEqual(green, {"harness": "unittest", "state": "identified", "names": []})
+        blank = gate_receipt.extract_unittest_failures(b"")
+        self.assertEqual(blank, {"harness": "unittest", "state": "unparsed", "names": []})
+        # Undecodable bytes are replaced, never raised: a receipt is still owed for this run.
+        self.assertEqual(
+            gate_receipt.extract_unittest_failures(b"\xff\xfe\nOK\n"),
+            {"harness": "unittest", "state": "identified", "names": []},
+        )
+
+
+DECLARED_EXITS = frozenset(
+    {
+        gate_receipt.EXIT_OK,
+        gate_receipt.EXIT_INTERNAL,
+        gate_receipt.EXIT_USAGE,
+        gate_receipt.EXIT_REFUSED,
+        gate_receipt.EXIT_PARTIAL,
+        gate_receipt.EXIT_GATE_FAILED,
+        gate_receipt.EXIT_UNOBSERVED,
+    }
+)
+
+
+def _run_with_hostile_stderr(
+    argv: list[str], *, mode: str, cwd: Path
+) -> tuple[int, bytes]:
+    """Run argv with a stderr this process CANNOT write to. Returns (exit code, stdout bytes).
+
+    Two shapes, kept separate because they produced DIFFERENT wrong exit codes and neither is
+    exotic — a caller closing fd 2, and a reader that goes away mid-run:
+
+        closed  `2>&-`. CPython then starts with `sys.stderr is None`, so the FIRST
+                `sys.stderr.write` raises `AttributeError`, not `OSError`.
+        epipe   fd 2 is the write end of a pipe whose reader is already closed, so every write
+                raises `EPIPE` AND leaves bytes pending in the stream's buffer, which the
+                interpreter flushes again while finalizing — replacing the exit code with 120.
+
+    Stderr is deliberately NOT captured: capturing it would give the child a writable stream and
+    test nothing. `_stderr_is_really_hostile` proves each mode reaches the child.
+    """
+    if mode == "closed":
+        # `exec 2>&-` in the shell, so the interpreter itself starts without fd 2. Spelled exactly
+        # as the reproduction was, rather than through `preexec_fn`.
+        proc = subprocess.run(
+            ["sh", "-c", 'exec 2>&-; exec "$@"', "sh", *argv],
+            stdout=subprocess.PIPE,
+            cwd=str(cwd),
+            check=False,
+        )
+        return proc.returncode, proc.stdout
+    if mode != "epipe":
+        raise AssertionError(f"unknown hostile stderr mode: {mode}")
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)  # the reader is gone BEFORE the child starts, so no write can succeed
+    try:
+        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=write_fd, cwd=str(cwd))
+    finally:
+        os.close(write_fd)
+    assert child.stdout is not None
+    with child.stdout as stream:
+        out = stream.read()
+    return child.wait(), out
+
+
+def _stderr_is_really_hostile(mode: str, cwd: Path) -> str:
+    """What a canary child OBSERVES about its own stderr under `mode`, reported over stdout.
+
+    Every negative assertion in this file's hostile-stderr tests needs this: `sh` failing with
+    ENOENT, or a mode that quietly hands the child a working stream, would let each of them pass
+    while proving nothing at all.
+    """
+    canary = (
+        "import sys\n"
+        "if sys.stderr is None:\n"
+        "    print('none')\n"
+        "else:\n"
+        "    try:\n"
+        "        sys.stderr.write('x')\n"
+        "        sys.stderr.flush()\n"
+        "        print('writable')\n"
+        "    except OSError as exc:\n"
+        "        print(type(exc).__name__)\n"
+    )
+    code, out = _run_with_hostile_stderr([sys.executable, "-B", "-c", canary], mode=mode, cwd=cwd)
+    return f"{code}:{out.decode('utf-8', 'replace').strip()}"
+
+
+@unittest.skipUnless(POSIX, "fd-level stderr hostility is POSIX-only")
+class HostileStderrTests(_ProducerTestCase):
+    """A stderr that cannot be written is a DISPLAY failure, never an evidence or exit failure.
+
+    Every case here was live on the branch. `record` against a red gate that had already run exited
+    1 with no receipt under `2>&-` and 120 down a broken pipe, because the mirror raised inside the
+    run window and `_report_failure` opened with another `sys.stderr.write`. The producer's exit
+    space is closed (`DECLARED_EXITS`), so 120 must be unreachable rather than unlikely.
+    """
+
+    def _red_gate(self, marker: Path) -> list[str]:
+        return _write_fake_gate(self.tmp, exit_code=7, marker=marker)
+
+    def test_the_hostile_stderr_fixture_is_actually_hostile(self) -> None:
+        """The control for every negative assertion below: the child really has no usable stderr.
+
+        The canary's own exit codes are the second half of the control. Under `2>&-` it observes
+        `sys.stderr is None` and exits cleanly, so `AttributeError` is what the producer had to
+        survive there. Under a broken pipe it CATCHES the `BrokenPipeError` and still exits 120,
+        because the bytes it left pending are flushed again while the interpreter finalizes — which
+        is why swallowing the write is not on its own enough, and why the fix has to stop claiming
+        the stream as well.
+        """
+        self.assertEqual(_stderr_is_really_hostile("closed", self.tmp), "0:none")
+        self.assertEqual(_stderr_is_really_hostile("epipe", self.tmp), "120:BrokenPipeError")
+
+    def test_a_hostile_stderr_cannot_cost_a_red_gate_its_receipt_or_its_verdict(self) -> None:
+        for mode in ("closed", "epipe"):
+            with self.subTest(mode=mode):
+                marker = self.tmp / f"ran-{mode}.marker"
+                out = self.tmp / f"receipt-{mode}.json"
+                code, stdout = _run_with_hostile_stderr(
+                    [
+                        sys.executable,
+                        "-B",
+                        str(SCRIPT),
+                        "record",
+                        "--gate",
+                        "fake gate",
+                        "--out",
+                        str(out),
+                        "--lock",
+                        str(self.lock),
+                        "--",  # NOT --quiet: the mirror must be live for this to mean anything
+                        *self._red_gate(marker),
+                    ],
+                    mode=mode,
+                    cwd=self.tmp,
+                )
+                self.assertTrue(marker.exists())  # the gate ran, observed rather than assumed
+                self.assertEqual(code, gate_receipt.EXIT_GATE_FAILED)
+                self.assertIn(code, DECLARED_EXITS)  # 120 and 1 are both wrong answers here
+                self.assertEqual(stdout, b"")  # the receipt went to --out, not onto stdout
+                receipt = json.loads(out.read_text(encoding="utf-8"))
+                self.assertTrue(gate_receipt.verify_receipt(receipt))
+                self.assertEqual(receipt["status"], 7)
+                self.assertEqual(receipt["outcome"], "failed")
+                self.assertEqual(
+                    receipt["log_digest"], _sha256_hex(b"fake gate stdout\nfake gate stderr\n")
+                )
+        # POSITIVE CONTROL: the identical command over a WORKING stderr returns the same code and a
+        # receipt with the same digest, and it does write the mirrored gate output — so the runs
+        # above lost the display channel and nothing else.
+        marker = self.tmp / "ran-control.marker"
+        out = self.tmp / "receipt-control.json"
+        proc = self._run(
+            [
+                "record",
+                "--gate",
+                "fake gate",
+                "--out",
+                str(out),
+                "--lock",
+                str(self.lock),
+                "--",
+                *self._red_gate(marker),
+            ]
+        )
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_GATE_FAILED, proc.stderr)
+        self.assertIn("fake gate stdout", proc.stderr)  # the channel the hostile runs lost
+        self.assertEqual(
+            json.loads(out.read_text(encoding="utf-8"))["log_digest"],
+            _sha256_hex(b"fake gate stdout\nfake gate stderr\n"),
+        )
+
+    def test_a_hostile_stderr_cannot_cost_an_unobserved_receipt_that_quiet_never_silences(
+        self,
+    ) -> None:
+        """`--quiet` silences the MIRROR; these notes are separate and were never suppressed.
+
+        So this case isolates the advisory NOTE from the mirror: with `--quiet --unobserved` no gate
+        runs and no byte is mirrored, and the single line at the top of `main` was still enough to
+        lose the receipt entirely.
+        """
+        for mode in ("closed", "epipe"):
+            with self.subTest(mode=mode):
+                out = self.tmp / f"unobserved-{mode}.json"
+                code, _ = _run_with_hostile_stderr(
+                    [
+                        sys.executable,
+                        "-B",
+                        str(SCRIPT),
+                        "record",
+                        "--gate",
+                        "fake gate",
+                        "--out",
+                        str(out),
+                        "--lock",
+                        str(self.lock),
+                        "--quiet",
+                        "--unobserved",
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "raise SystemExit(0)",
+                    ],
+                    mode=mode,
+                    cwd=self.tmp,
+                )
+                self.assertEqual(code, gate_receipt.EXIT_UNOBSERVED)
+                self.assertIn(code, DECLARED_EXITS)
+                receipt = json.loads(out.read_text(encoding="utf-8"))
+                self.assertTrue(gate_receipt.verify_receipt(receipt))
+                self.assertIsNone(receipt["status"])
+                self.assertIsNone(receipt["argv"])
+        # POSITIVE CONTROL: the note IS written on this path under a working stderr, `--quiet` and
+        # all — so the runs above suppressed a line that genuinely wanted writing.
+        proc = self._run(
+            [
+                "record",
+                "--gate",
+                "fake gate",
+                "--out",
+                str(self.tmp / "unobserved-control.json"),
+                "--lock",
+                str(self.lock),
+                "--quiet",
+                "--unobserved",
+                "--",
+                sys.executable,
+                "-c",
+                "raise SystemExit(0)",
+            ]
+        )
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_UNOBSERVED, proc.stderr)
+        self.assertIn("recording an unobserved receipt", proc.stderr)
+
+    def test_a_hostile_stderr_cannot_reclassify_a_clean_refusal(self) -> None:
+        """A refusal BEFORE the gate ran must still read as 3, not as 1 and not as 120."""
+        args = [
+            "record",
+            "--gate",
+            "fake gate",
+            "--out",
+            str(self.tmp / "absent-dir" / "receipt.json"),
+            "--lock",
+            str(self.lock),
+            "--quiet",
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(0)",
+        ]
+        for mode in ("closed", "epipe"):
+            with self.subTest(mode=mode):
+                code, _ = _run_with_hostile_stderr(
+                    [sys.executable, "-B", str(SCRIPT), *args], mode=mode, cwd=self.tmp
+                )
+                self.assertEqual(code, gate_receipt.EXIT_REFUSED)
+                self.assertIn(code, DECLARED_EXITS)
+        # POSITIVE CONTROL: the refusal is the named parent-directory one and it does report itself
+        # on a working stderr, so the code above is that refusal rather than a crash that happens
+        # to land on 3.
+        proc = self._run(args)
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_REFUSED, proc.stderr)
+        self.assertIn("does not exist", proc.stderr)
+
+    def test_a_hostile_stderr_cannot_reclassify_a_usage_error(self) -> None:
+        """The usage message and the usage CODE travel on different channels; only one may be lost."""
+        for mode in ("closed", "epipe"):
+            with self.subTest(mode=mode):
+                code, _ = _run_with_hostile_stderr(
+                    [sys.executable, "-B", str(SCRIPT), "record", "--not-an-option"],
+                    mode=mode,
+                    cwd=self.tmp,
+                )
+                self.assertEqual(code, gate_receipt.EXIT_USAGE)
+                self.assertIn(code, DECLARED_EXITS)
+        # POSITIVE CONTROL: the same argv writes both usage lines to a working stderr.
+        proc = self._run(["record", "--not-an-option"])
+        self.assertEqual(proc.returncode, gate_receipt.EXIT_USAGE)
+        self.assertIn("usage:", proc.stderr)
+        self.assertIn("error:", proc.stderr)
+
+    def test_a_broken_stdout_reports_partial_and_the_interpreter_cannot_overwrite_it(self) -> None:
+        """The ARTIFACT channel's own failure: 4 is correct, and 120 used to replace it.
+
+        `_report_failure` classified this one correctly all along and printed it; the interpreter
+        then flushed the same broken stdout while finalizing and overwrote the exit code, so the
+        caller was handed a code outside the contract for a failure the contract covers.
+        """
+        marker = self.tmp / "stdout-epipe.marker"
+        argv = [
+            sys.executable,
+            "-B",
+            str(SCRIPT),
+            "record",
+            "--gate",
+            "fake gate",
+            "--out",
+            "-",
+            "--lock",
+            str(self.lock),
+            "--quiet",
+            "--",
+            *_write_fake_gate(self.tmp, exit_code=0, marker=marker),
+        ]
+        read_fd, write_fd = os.pipe()
+        os.close(read_fd)  # nobody will ever read the receipt
+        try:
+            child = subprocess.Popen(argv, stdout=write_fd, stderr=subprocess.PIPE, cwd=str(self.tmp))
+        finally:
+            os.close(write_fd)
+        assert child.stderr is not None
+        with child.stderr as stream:
+            err = stream.read().decode("utf-8", "replace")
+        code = child.wait()
+        self.assertTrue(marker.exists())  # the gate ran, so this is a real partial result
+        self.assertEqual(code, gate_receipt.EXIT_PARTIAL, err)
+        self.assertIn(code, DECLARED_EXITS)
+        self.assertNotEqual(code, 120)
+        self.assertIn("already happened: the gate ran", err)
+        # ...and the interpreter no longer complains about the stream it was left holding.
+        self.assertNotIn("Exception ignored", err)
+        # POSITIVE CONTROL: over a working stdout the same command emits one verifiable receipt and
+        # returns the gate's verdict, so the 4 above is the broken pipe and not this argv.
+        sink = self.tmp / "receipt-on-stdout.json"
+        with sink.open("wb") as handle:
+            ok = subprocess.run(argv, stdout=handle, stderr=subprocess.PIPE, cwd=str(self.tmp))
+        self.assertEqual(ok.returncode, gate_receipt.EXIT_OK, ok.stderr)
+        self.assertTrue(gate_receipt.verify_receipt(json.loads(sink.read_text(encoding="utf-8"))))
+
+
+class AbandonBrokenStreamTests(unittest.TestCase):
+    """The one shared primitive both entrypoints lean on to keep 120 out of their exit space."""
+
+    def test_only_the_stream_that_failed_is_dropped(self) -> None:
+        """`main` is importable, so the caller may have swapped the stream since the sink settled.
+
+        Dropping unconditionally would take away a stream that never failed and that this module
+        was not even writing to — the distinguishing case an unconditional `setattr` would break.
+        """
+        settled = io.StringIO()
+        replacement = io.StringIO()
+        with mock.patch.object(sys, "stderr", replacement):
+            gate_receipt.abandon_broken_stream("stderr", settled)
+            self.assertIs(sys.stderr, replacement)  # not ours to drop
+            gate_receipt.abandon_broken_stream("stderr", replacement)
+            self.assertIsNone(sys.stderr)  # this one failed, so it goes
+
+    def test_a_settled_sink_stops_writing_after_its_first_failure(self) -> None:
+        class _DiesOnSecondFlush:
+            def __init__(self) -> None:
+                self.written: list[str] = []
+
+            def write(self, text: str) -> int:
+                self.written.append(text)
+                return len(text)
+
+            def flush(self) -> None:
+                if len(self.written) >= 2:
+                    raise OSError(errno.EPIPE, "broken pipe")
+
+        stream = _DiesOnSecondFlush()
+        with mock.patch.object(sys, "stderr", stream):
+            note = gate_receipt.advisory_stderr()
+            note("first\n")
+            note("second\n")  # this one fails...
+            note("third\n")  # ...so this one is never attempted
+            self.assertIsNone(sys.stderr)
+        self.assertEqual(stream.written, ["first\n", "second\n"])
+
+    def test_a_stderr_with_no_flush_still_gets_its_lines_and_keeps_its_receipt(self) -> None:
+        """Guarding the channel must not make `flush` a new requirement on the caller's stream.
+
+        A `write`-only object is a shape an importable `main` can be handed, and it worked before
+        these lines were guarded. Requiring `flush` would have traded one display-channel defect for
+        another: the sink would raise while being SETTLED, and the receipt would be lost again.
+        """
+
+        class _WriteOnly:
+            def __init__(self) -> None:
+                self.lines: list[str] = []
+
+            def write(self, text: str) -> int:
+                self.lines.append(text)
+                return len(text)
+
+        stream = _WriteOnly()
+        with mock.patch.object(sys, "stderr", stream):
+            note = gate_receipt.advisory_stderr()
+            note("advisory line\n")
+            gate_receipt._stderr_mirror(quiet=False)(b"mirrored bytes\n")
+            self.assertIs(sys.stderr, stream)  # nothing failed, so nothing was dropped
+        self.assertEqual(stream.lines, ["advisory line\n", "mirrored bytes\n"])
+
+    def test_a_closed_fd_2_settles_to_a_sink_that_writes_nowhere(self) -> None:
+        with mock.patch.object(sys, "stderr", None):
+            note = gate_receipt.advisory_stderr()
+            note("this cannot be written anywhere, and must not raise\n")
+            mirror = gate_receipt._stderr_mirror(quiet=False)
+            mirror(b"nor can this\n")
+            self.assertIsNone(sys.stderr)
 
 
 if __name__ == "__main__":
