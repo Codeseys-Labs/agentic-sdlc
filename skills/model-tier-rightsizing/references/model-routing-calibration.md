@@ -254,12 +254,14 @@ The proactive-compaction percentage is **85** as an opinionated default (amended
 was deliberately left unset pending measurement). It is one-directional — it can only compact
 earlier, and a value above the (undocumented) default is silently ignored — so 85 is safe before
 measurement: if 85 > default it is a no-op, if 85 < default it compacts at
-~0.85×272000≈231200 (`assets/claude/session-inheritance.sh` and both `scripts/*-claude.sh` export
+~0.85×272000≈231200 (`assets/claude/session-inheritance.sh`, which `scripts/muse-claude.sh`
+sources, and `scripts/opencodex-claude.sh` directly, export
 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` only when the operator has not already set it). An installer
 overrides it per environment with `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>` before
 `ccodex launch` — that value wins, because each launcher sets 85 only when the variable is unset.
 (`ccodex` sets it directly: ADR-0014 removed the environment scrub it used to be
-capture-then-restored across. `scripts/muse-claude.sh` still scrubs and restores.) The measurement
+capture-then-restored across. `scripts/muse-claude.sh` still scrubs and restores, through the
+shared helper rather than a private copy since 2026-08-18.) The measurement
 procedure that would settle the true default remains recorded in the research memo cited below;
 until run, 85 is an opinionated safety margin rather than a settled measurement, and must not
 be read as a verified optimum.

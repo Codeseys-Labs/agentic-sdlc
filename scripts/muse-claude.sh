@@ -65,23 +65,27 @@
 #     per the qualification memo the route is tier-UNPROVEN.
 #   * No tier is pinned into any provider-neutral role. The model slots here configure one
 #     operator-launched client process; they are not a role definition.
-#   * The isolated config dir is NOT isolated in every respect. Per ADR-0010, and identically
-#     to the ocx launcher (both call the same assets/claude/session-inheritance.sh, so the two
-#     cannot drift): inert per-session DATA is SHARED with ~/.claude by symlink, and the
+#   * The isolated config dir is NOT isolated in every respect. Per ADR-0010, and through the
+#     shared assets/claude/session-inheritance.sh: inert per-session DATA is SHARED with
+#     ~/.claude by symlink, and the
 #     isolated settings.json is CONSTRUCTED with the global statusLine stanza only. The global
 #     settings.json is never copied or linked, because its `env` block is a credential carrier
 #     on a real host (a live AWS_BEARER_TOKEN_BEDROCK was found there on 2026-08-07) and
 #     copying it would ALSO re-point this process away from Meta's endpoint, silently undoing
-#     the model slots below. Credentials never cross in either direction.
+#     the model slots below. Credentials never cross in either direction. That same helper owns
+#     this route's environment scrub (ADR-0010 Amendment A). The ocx launcher no longer sources
+#     it -- ADR-0014 removed its plane and its scrub outright -- so this is the one plane the
+#     policy governs today, and it lives in the shared asset so a later plane inherits it.
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-# Isolated Claude Code config root, mirroring the ocx launcher: a direct-route process syncs
-# its own session state, and sharing ~/.claude would mutate the operator's live session.
+# Isolated Claude Code config root: a direct-route process syncs its own session state, and
+# sharing ~/.claude would mutate the operator's live session.
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
 isolated_config_dir="$state_home/agentic-sdlc/muse-claude"
-# Selective session inheritance (ADR-0010). The SAME helper the ocx launcher sources, so what
-# crosses the credential boundary is defined in exactly one place for both routes.
+# Selective session inheritance AND the environment-variable policy (ADR-0010, Amendment A). The
+# shared asset owns both, so what crosses the credential boundary is defined in exactly one place
+# for every plane -- this route today, and any plane added later.
 session_inheritance="$root/assets/claude/session-inheritance.sh"
 
 # Base URL WITHOUT the /v1 suffix. Claude Code appends /v1/messages itself; see the header.
@@ -239,41 +243,48 @@ subscription_shaped_env() {
   return 1
 }
 
-scrub_anthropic_env() {
-  local name
-  # Prefix scrub, not an enumerated list: the parent session exports credential slots,
-  # per-tier model slots, capability strings, and routing flags (CLAUDE_CODE_USE_BEDROCK among
-  # them). Any one leaking into the child either re-routes it away from Meta or carries parent
-  # session identity into it. The exact slots this route needs are re-exported afterwards.
-  # AWS_* is the third prefix and the one an earlier `^(ANTHROPIC|CLAUDE)` rule missed: it is
-  # the half that carried a live AWS_BEARER_TOKEN_BEDROCK into the child (ADR-0010 Amendment A,
-  # which also records why the constructed settings.json cannot cover this -- Claude Code
-  # resolves the shell environment ABOVE settings `env`).
-  # Preserve an installer choice across the scrub so it wins over the opinionated default.
-  local saved_pct="${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}"
-  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true); do
-    unset "$name" || true
-  done
-  # Unprefixed hazards, denied by name (same ADR-0010 Amendment A list as the shared helper):
-  #   NODE_TLS_REJECT_UNAUTHORIZED     disables TLS verification process-wide.
-  #   FALLBACK_FOR_ALL_PRIMARY_MODELS  forces silent model substitution, which against this
-  #                                    route's restricted catalog is exactly the unattributable
-  #                                    response the identity ceiling above cannot detect.
-  #   API_TIMEOUT_MS                   inert, but a value tuned for api.anthropic.com is the
-  #                                    wrong number here, and a wrong timeout reads as a hung
-  #                                    model rather than as a misconfiguration.
-  for name in NODE_TLS_REJECT_UNAUTHORIZED FALLBACK_FOR_ALL_PRIMARY_MODELS API_TIMEOUT_MS; do
-    unset "$name" || true
-  done
-  if [ -n "$saved_pct" ]; then
-    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="$saved_pct"
-  else
-    # Opinionated default (ADR-0012 amended 2026-08-08): mirrors the gateway launchers so the
-    # direct muse route carries the same compaction expectation. Shared-pool sessions benefit
-    # from earlier compaction because the pool is one budget. The loop above already unset every
-    # CLAUDE_* variable, so an empty saved_pct means no override survives to check here.
-    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
-  fi
+# --- environment scrub: the SHARED ADR-0010 Amendment A policy ------------------------------
+#
+# The private prefix scrub this replaces implemented only half of Amendment A. It denied by
+# prefix -- ANTHROPIC_*, CLAUDE_*, AWS_* -- and denied the three unprefixed hazards by name, but
+# it never implemented the CLAUDE_* ALLOW-BY-NAME half, so it also swept the operator's
+# deliberately-set inert flags. That is a silent regression rather than extra safety: the privacy
+# flags are SET-TO-ACTIVATE, so dropping a set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC RE-ENABLES
+# the nonessential traffic in the launched plane, and the accessibility flags are exactly the
+# preferences whose loss hurts the operator who needs them.
+#
+# Nothing this route relied on moves: the shared helper performs the SAME prefix sweep, denies the
+# SAME three unprefixed names (NODE_TLS_REJECT_UNAUTHORIZED, FALLBACK_FOR_ALL_PRIMARY_MODELS,
+# API_TIMEOUT_MS), and applies the SAME capture-then-restore of CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+# with the opinionated 85 default (ADR-0012). What it adds is the enumerated allow half plus that
+# list's own admission check. One definition, in assets/claude/session-inheritance.sh, so the
+# boundary cannot drift between this route and a future plane.
+#
+# NEVER FAIL-SOFT, unlike session inheritance below. Inheritance is a convenience, so a missing
+# helper degrades to a private plane and the launch continues. The scrub IS the credential
+# boundary -- Claude Code resolves the shell environment ABOVE settings `env`, so the constructed
+# settings.json cannot cover this half -- and a launch without it would hand a parent-session
+# ANTHROPIC_*/AWS_* credential or a CLAUDE_CODE_USE_* routing switch to the child. So a missing,
+# unsourceable, or self-refusing policy stops the launch.
+scrub_child_environment() {
+  [ -f "$session_inheritance" ] && [ ! -L "$session_inheritance" ] \
+    || scrub_unavailable "the shared environment-policy helper is missing, or is a symlink, at $session_inheritance"
+  # shellcheck source=../assets/claude/session-inheritance.sh
+  . "$session_inheritance" \
+    || scrub_unavailable "the shared environment-policy helper at $session_inheritance could not be sourced"
+  # A refusal from the policy itself (an inadmissible or empty list) is reported by the helper on
+  # stderr and is fatal here for the same reason: no scrub, no launch.
+  scrub_and_restore_claude_env \
+    || scrub_unavailable "the shared environment policy refused to run; its REFUSED line above names the entry"
+}
+
+scrub_unavailable() {
+  printf '\nFAIL-CLOSED: %s\n' "$1" >&2
+  printf 'Claude Code was NOT launched. The environment scrub is this route'"'"'s credential\n' >&2
+  printf 'boundary (ADR-0010 Amendment A): without it a parent-session ANTHROPIC_*/AWS_*\n' >&2
+  printf 'credential or a CLAUDE_CODE_USE_* routing switch would reach the child, and Claude\n' >&2
+  printf 'Code resolves the shell environment ABOVE settings `env`, so nothing else closes it.\n' >&2
+  exit 1
 }
 
 assert_isolated_dir_has_no_subscription() {
@@ -322,6 +333,26 @@ inherit_session_state_if_available() {
     return 0
   }
   inherit_session_state "$isolated_config_dir" "$HOME/.claude"
+}
+
+# --- environment policy report (read-only) --------------------------------------------------
+#
+# `status` is the only route that can answer "will the CLAUDE_* flag I set survive a launch?"
+# without launching, which matters because the answer is an enumeration rather than a rule an
+# operator can infer. It APPLIES nothing: the shared reporter classifies the names present in this
+# shell and prints a class per name, never a value -- a credential's NAME is reportable, its value
+# never is. Read-only, so unlike the launch path a missing helper is reported rather than fatal.
+report_environment_policy_if_available() {
+  if [ ! -f "$session_inheritance" ] || [ -L "$session_inheritance" ]; then
+    printf '  (policy helper missing at %s; nothing was classified)\n' "$session_inheritance"
+    return 0
+  fi
+  # shellcheck source=../assets/claude/session-inheritance.sh
+  . "$session_inheritance" || {
+    printf '  (policy helper could not be sourced; nothing was classified)\n'
+    return 0
+  }
+  report_env_policy || true
 }
 
 # --- route verification -------------------------------------------------------------------
@@ -411,7 +442,14 @@ prepare_child_environment() {
   mkdir -p "$isolated_config_dir"
   assert_isolated_dir_has_no_subscription
   assert_no_keychain_subscription
-  scrub_anthropic_env
+  # ORDERING, and why each neighbour cannot move. The subscription refusal above READS
+  # ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY, so it must precede the scrub -- afterwards there is
+  # nothing left to inspect. The scrub cannot weaken it: the allow half is CLAUDE_*-only by its
+  # own admission check, so no name it restores is a name that refusal inspects. And the route
+  # slots below must come AFTER the restore, so that no restored preference can shadow
+  # CLAUDE_CONFIG_DIR or an ANTHROPIC_* slot -- which is also why CLAUDE_CONFIG_DIR is refused
+  # from the allowlist rather than merely absent from it.
+  scrub_child_environment
   # Re-export exactly the slots this route needs, after the scrub. ANTHROPIC_AUTH_TOKEN sends
   # `Authorization: Bearer`, which is verified working on this endpoint; the model slots are
   # mandatory because Claude Code's own defaults are claude-* IDs that 404 here.
@@ -508,6 +546,9 @@ cmd_status() {
     return 1
   fi
   printf '  state       : clear (no sk-ant-oat* token in ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)\n'
+
+  printf '\n== environment policy (ADR-0010 Amendment A; names only, never values) ==\n'
+  report_environment_policy_if_available
 
   printf '\n== live route ==\n'
   resolve_credential

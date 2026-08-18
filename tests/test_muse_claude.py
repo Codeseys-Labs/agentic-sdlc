@@ -564,6 +564,271 @@ class MuseClaudeTests(unittest.TestCase):
         self.assertFalse((self.isolated / "settings.json").exists())
         self.assertFalse((self.isolated / "history.jsonl").is_symlink())
 
+    # --- ADR-0010 Amendment A: CLAUDE_* is denied by default and ALLOWED BY NAME -----------
+    #
+    # The deny half was shipped; the allow half was not, so a deliberately-set
+    # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC was swept with everything else -- and because that
+    # flag is SET-TO-ACTIVATE, dropping a set flag silently RE-ENABLES the traffic in the launched
+    # plane. These tests assert both halves in the same child, because the failure mode of
+    # allow-by-name is allowing too MUCH: a passing allow test next to a missing deny test is
+    # exactly how a credential crosses the boundary.
+
+    def assert_channel_records(self, claude_log: Path, planted: dict[str, str]) -> None:
+        """Positive control for the observation channel used by the tests below.
+
+        A previous version of this stub recorded only ANTHROPIC_*/CLAUDE_*-prefixed names, so a
+        planted AWS_BEARER_TOKEN_BEDROCK passed its absence assertion VACUOUSLY -- the token was
+        in the child and the test could not see it. So before asserting that a name is absent
+        from a recorded child environment, prove the recorder would have shown it: run the same
+        stub directly with the same planted names and require every one of them, with its value,
+        in the log it writes.
+        """
+        stub = claude_log.parent / "bin" / "claude"
+        control_log = claude_log.parent / "channel-control.log"
+        subprocess.run(
+            [str(stub)],
+            env={"PATH": "/usr/bin:/bin", "MUSE_TEST_CLAUDE_LOG": str(control_log), **planted},
+            check=True,
+        )
+        recorded = control_log.read_text()
+        for name, value in planted.items():
+            with self.subTest(channel=name):
+                self.assertIn(
+                    f"{name}={value}",
+                    recorded,
+                    f"the observation channel does not carry {name}; an absence assertion "
+                    "about it would pass vacuously",
+                )
+
+    def test_named_claude_flags_survive_the_scrub_with_their_exact_values(self) -> None:
+        allowed = {
+            # The privacy flag Amendment A names explicitly. Set-to-activate: dropping it is a
+            # privacy regression the operator never asked for.
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            # The accessibility and compaction classes Amendment A names by category.
+            "CLAUDE_CODE_ACCESSIBILITY": "1",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "123456",
+            # An operator percentage must still beat the opinionated 85 default (ADR-0012).
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "40",
+        }
+        result, _, claude_log = self.run_launcher("launch", extra_env=dict(allowed))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_channel_records(claude_log, allowed)
+        inherited = claude_log.read_text()
+        for name, value in allowed.items():
+            with self.subTest(variable=name):
+                self.assertIn(f"{name}={value}", inherited)
+
+    def test_the_opinionated_percentage_still_applies_when_the_operator_set_none(self) -> None:
+        result, _, claude_log = self.run_launcher("launch")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85", claude_log.read_text())
+
+    def test_allow_by_name_still_denies_every_other_class_in_the_same_child(self) -> None:
+        denied = {
+            # Wrong namespace: ANTHROPIC_* is denied by prefix with no exceptions.
+            "ANTHROPIC_API_KEY": "sk-ant-api-planted-not-a-credential",
+            # The finding Amendment A exists for: an exported Bedrock bearer token.
+            "AWS_BEARER_TOKEN_BEDROCK": "planted-bedrock-bearer-not-a-credential",
+            # Unprefixed, denied by name.
+            "NODE_TLS_REJECT_UNAUTHORIZED": "0",
+            # CLAUDE_*-prefixed but NOT on the allowlist: an unrecognized name is dropped rather
+            # than guessed at, which is the whole reason the allow half is an enumeration.
+            "CLAUDE_CODE_UNRECOGNIZED_FUTURE_FLAG": "1",
+        }
+        allowed = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+        result, _, claude_log = self.run_launcher(
+            "launch", extra_env={**denied, **allowed}
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_channel_records(claude_log, {**denied, **allowed})
+        inherited = claude_log.read_text()
+        # The allow half worked in this exact child, so the denials below are not passing merely
+        # because the whole namespace was swept.
+        self.assertIn("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", inherited)
+        for name, value in denied.items():
+            with self.subTest(variable=name):
+                self.assertNotIn(name, inherited)
+                # Values are asserted only where they are distinguishable. A `0` or a `1` occurs
+                # incidentally in a temp path and in the surviving flags, so asserting those
+                # would be a coin flip rather than a control.
+                if len(value) > 8:
+                    self.assertNotIn(value, inherited)
+        self.assertNotIn("planted-", result.stdout + result.stderr)
+
+    def test_a_missing_policy_helper_fails_closed_instead_of_launching_unscrubbed(self) -> None:
+        # The scrub moved out of this script and into the shared helper, which introduces a way for
+        # it to be ABSENT. Session inheritance is fail-soft about exactly that, and the scrub must
+        # not be: a launch without it hands the parent's ANTHROPIC_*/AWS_* environment to the child.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / "scripts").mkdir()
+        (root / "assets" / "claude").mkdir(parents=True)
+        shutil.copy(SCRIPT, root / "scripts" / "muse-claude.sh")
+        asset = SCRIPT.parents[1] / "assets" / "claude" / "session-inheritance.sh"
+        environment = {
+            "HOME": str(root / "home"),
+            "XDG_STATE_HOME": str(root / "state"),
+            "PATH": "/usr/bin:/bin",
+            "MODEL_API_KEY": PLACEHOLDER_KEY,
+        }
+
+        def launch() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [BASH, str(root / "scripts" / "muse-claude.sh"), "launch"],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+            )
+
+        without_helper = launch()
+        self.assertEqual(without_helper.returncode, 1)
+        self.assertIn("FAIL-CLOSED", without_helper.stderr)
+        self.assertIn("session-inheritance.sh", without_helper.stderr)
+        self.assertIn("Claude Code was NOT launched", without_helper.stderr)
+
+        # Positive control: with the helper restored, the SAME tree gets past the scrub and stops
+        # later for an unrelated reason. Without this, the refusal above could be any failure of a
+        # copied tree rather than the missing policy.
+        shutil.copy(asset, root / "assets" / "claude" / "session-inheritance.sh")
+        with_helper = launch()
+        self.assertEqual(with_helper.returncode, 1)
+        self.assertNotIn("FAIL-CLOSED", with_helper.stderr)
+        self.assertIn("not on PATH", with_helper.stderr)
+
+    def test_status_reports_the_environment_policy_by_class_and_never_a_value(self) -> None:
+        planted = {
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_UNRECOGNIZED_FUTURE_FLAG": "1",
+            "AWS_BEARER_TOKEN_BEDROCK": "planted-bedrock-bearer-not-a-credential",
+        }
+        result, _, _ = self.run_launcher("status", extra_env=planted)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = result.stdout
+        self.assertIn("environment policy", report)
+        # Every planted name is classified, so the report is not silently blind to a class.
+        for name in planted:
+            with self.subTest(variable=name):
+                self.assertIn(name, report)
+        self.assertRegex(
+            report, r"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\s+INHERITED"
+        )
+        self.assertRegex(report, r"CLAUDE_CODE_UNRECOGNIZED_FUTURE_FLAG\s+DENIED")
+        self.assertRegex(report, r"AWS_BEARER_TOKEN_BEDROCK\s+DENIED")
+        # Names are reportable; values never are.
+        self.assertNotIn("planted-bedrock-bearer-not-a-credential", result.stdout + result.stderr)
+
+
+@unittest.skipUnless(BASH, "bash is required")
+class SharedEnvironmentPolicyTests(unittest.TestCase):
+    """The shared helper itself (assets/claude/session-inheritance.sh).
+
+    The launcher tests above prove the policy at its one call site. These prove the properties
+    that a call site cannot exercise: that the shipped allowlist passes its own admission check,
+    that a widened or wrong-namespace list REFUSES instead of scrubbing, and that a value the
+    operator controls cannot smuggle a second variable name through the capture-then-restore.
+    """
+
+    ASSET = Path(__file__).parents[1] / "assets" / "claude" / "session-inheritance.sh"
+
+    def run_policy(
+        self, body: str, env: dict[str, str] | None = None, source: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        script = "set -uo pipefail\n"
+        if source:
+            script += f'. "{self.ASSET}"\n'
+        script += body
+        return subprocess.run(
+            [BASH, "-c", script],
+            text=True,
+            capture_output=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", **(env or {})},
+            check=False,
+        )
+
+    def test_the_shipped_allowlist_passes_its_own_admission_check(self) -> None:
+        # Positive control for every refusal test below: the real list is admissible, so those
+        # nonzero exits are the guard working rather than the guard rejecting everything.
+        result = self.run_policy('scrub_and_restore_claude_env; printf "SCRUBBED\\n"')
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SCRUBBED", result.stdout)
+        self.assertNotIn("REFUSED", result.stderr)
+
+    def test_an_inadmissible_allowlist_entry_refuses_instead_of_scrubbing(self) -> None:
+        # One careless future entry is how allow-by-name re-opens the boundary, so each of these
+        # is refused by the list's own admission check rather than trusted to review.
+        for entry in (
+            "CLAUDE_CODE_USE_BEDROCK",  # a provider switch: routes the child off this plane
+            "CLAUDE_CONFIG_DIR",  # a plane selector: would point the child at ~/.claude
+            "CLAUDE_CODE_API_KEY_HELPER",  # credential-shaped
+            "ANTHROPIC_API_KEY",  # wrong namespace; denied by prefix with no exceptions
+            "AWS_BEARER_TOKEN_BEDROCK",  # the exact token the deny sweep exists for
+            "CLAUDE_*",  # a pattern, not a name: no prefix-level allow is admissible
+            "CLAUDE_CODE_DEFAULT_MODEL",  # a model pin
+        ):
+            with self.subTest(entry=entry):
+                result = self.run_policy(
+                    f"CLAUDE_INHERITED_ENV_VARS=({entry!r})\n"
+                    'scrub_and_restore_claude_env && printf "SCRUBBED\\n"'
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("SCRUBBED", result.stdout)
+                self.assertIn("REFUSED", result.stderr)
+                self.assertIn(entry, result.stderr)
+
+    def test_an_empty_policy_list_refuses_rather_than_passing_vacuously(self) -> None:
+        for mutation in (
+            "CLAUDE_INHERITED_ENV_VARS=()",
+            "CLAUDE_DENIED_ENV_VARS=()",
+            "unset CLAUDE_INHERITED_ENV_VARS",
+            "unset CLAUDE_DENIED_ENV_VARS",
+        ):
+            with self.subTest(mutation=mutation):
+                result = self.run_policy(
+                    f'{mutation}\nscrub_and_restore_claude_env && printf "SCRUBBED\\n"'
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("SCRUBBED", result.stdout)
+                self.assertIn("REFUSED", result.stderr)
+
+    def test_a_newline_in_an_allowed_value_cannot_inject_a_second_name(self) -> None:
+        # The capture-then-restore round-trips a value the OPERATOR controls. A `name=value`
+        # line format would let a value containing a newline export a SECOND name of the
+        # operator's choosing -- here a Bedrock bearer token, i.e. the exact boundary failure
+        # this policy exists to prevent.
+        injected = "AWS_BEARER_TOKEN_BEDROCK"
+        value = f"1\n{injected}=planted-injected-not-a-credential"
+        probe = (
+            f'printf "INJECTED=[%s]\\n" "${{{injected}:-<unset>}}"\n'
+            'printf "ALLOWED=[%s]\\n" "${CLAUDE_CODE_ACCESSIBILITY:-<unset>}"\n'
+        )
+        planted = {"CLAUDE_CODE_ACCESSIBILITY": value}
+
+        # Positive control: the probe really does print that name's value when it is set, so the
+        # `<unset>` assertion below is an observation rather than a blind spot.
+        control = self.run_policy(
+            probe, env={injected: "planted-control-not-a-credential"}, source=False
+        )
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertIn("INJECTED=[planted-control-not-a-credential]", control.stdout)
+
+        result = self.run_policy(f"scrub_and_restore_claude_env\n{probe}", env=planted)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("INJECTED=[<unset>]", result.stdout)
+        self.assertNotIn("planted-injected-not-a-credential", result.stdout.split("ALLOWED=")[0])
+        # The allowed flag keeps its exact value, newline and all -- it is not truncated or split.
+        self.assertIn(f"ALLOWED=[{value}]", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

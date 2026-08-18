@@ -2,7 +2,10 @@
 
 - **Status:** accepted
 - **Note:** scoped to `scripts/muse-claude.sh` by ADR-0014. `scripts/opencodex-claude.sh` no longer
-  has a plane to inherit into. `assets/claude/session-inheritance.sh` is unchanged.
+  has a plane to inherit into, and ADR-0014 changed nothing inside
+  `assets/claude/session-inheritance.sh`. That file did change on 2026-08-18, for this record's own
+  Amendment A: see Amendment A.1 below, which records the allow-by-name half being implemented and
+  wired.
 - **Date:** 2026-08-07
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/adr/0003-gateway-stance-downgraded-to-optional.md`
@@ -236,6 +239,51 @@ A bug worth recording because it was self-inflicted and silent: the policy lists
 under `set -u`. They are copied to locals first. The same lists are excluded from the status
 report, since reporting launcher state as "a denied variable you set" would be a false statement
 about the operator's shell.
+
+### A.1 The allow half was prose for eleven days; implemented 2026-08-18
+
+**What was actually shipped in A, and what was not.** The deny half landed in code: both launchers
+swept `ANTHROPIC_*`/`CLAUDE_*`/`AWS_*` by prefix and the three unprefixed hazards by name. The
+`CLAUDE_*` **allow-by-name** half did not. The enumeration and the capture-then-restore existed in
+`assets/claude/session-inheritance.sh` with **zero callers** — `scrub_and_restore_claude_env`,
+`CLAUDE_INHERITED_ENV_VARS`, `CLAUDE_DENIED_ENV_VARS`, and `report_env_policy` were all orphans —
+while `scripts/muse-claude.sh` ran a private prefix scrub that dropped every `CLAUDE_*` variable.
+So the concrete regression this amendment names, a set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+being swept and thereby **re-enabling** nonessential traffic under set-to-activate semantics, was
+live for eleven days. Prose is not policy; only a called function is.
+
+**Now one shared helper, one enumeration, one caller.** `scrub_and_restore_claude_env` is the
+launcher's only scrub, `scripts/muse-claude.sh` calls it in place of its deleted private copy, and
+`report_env_policy` is wired into that launcher's `status` route — the one place that can answer
+"will the flag I set survive a launch?" without launching. The list stays in the shared asset rather
+than moving into its single consumer, so a future plane inherits the reviewed boundary. **The ocx
+launcher is deliberately NOT a second caller:** ADR-0014 deleted its plane and its scrub, because
+that route's whole premise is presenting the operator's own environment and login. Item 8's "one
+mechanism serves both launchers" therefore now reads as *one mechanism serves any plane that
+prepares a child*, and there is exactly one today.
+
+**Two failures were found by wiring it, both invisible while it was dead code.** First, the
+capture-then-restore round-tripped values as `name=value` LINES, so a value the operator controls
+could inject a second name: `CLAUDE_CODE_ACCESSIBILITY=$'1\nAWS_BEARER_TOKEN_BEDROCK=<token>'`
+exported a Bedrock bearer token into the child and truncated the real preference to `1` — the exact
+boundary failure this amendment exists to close, arriving through the half meant to preserve inert
+preferences. Both lists are now bash arrays and the restore uses parallel name/value arrays, so a
+restored name can only come from the literal enumeration, and a value is never re-parsed. (Arrays
+cannot be exported, so the policy state is now also structurally incapable of reaching the child.)
+Second, a missing or empty list would have failed silently in opposite directions — an empty
+denylist scrubs nothing, an empty allowlist drops the privacy flags — so both are refused by name
+instead of defaulted.
+
+**The list checks itself, because allow-by-name fails by allowing too much.**
+`assert_env_allowlist_is_admissible` runs on every scrub and refuses the launch, before anything is
+unset, for an entry that is not an exact upper-case name (which is what forbids a prefix or glob
+from ever becoming an allow rule), is not `CLAUDE_*`, or is credential-, destination-, model-pin-,
+or plane-selector-shaped. `CLAUDE_CONFIG_DIR` is refused rather than merely absent, since a restored
+value would point the child at `~/.claude`. Every entry now carries its own in-code reason, and the
+admission test is about the NAME's whole value space, never about the value an operator happens to
+have set. Ordering at the call site is unchanged and load-bearing: the subscription refusal reads
+`ANTHROPIC_*` and so still precedes the scrub, which the `CLAUDE_*`-only allow half cannot weaken;
+the route slots are exported after the restore, so no preserved preference can shadow them.
 
 ### B. One `ccodex` dispatcher, not N commands, and the clone is required
 

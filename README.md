@@ -719,7 +719,10 @@ Until 2026-08-11 this launcher did the opposite — isolated config dir, full `A
 scope. That machinery, the `ccodex session` verbs, and the separately named
 `ccodex claude-subscription` route are all gone. `scripts/muse-claude.sh` still keeps its own
 isolated plane, so ADR-0010's inheritance and environment-variable policy still govern **it**, and
-`assets/claude/session-inheritance.sh` is unchanged.
+ADR-0014 changed nothing inside `assets/claude/session-inheritance.sh`. That helper did change on
+2026-08-18, for ADR-0010's own Amendment A: the `CLAUDE_*` allow-by-name half is now implemented and
+is `scripts/muse-claude.sh`'s only scrub, so a deliberately-set inert flag such as
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` survives the deny sweep by name (Amendment A.1).
 
 **Three route-integrity refusal channels remain, for billing honesty rather than prohibition.** A
 launch exits 3 when the gateway route would not actually be used. None edits anything to fix it:
