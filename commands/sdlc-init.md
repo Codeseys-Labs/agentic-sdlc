@@ -66,8 +66,40 @@ record — it is not an authenticated approval, and no planner output authorizes
      activation worktree before write steps.
 
 2. **Establish a trustworthy Git wave base**
-   - No `.git` → `git init -b main`.
-   - Ask one question only when not derivable: greenfield or existing code?
+   - No `.git` → `git init -b main`. Do this first: the classifier below classifies
+     repositories and refuses a directory that is not one.
+   - **Derive the class before asking.** Run the read-only
+     `skills/agentic-sdlc/tools/repository-classifier.py classify --target <absolute path>`.
+     It writes nothing, runs no subprocess, and answers with one of three verdicts at exit 0:
+     `brownfield` when it names an occupied guidance, queue, decision, toolchain, hook, CI, or
+     `.agentic-sdlc` contract surface — in the WORKING tree or in HEAD's COMMITTED tree, where a
+     committed one is named `HEAD:<path>`; `greenfield` only when the repository is provably
+     empty — no occupied surface in EITHER tree, no top-level entry outside a small allowlist of
+     regular files, and either one parentless commit whose committed tree is likewise clear or NO
+     commit in a repository whose object store and reflog are ALSO empty, which is the shape
+     `git init` leaves; `refuse-and-ask` otherwise, with each ambiguity named in the output.
+     Nothing along the chain from HEAD to that tree may answer "unreadable" as "empty": a
+     malformed `packed-refs` value, an emptied or non-regular `packed-refs`, a `refs` path that is
+     not a directory, a symref chain, a branch packed at two ids, a ref backend it does not read,
+     a packed or unparsable tree, an object that is not the tree its parent named, a submodule, an
+     unrecognized entry mode, or one of its walk bounds is each one of those named ambiguities and
+     never a silent absence. So a repository with history whose branch this tool cannot resolve is
+     refuse-and-ask, never greenfield. Exit 3 is a refusal to inspect at all (no `.git`, a
+     `.git` symlink, or a `gitdir:` redirect file, so run it against the repository root rather
+     than a linked worktree); exit 2 is a non-absolute `--target`.
+   - **`brownfield` is the only verdict that settles the question by itself**, because it is a
+     positive observation of something that is there. On `refuse-and-ask`, ask the
+     greenfield-or-existing-code question and QUOTE the named ambiguities — the human needs to
+     know what the classifier saw. On `greenfield`, do not re-ask the class, and do not read it
+     as a licence to write either: greenfield is precisely the verdict that would authorize a
+     baseline, so it still requires the confirmation in the next bullet before you propose one.
+   - The verdict is **advisory evidence, not a decision**. It reports what is on disk and
+     claims no readiness, ownership, trust, route, or tool identity, and it does not authorize
+     a write. Two occupied surfaces leave no trace on disk at all — a hosted tracker such as
+     GitHub Issues, Jira, or Linear, and a forge-side required check — so `greenfield` is
+     bounded by the commit-emptiness requirement rather than proven against the forge. Confirm
+     both with the user before proposing a baseline, and record the verdict with its evidence
+     in the plan rather than restating it as a fact about the project.
    - Greenfield: create a minimal README intent and commit it.
    - Existing code: inventory ignored, tracked, and untracked product files. Never make an
      empty commit and call the project wave-ready. Require the user to approve the initial
