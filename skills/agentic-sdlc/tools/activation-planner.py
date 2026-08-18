@@ -46,6 +46,41 @@ REPO_MANIFEST_NAME = "repo.toml"
 # ADR-0015's rendered model-task-map trio. Public like the manifest, but operator-named
 # rather than exact, so the subtree admits any NAME under closed CUSTODY.
 RIGHTSIZE_DIR_NAME = "rightsize"
+# The tracked, public repository root. It holds `repo.toml`, `rightsize/`, and the
+# machine-local plane pointers below; receipts and recovery journals live in the operator's
+# own plane (ADR-0018).
+STATE_DIR_NAME = ".agentic-sdlc"
+# `plane.<sha256 of the plane root path>.json`: the one machine-local, engine-owned name
+# family inside that otherwise public root, one per plane this checkout has ever put state
+# in. It is the only witness that survives a rename of the checkout, because the plane key
+# is derived from the absolute target path and the plane side is the only other place that
+# path is recorded. See `_record_plane_pointer`.
+PLANE_POINTER_PREFIX = "plane."
+PLANE_POINTER_SCHEMA = "agentic-sdlc/activation-plane-pointer@1"
+PLANE_SELECTION_ENV = "AGENTIC_SDLC_ACTIVATION_STATE"
+PLANE_REPO_LOCAL = "repo-local"
+# `${XDG_STATE_HOME:-~/.local/state}/ccodex/` per CONTEXT.md and issues/09; `activation/`
+# separates this engine's state from every other ccodex consumer of the same plane.
+PLANE_NAMESPACE = ("ccodex", "activation")
+LEGACY_STATE_REASON = "target-local activation state predates the ccodex state plane"
+UNSELECTED_PLANE_REASON = "activation state exists in a state plane this invocation did not select"
+# Separate from the reason above because the remedy is different: nothing about the selection is
+# wrong, the CHECKOUT moved. Reversing the rename or the state-home move makes the state
+# reachable again, and no path is printed because a plane root carries the operator's home.
+RECORDED_PLANE_REASON = "activation state exists in the state plane this checkout recorded, not in the one this invocation resolved"
+# The recorded plane is not merely unselected, it is UNREACHABLE, so this one is not a refusal
+# at all: see `_recorded_plane_entries` for why that is exit 4 and not exit 0 or exit 3.
+RECORDED_PLANE_UNRESOLVED_REASON = "the state plane this checkout recorded cannot be resolved, so whether activation state exists there is unknown"
+PLANE_PROBE_REASON = "cannot prove a state plane for this target holds no activation state"
+PLANE_LABEL_REPO_LOCAL = "target-local plane"
+PLANE_LABEL_DEFAULT = "ccodex state plane"
+# A plane no environment variable names any more, reached only through this checkout's own
+# pointer. Named separately so the operator can tell a selection they can undo from a rename or
+# relocation they have to reverse; neither label prints a path, because these carry the
+# operator's home.
+PLANE_LABEL_RECORDED = "state plane recorded for this checkout"
+PLANE_DEVICE_REASON = "activation state plane does not share the target filesystem"
+PLANE_ANCESTOR_REASON = "activation state plane ancestor is unsafe"
 _HEX32 = re.compile(r"[0-9a-f]{32}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
@@ -81,11 +116,68 @@ class RootBinding:
         self.identity = identity
 
 
+class StatePlane:
+    """Where one exact target's activation receipts and recovery journals live.
+
+    Default is the operator's own plane, `<state home>/ccodex/activation/<key>`; the
+    `repo-local` override selects the historical in-repository layout unchanged. Both
+    hold the same closed surface, so exactly one of them is the plane for a given
+    invocation and no record is ever split across the two.
+
+    The layouts differ in one place only. In the plane, the setup anchor and the no-op
+    audit are plane-root files (`intent.<id>.json`, `noop.<id>.json`); repo-local keeps
+    them at the target root under their historical `.agentic-sdlc.` names, so the
+    repository root's own whitelist neither widens nor changes.
+    """
+
+    def __init__(self, target: Path, root: Path, *, repo_local: bool, recorded: bool = False):
+        self.target = target
+        self.root = root
+        self.repo_local = repo_local
+        self.anchor_dir = target if repo_local else root
+        self.anchor_prefix = f"{STATE_DIR_NAME}.intent." if repo_local else "intent."
+        self.audit_prefix = f"{STATE_DIR_NAME}.noop." if repo_local else "noop."
+        # A probe-only candidate reached through this checkout's own pointer rather than through
+        # any environment variable. It changes the label and the refusal's reason, never the
+        # layout: no pointer is ever written for the repo-local override.
+        self.recorded = recorded
+
+    @property
+    def label(self) -> str:
+        """Name the plane without printing a path that carries the operator's home.
+
+        A recorded plane gets its own label so that a refusal distinguishes "you switched
+        selection", which the operator can undo, from "this checkout moved", which they have to
+        reverse.
+        """
+        if self.recorded:
+            return PLANE_LABEL_RECORDED
+        return PLANE_LABEL_REPO_LOCAL if self.repo_local else PLANE_LABEL_DEFAULT
+
+    def anchor_name(self, operation_id: str) -> str:
+        return f"{self.anchor_prefix}{operation_id}.json"
+
+    def audit_name(self, operation_id: str) -> str:
+        return f"{self.audit_prefix}{operation_id}.json"
+
+    @property
+    def receipts(self) -> Path:
+        return self.root / "receipts"
+
+    @property
+    def transactions(self) -> Path:
+        return self.root / "transactions"
+
+    def operation_dir(self, operation_id: str) -> Path:
+        return self.transactions / operation_id
+
+
 class PrivateTransaction:
     """Pinned private namespace for every effectful transaction operation."""
 
-    def __init__(self, target_path: Path, target_fd: int, state_fd: int, receipts_fd: int, transactions_fd: int, operation_fd: int, grants_fd: int, stage_fd: int, backup_fd: int, discard_fd: int, progress_history_fd: int, identities: dict[str, dict[str, Any]], operation_id: str, files: dict[tuple[str, str], dict[str, Any]] | None = None):
+    def __init__(self, target_path: Path, plane: StatePlane, target_fd: int, state_fd: int, receipts_fd: int, transactions_fd: int, operation_fd: int, grants_fd: int, stage_fd: int, backup_fd: int, discard_fd: int, progress_history_fd: int, identities: dict[str, dict[str, Any]], operation_id: str, files: dict[tuple[str, str], dict[str, Any]] | None = None):
         self.target_path = target_path
+        self.plane = plane
         self.target_fd = target_fd
         self.state_fd = state_fd
         self.receipts_fd = receipts_fd
@@ -135,7 +227,7 @@ class PrivateTransaction:
                 raise ActivationError("effect-unknown", f"pinned private {name} descriptor changed", 4)
         path_fds: dict[str, int] = {}
         try:
-            path_fds["state"] = open_component_dir(self.target_fd, ".agentic-sdlc")
+            path_fds["state"] = _open_plane_root(self.plane, self.target_fd)
             path_fds["receipts"] = open_component_dir(path_fds["state"], "receipts")
             path_fds["transactions"] = open_component_dir(path_fds["state"], "transactions")
             path_fds["operation"] = open_component_dir(path_fds["transactions"], self.operation_id)
@@ -419,8 +511,8 @@ def _renameat2_at(source_fd: int, source: str, destination_fd: int, destination:
         os.fsync(destination_fd)
 
 
-def _open_transaction_private(target_fd: int, operation_id: str) -> int:
-    state_fd = open_component_dir(target_fd, ".agentic-sdlc")
+def _open_transaction_private(target_fd: int, plane: StatePlane, operation_id: str) -> int:
+    state_fd = _open_plane_root(plane, target_fd)
     try:
         transactions_fd = open_component_dir(state_fd, "transactions")
     finally:
@@ -461,9 +553,10 @@ def _capture_prestate_at(target_fd: int, relative: str) -> tuple[dict[str, Any],
 
 
 def _private_transaction(target: Path, operation_id: str) -> PrivateTransaction:
+    plane = _resolve_plane(target)
     target_fd = open_root_chain(target)
     try:
-        state_fd = open_component_dir(target_fd, ".agentic-sdlc")
+        state_fd = _open_plane_root(plane, target_fd)
         receipts_fd = open_component_dir(state_fd, "receipts")
         transactions_fd = open_component_dir(state_fd, "transactions")
         operation_fd = open_component_dir(transactions_fd, operation_id)
@@ -472,7 +565,7 @@ def _private_transaction(target: Path, operation_id: str) -> PrivateTransaction:
         backup_fd = open_component_dir(operation_fd, "backup")
         discard_fd = open_component_dir(operation_fd, "discard")
         progress_history_fd = open_component_dir(operation_fd, "progress-history")
-        ptx = PrivateTransaction(target, target_fd, state_fd, receipts_fd, transactions_fd, operation_fd, grants_fd, stage_fd, backup_fd, discard_fd, progress_history_fd, {}, operation_id)
+        ptx = PrivateTransaction(target, plane, target_fd, state_fd, receipts_fd, transactions_fd, operation_fd, grants_fd, stage_fd, backup_fd, discard_fd, progress_history_fd, {}, operation_id)
         ptx.identities = {name: _dir_identity_fd(fd) for name, fd in (
             ("target", target_fd), ("state", state_fd), ("receipts", receipts_fd), ("transactions", transactions_fd),
             ("operation", operation_fd), ("grants", grants_fd), ("stage", stage_fd), ("backup", backup_fd), ("discard", discard_fd), ("progress_history", progress_history_fd),
@@ -534,6 +627,391 @@ def bind_target(target: Path) -> RootBinding:
         return RootBinding(target, _dir_identity_fd(fd))
     finally:
         os.close(fd)
+
+
+def _state_home_candidates() -> list[Path]:
+    """Every state home this engine can name, the selected one first.
+
+    Setting `XDG_STATE_HOME` after a plane was written under the `$HOME/.local/state`
+    fallback is a plane switch spelled differently, so the fallback stays nameable even
+    when the variable is set and `_assert_unselected_planes_empty` probes it too. The
+    order is load-bearing: `_state_home` is the head of this list and its refusals are
+    unchanged.
+    """
+    candidates: list[Path] = []
+    value = os.environ.get("XDG_STATE_HOME", "")
+    if value:
+        # The XDG spec says to ignore a relative value. Ignoring it silently would move
+        # the plane somewhere the operator did not name, so refuse instead: the default
+        # has to be unambiguous, and "unset" and "misset" are different states.
+        if not Path(value).is_absolute():
+            raise ActivationError("refused", "XDG_STATE_HOME is not an absolute path", 2)
+        candidates.append(Path(value))
+    home = os.environ.get("HOME", "")
+    if home and Path(home).is_absolute():
+        candidates.append(Path(home) / ".local" / "state")
+    if not candidates:
+        raise ActivationError("refused", "cannot resolve the ccodex XDG state plane", 2)
+    return candidates
+
+
+def _state_home() -> Path:
+    return _state_home_candidates()[0]
+
+
+def _assert_keyable_target(target: Path) -> None:
+    """Refuse a target path that would key one checkout to two plane entries.
+
+    `open_root_chain` opens every component `O_NOFOLLOW`, so an admitted target path
+    carries no symlinked component and is already its own realpath; `.` and `..` are the
+    only remaining way to spell one directory two ways, and the key is derived from the
+    exact string.
+    """
+    if not target.is_absolute():
+        raise ActivationError("unsupported", "target must be an absolute Linux path")
+    if any(part in {".", ".."} for part in target.parts):
+        raise ActivationError("refused", "target path is not in normal form", 2)
+
+
+def _plane_key(target: Path) -> str:
+    """Key on the exact absolute target path.
+
+    It distinguishes a linked worktree from its parent, which the Git common directory
+    would not (issues/09 requires a separately keyed receipt for each). It is
+    deliberately NOT stable across a rename: every record in the plane pins
+    `operation.target.path` and `_bind_operation_target` refuses when it differs, so a
+    key that followed a rename would only carry an already-unusable journal into the
+    renamed checkout and leave it permanently `effect-unknown`. A rename therefore yields
+    a fresh empty key plus an orphaned entry no target can reach.
+
+    Device+inode keying was rejected for the reverse failure: inode reuse after a
+    checkout is deleted would hand an unrelated new directory a stale journal whose
+    pinned path no longer exists, which is exactly the state no recovery decision can
+    classify.
+    """
+    return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+
+
+def _plane_root(target: Path) -> Path:
+    return _state_home().joinpath(*PLANE_NAMESPACE, _plane_key(target))
+
+
+def _plane_selection() -> str:
+    value = os.environ.get(PLANE_SELECTION_ENV, "")
+    if value and value != PLANE_REPO_LOCAL:
+        raise ActivationError("refused", "invalid activation state plane selection", 2)
+    return value
+
+
+def _resolve_plane(target: Path) -> StatePlane:
+    """Resolve the one plane for this invocation, creating nothing.
+
+    The selection is environmental and no record binds the plane it was written into --
+    binding one there would not help, because with the selection moved the engine never
+    opens that record. `_assert_unselected_planes_empty` closes the hole from the other
+    side instead: every plane this invocation did NOT select is probed for state, and
+    finding any is a clean refusal.
+    """
+    _assert_keyable_target(target)
+    if _plane_selection() == PLANE_REPO_LOCAL:
+        return StatePlane(target, target / STATE_DIR_NAME, repo_local=True)
+    return StatePlane(target, _plane_root(target), repo_local=False)
+
+
+def _plane_pointer_name(root: Path) -> str:
+    """Name a pointer after the plane it records, so the name binds the content."""
+    return f"{PLANE_POINTER_PREFIX}{hashlib.sha256(str(root).encode('utf-8')).hexdigest()}.json"
+
+
+def _plane_pointer_record(path: Path) -> Path:
+    """The plane root one pointer records, or a `foreign-state` refusal.
+
+    The recorded value must be an absolute path in normal form whose own digest is the
+    filename, so a pointer cannot be renamed onto a different plane, and a forged name in the
+    family cannot carry an arbitrary body. Nothing here trusts the value as a plane: it is
+    only ever used as a probe destination and as a candidate root, never opened for writing.
+    """
+    try:
+        record, _ = load_canonical_json(path, "plane pointer")
+        record = _exact(record, {"schema", "plane"}, "plane pointer")
+        value = record["plane"]
+        if record["schema"] != PLANE_POINTER_SCHEMA or not isinstance(value, str) or not value:
+            raise ActivationError("foreign-state", "invalid plane pointer")
+        root = Path(value)
+        if not root.is_absolute() or str(root) != value or any(part in {".", ".."} for part in root.parts):
+            raise ActivationError("foreign-state", "invalid plane pointer")
+        if _plane_pointer_name(root) != path.name:
+            raise ActivationError("foreign-state", "plane pointer does not bind its plane")
+    except ActivationError as exc:
+        if exc.status == "foreign-state":
+            raise
+        raise ActivationError("foreign-state", "invalid plane pointer") from exc
+    return root
+
+
+def _assert_plane_pointer(path: Path, root: RootBinding) -> Path:
+    """Admit one pointer under the SAME custody rules as `receipts`/`transactions`.
+
+    Widening the `.agentic-sdlc/` whitelist by this name family is not a loosening of the
+    rule the whitelist enforces: unlike `repo.toml` and `rightsize/`, which are Git-materialized
+    and therefore only `_assert_cloneable_private_node`-clean, a pointer is written by this
+    engine alone and is held to exact 0600, single-link, non-symlink, on-the-bound-mount
+    custody -- the private rule. A committed copy of a pointer materializes at the caller's
+    umask and is refused here by name rather than silently trusted, which is the intended
+    behaviour: `.gitignore` records that this file is machine-local and never committed.
+    """
+    _assert_private_file(path, root, "plane pointer")
+    return _plane_pointer_record(path)
+
+
+def _plane_pointer_roots(target: Path, root: RootBinding) -> list[Path]:
+    """Every plane root this checkout itself records, validated, in a stable order.
+
+    This is the half of the candidate set that a rename cannot destroy, because it lives
+    inside the directory being renamed. An absent state root, or one holding no pointer, is
+    an empty list rather than a refusal: pointers postdate the plane, so a checkout activated
+    before them has none, and that is the pre-pointer behaviour unchanged.
+    """
+    state = target / STATE_DIR_NAME
+    try:
+        names = sorted(item for item in os.listdir(state) if item.startswith(PLANE_POINTER_PREFIX))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError as exc:
+        raise ActivationError("refused", PLANE_PROBE_REASON, 3) from exc
+    return [_assert_plane_pointer(state / name, root) for name in names]
+
+
+def _plane_candidates(target: Path, root: RootBinding) -> list[StatePlane]:
+    """Every plane one target's state could be in that this engine can name exactly.
+
+    Three sources, and the third is what makes the set closed rather than merely broad:
+    the repo-local override's fixed target subdirectory, one default-layout plane per
+    nameable state home, and one per plane root this checkout's own pointers record. The
+    pointers are load-bearing for the two cases the environment cannot describe -- a renamed
+    checkout, whose key changed, and a state home relocated to a directory neither
+    `XDG_STATE_HOME` nor `$HOME` names any more.
+
+    SURVIVING MUTANT, reported rather than papered over: deleting the repo-local entry from
+    this list leaves the suite green, because when it is the UNSELECTED plane
+    `_validate_repository_state_root` has already refused the same two surfaces --
+    `receipts`/`transactions` and the `.agentic-sdlc.intent.`/`.agentic-sdlc.noop.` families
+    -- by `LEGACY_STATE_REASON`, and it runs first. No input distinguishes the two, so no
+    honest test can. It stays for the same reason as the defensive raise in
+    `_mkdir_plane_root`: `LEGACY_STATE_REASON` is a migration-era name for state that
+    "predates the ccodex state plane", and the day that check is retired this list is the only
+    thing standing between a repo-local journal and a clean `inactive` report.
+    """
+    planes = [StatePlane(target, target / STATE_DIR_NAME, repo_local=True)]
+    seen: set[Path] = {planes[0].root}
+    key = _plane_key(target)
+    for home in _state_home_candidates():
+        candidate = home.joinpath(*PLANE_NAMESPACE, key)
+        if candidate not in seen:
+            seen.add(candidate)
+            planes.append(StatePlane(target, candidate, repo_local=False))
+    for recorded in _plane_pointer_roots(target, root):
+        # A recorded root is always a default-layout plane root: `_record_plane_pointer`
+        # writes no pointer for the repo-local override, so no inference about layout is
+        # needed here and none is made. The environment's own candidates are appended FIRST, so
+        # a plane the environment can still name keeps its ordinary label and only a plane that
+        # nothing but the pointer names is reported as recorded.
+        if recorded not in seen:
+            seen.add(recorded)
+            planes.append(StatePlane(target, recorded, repo_local=False, recorded=True))
+    return planes
+
+
+def _plane_entries(path: Path, label: str) -> list[str]:
+    """Names in one plane directory, where "cannot tell" is never reported as absence.
+
+    Only `ENOENT` and `ENOTDIR` are absence -- nothing can exist under a non-directory.
+    `EACCES`, `ELOOP`, and every other error mean the probe cannot see whether state is there,
+    which is exactly the case that must not become `inactive`, so it refuses. Deliberately not
+    `Path.exists()` or a bare `except OSError`: both turn an unreadable plane into an empty one.
+    """
+    try:
+        return os.listdir(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError as exc:
+        raise ActivationError("refused", f"{PLANE_PROBE_REASON}: {label}", 3) from exc
+
+
+def _recorded_plane_entries(plane: StatePlane) -> list[str]:
+    """Names in a plane root ONLY this checkout's own pointer names, where absence is UNKNOWN.
+
+    The asymmetry with `_plane_entries` is the whole point, and reversing one sentence of the
+    previous round's reasoning is the change: "the probe reads the plane, not the pointer, so a
+    pointer to a missing or empty plane yields `inactive` honestly" is true of EMPTY and false
+    of MISSING. A pointer records that this checkout wrote its activation state into that exact
+    absolute root. A root that cannot be listed -- gone, replaced by a non-directory, or
+    unreadable -- is therefore not "no state"; it is a recorded write destination this
+    invocation cannot reach, which is precisely "I cannot tell whether an effect exists".
+
+    THE ORDINARY ARRANGEMENT THAT PRODUCES IT, and the reason a rename of the checkout alone was
+    not the whole case: one `mv` of a home directory holding BOTH the checkout and the plane.
+    That is the common layout -- a checkout under `$HOME`, the plane under
+    `$HOME/.local/state` -- so a single move relocates both. The pointer's recorded root names a
+    path that no longer exists, while the state itself moved with the home into a root the new
+    key does not name and no pointer records. MEASURED before this function existed: `inspect`,
+    `status`, and `plan` all reported `inactive` with `effect: none` at exit 0 over a published
+    product with an unresolved journal, and a second apply was admitted. HEAD answered exit 4
+    for the same operation.
+
+    Exit 4, not the exit-3 refusal `_plane_entries` raises for an unreadable plane, because the
+    two are different claims: exit 3 says "nothing happened here and I declined", and this
+    invocation cannot say the first half. Deliberately no further detection mechanism -- every
+    round of this ticket tried to make the engine KNOW and found another case where it cannot,
+    so keeping "I cannot tell" available for exactly these cases IS the answer.
+
+    A recorded root that DOES list is classified by the same rules as any other plane, so one
+    that resolves and is genuinely EMPTY stays honestly `inactive` at exit 0 and admits the
+    retry: there the engine can prove the absence. A checkout with no pointer at all reaches
+    none of this, because `_plane_candidates` adds no recorded candidate for it.
+    """
+    try:
+        return os.listdir(plane.root)
+    except OSError as exc:
+        raise ActivationError("effect-unknown", RECORDED_PLANE_UNRESOLVED_REASON, 4) from exc
+
+
+def _plane_holds_state(plane: StatePlane) -> bool:
+    """Does this plane hold any activation record for its target? Names only, no content.
+
+    Presence rather than resolution state, for two reasons. A committed receipt in an
+    unselected plane is the same double-apply hazard as an unresolved journal -- the
+    selected plane would report `inactive` and admit a second effectful owner for a path
+    another plane already owns. And classifying a foreign plane's records would mean
+    validating them, which can itself fail `effect-unknown` over state this invocation
+    never intends to touch; a presence probe can only ever produce a clean refusal.
+
+    EXHAUSTIVE BY CONSTRUCTION for a default plane root, rather than by a list of the record
+    kinds that exist today: nothing but this engine's own records is ever created in a key
+    directory, so ANY entry is state. A list would have to be revisited every time a record kind
+    is added -- and a probe that silently outgrows the surface it probes is how this defect
+    class keeps coming back. An existing but EMPTY key directory is correctly not state: it is
+    the crash window between creating the plane and writing its first record, in which nothing
+    was published. For a RECORDED root the same empty directory is still not state, but a root
+    that cannot be listed at all is no longer read as empty -- `_recorded_plane_entries` raises
+    `effect-unknown` there, so this function does not always return.
+
+    The repo-local root is shared with the tracked PUBLIC half of `.agentic-sdlc/`, so there the
+    non-state names are excluded by name instead: `repo.toml` and `rightsize/` exist on every
+    activated repository, and a pointer is a name FOR state elsewhere rather than state itself.
+    Treating any of the three as state would refuse every default-plane invocation on an
+    activated checkout. Anything else in that root is either state or a name
+    `_validate_repository_state_root` refuses outright, so counting it as state is safe in both
+    directions. The repo-local anchors sit at the target root, which is why the second listing
+    is of `anchor_dir` rather than of the plane root.
+
+    SURVIVING MUTANT, reported rather than papered over: replacing that final anchor/audit
+    listing with `False` leaves the suite green, for the same reason the repo-local entry in
+    `_plane_candidates` does. Reaching it requires the repo-local plane to be a candidate --
+    which means it is NOT selected -- and `_validate_repository_state_root` has already refused
+    exactly the `.agentic-sdlc.intent.`/`.agentic-sdlc.noop.` families by `LEGACY_STATE_REASON`
+    before the probe runs. No input distinguishes the two, so no honest test can, and writing one
+    that cannot fail would be worse than this note. The opposite direction IS reachable and
+    tested: widening either exclusion above makes ordinary activated checkouts refuse.
+    """
+    entries = _recorded_plane_entries(plane) if plane.recorded else _plane_entries(plane.root, plane.label)
+    if not plane.repo_local:
+        return bool(entries)
+    public = {REPO_MANIFEST_NAME, RIGHTSIZE_DIR_NAME}
+    if any(name not in public and not name.startswith(PLANE_POINTER_PREFIX) for name in entries):
+        return True
+    return any(name.startswith(plane.anchor_prefix) or name.startswith(plane.audit_prefix) for name in _plane_entries(plane.anchor_dir, plane.label))
+
+
+def _assert_unselected_planes_empty(target: Path, root: RootBinding, plane: StatePlane) -> None:
+    """Refuse when a plane this invocation did not select holds state for this target.
+
+    THE DEFECT THIS CLOSES: the plane came only from the environment, so crashing an apply
+    after publication in the default plane and then selecting `repo-local` made the engine
+    report `inactive` with `effect: none` at exit 0 over a published product with an
+    unresolved journal, and admit a second apply. That is a positive claim of no-effect
+    over an admitted partial effect. It was reachable through the engine's own documented
+    remedy for a cross-device plane, which is what made a recorded comment insufficient.
+
+    Symmetric by construction, not by two special cases: the reason names the plane that
+    holds the state and the probe runs for both directions. The reverse direction
+    (repo-local crash, then default selection) is ALSO refused earlier and by a different
+    name -- `_validate_repository_state_root` raises `LEGACY_STATE_REASON` for exactly that
+    surface -- so this check is the one that fires for the default-to-repo-local switch and
+    for a state home that moved between the two nameable defaults.
+
+    SELECTION IS NOT THE ONLY WAY TO MOVE A PLANE, and the first fix for the defect above
+    learned it the expensive way: the key is derived from the absolute target path, so
+    RENAMING the checkout -- or moving `XDG_STATE_HOME` to a third directory, or `HOME` --
+    also resolves a fresh empty plane while the old one still holds the journal. Probing only
+    the environment's own planes reported `inactive` with `effect: none` at exit 0 over a
+    published product and admitted a second effectful apply, which is the same defect one
+    surface along. `_plane_candidates` therefore includes every plane root this checkout's own
+    pointers record, and a pointer is written before the plane receives any record. What
+    remains outside the probe is state whose pointer AND journal were both destroyed, which is
+    the pre-existing "the operator deleted the journal" limit rather than a new one.
+    """
+    for candidate in _plane_candidates(target, root):
+        # A plane's identity is its root: the repo-local root's last component is
+        # `.agentic-sdlc` and every default root's is a 64-char key digest, so equal roots
+        # mean the same plane and no second field can distinguish them.
+        if candidate.root == plane.root:
+            continue
+        if _plane_holds_state(candidate):
+            if candidate.recorded:
+                raise ActivationError("refused", RECORDED_PLANE_REASON, 3)
+            raise ActivationError("refused", f"{UNSELECTED_PLANE_REASON}: {candidate.label}", 3)
+
+
+def _assert_plane_device(plane: StatePlane, root: RootBinding) -> None:
+    """Refuse a plane that cannot exchange objects with the target atomically.
+
+    Publication is `renameat2` between the plane's `stage/` and the live product, and
+    rollback is `RENAME_EXCHANGE` between the live product and `backup/`. Both are
+    confined to one mounted filesystem -- measured: plain rename, `RENAME_EXCHANGE`, and
+    `RENAME_NOREPLACE` all return `EXDEV` across devices -- so a cross-device plane cannot
+    be made atomic by any amount of care. Equal `mount_id` as well as equal `st_dev`,
+    because the kernel refuses a rename across two mounts of one superblock too.
+
+    This is a clean refusal before any effect, and the remedy it names is the repo-local
+    override, which keeps the state on the target's own filesystem by construction.
+    """
+    if plane.repo_local:
+        return
+    identity = _deepest_existing_dir_identity(plane.root)
+    if identity["dev"] != root.identity["dev"] or identity["mount_id"] != root.identity["mount_id"]:
+        raise ActivationError("refused", PLANE_DEVICE_REASON, 3)
+
+
+def _deepest_existing_dir_identity(path: Path) -> dict[str, Any]:
+    """Identity of the deepest existing ancestor, which is the device a child inherits.
+
+    Only `ENOENT` walks up. A symlinked or non-directory ancestor is refused rather than
+    skipped, because skipping it would compare the device of a node that is not the one a
+    later `mkdir` would land in.
+    """
+    current = path
+    while True:
+        try:
+            fd = os.open(current, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        except FileNotFoundError as exc:
+            if current.parent == current:
+                raise ActivationError("refused", PLANE_ANCESTOR_REASON, 3) from exc
+            current = current.parent
+            continue
+        except OSError as exc:
+            raise ActivationError("refused", PLANE_ANCESTOR_REASON, 3) from exc
+        try:
+            return _dir_identity_fd(fd)
+        finally:
+            os.close(fd)
+
+
+def _open_plane_root(plane: StatePlane, target_fd: int) -> int:
+    """Open the plane root through one strict no-follow, single-mount chain."""
+    if plane.repo_local:
+        return open_component_dir(target_fd, STATE_DIR_NAME)
+    return open_root_chain(plane.root)
 
 
 def _relative(path: str) -> str:
@@ -730,9 +1208,24 @@ def validate_internal_status_records(target: Path, raw: bytes) -> set[str]:
     A name is never sufficient to suppress a Git record: the whole private tree,
     including any root anchor/audit, has already passed its schema and custody
     checks before this function admits it to the projection.
+
+    In the default plane the ONLY machine-local activation state in the worktree is the plane
+    pointer family, so that is all this suppresses there. Full suppression survives for the
+    repo-local override, which is the one selection that still materializes `receipts/`,
+    `transactions/`, and the anchors inside the tree.
     """
     root = bind_target(target)
-    _validate_private_state(target, root)
+    # NOT an admission surface: `write_commit` reaches this through
+    # `capture_git_observation` to capture the POSTSTATE, after the product is published.
+    # A refusal raised from here is reported as `effect: none` over published bytes, so the
+    # unselected-plane probe stays out of it -- see `_validate_private_state`.
+    _validate_private_state(target, root, admission=False)
+    repo_local = _resolve_plane(target).repo_local
+    # Exact names, derived from the pointers that just passed custody and content validation --
+    # never a prefix match on the family. A name in the family that is not a valid pointer never
+    # reaches this function, because `_validate_repository_state_root` refuses it as
+    # `foreign-state` first, so this set is the earned suppression and nothing wider.
+    pointers = {f"{STATE_DIR_NAME}/{_plane_pointer_name(item)}" for item in _plane_pointer_roots(target, root)}
     filtered: set[str] = set()
     for parsed in parse_porcelain_v2_z(raw):
         try:
@@ -757,6 +1250,26 @@ def validate_internal_status_records(target: Path, raw: bytes) -> set[str]:
                 # ignoring it. Hidden, activation would proceed against a tree carrying an
                 # uncommitted artifact and the same file would behave differently tracked
                 # than untracked, for no gain the engine can name.
+                continue
+            if path in pointers:
+                # The one name in this root that EARNS suppression in the default plane: a
+                # pointer is per-checkout machine-local state -- it names the operator's own
+                # plane path -- exactly like `receipts/` was, and `.gitignore` names it for the
+                # same reason. Left visible it would be a permanent untracked record that fails
+                # `_require_clean` on every apply after the first, so the engine would break its
+                # own repository; and unlike `repo.toml`, nothing riding along in it could change
+                # what activation does, because the engine reads it only as a probe destination.
+                filtered.add(path)
+                continue
+            if not repo_local:
+                # INVARIANT, not a guard, and deliberately untested: in the default plane the
+                # only `.agentic-sdlc/` records `_validate_private_state` admits at all --
+                # `repo.toml`, `rightsize/`, and the pointer family -- have already `continue`d
+                # above, and every other suppressible name lives outside the worktree. There is
+                # therefore no input that distinguishes this line from its absence, so deleting
+                # it leaves the suite green. It stays as the explicit statement that plane mode
+                # suppresses nothing further, and as the fail-safe if the repository root's
+                # whitelist is widened again.
                 continue
             if path == ".agentic-sdlc" or path.startswith(".agentic-sdlc/"):
                 filtered.add(path)
@@ -1281,8 +1794,9 @@ def _publish_metadata_successor_at(private: PrivateTransaction, source_directory
     return observed
 
 
-def write_new_metadata(path: Path, record: dict[str, Any], *, target: Path | None = None, relative: str | None = None) -> None:
-    if target is None or relative is None:
+def write_new_metadata(path: Path, record: dict[str, Any], *, base: Path | None = None, relative: str | None = None) -> None:
+    """Create one canonical record, optionally through a no-follow chain under `base`."""
+    if base is None or relative is None:
         data = canonical_bytes(record)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
         try:
@@ -1291,7 +1805,7 @@ def write_new_metadata(path: Path, record: dict[str, Any], *, target: Path | Non
             os.close(fd)
         os.chmod(path, 0o600); _fsync_dir(path.parent)
         return
-    parent_fd, name = _open_parent_dirfd(target, relative)
+    parent_fd, name = _open_parent_dirfd(base, relative)
     try:
         _write_new_at(parent_fd, name, record)
     finally:
@@ -1391,7 +1905,7 @@ def write_progress(operation_dir: Path, progress: dict[str, Any], target: Path |
     elif target is None:
         write_new_metadata(path, progress)
     else:
-        write_new_metadata(path, progress, target=target, relative=f".agentic-sdlc/transactions/{operation_dir.name}/progress.json")
+        write_new_metadata(path, progress, base=_resolve_plane(target).root, relative=f"transactions/{operation_dir.name}/progress.json")
 
 
 def _progress(operation: dict[str, Any], *, phase: str, effect: str, direction: str = "apply", reasons: list[str] | None = None, staged_identity: dict[str, Any] | None = None, backup_identity: dict[str, Any] | None = None, terminal_evidence: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1419,6 +1933,7 @@ def classify_progress_witness(operation_dir: Path, operation: dict[str, Any]) ->
     _validate_operation(operation)
     target = Path(operation["target"]["path"])
     binding = _bind_operation_target(target, operation)
+    plane = _resolve_plane(target)
     try:
         _validate_private_state(target, binding)
         progress_path = operation_dir / "progress.json"
@@ -1454,7 +1969,7 @@ def classify_progress_witness(operation_dir: Path, operation: dict[str, Any]) ->
             post = capture_git_observation(target)
             if not _same_git_projection(post, rollback["git_poststate"]) or not _same_git_projection(post, operation["git_prestate"]):
                 return "effect_unknown", ["rollback Git witness no longer binds target"]
-            if (operation_dir / "commit.json").exists() or (target / ".agentic-sdlc" / "receipts" / f"{operation['operation_id']}.json").exists():
+            if (operation_dir / "commit.json").exists() or (plane.receipts / f"{operation['operation_id']}.json").exists():
                 return "effect_unknown", ["rollback conflicts with commit or receipt"]
             if progress["phase"] != "rolled-back":
                 return "effect_unknown", ["rollback lacks coherent terminal progress"]
@@ -1471,7 +1986,7 @@ def classify_progress_witness(operation_dir: Path, operation: dict[str, Any]) ->
             commit, _ = load_canonical_json(commit_path, "commit")
             _validate_commit(commit, operation)
             receipt_next = operation_dir / "receipt.json.next"
-            final_receipt = target / ".agentic-sdlc" / "receipts" / f"{operation['operation_id']}.json"
+            final_receipt = plane.receipts / f"{operation['operation_id']}.json"
             if receipt_next.exists():
                 next_record, _ = load_canonical_json(receipt_next, "staged receipt")
                 _validate_receipt(next_record, operation, commit)
@@ -1719,8 +2234,8 @@ def _assert_private_file(path: Path, root: RootBinding, label: str, *, modes: se
         raise ActivationError("foreign-state", f"unsafe private {label}")
 
 
-def _root_anchor_operation(target: Path, root: RootBinding, path: Path) -> None:
-    suffix = path.name.removeprefix(".agentic-sdlc.intent.").removesuffix(".json")
+def _root_anchor_operation(target: Path, root: RootBinding, path: Path, plane: StatePlane) -> None:
+    suffix = path.name.removeprefix(plane.anchor_prefix).removesuffix(".json")
     if not path.name.endswith(".json") or not _HEX32.fullmatch(suffix):
         raise ActivationError("foreign-state", "unknown activation anchor")
     _assert_private_file(path, root, "anchor")
@@ -1736,8 +2251,8 @@ def _root_anchor_operation(target: Path, root: RootBinding, path: Path) -> None:
         raise ActivationError("foreign-state", "invalid activation anchor") from exc
 
 
-def _root_noop_audit(target: Path, root: RootBinding, path: Path) -> None:
-    suffix = path.name.removeprefix(".agentic-sdlc.noop.").removesuffix(".json")
+def _root_noop_audit(target: Path, root: RootBinding, path: Path, plane: StatePlane) -> None:
+    suffix = path.name.removeprefix(plane.audit_prefix).removesuffix(".json")
     if not path.name.endswith(".json") or not _HEX32.fullmatch(suffix):
         raise ActivationError("foreign-state", "unknown activation audit")
     _assert_private_file(path, root, "audit")
@@ -1764,28 +2279,79 @@ def _root_noop_audit(target: Path, root: RootBinding, path: Path) -> None:
         raise ActivationError("foreign-state", "invalid no-op audit") from exc
 
 
-def _validate_private_state(target: Path, root: RootBinding) -> None:
+def _validate_private_state(target: Path, root: RootBinding, *, admission: bool = True) -> None:
+    """Validate this target's private state, and at admission also its plane selection.
+
+    `admission=False` is for the ONE caller that runs after a product is already
+    published: `validate_internal_status_records`, reached through
+    `capture_git_observation` when `write_commit` captures the poststate. A refusal raised
+    there surfaces through `apply_command` as `refused` with `effect: none`, which would be
+    a no-effect claim over published bytes -- MEASURED, and already true of
+    `LEGACY_STATE_REASON` and the plane device/ancestor guards at this same site, which is a
+    separate pre-existing defect at `apply_command`'s handler and not this one. The
+    unselected-plane probe does not join them: it is an admission decision, every admission
+    surface calls this function directly before any effect, and nothing this caller observes
+    could change the answer anyway.
+    """
+    plane = _resolve_plane(target)
+    _assert_plane_device(plane, root)
+    _validate_repository_state_root(target, root, plane)
+    if admission:
+        # Before any record of the SELECTED plane is read, let alone written: an unselected
+        # plane holding state means this invocation cannot honestly report on this target,
+        # and neither does one this checkout's own pointers name after a rename.
+        _assert_unselected_planes_empty(target, root, plane)
+    _validate_plane_records(target, root, plane)
+
+
+def _validate_repository_state_root(target: Path, root: RootBinding, plane: StatePlane) -> None:
+    """Admit the tracked, public half of `.agentic-sdlc/` plus the plane pointers, nothing else.
+
+    The whitelist is load-bearing: `repo.toml`, `rightsize/`, and the `plane.<digest>.json`
+    family are admitted, and any other name is `unknown private state path`. In the default
+    plane `receipts/`, `transactions/`, and the two root anchor families are no longer part of
+    it, so finding one is a live activation this engine did not write here. It is refused
+    BY NAME and left exactly as found -- see `LEGACY_STATE_REASON`.
+
+    The pointer family is the one addition, and it is admitted under stricter custody than
+    either public name rather than under a relaxed rule: exact 0600, single-link, engine-written
+    (`_assert_plane_pointer`). A name in the family that is not a valid pointer is
+    `foreign-state`, so the widening cannot be used to smuggle an arbitrary file in under a
+    matching name.
+    """
     for candidate in target.iterdir():
         name = candidate.name
-        if name == ".agentic-sdlc":
+        if name == STATE_DIR_NAME:
             continue
-        if name.startswith(".agentic-sdlc.intent."):
-            _root_anchor_operation(target, root, candidate)
-        elif name.startswith(".agentic-sdlc.noop."):
-            _root_noop_audit(target, root, candidate)
-    state = target / ".agentic-sdlc"
+        if name.startswith(f"{STATE_DIR_NAME}.intent.") or name.startswith(f"{STATE_DIR_NAME}.noop."):
+            if not plane.repo_local:
+                raise ActivationError("refused", LEGACY_STATE_REASON, 3)
+    state = target / STATE_DIR_NAME
     if not state.exists() and not state.is_symlink():
         return
     _assert_state_root(state, root)
     # ACCEPTED COST, recorded for whoever hits `foreign-state` in a recovery: unlike the
-    # other three names, `rightsize/` holds operator-VISIBLE rendered artifacts, so a stray
+    # other names, `rightsize/` holds operator-VISIBLE rendered artifacts, so a stray
     # `chmod o+w`, a symlink, or a foreign-owned file in there refuses activation AND
     # recovery, at every caller of this function. That is the deliberate price of one
     # namespace with one validator -- fix the offending node's custody rather than
     # special-casing recovery or exempting this subtree. `_assert_rightsize_artifacts` names
     # the offender, and task packs deliberately live outside this root to keep the
     # hand-edited half of rightsizing out of the walk.
-    if {item.name for item in state.iterdir()} - {"receipts", "transactions", REPO_MANIFEST_NAME, RIGHTSIZE_DIR_NAME}:
+    names = {item.name for item in state.iterdir()}
+    pointers = sorted(name for name in names if name.startswith(PLANE_POINTER_PREFIX))
+    allowed = {REPO_MANIFEST_NAME, RIGHTSIZE_DIR_NAME, *pointers}
+    if plane.repo_local:
+        allowed |= {"receipts", "transactions"}
+    elif names & {"receipts", "transactions"}:
+        # Never adopted and never removed. A receipt binds `custody.operation_dir` by
+        # dev/ino and `custody.operation_record` by dev/ino, so no copy or move can carry
+        # it: migrating would turn a valid committed activation into a permanently
+        # `effect-unknown` target. The remedy is the repo-local override, which leaves the
+        # state where its own custody already binds, or the operator's own deliberate
+        # retirement of it -- an outward effect that needs its own authorization.
+        raise ActivationError("refused", LEGACY_STATE_REASON, 3)
+    if names - allowed:
         raise ActivationError("foreign-state", "unknown private state path")
     manifest = state / REPO_MANIFEST_NAME
     if manifest.exists() or manifest.is_symlink():
@@ -1793,6 +2359,78 @@ def _validate_private_state(target: Path, root: RootBinding) -> None:
     rightsize = state / RIGHTSIZE_DIR_NAME
     if rightsize.exists() or rightsize.is_symlink():
         _assert_rightsize_artifacts(rightsize, root)
+    for name in pointers:
+        _assert_plane_pointer(state / name, root)
+
+
+def _assert_plane_ancestors(plane: StatePlane, root: RootBinding) -> None:
+    """Admit the operator-owned directories the plane key hangs from.
+
+    `<state home>` and `<state home>/ccodex` are shared with every other ccodex consumer
+    and `activation/` with every other target, so they are admitted as *cloneable* nodes
+    -- caller-owned, not other-writable, ACL-free, not symlinks, on the target's device --
+    rather than held to an exact mode this engine has no right to impose on them. The
+    check is not decoration: an other-writable ancestor would let another user rename this
+    target's whole key directory away and substitute a forged one, which no mode on the
+    key directory itself can prevent.
+    """
+    if plane.repo_local:
+        return
+    # Every ancestor is checked "if it exists", INCLUDING the state home, so that one call
+    # serves both orders. `_validate_plane_records` reaches this only when the plane root
+    # already exists, where every ancestor exists too and the condition is therefore not
+    # weaker than an unconditional check. `_mkdir_plane_root` calls it BEFORE it creates
+    # anything -- where a missing state home is the ordinary first-activation case and must
+    # not be a refusal -- and again after, where they all exist. Before that first call
+    # existed, the creating path detected a symlinked or other-writable EXISTING ancestor only
+    # after it had already made directories under it.
+    current = _state_home()
+    ancestors = [(current, "state plane home")]
+    for name in PLANE_NAMESPACE:
+        current = current / name
+        ancestors.append((current, f"state plane {name}"))
+    for path, label in ancestors:
+        if path.exists() or path.is_symlink():
+            _assert_cloneable_private_node(path, root, label, directory=True)
+
+
+def _validate_plane_records(target: Path, root: RootBinding, plane: StatePlane) -> None:
+    """Validate the anchors, audits, receipts, and journals of the selected plane.
+
+    Every custody helper is still passed the TARGET binding, even for plane nodes. That is
+    exact rather than approximate: `_assert_plane_device` has already required the plane to
+    share the target's `st_dev` and `mount_id` -- publication could not be atomic
+    otherwise -- so "on the target's device and mount" is the strongest statement available
+    and the one the engine actually depends on.
+    """
+    state = plane.root
+    present = state.exists() or state.is_symlink()
+    if not plane.repo_local:
+        if not present:
+            # No plane entry for this key: nothing has been activated here, exactly as an
+            # absent `.agentic-sdlc/` meant before. The anchors live inside it, so there is
+            # no witness anywhere else to miss.
+            return
+        _assert_plane_ancestors(plane, root)
+        # Only this engine ever creates the key directory, so unlike a Git-materialized
+        # root it is held to the exact 0700 rule its own children are held to.
+        _assert_private_dir(state, root, "state plane")
+        for item in state.iterdir():
+            if item.name in {"receipts", "transactions"}:
+                continue
+            if item.name.startswith(plane.anchor_prefix) or item.name.startswith(plane.audit_prefix):
+                continue
+            raise ActivationError("foreign-state", "unknown state plane path")
+    # Repo-local anchors sit at the target root, so this walk has to precede the
+    # `present` return: an interrupted setup can leave one with no state root at all.
+    for candidate in plane.anchor_dir.iterdir():
+        name = candidate.name
+        if name.startswith(plane.anchor_prefix):
+            _root_anchor_operation(target, root, candidate, plane)
+        elif name.startswith(plane.audit_prefix):
+            _root_noop_audit(target, root, candidate, plane)
+    if not present:
+        return
     for name in ("receipts", "transactions"):
         if (state / name).exists() or (state / name).is_symlink():
             _assert_private_dir(state / name, root, name)
@@ -1886,14 +2524,10 @@ def _bind_operation_target(target: Path, operation: dict[str, Any]) -> RootBindi
     return binding
 
 
-def _state_root(target: Path) -> Path:
-    return target / ".agentic-sdlc"
-
-
 def _operation_dirs(target: Path, root: RootBinding | None = None) -> list[Path]:
     if root is not None:
         _validate_private_state(target, root)
-    directory = _state_root(target) / "transactions"
+    directory = _resolve_plane(target).transactions
     return sorted((item for item in directory.iterdir() if item.is_dir() and not item.is_symlink()), key=lambda item: item.name) if directory.is_dir() and not directory.is_symlink() else []
 
 
@@ -1940,7 +2574,8 @@ def scan_grant_ledger(target: Path, grant: dict[str, Any]) -> None:
     root = bind_target(target)
     _validate_private_state(target, root)
     target_digest = digest_record(grant)
-    for path in target.glob(".agentic-sdlc.noop.*.json"):
+    plane = _resolve_plane(target)
+    for path in plane.anchor_dir.glob(f"{plane.audit_prefix}*.json"):
         try:
             record, _ = load_canonical_json(path, "audit")
         except ActivationError:
@@ -1974,7 +2609,14 @@ def _revalidate_plan(plan: dict[str, Any], manifest_path: Path) -> tuple[dict[st
     if {"executor": _tool_identity(Path(__file__)), "generator": _tool_identity(Path(__file__).with_name("instruction-generator.py"))} != plan["tool"]:
         raise ActivationError("stale", "canonical tool identity changed")
     updated = _plan_data(target, manifest_path, plan["selected_path"])
-    if updated != plan:
+    # Exact on every field except the Git observation's `filtered_internal`, which is DERIVED
+    # from what the engine itself owns rather than an input the plan pins. It grows by one entry
+    # the first time a plane pointer is written, so an exact comparison made a plan captured
+    # before that write permanently `stale` with "plan inputs changed" when nothing about the
+    # tree had changed. `_same_git_projection` is the same tolerance the rollback baseline check
+    # already uses, and it hides nothing: a suppressed path that appears or disappears from
+    # Git's own output changes the normalized porcelain bytes, and those stay exact here.
+    if {key: value for key, value in updated.items() if key != "git"} != {key: value for key, value in plan.items() if key != "git"} or not _same_git_projection(updated["git"], plan["git"]):
         raise ActivationError("stale", "plan inputs changed")
     rendered, _, old = render_and_bind_selected_output(target, manifest, plan["selected_path"])
     return rendered, old
@@ -1986,16 +2628,134 @@ def _new_operation(plan: dict[str, Any], grant: dict[str, Any]) -> dict[str, Any
     return {"schema": OPERATION_SCHEMA, "operation_id": operation_id, "kind": "apply", "target": plan["target"], "plan_digest": digest_record(plan), "manifest_sha256": plan["manifest_sha256"], "tool": plan["tool"], "grant": {"grant_id": grant["grant_id"], "document_digest": digest_record(grant)}, "git_prestate": plan["git"], "entry": {**entry, "stage_path": "stage/0000.payload", "backup_path": "backup/0000.payload", "discard_path": "discard/0000.payload"}}
 
 
+def _record_plane_pointer(target: Path, plane: StatePlane, root: RootBinding) -> None:
+    """Bind this checkout to the plane about to hold its state, before that plane holds any.
+
+    THE DEFECT THIS CLOSES, which the previous fix in this file introduced: the plane key is
+    derived from the absolute target path, and the PLANE side was the only place that path was
+    recorded. Renaming a checkout -- or moving `XDG_STATE_HOME` to a directory the environment
+    no longer names, or moving `HOME` -- therefore resolved a fresh, empty plane while the old
+    one still held an unresolved journal for a product that is still published in the tree. The
+    engine reported `inactive` with `effect: none` at exit 0 and admitted a second effectful
+    apply. Before the plane moved out of the tree the same rename was exit 4 `effect-unknown`,
+    because the journal travelled with the checkout and failed `_bind_operation_target`; turning
+    that honest "I cannot tell" into a confident "nothing here" was strictly worse than the
+    selection hole it replaced. A rename is an ordinary operation, which is what made this
+    blocking rather than residual.
+
+    Ordering: written BEFORE the plane root, so no plane RECORD can exist without a pointer
+    naming the plane that holds it. A crash in the window between the two leaves a pointer to a
+    plane root that does not exist, or exists and is empty, which probes clean and correctly
+    permits the next apply -- nothing was published and no journal was written.
+
+    Create-only, and named after the digest of the plane root, so a relocation ADDS a pointer
+    instead of rewriting one. That is what keeps it crash-consistent with no `*.next` window,
+    and it means every plane this checkout has ever written to stays nameable rather than only
+    the most recent one. Nothing removes a pointer: a receipt is durable, so the name of the
+    plane holding it is too, and a pointer whose plane no longer holds anything is simply a
+    candidate that probes empty.
+
+    Not written for the repo-local override. That plane IS the target's own subdirectory, so it
+    travels with a rename and cannot be orphaned by one: `_validate_repository_state_root`
+    refuses it by `LEGACY_STATE_REASON` under any other selection, and after a rename
+    `_bind_operation_target` refuses the moved journal itself at exit 4. Because no pointer ever
+    records a repo-local root, `_plane_candidates` needs no inference about a recorded root's
+    layout.
+
+    NOT a claim that state cannot be lost. A pointer is machine-local, so `git clean -x`
+    removes it exactly as it removed `.agentic-sdlc/receipts/` before the plane moved out of the
+    tree; destroying both halves of the evidence has always defeated detection, and this makes
+    that the only remaining way to.
+    """
+    if plane.repo_local:
+        return
+    state = target / STATE_DIR_NAME
+    if not state.exists() and not state.is_symlink():
+        _safe_mkdir(state)
+    # The state root may be a Git-materialized directory, so it earns the cloneable rule and
+    # not the private one -- exactly as `_validate_repository_state_root` admits it.
+    _assert_state_root(state, root)
+    name = _plane_pointer_name(plane.root)
+    pointer = state / name
+    if pointer.exists() or pointer.is_symlink():
+        if _assert_plane_pointer(pointer, root) != plane.root:
+            # Unreachable while the filename is the digest of the recorded root, and kept
+            # because this is the one place that equality is load-bearing for a WRITE.
+            raise ActivationError("foreign-state", "plane pointer does not bind its plane")
+        return
+    write_new_metadata(pointer, {"schema": PLANE_POINTER_SCHEMA, "plane": str(plane.root)}, base=target, relative=f"{STATE_DIR_NAME}/{name}")
+
+
+def _mkdir_plane_root(plane: StatePlane, root: RootBinding, target_fd: int) -> int:
+    """Create the plane root, then reopen it through the one strict chain.
+
+    Missing operator-owned ancestors are created at 0700 but an existing one is never
+    chmodded: `~/.local/state` and `~/.local/state/ccodex` are shared with every other
+    ccodex consumer, and rewriting their modes would be a side effect on state this engine
+    does not own. `_mkdir_at`'s unconditional 0700 is therefore reserved for the key
+    directory and its children, which only this engine creates.
+
+    Containment of those ancestors is asserted BEFORE the first `mkdir` as well as after it.
+    The second call alone was not a pre-effect check on this path: `_validate_plane_records`
+    runs `_assert_plane_ancestors` only when the plane root already exists, so on the creating
+    path -- the only path that writes to an unvalidated ancestor -- an other-writable or
+    symlinked existing ancestor was detected after this function had already created
+    directories beneath it.
+    """
+    if plane.repo_local:
+        return _mkdir_at(target_fd, STATE_DIR_NAME)
+    _assert_plane_ancestors(plane, root)
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        for part in plane.root.parts[1:-1]:
+            try:
+                child = open_component_dir(fd, part)
+            except FileNotFoundError:
+                os.mkdir(part, 0o700, dir_fd=fd)
+                os.fsync(fd)
+                child = open_component_dir(fd, part)
+            os.close(fd)
+            fd = child
+        os.close(_mkdir_at(fd, plane.root.name))
+    finally:
+        os.close(fd)
+    _assert_plane_ancestors(plane, root)
+    state_fd = open_root_chain(plane.root)
+    try:
+        identity = _dir_identity_fd(state_fd)
+        # DEFENSIVE, and deliberately untested: `_mkdir_at` has just set 0700 and
+        # `_assert_plane_device` plus `open_root_chain` have already fixed the device and
+        # mount, so the only way to reach this raise is a same-UID racer inside this
+        # window -- the one adversary this module states it does not defend against. It is
+        # kept because turning that race into a refusal is better than admitting an effect,
+        # not because any input reaches it: deleting it leaves the suite green.
+        if identity["mode"] != 0o700 or identity["dev"] != root.identity["dev"] or identity["mount_id"] != root.identity["mount_id"]:
+            raise ActivationError("foreign-state", "unsafe private state plane")
+        return state_fd
+    except BaseException:
+        os.close(state_fd)
+        raise
+
+
 def _make_layout(target: Path, operation: dict[str, Any]) -> Path:
     root_binding = _bind_operation_target(target, operation)
     _validate_private_state(target, root_binding)
+    plane = _resolve_plane(target)
+    _assert_plane_device(plane, root_binding)
     target_fd = open_root_chain(target)
-    anchor = f".agentic-sdlc.intent.{operation['operation_id']}.json"
+    anchor = plane.anchor_name(operation["operation_id"])
     try:
-        _write_new_at(target_fd, anchor, operation)
-        _failpoint("setup")
-        state_fd = _mkdir_at(target_fd, ".agentic-sdlc")
+        # Before the plane root, so no record in it can be orphaned by a later rename.
+        _record_plane_pointer(target, plane, root_binding)
+        state_fd = _mkdir_plane_root(plane, root_binding, target_fd)
         try:
+            # The anchor is the first witness of this operation, and it is written into the
+            # directory it will be renamed INTO. The rename is `RENAME_NOREPLACE`, which is
+            # confined to one filesystem, so an anchor outside the plane could not become
+            # `operation.json` at all once the plane stops being a repository subdirectory.
+            anchor_fd = target_fd if plane.repo_local else state_fd
+            _write_new_at(anchor_fd, anchor, operation)
+            _failpoint("setup")
             receipts_fd = _mkdir_at(state_fd, "receipts")
             transactions_fd = _mkdir_at(state_fd, "transactions")
             try:
@@ -2007,9 +2767,9 @@ def _make_layout(target: Path, operation: dict[str, Any]) -> Path:
                     progress_history_fd = _mkdir_new_at(operation_fd, "progress-history")
                     discard_fd = _mkdir_new_at(operation_fd, "discard")
                     try:
-                        _renameat2_at(target_fd, anchor, operation_fd, "operation.json", 1)
+                        _renameat2_at(anchor_fd, anchor, operation_fd, "operation.json", 1)
                         _write_new_at(operation_fd, "progress.json", _progress(operation, phase="setup", effect="private_state_only"))
-                        return target / ".agentic-sdlc" / "transactions" / operation["operation_id"]
+                        return plane.operation_dir(operation["operation_id"])
                     finally:
                         os.close(progress_history_fd); os.close(discard_fd); os.close(backup_fd); os.close(stage_fd); os.close(grants_fd)
                 finally:
@@ -2572,9 +3332,22 @@ def _apply_effectful(plan: dict[str, Any], manifest_path: Path, grant: dict[str,
 def _apply_noop(plan: dict[str, Any], manifest_path: Path, grant: dict[str, Any]) -> tuple[dict[str, Any], int]:
     target = Path(plan["target"]["path"])
     _revalidate_plan(plan, manifest_path)
+    plane = _resolve_plane(target)
     operation_id = uuid.uuid4().hex
-    audit = {"schema": AUDIT_SCHEMA, "operation_id": operation_id, "kind": "no-op", "target": plan["target"], "plan_digest": digest_record(plan), "manifest_sha256": plan["manifest_sha256"], "grant": {"grant_id": grant["grant_id"], "document_digest": digest_record(grant)}, "verified_outputs": plan["verified_outputs"], "git_observation": plan["git"], "existing_receipt_digests": [digest_record(load_canonical_json(item, "receipt")[0]) for item in (target / ".agentic-sdlc" / "receipts").glob("*.json")] if (target / ".agentic-sdlc" / "receipts").is_dir() else [], "effect": "audit_only", "approval_authenticated": False}
-    write_new_metadata(target / f".agentic-sdlc.noop.{operation_id}.json", audit)
+    audit = {"schema": AUDIT_SCHEMA, "operation_id": operation_id, "kind": "no-op", "target": plan["target"], "plan_digest": digest_record(plan), "manifest_sha256": plan["manifest_sha256"], "grant": {"grant_id": grant["grant_id"], "document_digest": digest_record(grant)}, "verified_outputs": plan["verified_outputs"], "git_observation": plan["git"], "existing_receipt_digests": [digest_record(load_canonical_json(item, "receipt")[0]) for item in plane.receipts.glob("*.json")] if plane.receipts.is_dir() else [], "effect": "audit_only", "approval_authenticated": False}
+    if not plane.repo_local:
+        # The audit is plane state too, so the plane root has to exist before it lands -- and
+        # the pointer has to exist before the plane root, for the same reason as in
+        # `_make_layout`. An audit alone IS state a plane switch or a rename must not step
+        # over: it is the grant ledger.
+        binding = bind_target(target)
+        target_fd = open_root_chain(target)
+        try:
+            _record_plane_pointer(target, plane, binding)
+            os.close(_mkdir_plane_root(plane, binding, target_fd))
+        finally:
+            os.close(target_fd)
+    write_new_metadata(plane.anchor_dir / plane.audit_name(operation_id), audit)
     return _result("apply", "no-op", 0, target, effect="audit_only", plan_digest=digest_record(plan), operation_id=operation_id), 0
 
 
@@ -2974,9 +3747,10 @@ def _validate_terminal_convergence(operation_dir: Path, operation: dict[str, Any
 
 def _validate_terminal_evidence_snapshot(target: Path, operation: dict[str, Any], evidence: dict[str, Any], *, terminal: str) -> None:
     evidence = _validate_terminal_evidence(evidence, operation, terminal=terminal)
+    plane = _resolve_plane(target)
     target_fd = open_root_chain(target)
     try:
-        operation_fd = _open_transaction_private(target_fd, operation["operation_id"])
+        operation_fd = _open_transaction_private(target_fd, plane, operation["operation_id"])
     finally:
         os.close(target_fd)
     try:
@@ -3039,7 +3813,7 @@ def _final_status_namespace_observation(target: Path, operation: dict[str, Any],
     """Read-only terminal snapshot; later cooperative-writer mutation is outside it."""
     try:
         with _pin_private(target, operation["operation_id"]) as private:
-            _validate_terminal_convergence(private.target_path / ".agentic-sdlc" / "transactions" / operation["operation_id"], operation, commit, receipt, target)
+            _validate_terminal_convergence(private.plane.operation_dir(operation["operation_id"]), operation, commit, receipt, target)
     except (OSError, ActivationError) as exc:
         if isinstance(exc, ActivationError):
             raise

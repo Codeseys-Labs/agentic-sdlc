@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -45,6 +46,62 @@ def manifest(path: str = "AGENTS.md") -> dict:
     }
 
 
+def set_environment(case: unittest.TestCase, name: str, value: str | None) -> None:
+    """Set or clear one environment variable for the duration of one test.
+
+    Subprocess-driven cases inherit `os.environ`, so the plane selection has to live
+    there rather than in a patched module global.
+    """
+    previous = os.environ.get(name)
+
+    def restore() -> None:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
+
+    case.addCleanup(restore)
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+
+
+def use_state_plane(case: unittest.TestCase, root: Path) -> Path:
+    """Point the ccodex XDG state plane inside the case's own temporary tree.
+
+    Never inherit the operator's real `XDG_STATE_HOME`: the plane is a write
+    destination, and it must share the target's filesystem.
+    """
+    state_home = root / "state"
+    set_environment(case, "XDG_STATE_HOME", str(state_home))
+    set_environment(case, ap.PLANE_SELECTION_ENV, None)
+    return state_home
+
+
+def plane_root(target: Path, state_home: Path | None = None) -> Path:
+    """Derive the plane path independently of the engine, so layout is asserted."""
+    home = Path(os.environ["XDG_STATE_HOME"]) if state_home is None else Path(state_home)
+    return home / "ccodex" / "activation" / hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+
+
+def pointer_name(root: Path) -> str:
+    """Derive the plane pointer's filename independently of the engine."""
+    return f"plane.{hashlib.sha256(str(root).encode('utf-8')).hexdigest()}.json"
+
+
+def plane_receipts(target: Path) -> Path:
+    return plane_root(target) / "receipts"
+
+
+def plane_transactions(target: Path) -> Path:
+    return plane_root(target) / "transactions"
+
+
+def select_repo_local_plane(case: unittest.TestCase) -> None:
+    set_environment(case, ap.PLANE_SELECTION_ENV, ap.PLANE_REPO_LOCAL)
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -57,6 +114,7 @@ class ActivationTransactionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.state_home = use_state_plane(self, Path(self.tmp.name))
         self.target = Path(self.tmp.name) / "repo"
         self.target.mkdir()
         init_repo(self.target)
@@ -98,7 +156,7 @@ class ActivationTransactionTests(unittest.TestCase):
             sys.executable, str(SCRIPT), "apply", "--plan", str(plan_path), "--manifest", str(manifest_path), "--grant", str(grant_path),
         ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="stage"))
         self.assertEqual(crashed.returncode, 97)
-        operation_dir = next((target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(target)).iterdir())
         operation, _ = ap.load_canonical_json(operation_dir / "operation.json", "operation")
         progress, _ = ap.load_canonical_json(operation_dir / "progress.json", "progress")
         self.assertIsNotNone(progress["staged_custody"])
@@ -159,7 +217,7 @@ class ActivationTransactionTests(unittest.TestCase):
             sys.executable, str(SCRIPT), "apply", "--plan", str(self.plan_file), "--manifest", str(self.manifest), "--grant", str(self.grant(plan)),
         ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="stage"))
         self.assertEqual(crashed.returncode, 97)
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         progress, _ = ap.load_canonical_json(operation_dir / "progress.json", "progress")
         progress["staged_identity"] = None
         progress["staged_custody"] = None
@@ -202,10 +260,10 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertFalse((self.target / "AGENTS.md").exists())
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         self.assertEqual((operation_dir / "stage" / "0000.payload").read_bytes(), b"EXTERNAL SUBSTITUTION\n")
         self.assertFalse((operation_dir / "commit.json").exists())
-        self.assertEqual(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json")), [])
+        self.assertEqual(list((plane_receipts(self.target)).glob("*.json")), [])
 
     def test_replace_publication_rejects_substituted_stage_and_restores_witness(self) -> None:
         output = self.target / "AGENTS.md"
@@ -237,10 +295,10 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(output.read_bytes(), b"# original\n")
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         self.assertEqual((operation_dir / "stage" / "0000.payload").read_bytes(), b"EXTERNAL SUBSTITUTION\n")
         self.assertFalse((operation_dir / "commit.json").exists())
-        self.assertEqual(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json")), [])
+        self.assertEqual(list((plane_receipts(self.target)).glob("*.json")), [])
 
     def test_status_final_observation_rejects_private_namespace_substitution(self) -> None:
         for component in ("operation", "operation.json", "stage", "backup", "discard"):
@@ -267,7 +325,7 @@ class ActivationTransactionTests(unittest.TestCase):
                 grant_path.write_bytes(ap.canonical_bytes(grant))
                 result, code = ap.apply_command(plan_path, manifest_path, grant_path)
                 self.assertEqual(code, 0, result)
-                operation_dir = next((target / ".agentic-sdlc" / "transactions").iterdir())
+                operation_dir = next((plane_transactions(target)).iterdir())
                 outside = root / f"outside-{component}"
                 outside.mkdir()
                 victim = outside / "victim"
@@ -308,6 +366,12 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(status["status"], "effect-unknown")
 
     def test_forged_root_anchor_remains_foreign_git_state(self) -> None:
+        """A root anchor is legacy state in the default plane, and it is still never hidden.
+
+        The classification moved from `foreign-state` to the named legacy refusal, because
+        the engine no longer writes anchors here at all; the Git-visibility assertion is
+        unchanged and is what stops a forged anchor from being suppressed.
+        """
         forged = self.target / (".agentic-sdlc.intent." + "0" * 32 + ".json")
         forged.write_text("{}\n")
         os.chmod(forged, 0o600)
@@ -317,8 +381,9 @@ class ActivationTransactionTests(unittest.TestCase):
 
         result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
 
-        self.assertEqual(code, 1, result)
-        self.assertEqual(result["status"], "foreign-state")
+        self.assertEqual(code, 3, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(ap.LEGACY_STATE_REASON, result["reasons"])
 
     def test_crash_after_publish_rolls_back_create_and_replace(self) -> None:
         for existing in (None, b"# original\n"):
@@ -373,7 +438,7 @@ class ActivationTransactionTests(unittest.TestCase):
                     self.assertEqual(output.read_bytes(), existing)
                 baseline = ap.capture_git_observation(target)
                 self.assertEqual(baseline["porcelain_v2_z_base64"], "")
-                transaction = target / ".agentic-sdlc" / "transactions" / operation["operation_id"]
+                transaction = plane_transactions(target) / operation["operation_id"]
                 self.assertEqual(list((transaction / "stage").iterdir()), [])
                 discard = transaction / "discard" / "0000.payload"
                 self.assertTrue(discard.is_file())
@@ -427,7 +492,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(result["status"], "committed")
         output = self.target / "AGENTS.md"
         self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o644)
-        receipts = list((self.target / ".agentic-sdlc" / "receipts").glob("*.json"))
+        receipts = list((plane_receipts(self.target)).glob("*.json"))
         self.assertEqual(len(receipts), 1)
 
         no_op = self.plan()
@@ -435,8 +500,17 @@ class ActivationTransactionTests(unittest.TestCase):
         result, code = self.apply(no_op)
         self.assertEqual(code, 0, result)
         self.assertEqual(result["status"], "no-op")
-        self.assertEqual(len(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json"))), 1)
-        self.assertEqual(len(list(self.target.glob(".agentic-sdlc.noop.*.json"))), 1)
+        self.assertEqual(len(list((plane_receipts(self.target)).glob("*.json"))), 1)
+        # The no-op audit is plane state for the same reason the receipt is: it records the
+        # consumed grant, the Git observation, and every existing receipt digest.
+        self.assertEqual(len(list(plane_root(self.target).glob("noop.*.json"))), 1)
+        # The target keeps exactly ONE machine-local file: the pointer naming the plane that
+        # holds the state, which is the only witness that survives renaming this checkout. No
+        # journal, no receipt, and no anchor is in the tree, which is what "the plane is not in
+        # the repository" means. Both applies name the same plane, so there is one pointer.
+        self.assertEqual(sorted(item.name for item in self.target.glob(".agentic-sdlc*")), [".agentic-sdlc"])
+        self.assertEqual(sorted(item.name for item in (self.target / ".agentic-sdlc").iterdir()), [pointer_name(plane_root(self.target))])
+        self.assertEqual(stat.S_IMODE((self.target / ".agentic-sdlc" / pointer_name(plane_root(self.target))).stat().st_mode), 0o600)
 
     def test_grant_replay_and_expiry_are_refused(self) -> None:
         plan = self.plan()
@@ -506,12 +580,17 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(result["status"], "committed")
 
         # An unexpected witness has no safe automatic outcome and is retained.
-        (self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"] / "stage" / "foreign").write_text("foreign")
+        (plane_transactions(self.target) / operation["operation_id"] / "stage" / "foreign").write_text("foreign")
         inspected, code = ap.recover_inspect_command(self.target)
         self.assertEqual(code, 4)
-        self.assertTrue((self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"] / "stage" / "foreign").exists())
+        self.assertTrue((plane_transactions(self.target) / operation["operation_id"] / "stage" / "foreign").exists())
 
-    def test_symlinked_private_receipts_are_refused_without_outside_write(self) -> None:
+    def test_symlinked_target_local_receipts_are_refused_without_outside_write(self) -> None:
+        """`receipts/` in the worktree is legacy state now, so the refusal is by NAME.
+
+        It is refused before any custody question is asked, which is the point: the engine
+        neither adopts nor follows it, and the symlink's destination stays untouched.
+        """
         plan = self.plan()
         outside = Path(self.tmp.name) / "outside"
         outside.mkdir()
@@ -521,8 +600,10 @@ class ActivationTransactionTests(unittest.TestCase):
 
         result, code = self.apply(plan)
 
-        self.assertEqual(code, 1, result)
-        self.assertIn(result["status"], {"foreign-state", "refused"})
+        self.assertEqual(code, 3, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(ap.LEGACY_STATE_REASON, result["reasons"])
+        self.assertTrue((state / "receipts").is_symlink())
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_generator_symlink_is_refused_before_any_marker_executes(self) -> None:
@@ -593,7 +674,7 @@ class ActivationTransactionTests(unittest.TestCase):
             sys.executable, str(SCRIPT), "apply", "--plan", str(self.plan_file), "--manifest", str(self.manifest), "--grant", str(self.grant(plan)),
         ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="publish"))
         self.assertEqual(crashed.returncode, 97)
-        operation_path = next((self.target / ".agentic-sdlc" / "transactions").glob("*/operation.json"))
+        operation_path = next((plane_transactions(self.target)).glob("*/operation.json"))
         operation, _ = ap.load_canonical_json(operation_path, "operation")
         operation["unexpected"] = True
         operation_path.write_bytes(ap.canonical_bytes(operation))
@@ -620,7 +701,7 @@ class ActivationTransactionTests(unittest.TestCase):
 
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
-        self.assertEqual(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json")), [])
+        self.assertEqual(list((plane_receipts(self.target)).glob("*.json")), [])
 
     def test_mount_boundary_is_refused_when_second_mount_is_available(self) -> None:
         mount_root = Path("/dev/shm")
@@ -640,7 +721,7 @@ class ActivationTransactionTests(unittest.TestCase):
             sys.executable, str(SCRIPT), "apply", "--plan", str(self.plan_file), "--manifest", str(self.manifest), "--grant", str(self.grant(plan)),
         ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="publish"))
         self.assertEqual(crashed.returncode, 97)
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         rollback = operation_dir / "rollback.json"
         rollback.write_bytes(ap.canonical_bytes({}))
         os.chmod(rollback, 0o600)
@@ -654,16 +735,23 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(inspected["status"], "effect-unknown")
         self.assertTrue((self.target / "AGENTS.md").exists())
 
-    def test_malformed_receipt_stays_visible_and_blocks_private_state_admission(self) -> None:
-        state = self.target / ".agentic-sdlc"
-        receipts = state / "receipts"
-        state.mkdir(mode=0o700)
-        receipts.mkdir(mode=0o700)
-        os.chmod(state, 0o700)
+    def test_malformed_plane_receipt_blocks_admission_and_never_dirties_the_worktree(self) -> None:
+        """A malformed receipt still blocks admission, and the plane never touches Git.
+
+        Before the plane it had to stay VISIBLE to Git; now the receipt is not in the tree
+        at all, so the invariant is the reverse one -- a foreign receipt cannot dirty the
+        worktree. The untracked decoy proves the observation channel really does report
+        untracked paths, so the absent `.agentic-sdlc/` record is a fact rather than a
+        silent `git status` failure.
+        """
+        receipts = plane_receipts(self.target)
+        receipts.mkdir(mode=0o700, parents=True)
+        os.chmod(receipts.parent, 0o700)
         os.chmod(receipts, 0o700)
         receipt = receipts / ("7" * 32 + ".json")
         receipt.write_bytes(ap.canonical_bytes({"schema": ap.RECEIPT_SCHEMA}))
         os.chmod(receipt, 0o600)
+        (self.target / "decoy-untracked.txt").write_text("decoy\n")
         environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         visible = subprocess.run([
             "git", "-C", str(self.target), "status", "--porcelain=v2", "-z",
@@ -671,7 +759,8 @@ class ActivationTransactionTests(unittest.TestCase):
 
         result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
 
-        self.assertIn(b"? .agentic-sdlc/\0", visible)
+        self.assertIn(b"? decoy-untracked.txt\0", visible)
+        self.assertNotIn(b".agentic-sdlc", visible)
         self.assertNotEqual(code, 0, result)
         self.assertIn(result["status"], {"foreign-state", "effect-unknown"})
 
@@ -729,9 +818,9 @@ class ActivationTransactionTests(unittest.TestCase):
 
                 self.assertEqual(code, 3, result)
                 self.assertEqual(result["status"], "recovery-required")
-                transactions = list((target / ".agentic-sdlc" / "transactions").iterdir())
+                transactions = list((plane_transactions(target)).iterdir())
                 self.assertEqual(len(transactions), 1)
-                self.assertEqual(list((target / ".agentic-sdlc" / "receipts").glob("*.json")), [])
+                self.assertEqual(list((plane_receipts(target)).glob("*.json")), [])
 
     def test_replace_publication_mismatch_restores_external_writer_and_preserves_witnesses(self) -> None:
         output = self.target / "AGENTS.md"
@@ -762,9 +851,9 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(output.read_bytes(), b"external publication\n")
-        operation = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation = next((plane_transactions(self.target)).iterdir())
         self.assertFalse((operation / "commit.json").exists())
-        self.assertEqual(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json")), [])
+        self.assertEqual(list((plane_receipts(self.target)).glob("*.json")), [])
         self.assertTrue((operation / "stage" / "0000.payload").exists())
 
     def test_replace_rollback_mismatch_restores_external_writer_without_rollback_record(self) -> None:
@@ -803,7 +892,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(output.read_bytes(), b"external rollback\n")
-        operation_dir = self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"]
+        operation_dir = plane_transactions(self.target) / operation["operation_id"]
         self.assertFalse((operation_dir / "rollback.json").exists())
         self.assertTrue((operation_dir / "backup" / "0000.payload").exists())
 
@@ -869,7 +958,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(victim.read_bytes(), b"outside cleanup victim\n")
-        self.assertEqual(len(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json"))), 1)
+        self.assertEqual(len(list((plane_receipts(self.target)).glob("*.json"))), 1)
 
     def test_receipt_publication_rechecks_live_product_before_terminal_success(self) -> None:
         plan = self.plan()
@@ -896,7 +985,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual((self.target / "AGENTS.md").read_bytes(), b"external bytes after receipt\n")
-        operation = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation = next((plane_transactions(self.target)).iterdir())
         progress, _ = ap.load_canonical_json(operation / "progress.json", "progress")
         self.assertNotEqual(progress["phase"], "committed")
 
@@ -933,7 +1022,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(output.read_bytes(), b"external create rollback\n")
-        operation_dir = self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"]
+        operation_dir = plane_transactions(self.target) / operation["operation_id"]
         self.assertFalse((operation_dir / "rollback.json").exists())
 
     def test_same_content_create_rollback_substitution_preserves_external_inode(self) -> None:
@@ -970,7 +1059,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(output.stat().st_ino, external_ino)
-        self.assertFalse((self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"] / "rollback.json").exists())
+        self.assertFalse((plane_transactions(self.target) / operation["operation_id"] / "rollback.json").exists())
 
     def test_same_content_replace_rollback_substitution_preserves_external_inode(self) -> None:
         output = self.target / "AGENTS.md"
@@ -1009,7 +1098,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(output.stat().st_ino, external_ino)
-        self.assertFalse((self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"] / "rollback.json").exists())
+        self.assertFalse((plane_transactions(self.target) / operation["operation_id"] / "rollback.json").exists())
 
     def test_receipt_directory_swap_during_finish_preserves_external_directory(self) -> None:
         plan = self.plan()
@@ -1020,7 +1109,7 @@ class ActivationTransactionTests(unittest.TestCase):
         inspected, inspect_code = ap.recover_inspect_command(self.target)
         self.assertEqual(inspect_code, 3, inspected)
         operation = inspected["operation"]
-        receipts = self.target / ".agentic-sdlc" / "receipts"
+        receipts = plane_receipts(self.target)
         outside = Path(self.tmp.name) / "outside-receipts"
         outside.mkdir()
         victim = outside / "receipt-victim"
@@ -1156,7 +1245,7 @@ class ActivationTransactionTests(unittest.TestCase):
 
                 self.assertEqual(code, 4, result)
                 self.assertEqual(result["status"], "effect-unknown")
-                self.assertEqual(list((target / ".agentic-sdlc" / "receipts").glob("*.json")), [])
+                self.assertEqual(list((plane_receipts(target)).glob("*.json")), [])
 
     def test_consumed_apply_grant_remains_recoverable_after_expiry(self) -> None:
         for decision in ("finish", "rollback"):
@@ -1185,7 +1274,7 @@ class ActivationTransactionTests(unittest.TestCase):
                     sys.executable, str(SCRIPT), "apply", "--plan", str(plan_path), "--manifest", str(manifest_path), "--grant", str(apply_path),
                 ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="publish"))
                 self.assertEqual(crashed.returncode, 97)
-                operation_dir = next((target / ".agentic-sdlc" / "transactions").iterdir())
+                operation_dir = next((plane_transactions(target)).iterdir())
                 operation, _ = ap.load_canonical_json(operation_dir / "operation.json", "operation")
                 advanced = issued + timedelta(minutes=6)
 
@@ -1244,7 +1333,7 @@ class ActivationTransactionTests(unittest.TestCase):
 
         self.assertTrue(injected)
         self.assertEqual(stale_code, 1, stale)
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         operation, _ = ap.load_canonical_json(operation_dir / "operation.json", "operation")
         backup = operation_dir / "backup" / "0000.payload"
         self.assertEqual(backup.stat().st_ino, external_inode)
@@ -1305,7 +1394,7 @@ class ActivationTransactionTests(unittest.TestCase):
                 grant_path.write_bytes(ap.canonical_bytes(grant))
                 applied, applied_code = ap.apply_command(plan_path, manifest_path, grant_path)
                 self.assertEqual(applied_code, 0, applied)
-                operation_dir = next((target / ".agentic-sdlc" / "transactions").iterdir())
+                operation_dir = next((plane_transactions(target)).iterdir())
                 replacement = root / f"replacement-{component}"
                 if component == "operation":
                     shutil.copytree(operation_dir, replacement, copy_function=shutil.copy2)
@@ -1372,7 +1461,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertTrue(injected)
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         backup = operation_dir / "backup" / "0000.payload"
         self.assertEqual(backup.stat().st_ino, external_inode)
         self.assertEqual(backup.read_bytes(), b"external backup substitution\n")
@@ -1391,10 +1480,10 @@ class ActivationTransactionTests(unittest.TestCase):
         result, code = self.apply(plan)
 
         self.assertEqual(code, 0, result)
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         operation, _ = ap.load_canonical_json(operation_dir / "operation.json", "operation")
         commit, _ = ap.load_canonical_json(operation_dir / "commit.json", "commit")
-        receipt, _ = ap.load_canonical_json(self.target / ".agentic-sdlc" / "receipts" / f"{operation['operation_id']}.json", "receipt")
+        receipt, _ = ap.load_canonical_json(plane_receipts(self.target) / f"{operation['operation_id']}.json", "receipt")
         progress, _ = ap.load_canonical_json(operation_dir / "progress.json", "progress")
         backup = operation_dir / "backup" / "0000.payload"
         _, identity = ap.read_stable_file(backup, "sealed backup")
@@ -1418,7 +1507,7 @@ class ActivationTransactionTests(unittest.TestCase):
         plan = self.plan()
         applied, applied_code = self.apply(plan)
         self.assertEqual(applied_code, 0, applied)
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         backup = operation_dir / "backup" / "0000.payload"
         replacement = Path(self.tmp.name) / "same-content-external-backup"
         replacement.write_bytes(backup.read_bytes())
@@ -1444,7 +1533,7 @@ class ActivationTransactionTests(unittest.TestCase):
         result, code = ap.recover_rollback_command(self.target, self._recovery_grant(operation, "rollback"))
 
         self.assertEqual(code, 0, result)
-        operation_dir = self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"]
+        operation_dir = plane_transactions(self.target) / operation["operation_id"]
         rollback, _ = ap.load_canonical_json(operation_dir / "rollback.json", "rollback")
         progress, _ = ap.load_canonical_json(operation_dir / "progress.json", "progress")
         discard = operation_dir / "discard" / "0000.payload"
@@ -1476,7 +1565,7 @@ class ActivationTransactionTests(unittest.TestCase):
         result, code = ap.recover_rollback_command(self.target, self._recovery_grant(operation, "rollback"))
 
         self.assertEqual(code, 0, result)
-        operation_dir = self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"]
+        operation_dir = plane_transactions(self.target) / operation["operation_id"]
         rollback, _ = ap.load_canonical_json(operation_dir / "rollback.json", "rollback")
         progress, _ = ap.load_canonical_json(operation_dir / "progress.json", "progress")
         discard = operation_dir / "discard" / "0000.payload"
@@ -1493,7 +1582,7 @@ class ActivationTransactionTests(unittest.TestCase):
 
     def test_progress_successor_substitution_preserves_temp_and_refuses_effect_unknown(self) -> None:
         plan = self.plan()
-        operation_dir = self.target / ".agentic-sdlc" / "transactions"
+        operation_dir = plane_transactions(self.target)
         external = Path(self.tmp.name) / "substituted-progress.json"
         external.write_bytes(b'{"substituted":true}\n')
         globals_ = ap.write_progress.__globals__
@@ -1573,7 +1662,7 @@ class ActivationTransactionTests(unittest.TestCase):
 
         self.assertEqual(second_code, 1, second)
         self.assertEqual(second["status"], "unsupported")
-        self.assertEqual(len(list((self.target / ".agentic-sdlc" / "transactions").iterdir())), 1)
+        self.assertEqual(len(list((plane_transactions(self.target)).iterdir())), 1)
         final_status, final_status_code = ap.status_command(self.target)
         self.assertEqual(final_status_code, 0, final_status)
         self.assertEqual(final_status["status"], "committed")
@@ -1620,7 +1709,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertEqual(result["status"], "effect-unknown")
         self.assertEqual(output.stat().st_ino, second_inode)
         self.assertEqual(output.read_bytes(), b"second finite replacement B\n")
-        discard = self.target / ".agentic-sdlc" / "transactions" / operation["operation_id"] / "discard" / "0000.payload"
+        discard = plane_transactions(self.target) / operation["operation_id"] / "discard" / "0000.payload"
         self.assertEqual(discard.stat().st_ino, first_inode)
         self.assertEqual(discard.read_bytes(), b"first finite replacement A\n")
         self.assertFalse((discard.parent.parent / "rollback.json").exists())
@@ -1655,12 +1744,12 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertTrue(injected)
         self.assertEqual(code, 4, result)
         self.assertEqual(result["status"], "effect-unknown")
-        operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+        operation_dir = next((plane_transactions(self.target)).iterdir())
         self.assertEqual((operation_dir / "progress.json").read_bytes(), expected_foreign["raw"])
         successor, _ = ap.load_canonical_json(operation_dir / "progress.json.next", "successor")
         self.assertEqual(successor["phase"], "staged")
         self.assertFalse((operation_dir / "commit.json").exists())
-        self.assertEqual(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json")), [])
+        self.assertEqual(list((plane_receipts(self.target)).glob("*.json")), [])
 
     def test_missing_or_malformed_active_progress_is_effect_unknown_without_consuming_recovery_grant(self) -> None:
         for tamper in ("missing", "malformed"):
@@ -1689,7 +1778,7 @@ class ActivationTransactionTests(unittest.TestCase):
                     sys.executable, str(SCRIPT), "apply", "--plan", str(plan_path), "--manifest", str(manifest_path), "--grant", str(apply_path),
                 ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="stage"))
                 self.assertEqual(crashed.returncode, 97)
-                operation_dir = next((target / ".agentic-sdlc" / "transactions").iterdir())
+                operation_dir = next((plane_transactions(target)).iterdir())
                 operation, _ = ap.load_canonical_json(operation_dir / "operation.json", "operation")
                 progress = operation_dir / "progress.json"
                 if tamper == "missing":
@@ -1729,7 +1818,7 @@ class ActivationTransactionTests(unittest.TestCase):
                 plan = self.plan()
                 result, code = self.apply(plan)
                 self.assertEqual(code, 0, result)
-                operation_dir = next((self.target / ".agentic-sdlc" / "transactions").iterdir())
+                operation_dir = next((plane_transactions(self.target)).iterdir())
                 progress_path = operation_dir / "progress.json"
                 progress, _ = ap.load_canonical_json(progress_path, "progress")
                 progress[field] = replacement
@@ -1776,7 +1865,7 @@ class ActivationTransactionTests(unittest.TestCase):
                     sys.executable, str(SCRIPT), "apply", "--plan", str(plan_path), "--manifest", str(manifest_path), "--grant", str(apply_path),
                 ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="publish"))
                 self.assertEqual(crashed.returncode, 97)
-                operation_dir = next((target / ".agentic-sdlc" / "transactions").iterdir())
+                operation_dir = next((plane_transactions(target)).iterdir())
                 operation, _ = ap.load_canonical_json(operation_dir / "operation.json", "operation")
                 recovery = {
                     "schema": ap.GRANT_SCHEMA, "grant_id": "d" * 32,
@@ -1833,6 +1922,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.state_home = use_state_plane(self, Path(self.tmp.name))
         self.target = Path(self.tmp.name) / "repo"
         self.target.mkdir()
         init_repo(self.target)
@@ -2030,6 +2120,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.state_home = use_state_plane(self, Path(self.tmp.name))
         self.target = Path(self.tmp.name) / "repo"
         self.target.mkdir()
         init_repo(self.target)
@@ -2045,12 +2136,19 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
         return state
 
     def _activate(self) -> Path:
-        """The already-activated shape whose refusal is the severity of this defect."""
-        state = self._state()
+        """The already-activated shape whose refusal is the severity of this defect.
+
+        Activation state lives in the ccodex plane now, so the activated shape is a plane
+        entry beside an untouched public `.agentic-sdlc/`. That is also the coexistence
+        this class exists to protect: the plane and the tracked public root are separate.
+        """
+        plane = plane_root(self.target)
+        plane.mkdir(mode=0o700, parents=True)
+        os.chmod(plane, 0o700)
         for name in ("receipts", "transactions"):
-            (state / name).mkdir(exist_ok=True)
-            os.chmod(state / name, 0o700)
-        return state
+            (plane / name).mkdir(exist_ok=True)
+            os.chmod(plane / name, 0o700)
+        return self._state()
 
     def _rightsize(self, *, mode: int = 0o755, file_mode: int = 0o644, name: str = "model-task-map.json") -> Path:
         state = self._state()
@@ -2308,6 +2406,1219 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         self.assertEqual(code, 0, result)
         self.assertEqual(result["status"], "planned")
+
+
+class ActivationStatePlaneTests(unittest.TestCase):
+    """Receipts and recovery journals live in the ccodex XDG state plane (ADR-0018).
+
+    A receipt binds owned paths, hashes, tool identities and trust state, which is
+    operator-plane data rather than repository data, so it belongs under
+    `${XDG_STATE_HOME:-~/.local/state}/ccodex/` keyed per physical clone or worktree
+    (`CONTEXT.md`, product-spec Implementation Decision 11, issues/09).
+
+    `.agentic-sdlc/` keeps exactly its tracked public surface -- `repo.toml` and
+    `rightsize/` -- and every other name in it stays foreign state.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.state_home = use_state_plane(self, self.root)
+        self.target = self.root / "repo"
+        self.target.mkdir()
+        init_repo(self.target)
+        self.manifest = self.root / "manifest.json"
+        self.manifest.write_bytes(ap.canonical_bytes(manifest()))
+
+    def _apply(self, target: Path | None = None) -> tuple[dict, int]:
+        target = self.target if target is None else target
+        planned, code = ap.plan_command(target, self.manifest, "AGENTS.md")
+        if code != 0:
+            return planned, code
+        plan = planned["plan"]
+        plan_path = self.root / "plan.json"
+        plan_path.write_bytes(ap.canonical_bytes(plan))
+        instant = now()
+        serial = getattr(self, "serial", 0)
+        self.serial = serial + 1
+        grant = {
+            "schema": ap.GRANT_SCHEMA, "grant_id": "3" * 31 + format(serial, "x"), "operation": "apply",
+            "target": {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino},
+            "plan_digest": ap.digest_record(plan), "operation_id": None, "operation_digest": None, "decision": None,
+            "issued_at": stamp(instant), "expires_at": stamp(instant + timedelta(minutes=5)),
+        }
+        grant_path = self.root / "grant.json"
+        grant_path.write_bytes(ap.canonical_bytes(grant))
+        return ap.apply_command(plan_path, self.manifest, grant_path)
+
+    def _legacy(self, *names: str) -> Path:
+        state = self.target / ".agentic-sdlc"
+        state.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(state, 0o700)
+        current = state
+        for name in names:
+            current = current / name
+            current.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(current, 0o700)
+        return current
+
+    def test_receipt_lands_in_the_xdg_plane_and_the_target_keeps_only_a_plane_pointer(self) -> None:
+        result, code = self._apply()
+
+        self.assertEqual(code, 0, result)
+        receipts = sorted(plane_receipts(self.target).glob("*.json"))
+        self.assertEqual(len(receipts), 1, receipts)
+        record, _ = ap.load_canonical_json(receipts[0], "receipt")
+        self.assertEqual(ap.digest_record(record), result["receipt_digest"])
+        self.assertTrue((plane_transactions(self.target) / result["operation_id"] / "progress.json").is_file())
+        # The receipt, the journal, and every anchor are outside the tree. What the tree keeps
+        # is exactly one pointer NAMING the plane -- machine-local, 0600, and the only reason a
+        # rename of this checkout cannot hide the receipt that already exists.
+        self.assertEqual(sorted(item.name for item in self.target.glob(".agentic-sdlc*")), [".agentic-sdlc"])
+        pointer = self.target / ".agentic-sdlc" / pointer_name(plane_root(self.target))
+        self.assertEqual(sorted(item.name for item in (self.target / ".agentic-sdlc").iterdir()), [pointer.name])
+        self.assertEqual(stat.S_IMODE(pointer.stat().st_mode), 0o600)
+        recorded, _ = ap.load_canonical_json(pointer, "plane pointer")
+        self.assertEqual(recorded, {"schema": ap.PLANE_POINTER_SCHEMA, "plane": str(plane_root(self.target))})
+        # POSITIVE CONTROL for the negative assertions above: the two names the tree must NOT
+        # hold are exactly the ones that exist in the plane instead.
+        self.assertTrue(plane_receipts(self.target).is_dir())
+        self.assertTrue(plane_transactions(self.target).is_dir())
+        for name in ("receipts", "transactions"):
+            self.assertFalse((self.target / ".agentic-sdlc" / name).exists())
+
+    def test_recovery_journal_survives_removal_of_the_checkout(self) -> None:
+        crashed = subprocess.run([
+            sys.executable, str(SCRIPT), "apply", "--plan", str(self._staged_plan()), "--manifest",
+            str(self.manifest), "--grant", str(self._staged_grant()),
+        ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="publish"))
+        self.assertEqual(crashed.returncode, 97)
+        journal = next(plane_transactions(self.target).iterdir())
+        self.assertTrue((journal / "progress.json").is_file())
+
+        shutil.rmtree(self.target)
+
+        self.assertFalse(self.target.exists())
+        self.assertTrue((journal / "progress.json").is_file())
+        progress, _ = ap.load_canonical_json(journal / "progress.json", "progress")
+        self.assertEqual(progress["phase"], "staged")
+
+    def _staged_plan(self) -> Path:
+        planned, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+        self.assertEqual(code, 0, planned)
+        self._plan_document = planned["plan"]
+        path = self.root / "staged-plan.json"
+        path.write_bytes(ap.canonical_bytes(planned["plan"]))
+        return path
+
+    def _staged_grant(self) -> Path:
+        instant = now()
+        grant = {
+            "schema": ap.GRANT_SCHEMA, "grant_id": "5" * 32, "operation": "apply",
+            "target": {"path": str(self.target), "root_dev": self.target.stat().st_dev, "root_ino": self.target.stat().st_ino},
+            "plan_digest": ap.digest_record(self._plan_document), "operation_id": None, "operation_digest": None,
+            "decision": None, "issued_at": stamp(instant), "expires_at": stamp(instant + timedelta(minutes=5)),
+        }
+        path = self.root / "staged-grant.json"
+        path.write_bytes(ap.canonical_bytes(grant))
+        return path
+
+    def test_plane_key_separates_sibling_checkouts_and_a_linked_worktree(self) -> None:
+        sibling = self.root / "sibling"
+        linked = self.target / ".worktrees" / "wave"
+        keys = {ap._plane_root(self.target), ap._plane_root(sibling), ap._plane_root(linked)}
+
+        self.assertEqual(len(keys), 3, keys)
+        self.assertEqual(ap._plane_root(self.target), plane_root(self.target))
+        self.assertTrue(str(ap._plane_root(self.target)).startswith(str(self.state_home / "ccodex" / "activation")))
+
+    def test_target_local_receipts_are_refused_by_name_and_preserved(self) -> None:
+        legacy = self._legacy("receipts") / ("4" * 32 + ".json")
+        legacy.write_bytes(ap.canonical_bytes({"schema": ap.RECEIPT_SCHEMA}))
+        os.chmod(legacy, 0o600)
+        self.assertTrue(legacy.is_file())
+
+        result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertEqual(code, 3, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(ap.LEGACY_STATE_REASON, result["reasons"])
+        self.assertTrue(legacy.is_file())
+
+    def test_target_local_transactions_are_refused_by_name_and_preserved(self) -> None:
+        legacy = self._legacy("transactions", "0" * 32)
+        self.assertTrue(legacy.is_dir())
+
+        result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertEqual(code, 3, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(ap.LEGACY_STATE_REASON, result["reasons"])
+        self.assertTrue(legacy.is_dir())
+
+    def test_legacy_root_anchor_and_audit_are_refused_by_name_and_preserved(self) -> None:
+        for name in (f".agentic-sdlc.intent.{'1' * 32}.json", f".agentic-sdlc.noop.{'2' * 32}.json"):
+            with self.subTest(name=name):
+                legacy = self.target / name
+                legacy.write_bytes(ap.canonical_bytes({"schema": "legacy"}))
+                os.chmod(legacy, 0o600)
+                try:
+                    result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+                    self.assertEqual(code, 3, result)
+                    self.assertEqual(result["status"], "refused")
+                    self.assertIn(ap.LEGACY_STATE_REASON, result["reasons"])
+                    self.assertTrue(legacy.is_file())
+                finally:
+                    legacy.unlink()
+
+    def test_repo_local_override_keeps_the_state_in_the_target(self) -> None:
+        select_repo_local_plane(self)
+
+        result, code = self._apply()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(list((self.target / ".agentic-sdlc" / "receipts").glob("*.json"))), 1)
+        self.assertFalse(plane_root(self.target).exists())
+
+    def test_unknown_plane_selection_is_a_grammar_refusal(self) -> None:
+        set_environment(self, ap.PLANE_SELECTION_ENV, "somewhere-else")
+
+        result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertEqual(code, 2, result)
+        self.assertEqual(result["status"], "refused")
+
+    def test_relative_state_home_is_refused_rather_than_silently_relocated(self) -> None:
+        set_environment(self, "XDG_STATE_HOME", "relative/state")
+
+        result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertEqual(code, 2, result)
+        self.assertEqual(result["status"], "refused")
+
+    def test_cross_device_plane_is_refused_before_any_effect(self) -> None:
+        mount_root = Path("/dev/shm")
+        if not mount_root.is_dir() or os.stat(mount_root).st_dev == os.stat(self.target).st_dev:
+            self.skipTest("no second mount fixture")
+        # Positive control: the identical operation commits on a same-device plane.
+        control, control_code = self._apply()
+        self.assertEqual(control_code, 0, control)
+        git(self.target, "add", "AGENTS.md")
+        git(self.target, "commit", "-m", "control")
+        with tempfile.TemporaryDirectory(dir=mount_root) as foreign:
+            set_environment(self, "XDG_STATE_HOME", foreign)
+
+            result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+            self.assertEqual(code, 3, result)
+            self.assertEqual(result["status"], "refused")
+            self.assertIn(ap.PLANE_DEVICE_REASON, result["reasons"])
+            self.assertEqual(list(Path(foreign).iterdir()), [])
+
+    def test_symlinked_plane_receipts_are_refused_without_writing_outside(self) -> None:
+        outside = self.root / "outside-plane-receipts"
+        outside.mkdir()
+        plane = plane_root(self.target)
+        plane.mkdir(mode=0o700, parents=True)
+        (plane / "receipts").symlink_to(outside, target_is_directory=True)
+        # Positive control: the decoy is reachable and the identical apply succeeds once
+        # the same name is an ordinary directory, so the refusal comes from the symlink
+        # guard rather than from a missing path.
+        result, code = self._apply()
+        self.assertNotEqual(code, 0, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unsafe private receipts", result["reasons"])
+        self.assertEqual(list(outside.iterdir()), [])
+
+        (plane / "receipts").unlink()
+        (plane / "receipts").mkdir(mode=0o700)
+        control, control_code = self._apply()
+
+        self.assertEqual(control_code, 0, control)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_symlinked_plane_root_is_refused_without_writing_outside(self) -> None:
+        """The key directory itself is a redirect vector, not only its children.
+
+        The refusal arrives from the ancestor walk rather than from the key directory's own
+        custody check, because `O_NOFOLLOW` on the walk sees the link first. Both guards
+        exist; this is the one that fires, and it fires before any effect.
+        """
+        outside = self.root / "outside-plane-root"
+        outside.mkdir()
+        plane = plane_root(self.target)
+        plane.parent.mkdir(mode=0o700, parents=True)
+        plane.symlink_to(outside, target_is_directory=True)
+
+        result, code = self._apply()
+
+        self.assertEqual(code, 3, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(ap.PLANE_ANCESTOR_REASON, result["reasons"])
+        self.assertEqual(list(outside.iterdir()), [])
+        # Positive control: the same operation commits once the name is a real directory.
+        plane.unlink()
+        control, control_code = self._apply()
+        self.assertEqual(control_code, 0, control)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_plane_root_requires_exact_0700(self) -> None:
+        """The engine is the only writer of the key directory, so it is held to 0700.
+
+        The tracked `.agentic-sdlc/` cannot be, because Git materializes it at the caller's
+        umask; nothing materializes this one but this engine.
+        """
+        result, code = self._apply()
+        self.assertEqual(code, 0, result)
+        plane = plane_root(self.target)
+        self.assertEqual(stat.S_IMODE(plane.stat().st_mode), 0o700)
+        os.chmod(plane, 0o750)
+
+        observed, observed_code = ap.status_command(self.target)
+
+        self.assertNotEqual(observed_code, 0, observed)
+        self.assertEqual(observed["status"], "foreign-state")
+        self.assertIn("unsafe private state plane", observed["reasons"])
+
+    def test_symlinked_plane_ancestor_is_refused_before_the_plane_exists(self) -> None:
+        """With no plane entry yet, the ancestor walk is the only guard there is.
+
+        Skipping a non-`ENOENT` ancestor instead of refusing it would compare the device of
+        a directory that is not the one `mkdir` would land in.
+        """
+        mount_root = Path("/dev/shm")
+        if not mount_root.is_dir() or os.stat(mount_root).st_dev == os.stat(self.target).st_dev:
+            self.skipTest("no second mount fixture")
+        with tempfile.TemporaryDirectory(dir=mount_root) as foreign:
+            self.state_home.mkdir(mode=0o700, parents=True)
+            (self.state_home / "ccodex").symlink_to(foreign, target_is_directory=True)
+            self.assertTrue((self.state_home / "ccodex").is_dir())
+
+            result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+            self.assertEqual(code, 3, result)
+            self.assertEqual(result["status"], "refused")
+            self.assertIn(ap.PLANE_ANCESTOR_REASON, result["reasons"])
+            self.assertEqual(list(Path(foreign).iterdir()), [])
+
+    def test_plane_receipts_keep_the_exact_0700_rule(self) -> None:
+        result, code = self._apply()
+        self.assertEqual(code, 0, result)
+        receipts = plane_receipts(self.target)
+        self.assertEqual(stat.S_IMODE(receipts.stat().st_mode), 0o700)
+        os.chmod(receipts, 0o750)
+
+        observed, observed_code = ap.status_command(self.target)
+
+        self.assertNotEqual(observed_code, 0, observed)
+        self.assertEqual(observed["status"], "foreign-state")
+
+    def test_shared_plane_ancestors_keep_their_operator_owned_modes(self) -> None:
+        self.state_home.mkdir(mode=0o755, parents=True)
+        (self.state_home / "unrelated").mkdir(mode=0o755)
+
+        result, code = self._apply()
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual(stat.S_IMODE(self.state_home.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((self.state_home / "unrelated").stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(plane_root(self.target).stat().st_mode), 0o700)
+
+    def test_forged_plane_anchor_is_refused(self) -> None:
+        """The anchor moved into the plane, so the forgery threat moved with it."""
+        plane = plane_root(self.target)
+        plane.mkdir(mode=0o700, parents=True)
+        forged = plane / f"intent.{'0' * 32}.json"
+        forged.write_text("{}\n")
+        os.chmod(forged, 0o600)
+
+        result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertNotEqual(code, 0, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("invalid activation anchor", result["reasons"])
+        self.assertTrue(forged.is_file())
+
+    def test_unknown_name_in_the_plane_root_is_refused(self) -> None:
+        """The plane root's whitelist is as closed as the repository root's."""
+        plane = plane_root(self.target)
+        plane.mkdir(mode=0o700, parents=True)
+        stray = plane / "stray.json"
+        stray.write_text("{}\n")
+
+        result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertNotEqual(code, 0, result)
+        self.assertEqual(result["status"], "foreign-state")
+        self.assertIn("unknown state plane path", result["reasons"])
+        self.assertTrue(stray.is_file())
+
+    def test_other_writable_plane_ancestor_is_refused(self) -> None:
+        """An other-writable shared ancestor can rename this key away and substitute one.
+
+        No mode on the key directory can prevent that, so EVERY shared ancestor is checked,
+        not just the innermost. Positive control: the same tree at 0700 reports committed.
+        """
+        control, control_code = self._apply()
+        self.assertEqual(control_code, 0, control)
+        ancestors = {
+            "state plane home": self.state_home,
+            "state plane ccodex": self.state_home / "ccodex",
+            "state plane activation": self.state_home / "ccodex" / "activation",
+        }
+        for label, ancestor in ancestors.items():
+            with self.subTest(ancestor=label):
+                clean, clean_code = ap.status_command(self.target)
+                self.assertEqual(clean_code, 0, clean)
+                self.assertEqual(clean["status"], "committed")
+                self.assertEqual(stat.S_IMODE(ancestor.stat().st_mode), 0o700)
+                os.chmod(ancestor, 0o757)
+                try:
+                    result, code = ap.status_command(self.target)
+
+                    self.assertNotEqual(code, 0, result)
+                    self.assertEqual(result["status"], "foreign-state")
+                    self.assertIn(f"unsafe {label}", result["reasons"])
+                finally:
+                    os.chmod(ancestor, 0o700)
+
+    def test_target_path_with_dot_dot_components_is_refused(self) -> None:
+        indirect = Path(str(self.target.parent) + "/./repo/../repo")
+
+        result, code = ap.plan_command(indirect, self.manifest, "AGENTS.md")
+
+        self.assertEqual(code, 2, result)
+        self.assertEqual(result["status"], "refused")
+
+
+class ActivationPlaneSwitchTests(unittest.TestCase):
+    """MOVING a plane must never turn an admitted partial effect into `inactive`.
+
+    Three spellings of the same move, all covered here, because two of them were found as
+    fresh instances of the first one's defect:
+
+      * SELECTION. The plane is chosen from the environment and no record can bind the plane
+        it was written into -- with the selection moved, the engine would never open that
+        record. Observed: crash an apply AFTER publication in the default plane, then select
+        `AGENTIC_SDLC_ACTIVATION_STATE=repo-local`, and the engine reported `inactive` with
+        `effect: none` at exit 0 over a published product with an unresolved journal, and
+        permitted a second apply. It was reachable through the engine's OWN documented remedy
+        for a cross-device plane, which is what made a recorded comment insufficient.
+      * RELOCATION. `XDG_STATE_HOME` or `HOME` moved to a directory the environment no longer
+        names is the same move without touching the selection.
+      * RENAME. The plane key is the digest of the absolute target path, so renaming the
+        checkout resolves a fresh empty plane while the old one still holds the journal for a
+        product that is still published in the renamed tree. This is the ordinary operation of
+        the three, and the first fix for the selection defect introduced it: it reported exit
+        0 `inactive` where the pre-plane engine had reported exit 4 `effect-unknown`, which
+        made a confident "nothing here" out of an honest "I cannot tell".
+
+    Two mechanisms close them, both before any journal or product effect.
+    `_assert_unselected_planes_empty` probes every plane this invocation did not select, and
+    `_record_plane_pointer` writes a machine-local pointer into the checkout -- before the
+    plane receives any record -- so that the plane the state went into stays exactly nameable
+    from inside the directory a rename moves.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.state_home = use_state_plane(self, self.root)
+        self.target = self.root / "repo"
+        self.target.mkdir()
+        init_repo(self.target)
+        self.manifest = self.root / "manifest.json"
+        self.manifest.write_bytes(ap.canonical_bytes(manifest()))
+        self.serial = 0
+
+    def _documents(self, target: Path | None = None) -> tuple[Path, Path]:
+        """Plan and grant for one apply, produced under the CURRENT plane selection."""
+        target = self.target if target is None else target
+        planned, code = ap.plan_command(target, self.manifest, "AGENTS.md")
+        self.assertEqual(code, 0, planned)
+        plan = planned["plan"]
+        serial = self.serial
+        self.serial = serial + 1
+        plan_path = self.root / f"plan-{serial}.json"
+        plan_path.write_bytes(ap.canonical_bytes(plan))
+        instant = now()
+        grant = {
+            "schema": ap.GRANT_SCHEMA, "grant_id": "7" * 31 + format(serial, "x"), "operation": "apply",
+            "target": {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino},
+            "plan_digest": ap.digest_record(plan), "operation_id": None, "operation_digest": None, "decision": None,
+            "issued_at": stamp(instant), "expires_at": stamp(instant + timedelta(minutes=5)),
+        }
+        grant_path = self.root / f"grant-{serial}.json"
+        grant_path.write_bytes(ap.canonical_bytes(grant))
+        return plan_path, grant_path
+
+    def _crash_after_publish(self, target: Path | None = None) -> None:
+        """Publish the product, then die before the commit witness lands."""
+        target = self.target if target is None else target
+        plan_path, grant_path = self._documents(target)
+        crashed = subprocess.run([
+            sys.executable, str(SCRIPT), "apply", "--plan", str(plan_path), "--manifest", str(self.manifest),
+            "--grant", str(grant_path),
+        ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="publish"))
+        self.assertEqual(crashed.returncode, 97)
+        self.assertTrue((target / "AGENTS.md").is_file(), "the product must be published for this to be a partial effect")
+
+    def _unresolved_journal(self, transactions: Path) -> Path:
+        journal = next(transactions.iterdir())
+        progress, _ = ap.load_canonical_json(journal / "progress.json", "progress")
+        self.assertEqual(progress["phase"], "staged", progress)
+        return journal
+
+    def _assert_still_unresolved(self, journal: Path) -> None:
+        progress, _ = ap.load_canonical_json(journal / "progress.json", "progress")
+        self.assertEqual(progress["phase"], "staged", progress)
+
+    def _finish(self, target: Path | None = None) -> tuple[dict, int]:
+        """Recover the transaction in the plane that actually owns it."""
+        target = self.target if target is None else target
+        inspected, code = ap.recover_inspect_command(target)
+        self.assertEqual(code, 3, inspected)
+        self.assertEqual(inspected["status"], "recovery-required")
+        instant = now()
+        recovery = {
+            "schema": ap.GRANT_SCHEMA, "grant_id": "b" * 32, "operation": "recover",
+            "target": {"path": str(target), "root_dev": target.stat().st_dev, "root_ino": target.stat().st_ino},
+            "plan_digest": None, "operation_id": inspected["operation_id"],
+            "operation_digest": inspected["operation_digest"], "decision": "finish",
+            "issued_at": stamp(instant), "expires_at": stamp(instant + timedelta(minutes=5)),
+        }
+        path = self.root / "recovery.json"
+        path.write_bytes(ap.canonical_bytes(recovery))
+        return ap.recover_finish_command(target, path)
+
+    def _assert_recorded_plane_refusal(self, result: dict, code: int) -> None:
+        """A plane no environment variable names any more: this checkout moved."""
+        self.assertEqual(code, 3, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertEqual(result["effect"], "none")
+        self.assertEqual(result["reasons"], [ap.RECORDED_PLANE_REASON], result)
+
+    def _assert_unselected_plane_refusal(self, result: dict, code: int, label: str) -> None:
+        self.assertEqual(code, 3, result)
+        self.assertEqual(result["status"], "refused")
+        self.assertEqual(result["effect"], "none")
+        self.assertEqual(result["reasons"], [f"{ap.UNSELECTED_PLANE_REASON}: {label}"], result)
+
+    def test_repo_local_selection_refuses_while_the_default_plane_holds_an_unresolved_journal(self) -> None:
+        """The exact reported reproduction, with its own before/after positive control."""
+        # POSITIVE CONTROL, on this same target under this same selection: with the default
+        # plane empty the repo-local selection reports `inactive` at exit 0. The refusals
+        # below therefore come from the default plane's state, not from the selection being
+        # broken or from a missing path.
+        select_repo_local_plane(self)
+        control, control_code = ap.recover_inspect_command(self.target)
+        self.assertEqual(control_code, 0, control)
+        self.assertEqual(control["status"], "inactive")
+        self.assertEqual(control["effect"], "none")
+
+        set_environment(self, ap.PLANE_SELECTION_ENV, None)
+        self._crash_after_publish()
+        journal = self._unresolved_journal(plane_transactions(self.target))
+
+        select_repo_local_plane(self)
+        inspected, inspect_code = ap.recover_inspect_command(self.target)
+        observed, status_code = ap.status_command(self.target)
+        planned, plan_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self._assert_unselected_plane_refusal(inspected, inspect_code, ap.PLANE_LABEL_DEFAULT)
+        self._assert_unselected_plane_refusal(observed, status_code, ap.PLANE_LABEL_DEFAULT)
+        self._assert_unselected_plane_refusal(planned, plan_code, ap.PLANE_LABEL_DEFAULT)
+        # A refused plan cannot become a second apply, and nothing was written into the newly
+        # selected repo-local plane: no `receipts/`, no `transactions/`, no root-level anchor or
+        # audit. The state root itself exists, holding only the pointer the crashed DEFAULT-plane
+        # apply wrote before it created its plane -- which is what makes the refusal above
+        # survive a rename, and is asserted exactly rather than by absence.
+        self.assertEqual(sorted(item.name for item in self.target.glob(".agentic-sdlc*")), [".agentic-sdlc"])
+        self.assertEqual(sorted(item.name for item in (self.target / ".agentic-sdlc").iterdir()), [pointer_name(plane_root(self.target))])
+        self._assert_still_unresolved(journal)
+
+        # And the operator is not stranded: the plane that owns the journal still recovers.
+        set_environment(self, ap.PLANE_SELECTION_ENV, None)
+        completed, finish_code = self._finish()
+
+        self.assertEqual(finish_code, 0, completed)
+        self.assertEqual(completed["status"], "committed")
+
+    def test_default_selection_refuses_a_repo_local_crash_journal_before_any_effect(self) -> None:
+        """The reverse direction, demonstrated against a real crashed journal.
+
+        This one is refused by `LEGACY_STATE_REASON` from `_validate_repository_state_root`,
+        which runs first and names the same surface. Asserting the reverse direction here
+        keeps the property under test end to end rather than trusting which of the two
+        guards happens to fire.
+        """
+        select_repo_local_plane(self)
+        self._crash_after_publish()
+        journal = self._unresolved_journal(self.target / ".agentic-sdlc" / "transactions")
+
+        set_environment(self, ap.PLANE_SELECTION_ENV, None)
+        inspected, inspect_code = ap.recover_inspect_command(self.target)
+        observed, status_code = ap.status_command(self.target)
+        planned, plan_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        for result, code in ((inspected, inspect_code), (observed, status_code), (planned, plan_code)):
+            self.assertEqual(code, 3, result)
+            self.assertEqual(result["status"], "refused")
+            self.assertEqual(result["effect"], "none")
+            self.assertEqual(result["reasons"], [ap.LEGACY_STATE_REASON], result)
+        self.assertFalse(plane_root(self.target).exists())
+        self._assert_still_unresolved(journal)
+
+        select_repo_local_plane(self)
+        completed, finish_code = self._finish()
+
+        self.assertEqual(finish_code, 0, completed)
+        self.assertEqual(completed["status"], "committed")
+
+    def test_setting_the_state_home_refuses_while_the_fallback_plane_holds_state(self) -> None:
+        """Setting `XDG_STATE_HOME` after a plane was written under the fallback is a switch.
+
+        `$HOME/.local/state` is the one other plane the ENVIRONMENT can name exactly, so it is
+        probed even when the variable is set. A state home moved to a THIRD directory, which
+        neither variable names any more, is covered separately by the pointer the checkout
+        itself carries -- see
+        `test_a_state_home_moved_to_a_third_directory_is_still_named_by_the_pointer`.
+        """
+        home = self.root / "home"
+        (home / ".local" / "state").mkdir(parents=True)
+        set_environment(self, "HOME", str(home))
+        # POSITIVE CONTROL: with the fallback plane empty, this exact selection reports
+        # `inactive` at exit 0.
+        control, control_code = ap.recover_inspect_command(self.target)
+        self.assertEqual(control_code, 0, control)
+        self.assertEqual(control["status"], "inactive")
+
+        set_environment(self, "XDG_STATE_HOME", None)
+        self._crash_after_publish()
+        fallback = plane_root(self.target, home / ".local" / "state")
+        journal = self._unresolved_journal(fallback / "transactions")
+
+        set_environment(self, "XDG_STATE_HOME", str(self.state_home))
+        inspected, inspect_code = ap.recover_inspect_command(self.target)
+
+        self._assert_unselected_plane_refusal(inspected, inspect_code, ap.PLANE_LABEL_DEFAULT)
+        self.assertFalse(plane_root(self.target, self.state_home).exists())
+        self._assert_still_unresolved(journal)
+
+    def test_a_no_op_audit_alone_is_state_a_plane_switch_cannot_step_over(self) -> None:
+        """A plane can hold state with no `receipts/` and no `transactions/` at all.
+
+        `_apply_noop` creates only the key directory and one `noop.<id>.json`, and an apply
+        interrupted at the `setup` failpoint leaves only `intent.<id>.json`. Probing just the
+        two directories would step over both. The audit is the grant ledger: `scan_grant_ledger`
+        reads only the SELECTED plane's audits, so a switch would let an already-consumed
+        procedural grant be replayed.
+        """
+        # The product already matches the manifest render, so this apply is a no-op audit.
+        plan_path, grant_path = self._documents()
+        published, published_code = ap.apply_command(plan_path, self.manifest, grant_path)
+        self.assertEqual(published_code, 0, published)
+        git(self.target, "add", "AGENTS.md")
+        git(self.target, "commit", "-m", "product")
+        plan_path, grant_path = self._documents()
+        audited, audited_code = ap.apply_command(plan_path, self.manifest, grant_path)
+        self.assertEqual(audited_code, 0, audited)
+        self.assertEqual(audited["status"], "no-op")
+        # Reduce the plane to audit-only state, so the directory probe cannot see it.
+        plane = plane_root(self.target)
+        shutil.rmtree(plane / "receipts")
+        shutil.rmtree(plane / "transactions")
+        audits = sorted(item.name for item in plane.iterdir())
+        self.assertEqual(audits, [f"noop.{audited['operation_id']}.json"], audits)
+
+        select_repo_local_plane(self)
+        observed, status_code = ap.status_command(self.target)
+
+        self._assert_unselected_plane_refusal(observed, status_code, ap.PLANE_LABEL_DEFAULT)
+
+        # A RENAME must not step over it either, and for the same grant-ledger reason. The plane
+        # holds one audit and no directories at all, so this is also the case that shows the probe
+        # does not depend on `receipts/` or `transactions/` being there to look at.
+        set_environment(self, ap.PLANE_SELECTION_ENV, None)
+        renamed = self.root / "repo-renamed"
+        self.target.rename(renamed)
+        try:
+            after_rename, after_code = ap.status_command(renamed)
+            planned, plan_code = ap.plan_command(renamed, self.manifest, "AGENTS.md")
+        finally:
+            renamed.rename(self.target)
+
+        self._assert_recorded_plane_refusal(after_rename, after_code)
+        self._assert_recorded_plane_refusal(planned, plan_code)
+        self.assertEqual(sorted(item.name for item in plane.iterdir()), audits)
+
+    def test_the_probe_never_claims_no_effect_over_a_published_product(self) -> None:
+        """The guard is an admission check, and it must not become a post-publish refusal.
+
+        `write_commit` captures the poststate through `capture_git_observation`, which reaches
+        `validate_internal_status_records` -> `_validate_private_state` AFTER the product is
+        published. A refusal raised from there is reported by `apply_command` as `refused`
+        with `effect: none` over published bytes -- the exact class this project keeps
+        relearning. That is already MEASURABLY true of `LEGACY_STATE_REASON` at the same site
+        and is a separate pre-existing defect at `apply_command`'s handler; this test pins
+        that the unselected-plane probe does not join it.
+
+        The two halves are each other's control: the identical injection BEFORE the apply is
+        a clean exit-3 refusal, and DURING the apply it is not a refusal at all.
+        """
+        home = self.root / "home"
+        (home / ".local" / "state").mkdir(parents=True)
+        set_environment(self, "HOME", str(home))
+        fallback = plane_root(self.target, home / ".local" / "state")
+
+        def plant_fallback_state() -> None:
+            (fallback / "transactions").mkdir(mode=0o700, parents=True)
+
+        # HALF ONE, the control: planted before admission, this is a clean refusal.
+        plant_fallback_state()
+        refused, refused_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+        self._assert_unselected_plane_refusal(refused, refused_code, ap.PLANE_LABEL_DEFAULT)
+        shutil.rmtree(fallback)
+
+        # HALF TWO: the same state appears between publication and the commit witness.
+        plan_path, grant_path = self._documents()
+        original = ap.write_commit
+        planner_globals = original.__globals__
+
+        def inject(operation_dir: Path, operation: dict, poststate: dict, target: Path) -> dict:
+            plant_fallback_state()
+            return original(operation_dir, operation, poststate, target)
+
+        planner_globals["write_commit"] = inject
+        try:
+            result, code = ap.apply_command(plan_path, self.manifest, grant_path)
+        finally:
+            planner_globals["write_commit"] = original
+
+        self.assertTrue((self.target / "AGENTS.md").is_file())
+        self.assertTrue((fallback / "transactions").is_dir(), "the injection must have happened")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["status"], "committed")
+        self.assertEqual(result["effect"], "committed")
+
+    def _pointer(self, target: Path, root: Path | None = None) -> Path:
+        return target / ".agentic-sdlc" / pointer_name(plane_root(target) if root is None else root)
+
+    def _all_surfaces(self, target: Path) -> list[tuple[dict, int]]:
+        """Every read surface plus the one that gates a second apply."""
+        return [
+            ap.status_command(target),
+            ap.recover_inspect_command(target),
+            ap.plan_command(target, self.manifest, "AGENTS.md"),
+        ]
+
+    def test_renaming_the_checkout_refuses_instead_of_reporting_inactive(self) -> None:
+        """THE REPORTED REGRESSION. A rename moved the plane out of reach of the key.
+
+        The plane key is the digest of the absolute target path, so after a rename the engine
+        resolved a fresh, empty plane. It reported `inactive` with `effect: none` at exit 0 --
+        MEASURED, on all three surfaces -- and admitted a second apply that committed over a
+        published product whose first journal was still unresolved. The pre-plane engine
+        answered exit 4 `effect-unknown` for the same rename, because the journal travelled
+        inside the tree and failed `_bind_operation_target`.
+
+        The pointer the checkout carries is what makes the old plane nameable again. Both
+        controls matter: a renamed checkout with NOTHING in its plane still reports `inactive`
+        at exit 0, and the plane that owns the journal still recovers once the name is back.
+        """
+        # POSITIVE CONTROL ONE: renaming a checkout that has no activation state at all is not
+        # a refusal. Without this, a guard that refuses every renamed target would pass.
+        clean = self.root / "clean-renamed"
+        self.target.rename(clean)
+        for result, code in self._all_surfaces(clean):
+            self.assertEqual(code, 0, result)
+            self.assertIn(result["status"], {"inactive", "planned"})
+        clean.rename(self.target)
+
+        self._crash_after_publish()
+        journal = self._unresolved_journal(plane_transactions(self.target))
+        original_plane = plane_root(self.target)
+        self.assertTrue(self._pointer(self.target).is_file(), "the crash must have left a pointer to its plane")
+
+        renamed = self.root / "repo-renamed"
+        self.target.rename(renamed)
+
+        self.assertTrue((renamed / "AGENTS.md").is_file(), "the product travels with the rename")
+        self.assertNotEqual(plane_root(renamed), original_plane, "the rename must change the key")
+        self.assertFalse(plane_root(renamed).exists(), "the new key names nothing")
+        for result, code in self._all_surfaces(renamed):
+            # Its own reason, not the selection one: no environment variable names this plane
+            # any more, so the refusal has to tell the operator that the checkout moved rather
+            # than that a selection changed.
+            self._assert_recorded_plane_refusal(result, code)
+        # No plan means no second apply, and the orphaned journal is untouched and still owned
+        # by the plane it was written into.
+        self._assert_still_unresolved(journal)
+        self.assertEqual(sorted(item.name for item in (renamed / ".agentic-sdlc").iterdir()), [pointer_name(original_plane)])
+
+        # POSITIVE CONTROL TWO: recovery stays reachable. Renaming back restores the key, and
+        # the transaction finishes in the plane that owns it.
+        renamed.rename(self.target)
+        completed, finish_code = self._finish()
+
+        self.assertEqual(finish_code, 0, completed)
+        self.assertEqual(completed["status"], "committed")
+
+    def test_a_rename_cannot_step_over_a_plane_holding_only_a_setup_anchor(self) -> None:
+        """The pointer lands BEFORE the plane, so no plane record can outlive its name.
+
+        Crashing at the `setup` failpoint leaves a plane whose only content is
+        `intent.<id>.json` -- no `receipts/`, no `transactions/`, nothing published. Writing the
+        pointer any later than the plane root would leave that anchor nameless after a rename,
+        and this is the input that distinguishes the two orders.
+        """
+        plan_path, grant_path = self._documents()
+        crashed = subprocess.run([
+            sys.executable, str(SCRIPT), "apply", "--plan", str(plan_path), "--manifest", str(self.manifest),
+            "--grant", str(grant_path),
+        ], env=dict(os.environ, AGENTIC_SDLC_FAILPOINT="setup"))
+        self.assertEqual(crashed.returncode, 97)
+        original_plane = plane_root(self.target)
+        anchors = sorted(item.name for item in original_plane.iterdir())
+        self.assertEqual(len(anchors), 1, anchors)
+        self.assertTrue(anchors[0].startswith("intent."), anchors)
+        self.assertFalse((self.target / "AGENTS.md").exists(), "nothing is published at the setup failpoint")
+
+        renamed = self.root / "repo-renamed"
+        self.target.rename(renamed)
+        observed, status_code = ap.status_command(renamed)
+
+        self._assert_recorded_plane_refusal(observed, status_code)
+        self.assertEqual(sorted(item.name for item in original_plane.iterdir()), anchors)
+
+    def test_a_state_home_moved_to_a_third_directory_is_still_named_by_the_pointer(self) -> None:
+        """The residual gap the previous round left open, closed and demonstrated.
+
+        Neither `XDG_STATE_HOME` nor `$HOME` names the old plane any more, so the environment
+        alone cannot describe it. The pointer inside the checkout can, exactly.
+        """
+        third = self.root / "third-state-home"
+        third.mkdir()
+        # POSITIVE CONTROL: with the original plane empty, this exact relocation is `inactive`.
+        set_environment(self, "XDG_STATE_HOME", str(third))
+        control, control_code = ap.status_command(self.target)
+        self.assertEqual(control_code, 0, control)
+        self.assertEqual(control["status"], "inactive")
+
+        set_environment(self, "XDG_STATE_HOME", str(self.state_home))
+        self._crash_after_publish()
+        journal = self._unresolved_journal(plane_transactions(self.target))
+        original_plane = plane_root(self.target, self.state_home)
+
+        set_environment(self, "XDG_STATE_HOME", str(third))
+        observed, status_code = ap.status_command(self.target)
+
+        self._assert_recorded_plane_refusal(observed, status_code)
+        self.assertFalse(plane_root(self.target, third).exists())
+        self.assertTrue(self._pointer(self.target, original_plane).is_file())
+        self._assert_still_unresolved(journal)
+
+    def _crash_around_the_plane_root(self, *, after: bool) -> None:
+        """Crash an apply in the window between the pointer and the plane root, either side.
+
+        `after=False` leaves a pointer naming a root that does not exist; `after=True` leaves
+        the same pointer naming a root that exists and is EMPTY. Those are the two sides of the
+        distinction this class now draws, and the injection is the only way to reach them
+        because the pointer is deliberately written before the plane root.
+        """
+        plan_path, grant_path = self._documents()
+        original = ap._mkdir_plane_root
+        planner_globals = original.__globals__
+
+        def die_around_the_plane(plane, root, target_fd):
+            if after:
+                os.close(original(plane, root, target_fd))
+            raise ap.ActivationError("refused", "injected crash at the plane root", 3)
+
+        planner_globals["_mkdir_plane_root"] = die_around_the_plane
+        try:
+            refused, refused_code = ap.apply_command(plan_path, self.manifest, grant_path)
+        finally:
+            planner_globals["_mkdir_plane_root"] = original
+
+        self.assertEqual(refused_code, 3, refused)
+        self.assertTrue(self._pointer(self.target).is_file(), "the pointer must precede the plane root")
+        self.assertEqual(plane_root(self.target).exists(), after)
+        self.assertFalse((self.target / "AGENTS.md").exists())
+
+    def _assert_unresolved_plane_effect_unknown(self, result: dict, code: int) -> None:
+        """A plane this checkout RECORDED that nothing can resolve: cannot tell, not `inactive`."""
+        self.assertEqual(code, 4, result)
+        self.assertEqual(result["status"], "effect-unknown")
+        self.assertEqual(result["reasons"], [ap.RECORDED_PLANE_UNRESOLVED_REASON], result)
+        # `effect` names the effect of THIS command, so `status` and `recover inspect` widen it to
+        # `effect_unknown` while `plan` and `apply` report `none` from their shared handler. Both
+        # are true here -- neither produced an effect -- and the pre-existing difference in shape
+        # is asserted as the closed set it is rather than papered over with one expected value.
+        self.assertIn(result["effect"], {"effect_unknown", "none"}, result)
+
+    def test_a_pointer_to_a_plane_that_never_materialized_does_not_strand_the_target(self) -> None:
+        """A pointer is not itself evidence of state: an empty plane probes clean.
+
+        The pointer is written before the plane root, so a crash in that window leaves a
+        pointer naming a plane that does not exist. Nothing was published and no journal was
+        written, so `inactive` is the honest answer and the next apply must be admitted -- the
+        opposite failure to the one this class's other cases fixed, and the reason the probe
+        reads the plane instead of trusting the pointer's existence.
+
+        The scope of that is exactly "where the pointer's root is the one this invocation also
+        resolves". Once the checkout MOVES, the same pointer names a root nothing can resolve,
+        and the engine can no longer prove the plane was never written -- see
+        `test_a_recorded_plane_root_that_cannot_be_resolved_is_effect_unknown_not_inactive`,
+        which is the other half of this input.
+        """
+        self._crash_around_the_plane_root(after=False)
+
+        observed, status_code = ap.status_command(self.target)
+        plan_path, grant_path = self._documents()
+        applied, applied_code = ap.apply_command(plan_path, self.manifest, grant_path)
+
+        self.assertEqual(status_code, 0, observed)
+        self.assertEqual(observed["status"], "inactive")
+        self.assertEqual(applied_code, 0, applied)
+        self.assertEqual(applied["status"], "committed")
+
+    def test_a_recorded_plane_root_that_resolves_and_is_empty_stays_inactive(self) -> None:
+        """THE SIDE THAT MUST NOT MOVE. A resolvable empty recorded root is provably absent.
+
+        The crash window between the plane root and its first record leaves an EXISTING empty
+        key directory. After a rename no environment variable names it, so it is reached only
+        through the pointer -- and the engine can still list it and see that nothing is there.
+        That is a proof of absence, so it stays `inactive` at exit 0 and the retry is admitted.
+
+        Its own control is the assertion that the root exists and is empty: without it, this
+        test would pass for the wrong reason the moment the fixture stopped creating the root.
+        """
+        self._crash_around_the_plane_root(after=True)
+        recorded = plane_root(self.target)
+        self.assertEqual(sorted(item.name for item in recorded.iterdir()), [], "the recorded root must resolve and be empty")
+
+        renamed = self.root / "repo-renamed"
+        self.target.rename(renamed)
+        try:
+            surfaces = self._all_surfaces(renamed)
+        finally:
+            renamed.rename(self.target)
+        plan_path, grant_path = self._documents()
+        applied, applied_code = ap.apply_command(plan_path, self.manifest, grant_path)
+
+        for result, code in surfaces:
+            self.assertEqual(code, 0, result)
+            self.assertIn(result["status"], {"inactive", "planned"})
+        self.assertEqual(applied_code, 0, applied)
+        self.assertEqual(applied["status"], "committed")
+
+    def test_a_recorded_plane_root_that_cannot_be_resolved_is_effect_unknown_not_inactive(self) -> None:
+        """THE REPORTED CASE, and it is the ordinary arrangement rather than an exotic one.
+
+        ONE `mv` of a home directory holding BOTH the checkout and the state plane -- a checkout
+        under `$HOME` and the plane under `$HOME/.local/state`, which is the common layout. The
+        pointer's recorded ABSOLUTE root then names a path that no longer exists, while the
+        state itself moved with the home into a root the new key does not name and no pointer
+        records. MEASURED before the fix: `inspect`, `status`, and `plan` all reported
+        `inactive`/`planned` with `effect: none` at exit 0, and a second apply was admitted over
+        the published product while the first journal stayed unresolved. HEAD answered exit 4
+        `effect-unknown` for the same operation, and that was the honest answer.
+
+        Both controls are here, because a change that makes everything `effect-unknown` is not a
+        fix: a never-activated checkout carries no pointer and is still `inactive` at exit 0
+        after the same move, and moving the home BACK lets `recover finish` complete.
+        """
+        home = self.root / "home"
+        (home / ".local" / "state").mkdir(parents=True)
+        set_environment(self, "HOME", str(home))
+        set_environment(self, "XDG_STATE_HOME", None)
+        moved_home = self.root / "moved-home"
+
+        # POSITIVE CONTROL ONE: no pointer, so the identical move is not `effect-unknown`.
+        clean = home / "clean"
+        clean.mkdir()
+        init_repo(clean)
+        home.rename(moved_home)
+        set_environment(self, "HOME", str(moved_home))
+        for result, code in self._all_surfaces(moved_home / "clean"):
+            self.assertEqual(code, 0, result)
+            self.assertIn(result["status"], {"inactive", "planned"})
+        moved_home.rename(home)
+        set_environment(self, "HOME", str(home))
+
+        target = home / "repo"
+        target.mkdir()
+        init_repo(target)
+        # Captured BEFORE the crash, because afterwards no surface will hand out a plan. Rewriting
+        # its paths gives the plan the moved location would have produced -- `mv` preserves
+        # dev/ino -- so `apply` can be driven directly rather than only shown to be unreachable.
+        stale_plan, _ = self._documents(target)
+        self._crash_after_publish(target)
+        recorded = plane_root(target, home / ".local" / "state")
+        journal = self._unresolved_journal(recorded / "transactions")
+        self.assertTrue(self._pointer(target, recorded).is_file())
+
+        home.rename(moved_home)
+        set_environment(self, "HOME", str(moved_home))
+        moved = moved_home / "repo"
+        moved_journal = moved_home / ".local" / "state" / "ccodex" / "activation" / recorded.name / "transactions" / journal.name
+
+        self.assertTrue((moved / "AGENTS.md").is_file(), "the product travels with the home")
+        self.assertFalse(recorded.exists(), "the recorded plane root no longer resolves")
+        self.assertFalse(plane_root(moved, moved_home / ".local" / "state").exists(), "the new key names nothing")
+        self.assertTrue((moved_journal / "progress.json").is_file(), "the journal moved with the home, into a root nothing names")
+        for result, code in self._all_surfaces(moved):
+            self._assert_unresolved_plane_effect_unknown(result, code)
+        # And `apply` itself, driven with a plan the moved location would accept. The grant path
+        # below does not exist, which is the point: the answer lands before any grant is read, so
+        # no fresh effect is admitted on any input.
+        moved_plan = self.root / "moved-plan.json"
+        moved_plan.write_bytes(stale_plan.read_bytes().replace(str(home).encode(), str(moved_home).encode()))
+        attempted, attempted_code = ap.apply_command(moved_plan, self.manifest, self.root / "no-such-grant.json")
+        self._assert_unresolved_plane_effect_unknown(attempted, attempted_code)
+        self.assertFalse(plane_root(moved, moved_home / ".local" / "state").exists())
+        self._assert_still_unresolved(moved_journal)
+
+        # POSITIVE CONTROL TWO: the operator is not stranded. Moving the home back restores both
+        # halves at once, and the transaction finishes in the plane that owns it.
+        moved_home.rename(home)
+        set_environment(self, "HOME", str(home))
+        completed, finish_code = self._finish(target)
+
+        self.assertEqual(finish_code, 0, completed)
+        self.assertEqual(completed["status"], "committed")
+
+    def test_an_unreadable_candidate_plane_is_refused_rather_than_read_as_empty(self) -> None:
+        """"Cannot tell" is not absence. `Path.exists()` would have said it was.
+
+        The probe walks planes the operator owns, and a directory it cannot read is the exact
+        state that must not become `inactive`. Two fixtures, because an unreadable plane root and
+        an unreadable ANCESTOR of one fail at different points and a reader should not have to
+        assume the second follows from the first:
+
+          * the plane root at 0o100: traversable but not readable, so the listing itself fails;
+          * `ccodex` at 0o000: neither, so the listing fails one level higher up.
+
+        Positive control: the same trees readable are `inactive` at exit 0. A plane root that
+        exists and IS readable and empty stays `inactive` too -- see
+        `test_a_pointer_to_a_plane_that_never_materialized_does_not_strand_the_target` -- so this
+        is a refusal about not being able to look, never about the plane being empty.
+        """
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the permission bits this case depends on")
+        home = self.root / "home"
+        fallback_home = home / ".local" / "state"
+        fallback_plane = plane_root(self.target, fallback_home)
+        fallback_plane.mkdir(mode=0o700, parents=True)
+        set_environment(self, "HOME", str(home))
+
+        for label, node, mode in (("plane root", fallback_plane, 0o100), ("ancestor", fallback_home / "ccodex", 0o000)):
+            with self.subTest(fixture=label):
+                control, control_code = ap.status_command(self.target)
+                self.assertEqual(control_code, 0, control)
+                self.assertEqual(control["status"], "inactive")
+
+                os.chmod(node, mode)
+                try:
+                    observed, status_code = ap.status_command(self.target)
+                    planned, plan_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+                finally:
+                    os.chmod(node, 0o700)
+
+                for result, code in ((observed, status_code), (planned, plan_code)):
+                    self.assertEqual(code, 3, result)
+                    self.assertEqual(result["status"], "refused")
+                    self.assertEqual(result["effect"], "none")
+                    self.assertEqual(result["reasons"], [f"{ap.PLANE_PROBE_REASON}: {ap.PLANE_LABEL_DEFAULT}"], result)
+
+    def test_a_pointer_is_admitted_only_under_private_custody(self) -> None:
+        """The whitelist widened by one engine-owned family, not by one relaxed rule.
+
+        A pointer is held to the private rule -- exact 0600, single link, not a symlink -- and
+        not to the cloneable rule the two Git-materialized public names get. A committed copy
+        of a pointer materializes at the caller's umask and is refused by name here, which is
+        why `.gitignore` records that it is never committed.
+        """
+        plan_path, grant_path = self._documents()
+        applied, applied_code = ap.apply_command(plan_path, self.manifest, grant_path)
+        self.assertEqual(applied_code, 0, applied)
+        pointer = self._pointer(self.target)
+
+        # POSITIVE CONTROL: at 0600 this exact pointer is admitted and status is committed.
+        control, control_code = ap.status_command(self.target)
+        self.assertEqual(control_code, 0, control)
+        self.assertEqual(control["status"], "committed")
+
+        for mode in (0o644, 0o700, 0o400):
+            with self.subTest(mode=oct(mode)):
+                os.chmod(pointer, mode)
+                try:
+                    observed, status_code = ap.status_command(self.target)
+                finally:
+                    os.chmod(pointer, 0o600)
+                self.assertNotEqual(status_code, 0, observed)
+                self.assertEqual(observed["status"], "foreign-state")
+                self.assertIn("unsafe private plane pointer", observed["reasons"])
+
+        link = self.target / ".agentic-sdlc" / pointer_name(self.root / "elsewhere")
+        link.symlink_to(pointer)
+        try:
+            observed, status_code = ap.status_command(self.target)
+        finally:
+            link.unlink()
+
+        self.assertNotEqual(status_code, 0, observed)
+        self.assertEqual(observed["status"], "foreign-state")
+        self.assertIn("unsafe private plane pointer", observed["reasons"])
+
+    def test_a_forged_pointer_cannot_name_a_plane_its_filename_does_not_bind(self) -> None:
+        """The filename is the digest of the recorded plane, so neither half moves alone.
+
+        Without the binding, renaming a pointer -- or planting one under a name in the family --
+        would let an arbitrary directory be presented as this checkout's plane, and a pointer
+        could be retargeted away from the plane that actually holds the journal.
+        """
+        state = self.target / ".agentic-sdlc"
+        state.mkdir(mode=0o700)
+        elsewhere = self.root / "elsewhere"
+        cases = {
+            "plane pointer does not bind its plane": (
+                pointer_name(elsewhere),
+                {"schema": ap.PLANE_POINTER_SCHEMA, "plane": str(plane_root(self.target))},
+            ),
+            "invalid plane pointer": (
+                pointer_name(elsewhere),
+                {"schema": ap.PLANE_POINTER_SCHEMA, "plane": "relative/plane"},
+            ),
+        }
+        for reason, (name, body) in cases.items():
+            with self.subTest(reason=reason):
+                forged = state / name
+                forged.write_bytes(ap.canonical_bytes(body))
+                os.chmod(forged, 0o600)
+                try:
+                    observed, status_code = ap.status_command(self.target)
+                finally:
+                    forged.unlink()
+
+                self.assertNotEqual(status_code, 0, observed)
+                self.assertEqual(observed["status"], "foreign-state")
+                self.assertIn(reason, observed["reasons"])
+
+        # A name in the family that is not canonical JSON at all is refused too.
+        stray = state / f"{ap.PLANE_POINTER_PREFIX}{'0' * 64}.json"
+        stray.write_text("{}\n")
+        os.chmod(stray, 0o600)
+        observed, status_code = ap.status_command(self.target)
+        self.assertNotEqual(status_code, 0, observed)
+        self.assertEqual(observed["status"], "foreign-state")
+        self.assertIn("invalid plane pointer", observed["reasons"])
+        stray.unlink()
+
+        # POSITIVE CONTROL: with the forgeries gone, an ordinary apply writes its own pointer
+        # into this same state root and is admitted.
+        plan_path, grant_path = self._documents()
+        applied, applied_code = ap.apply_command(plan_path, self.manifest, grant_path)
+        self.assertEqual(applied_code, 0, applied)
+        self.assertEqual(sorted(item.name for item in state.iterdir()), [pointer_name(plane_root(self.target))])
+
+    def test_the_pointer_never_dirties_the_engines_git_projection(self) -> None:
+        """It is machine-local state, so it is suppressed -- and only it is.
+
+        Left visible, the pointer would be a permanent untracked record that fails
+        `_require_clean` on every apply after the first, so the engine would break its own
+        repository. The control is the same test's second half: an ordinary untracked file at
+        the repository root DOES refuse, so the suppression is exactly one name wide.
+        """
+        plan_path, grant_path = self._documents()
+        applied, applied_code = ap.apply_command(plan_path, self.manifest, grant_path)
+        self.assertEqual(applied_code, 0, applied)
+        pointer = self._pointer(self.target)
+        self.assertTrue(pointer.is_file())
+        # The human's own `git status` still shows it: nothing is hidden from Git itself, and
+        # this repository ignores it by name instead.
+        raw = subprocess.run(["git", "-C", str(self.target), "status", "--porcelain", "--untracked-files=all"], capture_output=True, check=True).stdout.decode()
+        self.assertIn(".agentic-sdlc/", raw)
+
+        git(self.target, "add", "AGENTS.md")
+        git(self.target, "commit", "-m", "product")
+        second, second_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertEqual(second_code, 0, second)
+        self.assertEqual(second["plan"]["git"]["filtered_internal"], [f".agentic-sdlc/{pointer.name}"])
+
+        (self.target / "unrelated.txt").write_text("dirty\n")
+        refused, refused_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+
+        self.assertNotEqual(refused_code, 0, refused)
+        self.assertEqual(refused["reasons"], ["Git worktree is not clean"], refused)
+
+    def test_an_unsafe_existing_plane_ancestor_is_refused_before_the_plane_is_created(self) -> None:
+        """The ancestor check has to run BEFORE the first `mkdir`, not after it.
+
+        `_validate_plane_records` reaches `_assert_plane_ancestors` only when the plane root
+        already exists, so on the CREATING path -- the only path that writes under an
+        unvalidated ancestor -- the check used to run after `_mkdir_plane_root` had already
+        made `ccodex/`, `activation/`, and the key directory beneath an other-writable home.
+        Positive control: the same apply at 0700 commits and creates exactly those directories.
+        """
+        self.state_home.mkdir(parents=True)
+        # chmod, not the `mkdir` mode: the umask would have masked the other-write bit off and
+        # the case would then assert nothing.
+        os.chmod(self.state_home, 0o757)
+        self.assertTrue(stat.S_IMODE(self.state_home.stat().st_mode) & 0o002)
+
+        plan_path, grant_path = self._documents()
+        refused, refused_code = ap.apply_command(plan_path, self.manifest, grant_path)
+
+        self.assertNotEqual(refused_code, 0, refused)
+        self.assertEqual(refused["status"], "foreign-state")
+        self.assertIn("unsafe state plane home", refused["reasons"])
+        self.assertEqual(sorted(item.name for item in self.state_home.iterdir()), [], "nothing may be created under an unsafe ancestor")
+        self.assertFalse((self.target / "AGENTS.md").exists())
+        # PINNED, because it is the one thing in this change that becomes true while the result
+        # says `effect: none`: the pointer is written before the plane, so a refusal from the
+        # plane's own creation leaves one behind. `effect` names journal and product effects, and
+        # a pointer is neither -- it holds no operation, grant, receipt, or payload. It also
+        # cannot produce a later false report, which the next two assertions demonstrate: the
+        # plane it names does not exist, so the probe finds nothing and the retry below is
+        # admitted rather than stranded.
+        self.assertTrue(self._pointer(self.target).is_file())
+        self.assertEqual(refused["effect"], "none")
+        self.assertFalse(plane_root(self.target).exists())
+
+        os.chmod(self.state_home, 0o700)
+        applied, applied_code = ap.apply_command(plan_path, self.manifest, grant_path)
+
+        self.assertEqual(applied_code, 0, applied)
+        self.assertTrue(plane_receipts(self.target).is_dir())
+
+    def test_a_crash_in_one_checkout_never_refuses_another(self) -> None:
+        """The probe is keyed per target, so it does not refuse the whole state home.
+
+        A shared plane holds one entry per checkout; a sibling's unresolved journal is not
+        this target's business, in either selection.
+        """
+        sibling = self.root / "sibling"
+        sibling.mkdir()
+        init_repo(sibling)
+        self._crash_after_publish(sibling)
+        self._unresolved_journal(plane_transactions(sibling))
+
+        for selection in (None, ap.PLANE_REPO_LOCAL):
+            with self.subTest(selection=selection or "default"):
+                set_environment(self, ap.PLANE_SELECTION_ENV, selection)
+                inspected, inspect_code = ap.recover_inspect_command(self.target)
+                observed, status_code = ap.status_command(self.target)
+
+                self.assertEqual(inspect_code, 0, inspected)
+                self.assertEqual(inspected["status"], "inactive")
+                self.assertEqual(status_code, 0, observed)
+                self.assertEqual(observed["status"], "inactive")
 
 
 if __name__ == "__main__":
