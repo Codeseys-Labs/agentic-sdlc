@@ -31,44 +31,72 @@ recorded outside that repository, and treats it as durable house doctrine rather
 reinventing an equivalent.
 
 --------------------------------------------------------------------------------
-The register, stated plainly: intra-family only, so far
+The register, stated plainly: two third-party donors read directly, none via pi-lab
 --------------------------------------------------------------------------------
 
-Every derivation this file records below is **intra-family**: the donor is a sibling
-repository under the same author (Baladithya Balamurugan, MIT throughout), and no sentence,
-table, or worked example was carried across in any case — only ideas, re-expressed in this
-repository's own prose and vocabulary. This matters for the provenance question specifically:
+The register below holds two kinds of donor, and keeping them apart is the whole purpose of
+this section:
+
+  * **Intra-family — Donors 1, 2, and 3.** The donor is a sibling repository under the same
+    author (Baladithya Balamurugan, MIT throughout), and no sentence, table, or worked example
+    was carried across in any of those three cases — only ideas, re-expressed in this
+    repository's own prose and vocabulary.
+  * **Direct third-party — Donors 4 and 5.** `adr/madr` and the Conventional Commits v1.0.0
+    specification are independent upstream projects under other copyright holders, harvested by
+    this repository's own `adr-lifecycle` and `change-writing` skills straight from the upstream
+    artifact at the pins those entries record. Donor 4 took ideas only. **Donor 5 is the one
+    donor in this file whose derived file does carry upstream wording** — the grammar block, the
+    sixteen rules in applicable form, and four short phrases quoted from four of the
+    specification's own FAQ answers, which CC BY 3.0 permits with attribution and which Donor 5's
+    entry and the derived file's own header both attribute. The "only ideas, nothing carried across"
+    sentence in the bullet above is scoped to Donors 1-3 and must not be read as covering it.
+
+So this register is no longer intra-family only. What has still never happened is the narrower
+thing this section was written to track: **no third-party idea has traveled through a `pi-lab`
+intermediary into a file in this repository.** Both third-party donors were read at their own
+upstream pins, which leaves `pi-lab`'s own third-party chains outside this register:
 
   * `pi-lab`'s own `house/loop-design` skill carries a *separate* file,
     `skills/house/loop-design/references/external-anchors-and-loop-shape.md`, that itself
     derives from a third party (`affaan-m/ECC`, MIT, whose own footer attributes the
     underlying ideas further upstream to Norbert Wiener, Anatoli, and Addy Osmani —
-    `pi-lab/NOTICE`'s Donor 1). **That chain does not reach this repository.** The two files
-    in this repository that draw on `pi-lab`'s loop-design material
-    (`skills/agentic-sdlc/references/deep-work-loop.md`) cite only `pi-lab`'s main
+    `pi-lab/NOTICE`'s Donor 1). **That chain does not reach this repository.** The file
+    in this repository that draws on `pi-lab`'s loop-design material
+    (`skills/agentic-sdlc/references/deep-work-loop.md`) cites only `pi-lab`'s main
     `house/loop-design/SKILL.md` body, which attributes its own central claim (a loop's stop
     condition must be externally adjudicated, never self-graded) to Anthropic's own published
     engineering posts (`vendor-doc` class throughout that section), not to the ECC-mediated
     Wiener/Anatoli/Osmani chain. Checked directly: `pi-lab/skills/house/loop-design/SKILL.md`
-    itself never names Wiener, Anatoli, or Osmani; only its sibling `references/` file does,
-    and this repository does not cite that sibling file anywhere (`rg -n
-    'Wiener|Anatoli|Osmani|Nygard|MADR|Zdun|Zimmermann' skills/` returns no hits in this
-    repository at the time of this pass).
+    names Wiener, Anatoli, and Osmani only in its pointer to that sibling `references/` file,
+    never as the source of the stop-condition rule, and this repository names neither that
+    sibling file nor those three people anywhere in `skills/`. Re-run 2026-08-18: `rg -n
+    'Wiener|Anatoli|Osmani' skills/` and `rg -n 'external-anchors-and-loop-shape' skills/`
+    each print nothing and exit 1.
   * `pi-lab`'s ADR-authoring skill separately derives from `adr/madr` and `adr/adr.github.io`
     (`pi-lab/NOTICE`'s Donor 2, crediting Michael Nygard and Zdun et al. upstream). This
-    repository has no ADR-authoring skill or reference file at all (`rg -n
-    'MADR|Nygard' skills/` returns no hits), so that chain also does not reach here.
+    repository now has an ADR-authoring skill of its own, `skills/adr-lifecycle/`, so the older
+    form of this bullet — that no such skill or reference file existed here at all — is
+    obsolete. That is not `pi-lab`'s chain arriving late. `skills/adr-lifecycle/` credits MADR
+    directly, is recorded below as this file's own **Donor 4** against MADR's own commit pin,
+    and cites no `pi-lab` file. Re-run 2026-08-18, `rg -n 'MADR|Nygard' skills/` returns five
+    hits, every one of them the string `MADR` inside that skill
+    (`references/house-template.md` lines 7, 100, 152, and 154, and `SKILL.md` line 155) and
+    none of them `Nygard`; the wider `rg -n
+    'Wiener|Anatoli|Osmani|Nygard|MADR|Zdun|Zimmermann' skills/` returns those same five hits
+    and no others. So Nygard's own material, `adr/adr.github.io`, and the Y-statement authors'
+    own published wording are still not derived from here, and `pi-lab`'s ADR chain still does
+    not reach here.
 
-So the honest statement is: **this repository's donor register is currently intra-family
-only.** No third-party idea has yet traveled through a `pi-lab` intermediary into a file in
-this repository. If that changes — if a future edit here draws on
-`external-anchors-and-loop-shape.md`, the ADR template material, or any other file in
+So the honest statement is: **this repository's donor register reaches two third-party projects
+directly, at their own pins, and reaches no third party through a `pi-lab` intermediary.** If
+the second half of that changes — if a future edit here draws on
+`external-anchors-and-loop-shape.md`, `pi-lab`'s own ADR template material, or any other file in
 `pi-lab/NOTICE` whose own provenance is a third party — the upstream credit (Wiener, Anatoli,
 Osmani, Nygard, or the Y-statement authors, as applicable) must be repeated here under the
 `author-claim about a third party` evidence class exactly as `pi-lab/NOTICE` states it, never
-laundered through the intra-family donor's MIT grant. Until then, `pi-lab/NOTICE` is cited
-below only as the **shape precedent** this file follows, not as a source of ideas that
-reached this repository through it.
+laundered through the intra-family donor's MIT grant. Until then, `pi-lab` appears below as the
+donor of Donors 1 and 2's own material and as the **shape precedent** this file follows, and not
+as a route by which any third party's ideas reached this repository.
 
 --------------------------------------------------------------------------------
 Donor 1 — pi-lab, house/skill-authoring-standard and house/lesson-extraction
@@ -89,8 +117,12 @@ Licence      MIT, Copyright (c) 2026 Baladithya Balamurugan — same author as t
              holder is identical; this is recorded as an intra-family donor, not a
              third-party one, and the licence question and the origin question below are
              both "the same author" rather than "a permissive grant from someone else."
-Harvested    `skills/agentic-sdlc/references/skill-authoring.md` (this repository), 181
-             lines, blob `266ae898655c386010e70df9db16d17dfd0ef56f`
+Harvested    `skills/agentic-sdlc/references/skill-authoring.md` (this repository).
+             **At harvest**: 181 lines, blob `266ae898655c386010e70df9db16d17dfd0ef56f` —
+             the value at commit `6c650418ecb074e3acbd9e51d6417e73745ba395` ("docs: port
+             pi-lab doctrine into the flagship references", 2026-08-06), the commit that
+             landed the harvest; `git cat-file -p` on that blob still returns those 181
+             lines.
 
 Who originated the ideas
 -------------------------
@@ -257,8 +289,12 @@ Licence      MIT — `LICENSE` (1127 bytes), dual copyright: "Copyright (c) 2026
              bytes harvested here were authored by this repository's own author inside the
              fork, making this an intra-family donor in substance even though the repository
              LICENSE it ships under names other people (for unrelated files in the same tree).
-Harvested    `skills/agentic-sdlc/references/worktree-failclosed-tests.md` (this repository),
-             227 lines, blob `bdfbe46f5aacae8d0e6aee43fe959d4cbdaf4460`
+Harvested    `skills/agentic-sdlc/references/worktree-failclosed-tests.md` (this repository).
+             **At harvest**: 227 lines, blob
+             `bdfbe46f5aacae8d0e6aee43fe959d4cbdaf4460` — the value at commit
+             `6c650418ecb074e3acbd9e51d6417e73745ba395` ("docs: port pi-lab doctrine into the
+             flagship references", 2026-08-06), the commit that landed the harvest; that blob
+             is still reachable and still returns those 227 lines.
 
 Who originated the ideas
 -------------------------
@@ -285,11 +321,11 @@ What IS derived from this donor, and where
     precondition, assert refusal not degradation, assert zero dispatch, assert no orphan,
     tear down in `finally`), the five-entry failure-mode catalogue (occupied branch, non-git
     directory, throwing observer, mid-flight abort, timeout), and the two cross-cutting
-    assertion sub-patterns (redaction, pair-completeness). Re-expressed as a **specification
-    for a future implementer**, explicitly not as executable code: the harvested file's own
-    opening paragraph states "nothing here is executable — it is a specification a future
-    implementer turns into real Python tests once this repo has (or adopts) worktree-isolated
-    agent dispatch." No source line, assertion string, or helper function was copied verbatim;
+    assertion sub-patterns (redaction, pair-completeness). Re-expressed as a **test-design
+    contract**, not as executable code: the harvested file's own opening states that it "stays
+    a test-design contract rather than a test runner," and its per-entry coverage table marks
+    which entries this repository executes and which remain shapes only. No source line,
+    assertion string, or helper function was copied verbatim;
     the TypeScript `node:test`/`execFileSync`/`mkdtempSync` mechanics were translated to their
     named Python `unittest`/`subprocess.run`/`tempfile.mkdtemp` analogues in the file's closing
     "Notes for a future Python-`unittest` implementation" section, which is this repository's
@@ -304,22 +340,268 @@ What is NOT derived, and no file here may reproduce
   2. The donor's own production implementation (`src/workflow.ts`'s worktree-acquisition
      policy, `src/worktree.ts`'s slug derivation, `src/errors.ts`'s
      `WorkflowErrorCode.WORKTREE_ISOLATION_UNAVAILABLE`) — this repository has no
-     worktree-isolated dispatch mechanism today, and the harvested file says so explicitly:
-     "treat each entry below as a test case shape, not as authorization that the described
-     behavior already exists here."
-  3. Any claim that this repository's own test suite currently implements this pattern. It
-     does not: `worktree-failclosed-tests.md` is a specification with zero corresponding
-     Python test file in this repository as of this pass (confirmed: no
-     `tests/test_worktree*.py` or equivalent exists).
+     worktree-isolated dispatch mechanism today; it delegates fan-out to the host's own
+     subagent tool. The harvested file says so explicitly, and closes by directing the reader
+     to treat every uncovered entry as a test case shape, "not as authorization that the
+     described behavior already exists here."
+  3. Any claim that this repository's own test suite implements this pattern *in full*, and
+     equally any claim that it implements none of it. Both were asserted here in earlier
+     passes and both are false; the truth is a split, verified by reading the two artifacts
+     against each other rather than either one's self-description:
+       * **Executed here (the git-substrate half).** `tests/test_worktree_failclosed.py` is
+         279 lines and runs 7 cases green (`test_a` occupied branch, `test_b` occupied target
+         path plus the runbook's recovery, `test_c` dirty index does not leak, `test_d`
+         in-workspace worktree stays invisible, `test_e` prune before the path is reusable,
+         `test_f` the two cleanup refusals, `test_g` one documented substrate owner). It first
+         landed in commit `d332e55` (2026-08-06) with three cases and reached its current
+         seven-case form in `b4b12dd` (2026-08-07). It covers the general shape's fixture (1),
+         planted-precondition (2, partially), no-orphan (5), and teardown (6) clauses, plus
+         failure mode 1 at the git level and part of the satisfiable-isolation control.
+       * **Not executed here (the agent-dispatch half).** Failure modes 2-5 (non-git working
+         directory, throwing observer, mid-flight abort, timeout), the redaction and
+         start/end pair-completeness sub-patterns, general shape 3's typed error identity and
+         4's zero-dispatch assertions, and the no-isolation-requested control all require a
+         dispatcher to plant a violation against, which item 2 above records this repository
+         does not have.
+       * **What the executed half therefore does not prove.** It proves the git substrate the
+         `commands/sdlc-wave.md` recipe stands on refuses and is restorable to byte-identical
+         state; it does not prove that any dispatcher refuses instead of silently running an
+         agent in the shared checkout, which is the defect the donor's pattern exists to
+         catch. `skills/agentic-sdlc/SKILL.md`'s summary ("A future implementer's spec, not
+         evidence that this repo already runs isolated dispatch") is accurate precisely
+         because it is scoped to isolated *dispatch*.
+     The harvested file carries this same split as a per-entry coverage table, so a reader
+     lands on the scoped claim from either direction.
+
+--------------------------------------------------------------------------------
+Donor 4 — adr/madr (Markdown Architectural Decision Records)
+--------------------------------------------------------------------------------
+
+Repository   adr/madr (https://github.com/adr/madr) — an independent third-party project,
+             not a sibling repository under this author
+Pin          `835fc94baa37887774b1cddddb2ae874881e703b` (head of the `develop` branch,
+             resolved 2026-08-18; the project tags no release covering the exact template
+             wording read here, so this is a commit pin on a moving branch, not a release)
+Licence      Dual `MIT OR CC0-1.0` (SPDX, from the repository's own `LICENSE`). This entry
+             takes the MIT grant. Permission notice reproduced verbatim, because the
+             copyright holder differs from this repository's own (from `LICENSE.MIT`):
+
+               MIT License
+
+               Copyright (c) 2017-2022 Oliver Kopp, Olaf Zimmermann
+
+               Permission is hereby granted, free of charge, to any person obtaining a copy
+               of this software and associated documentation files (the "Software"), to deal
+               in the Software without restriction, including without limitation the rights
+               to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+               copies of the Software, and to permit persons to whom the Software is
+               furnished to do so, subject to the following conditions:
+
+               The above copyright notice and this permission notice shall be included in all
+               copies or substantial portions of the Software.
+
+               THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+               IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+               FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+               AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+               LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+               OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+               SOFTWARE.
+Harvested    `skills/adr-lifecycle/references/house-template.md` (this repository).
+             **At harvest**: 160 lines, blob `678c7621041ccbb94bce07f12514fc8f7a25420e` —
+             the value at commit `5f39762e94503abac0ec1a9203957c22d4742531` ("feat: build the
+             five specced capabilities as one skill and six references", 2026-08-07), the
+             commit that landed the harvest; the file is unrevised since that commit, so
+             `git hash-object` still returns that at-harvest blob.
+
+Who originated the ideas
+-------------------------
+
+MADR (Oliver Kopp's and Olaf Zimmermann's project) originated the four-tier decision-record
+shape, its Context/Decision/Consequences skeleton, and the discipline of a closed,
+machine-readable status field that this repository's house template restates.
+`house-template.md`'s own opening paragraph credits MADR by name for that descent and states
+plainly that "nothing here is a copy of either project's template text" — only the shape and
+field set were adapted, re-derived against the records already in this repository's own
+`docs/adr/` rather than transcribed from MADR's published template files. The one-line tier's
+six-slot sentence form is a second, distinct idea source named in the same sentence: the
+Y-statement, originated by Uwe Zdun and Olaf Zimmermann's own prior architecture-decision
+modeling work (the same Zimmermann who co-holds MADR's copyright, but a separate publication)
+— `house-template.md` credits it separately as "the Y-statement form for the one-line tier."
+No redistributable text from a Y-statement source was harvested; only the six-slot idea,
+restated in this repository's own prose.
+
+Evidence class: **primary-artifact** for MADR (its `LICENSE`, `LICENSE.MIT`, and template
+content read directly from the pinned commit above) and **author-claim about a third party**
+for the Y-statement attribution, which this repository takes on `house-template.md`'s own
+say-so rather than an independent primary read of Zdun and Zimmermann's original publication.
+
+What IS derived from this donor, and where
+-------------------------------------------
+
+  `skills/adr-lifecycle/references/house-template.md`
+
+    The tier ladder (one-line / minimal / standard / extended), the Context / Decision /
+    Consequences skeleton, and the general discipline of a Confirmation-and-Reversal-Condition
+    pair, all re-expressed in this repository's own field list and matched against this
+    repository's own existing `docs/adr/` records rather than MADR's upstream field names.
+    Three deliberate divergences from MADR are named explicitly in the file's own closing
+    section (a closed status vocabulary, a typed relationships table, and a mandatory
+    reversal condition at Standard tier) precisely so a reader familiar with MADR does not
+    "fix" them back to upstream's choices. No sentence, table, or worked example from MADR's
+    own template files was carried across verbatim.
+
+What is NOT derived, and no file here may reproduce
+------------------------------------------------------
+
+  1. MADR's own upstream template markdown, its full field catalogue (e.g. its optional
+     "Pros and Cons of the Options" subsection), or any of its published example records —
+     only the tier structure and the field set this repository already uses were adapted,
+     not MADR's literal document.
+  2. Any claim that this repository's `docs/adr/` records conform to MADR's own convention;
+     `house-template.md` states three named divergences precisely to prevent that reading.
+  3. The Y-statement's own original published wording (Zdun and Zimmermann's decision-
+     modeling papers) — only the six-slot sentence idea was restated, in this repository's
+     own words.
+
+--------------------------------------------------------------------------------
+Donor 5 — Conventional Commits v1.0.0 specification
+--------------------------------------------------------------------------------
+
+Repository   conventional-commits/conventionalcommits.org
+             (https://github.com/conventional-commits/conventionalcommits.org) — the
+             specification text published at conventionalcommits.org, not this author's
+             own project
+Pin          Three blobs, each pinned separately because the harvested prose and the licence
+             statement do NOT live in the same file. All resolved 2026-08-18 against `master`
+             at commit `7d293dc59e88abc8ce6c6698344d4da518ff3f27`. The project publishes no git
+             tags at all (`gh api repos/conventional-commits/conventionalcommits.org/tags`
+             returns an empty list), so each of these is a blob pin on a moving branch, never a
+             release tag:
+               * `content/v1.0.0/index.md`, blob
+                 `4fa8464d66f7659c3565a2a84ce0577839552046`, 10,374 bytes — the versioned
+                 v1.0.0 specification text, and the artifact the harvested grammar, rules, and
+                 quotations come from.
+               * `config.yaml`, blob `ce65b3d78b1426fa62d1e92ca8ede05a9d1e051a`, 17,753 bytes —
+                 site-wide Hugo configuration, and the artifact that actually carries the CC BY
+                 statement (see Licence).
+               * `LICENSE`, blob `bd2edec952f0a70e008a60a6fd02b11b28ef1f9d`, 1,079 bytes — the
+                 hosting repository's MIT grant, pinned to record what it does NOT cover.
+Licence      Creative Commons Attribution 3.0 Unported (CC BY 3.0)
+             (https://creativecommons.org/licenses/by/3.0/). **Where that statement lives,
+             stated exactly, because the anchor is the whole evidence question:** not in the
+             specification page's own markdown. The pinned `content/v1.0.0/index.md` blob
+             contains no licence string whatsoever: running
+             `grep -niE 'creative commons|CC BY|licen[cs]e'` over those exact 10,374 bytes
+             matches nothing and exits 1. The statement is instead site-wide Hugo
+             configuration: `params.license.action.label:
+             Creative Commons - CC BY 3.0` with `params.license.action.url:
+             'https://creativecommons.org/licenses/by/3.0/'`, at lines 9-13 of the pinned
+             `config.yaml` blob. The published page
+             https://www.conventionalcommits.org/en/v1.0.0/ renders it from there, inside
+             `<footer class="footer">` as `<div class="footer__license">` carrying `License`
+             and an anchor reading "Creative Commons - CC BY 3.0". Two consequences are worth
+             recording rather than smoothing over: the grant is site-wide chrome rather than a
+             per-version header inside the v1.0.0 text, and its source file is not versioned by
+             the content path, so a future licence change would land in `config.yaml` while
+             `content/v1.0.0/index.md` stayed byte-identical. Pinning `config.yaml` by its own
+             blob sha above is what makes that detectable. (Of the artifacts checked, only
+             `config.yaml` names CC BY: the pinned spec page carries no licence string, and the
+             repository's `CONTRIBUTING.md` refers to "the Conventional Commit License" without
+             naming it.) This is distinct from the hosting repository's own `LICENSE` file (MIT,
+             Copyright (c) 2018 Conventional Changelog), which covers the site's code, not the
+             specification prose harvested here. CC BY requires attribution for reuse; this
+             entry, plus `conventional-commits.md`'s own opening line ("Rule and FAQ text
+             quoted here is from the Conventional Commits v1.0.0 specification, published at
+             `conventionalcommits.org` under CC BY 3.0"), is that attribution.
+Harvested    `skills/change-writing/references/conventional-commits.md` (this repository).
+             **At harvest**: 205 lines, blob `cd795c682f307f6deb4800125b8a220610dca231` —
+             the value at commit `5f39762e94503abac0ec1a9203957c22d4742531` ("feat: build the
+             five specced capabilities as one skill and six references", 2026-08-07), the
+             commit that landed the harvest; the file is unrevised since that commit, so
+             `git hash-object` still returns that at-harvest blob.
+
+Who originated the ideas
+-------------------------
+
+The Conventional Commits project (published collaboratively at conventionalcommits.org; neither
+the pinned specification text nor the site's footer chrome credits a single named author, and
+the only copyright holder named in the three artifacts pinned above is the MIT holder of the
+site code, "Conventional Changelog") originated the
+`<type>[scope][!]: <description>` grammar, the sixteen numbered rules, the SemVer type
+mapping, and the two breaking-change marking forms that `conventional-commits.md` restates.
+The grammar block and the sixteen rules follow the specification text closely — the grammar
+block near-verbatim: this repository's copy adds the optional `!` slot to the same
+three-element shape, and both fenced blocks are five lines — the type/scope/description line,
+the `[optional body]` line, and the `[optional footer(s)]` line, separated by the two blank
+lines the grammar itself requires. Counted directly at
+`skills/change-writing/references/conventional-commits.md` lines 32-36 (5 lines, 3 non-blank)
+and, on the donor side, at lines 21-25 of the pinned `content/v1.0.0/index.md` blob (also
+5 lines, 3 non-blank). The rules are close paraphrase in the spec's own order and
+numbering — which CC BY 3.0
+permits with attribution. The type-selection table, the "five failures"
+table, and the specification-versus-linter comparison table are this repository's own
+restatement built to answer this repository's own operational questions, not quotations from
+the spec.
+
+Evidence class: **primary-artifact**, with the anchor named per fact rather than in aggregate,
+because the three facts sit in three different files:
+
+  * The harvested grammar, rules, and quoted phrases — read directly at the
+    `content/v1.0.0/index.md` blob pinned above.
+  * The CC BY 3.0 grant — read directly at the `config.yaml` blob pinned above, and
+    independently confirmed in the rendered footer of
+    https://www.conventionalcommits.org/en/v1.0.0/. NOT read at the specification-page blob,
+    which carries no licence string; no part of the licence claim rests on that blob.
+  * MIT's non-coverage of the specification prose — read directly at the `LICENSE` blob pinned
+    above.
+
+The rendered page is a secondary confirmation of the config file, not the primary anchor: it is
+a build output at an untracked point in time, whereas `config.yaml`'s blob sha is exact.
+
+What IS derived from this donor, and where
+-------------------------------------------
+
+  `skills/change-writing/references/conventional-commits.md`
+
+    The grammar block, the sixteen rules (restated "in applicable form" per the file's own
+    heading — paraphrased for this repository's use, not reproduced as a numbered list
+    identical to the spec's own clause-by-clause wording), the two breaking-change forms, and
+    the SemVer mapping. The file's own header names the source and licence inline rather than
+    only in this NOTICE entry, matching this repository's existing convention of repeating
+    provenance where a reader of the derived file will see it.
+
+What is NOT derived, and no file here may reproduce
+------------------------------------------------------
+
+  1. The specification's own `## FAQ` section beyond the four short phrases explicitly quoted.
+     Those four are all the upstream wording `conventional-commits.md` carries, each from a
+     different FAQ answer, and each locatable in the pinned `content/v1.0.0/index.md` blob (the
+     FAQ is a section of that same page, so the pin covers it): "proceed as if you've already
+     released the product" (blob line 141), "Go back and make multiple commits whenever
+     possible." (line 149), "will be missed by tools" (line 176), and "lead maintainers can
+     clean up the commit messages as they're merged" (line 180). Everything else in
+     `conventional-commits.md`'s edge-case and checklist sections is this repository's own
+     restatement of the spec's *rules*, not a transcription of the FAQ's prose.
+  2. The `@commitlint/config-conventional` preset's own source code or configuration schema —
+     `conventional-commits.md`'s comparison table states the preset's documented behavior; it
+     does not vendor or reproduce the preset's implementation.
+  3. Any claim that this repository's own commit history already conforms to Conventional
+     Commits; `conventional-commits.md` states explicitly that the repository's own
+     convention wins, and Conventional Commits is "a fallback only" absent a local dialect or
+     linter.
 
 --------------------------------------------------------------------------------
 Non-endorsement
 --------------------------------------------------------------------------------
 
 This repository is not affiliated with, endorsed by, or certified by pi-lab,
-pi-dynamic-fractal-workflows, QuintinShaw, Michael Livs, or any other party named in this
-file. Names are used only to identify the donor. No claim of conformance to any donor's own
-conventions is made anywhere in this repository.
+pi-dynamic-fractal-workflows, QuintinShaw, Michael Livs, the `adr/madr` project, the
+Conventional Commits project, or any other party named in this file. Names are used only to
+identify the donor. Nothing in this repository claims that this repository's own artifacts
+conform to any donor's own convention: Donor 4 names three deliberate divergences from MADR, and
+Donor 5's derived file states that the local repository's convention wins over Conventional
+Commits.
 
 --------------------------------------------------------------------------------
 Adding a donor to this file
@@ -335,7 +617,8 @@ Adding a donor to this file
      before repeating the upstream credit — an intra-family donor's own third-party
      attributions do not automatically travel with a restatement of the donor's unrelated
      content, and this file's "register" section above records exactly that distinction for
-     the current, intra-family-only state.
+     the current state: two third-party donors read directly at their own pins, and no third
+     party reaching this repository through `pi-lab`.
   4. List what IS derived with the destination path, and what is NOT derived with a reason
      per item. An omission with no reason is invisible.
   5. Put the same provenance statement in a header inside each derived file, matching the

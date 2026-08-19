@@ -55,11 +55,15 @@ choice needed before specification; it does not implement the product.
 
 ## Decision closure
 
-No product or architecture choice remains open. The final brief is
-[`to-spec-handoff.md`](to-spec-handoff.md). Exact implementation schemas, archive layout, Workflow
-calls, XDG paths, usage readback, renderer tuples, and later queue dispositions belong to
-`/to-spec` discovery. Any implementation finding that would change a boundary in this map returns
-for human decision instead of being silently resolved in code.
+Two product choices remain open, each tracked as its own decision seed rather than resolved
+here: whether to restore or formally drop the `ccodex sdlc` profiles surface (seed
+`agentic-sdlc-c990`), and who owns release version selection at install time — the installer
+lifecycle, the release manifest, or the operator (seed `agentic-sdlc-0faa`). Every other product
+and architecture choice this map tracked is closed. The final brief is
+[`to-spec-handoff.md`](to-spec-handoff.md) for those closed choices. Exact implementation schemas,
+archive layout, Workflow calls, XDG paths, usage readback, renderer tuples, and later queue
+dispositions belong to `/to-spec` discovery. Any implementation finding that would change a
+boundary in this map returns for human decision instead of being silently resolved in code.
 
 ## Out of scope
 

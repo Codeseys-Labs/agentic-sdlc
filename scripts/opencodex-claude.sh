@@ -47,11 +47,15 @@
 #     and `ocx claude` passes it to the gateway; this wrapper only checks NAMES, value PREFIXES,
 #     and base-URL SHAPES that would silently defeat the route, and never echoes a base URL
 #     because one can carry userinfo credentials (see assert_gateway_route_is_effective).
-#   * It does not verify which model actually served a request. The canary in
-#     docs/research/2026-08-05-gateway-selection-memo.md §4 is the qualification gate and is
-#     still unrun. A healthy gateway proves reachability, never model identity — and the routed
-#     branch RE-LABELS its reply with the requested model, so the response body is inadmissible
-#     as evidence. Only the gateway's own request log distinguishes the branches.
+#   * It does not verify which model actually served a request. The qualification gate is the
+#     canary in docs/research/2026-08-05-gateway-selection-memo.md §4 (probes A, C, D, E, F).
+#     Whether that canary has been run, and its verdict, is recorded evidence this comment does
+#     not restate and cannot assert as a static fact — see
+#     docs/research/2026-08-07-opencodex-qualification-canary.md and ADR-0005 Decision item 5 for
+#     the current disposition. A healthy gateway proves reachability, never model identity — and
+#     the routed branch RE-LABELS its reply with the requested model, so the response body is
+#     inadmissible as evidence. Only the gateway's own request log (`ocx observe logs --jsonl`,
+#     the `resolvedModel` field correlated by `requestId`) distinguishes the branches.
 #   * A healthy `status` is evidence, not authorization. Exit 0 means the proxy answered an
 #     identity-checked health probe at that moment. It grants no authority for any outward
 #     effect.
