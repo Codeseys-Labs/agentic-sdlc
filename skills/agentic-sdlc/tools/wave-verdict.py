@@ -5,16 +5,56 @@
 # ///
 """Derive the ONE terminal wave state from the wave's emitted artifacts.
 
-Issue 07's "Completion and adversarial review" section is this module's whole contract. A wave is
-complete only when EIGHT conditions hold together, and a normal delivery wave additionally requires
-the authoritative repository gate to pass. This module derives exactly one state:
+Issue 07's "Completion and adversarial review" section and the product spec's Implementation
+Decision 61 are together this module's whole contract. A wave is complete only when EIGHT conditions
+hold together, and a normal delivery wave additionally requires the authoritative repository gate to
+pass. Decision 61 closes the outcome at SIX values, and this module derives exactly one of them:
 
     accepted               every completion condition is met and the authoritative repository gate
                            passes; the wave is complete
     remediation-progress   the focused gates pass and the exact global failure baseline did not
                            worsen; this verdict NEVER claims the repository gate passes and never
                            claims the repository is write-ready
-    blocked                anything else, always with named reasons
+    blocked                anything else the completion evidence shows, always with named reasons
+    aborted                a conductor record says the execution was stopped before it completed
+    failed                 a conductor record says the execution ran and ended failed
+    unknown-effect         a conductor record says the execution ended leaving an effect of unknown
+                           extent; recovery follows it, and no other evidence talks it down
+
+THE FIRST THREE ARE WHAT THE EVIDENCE SHOWS; THE LAST THREE ARE HOW THE EXECUTION ENDED. Issue 07
+describes only the first three -- completion, `remediation-progress`, and not complete -- because
+they are what completion evidence shows: the eight conditions and the gate. It names none of the
+other three. Decision 61's other three describe how the execution ENDED, which no artifact but the
+conductor's own record carries -- the conductor is the party that watched it end, and
+`wave-journal.py`'s per-node dispositions describe node endings rather than the wave's. So
+`wave-verdict-conductor-record@1` carries `ended_state`, `ended_reasons`, and `last_proven_stage`
+(sealed by `skills/agentic-sdlc/tools/wave-submission.py`), and this module reads them. The
+precedence, exactly:
+
+  1. `unknown-effect` DOMINATES: if any record says the execution ended with an effect of unknown
+     extent, that is the state whatever every other record and every other artifact says. An unknown
+     effect can never be talked down -- neither by a peer record saying the execution merely failed,
+     nor by a later one saying it completed, which is precisely the laundering Decision 61's "process
+     completion and publication cannot manufacture success" forbids.
+  2. TWO DIFFERENT other endings REFUSE rather than pick. `failed` and `aborted` are peers: one says
+     the execution ran and failed, the other that it was stopped before it could. Nothing here can
+     rank them, so a wave whose records say both is `blocked` with the disagreement named.
+  3. ONE other ending OVERRIDES the completion evidence. A wave whose evidence set is complete and
+     whose authoritative gate passed is still `failed` if a conductor recorded that it ended failed:
+     the eight conditions describe what was proven, never that the execution reached its end.
+  4. `completed` overrides NOTHING and adds no reason, so a completed execution derives exactly what
+     this module derived before Decision 61's other three existed.
+  5. For an ended state other than `completed`, the top-level `repository_gate_passes` is null rather
+     than the receipt's fact: an execution that did not reach its end never proved the receipt's
+     snapshot is this wave's result. The raw outcome stays in `gate`.
+
+An absent `ended_state` is a NAMED REASON -- how the execution ended is unrecorded -- and never an
+assumed `completed`, which keeps every record written before those fields existed parseable rather
+than silently successful. Contradictory ended facts are malformed input (exit 2), like any other
+document that is not what it claims: `completed` beside an ending reason or a last proven stage, a
+non-`completed` state with neither, an `ended_state` outside the four tokens, and ended facts carried
+without the state they belong to. `--conductor-record` REPEATS, because a wave that crashed and was
+resumed has two accounts and argparse keeping only the last would let the later erase the earlier.
 
 THE CONDUCTOR OWNS CLASSIFICATION. Issue 07 says "the critic advises; the conductor owns
 classification and verdict", so the critic's findings are an INPUT here and this module classifies
@@ -121,19 +161,31 @@ RESIDUALS, STATED EXACTLY.
     of "fan-in was authorized" -- the alternative would satisfy the condition vacuously, which is the
     failure mode `scripts/gate_baseline.py` exists to refuse.
   * Reviews, the artifact manifest, the critic findings, and the conductor record are same-user
-    assertions with no producer in this repository yet. They are VALIDATED, cross-checked against the
-    journal's roles and sequence, and never trusted; a recorded approval is likewise stamped
-    `authenticated: false` by the journal itself.
+    assertions. `skills/agentic-sdlc/tools/wave-submission.py` now SEALS all four -- it closes each
+    key set, refuses every shape this module would block on, and adds one `digest` -- and sealing
+    changes none of that: a same-user producer signs nothing, so the four stay VALIDATED,
+    cross-checked against the journal's roles and sequence, and never trusted. Nothing here reads the
+    seal; a hand-authored document is accepted exactly as before. A recorded approval is likewise
+    stamped `authenticated: false` by the journal itself.
   * Freshness is underivable from these artifacts. A stale but internally consistent set -- a
     projection, manifest, and passing receipt from an earlier tree -- derives `accepted` by
     construction.
-  * `docs/plans/claude-code-first-harness/issues/07-define-dynamic-workflow-graph-contract.md` names
-    three terminal wave outcomes; the product spec's Implementation Decision 61 closes a SIX-value
-    set (`accepted`, `remediation-progress`, `blocked`, `aborted`, `failed`, `unknown-effect`). This
-    module derives the three issue 07 names. `aborted`, `failed`, and `unknown-effect` describe how
-    an execution ENDED rather than what its completion evidence shows, and no artifact consumed here
-    records them, so they are not derivable and are not guessed; a wave that ended in one of them
-    reaches `blocked` with its reasons named.
+  * An ended state is the CONDUCTOR'S OWN ACCOUNT, and this module reads records rather than
+    executions. An execution that ended with an unknown effect and was recorded as `completed`, or
+    was never recorded at all, derives from completion evidence alone; nothing here can observe an
+    ending nobody wrote down, and the ended facts are the same-user assertions everything else in
+    that record is.
+  * `docs/plans/claude-code-first-harness/issues/07-define-dynamic-workflow-graph-contract.md`
+    contains neither `aborted` nor `unknown-effect`: its "Completion and adversarial review" section
+    still describes only completion, `remediation-progress`, and not complete, while Implementation
+    Decision 61 closes the SIX this module now derives. The separation above -- three read off
+    completion evidence, three read off how the execution ended -- is the reconciliation, and that
+    issue's own prose has not been rewritten to state it.
+  * The result document still carries `agentic-sdlc/wave-terminal-verdict@1`. Its closed key set did
+    not change: the three new states are new tokens in the `state` field's vocabulary, which
+    Decision 61 always closed at six, and the ended facts are published inside the existing
+    `evidence` object. A consumer that hard-codes three states was already narrower than the
+    decision it implements.
 
 A derived state is evidence about artifacts. It authorizes no push, publication, PR mutation, merge,
 or deployment, and `accepted` is a statement about one wave's completion evidence, not a grant.
@@ -155,6 +207,29 @@ RESULT_SCHEMA = "agentic-sdlc/wave-terminal-verdict@1"
 STATE_ACCEPTED = "accepted"
 STATE_REMEDIATION_PROGRESS = "remediation-progress"
 STATE_BLOCKED = "blocked"
+STATE_ABORTED = "aborted"
+STATE_FAILED = "failed"
+STATE_UNKNOWN_EFFECT = "unknown-effect"
+
+#: Implementation Decision 61's other half: how the execution ENDED, closed at the four tokens
+#: `wave-submission.py` seals into a conductor record.
+ENDED_COMPLETED = "completed"
+ENDED_ABORTED = "aborted"
+ENDED_FAILED = "failed"
+ENDED_UNKNOWN_EFFECT = "unknown-effect"
+ENDED_STATES = (ENDED_ABORTED, ENDED_COMPLETED, ENDED_FAILED, ENDED_UNKNOWN_EFFECT)
+#: The three keys that carry those facts. Present or absent AS A GROUP: a record carrying two of them
+#: is a record whose ending has no state to belong to.
+ENDED_KEYS = ("ended_state", "ended_reasons", "last_proven_stage")
+
+#: Each non-`completed` ending's terminal state. Deliberately NOT an ordered ranking: `unknown-effect`
+#: outranks every other ending in `Assessment.state`'s first branch, and `failed` and `aborted` are
+#: PEERS whose disagreement is refused there rather than resolved by an order recorded here.
+ENDED_STATE_TERMINALS = {
+    ENDED_UNKNOWN_EFFECT: STATE_UNKNOWN_EFFECT,
+    ENDED_FAILED: STATE_FAILED,
+    ENDED_ABORTED: STATE_ABORTED,
+}
 
 #: Each state's consequence, worded as issue 07 words it.
 CONSEQUENCE = {
@@ -170,6 +245,21 @@ CONSEQUENCE = {
     STATE_BLOCKED: (
         "the wave is not complete; the reasons name what is missing, and an unresolved blocking "
         "finding may never be carried into completion"
+    ),
+    STATE_ABORTED: (
+        "the wave's execution was stopped before it completed: a conductor record says it ended "
+        "aborted, and the last proven stage is where its evidence stops. Completion evidence beside "
+        "that record proves what was reached before the stop and never that the wave delivered"
+    ),
+    STATE_FAILED: (
+        "the wave's execution ran and ended failed: the reasons name what ended it and the last "
+        "proven stage names where evidence stops. A passing gate receipt beside it describes the "
+        "snapshot that receipt measured, not a completed wave"
+    ),
+    STATE_UNKNOWN_EFFECT: (
+        "the wave's execution ended leaving an effect of unknown extent: recovery, not completion, is "
+        "what follows. Nothing here may be read as evidence that the repository, the queue, or any "
+        "external system is in a known state, and no later record may talk this state down"
     ),
 }
 
@@ -249,11 +339,16 @@ RESIDUALS = (
     "condition 3 hashes declared artifacts in the target tree as it is now; no Git snapshot, commit, "
     "or merge-base is verified, because this tool runs no subprocess",
     "reviews, the artifact manifest, the critic findings, and the conductor record are same-user "
-    "assertions: validated and cross-checked against the journal, never authenticated",
+    "assertions: validated and cross-checked against the journal, never authenticated, and a seal "
+    "from wave-submission.py adds provenance no consumer here reads",
     "freshness is underivable: a stale but internally consistent artifact set derives its state by "
     "construction",
-    "Implementation Decision 61's `aborted`, `failed`, and `unknown-effect` are not derivable from "
-    "these artifacts and are never guessed; such a wave reaches blocked with its reasons named",
+    "Implementation Decision 61's `aborted`, `failed`, and `unknown-effect` are read from the "
+    "conductor record's ended_state, which is the conductor's own account: an ending nobody recorded "
+    "is unobservable here, and a wave whose record says completed derives from completion evidence "
+    "alone",
+    "an unknown effect is derived, never bounded: this tool names the state and the last proven "
+    "stage, and what the effect actually touched stays a recovery question no artifact here answers",
 )
 
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
@@ -585,6 +680,11 @@ class Assessment:
         self.conditions: dict[int, list[str]] = {number: [] for number, _ in CONDITIONS}
         self.critic_reasons: list[str] = []
         self.binding_reasons: list[str] = []
+        #: How each supplied conductor record says the execution ended, keyed by the non-`completed`
+        #: token and holding the paths that claim it, so a disagreement is representable rather than
+        #: overwritten. `completed` is deliberately absent from this map: it overrides nothing.
+        self.ended_states: dict[str, list[str]] = {}
+        self.ended_reasons: list[str] = []
         self.gate_mode: str | None = None
         self.gate_outcome: str | None = None
         self.wave_id: str | None = None
@@ -604,9 +704,16 @@ class Assessment:
         self.evidence: dict[str, Any] = {
             "conductor_recorded_at": None,
             "declared_artifacts": None,
+            # Decision 61's ended facts: every record's account, in the order they were supplied, plus
+            # the dominant ending the fold selected from them. `last_proven_stage` is published only
+            # when ONE account carries that ending, because choosing between two would be a pick.
+            "ended_accounts": [],
+            "ended_reasons": [],
+            "ended_state": None,
             "fan_in_approval": None,
             "integrator_nodes": [],
             "journal_digest": None,
+            "last_proven_stage": None,
             "mode": None,
             "plan_digest": None,
             "required_nodes": None,
@@ -620,19 +727,41 @@ class Assessment:
         self.conditions[number].append(reason)
 
     def reasons(self) -> list[str]:
-        flat = list(self.binding_reasons)
+        # The ended facts lead, because how the execution ended outranks what its evidence shows.
+        flat = list(self.ended_reasons)
+        flat.extend(self.binding_reasons)
         for number, _ in CONDITIONS:
             flat.extend(self.conditions[number])
         flat.extend(self.critic_reasons)
         return flat
 
     def state(self) -> str:
-        """Exactly one state, always.
+        """Exactly one state, always. Implementation Decision 61's six, folded in this exact order.
 
-        The selection is one partition over one value, so two states are unrepresentable. The final
-        branch is defence in depth against this module's own worst failure -- returning no state --
-        and it is a named reason rather than an `assert`, which `python -O` would strip.
+        The selection is one partition over one value, so two states are unrepresentable. The order of
+        the first three branches is the whole of Decision 61's precedence and each boundary is
+        load-bearing:
+
+          * `unknown-effect` DOMINATES, before the disagreement branch and before every piece of
+            completion evidence. An unknown effect can never be talked down -- not by a peer record
+            claiming the execution merely failed, and not by a later one claiming it completed.
+          * TWO DIFFERENT other endings are `blocked`, because `failed` and `aborted` are peers that
+            nothing here can rank; `assess_conductor_record` has already named the disagreement, and
+            refusing to pick is the point.
+          * ONE other ending overrides the completion evidence: the eight conditions describe what was
+            proven, never that the execution reached its end.
+
+        `completed` is not in `ended_states` at all, so a completed execution falls through to the
+        three states this module derived before Decision 61's other three existed. The final branch is
+        defence in depth against this module's own worst failure -- returning no state -- and it is a
+        named reason rather than an `assert`, which `python -O` would strip.
         """
+        if ENDED_UNKNOWN_EFFECT in self.ended_states:
+            return ENDED_STATE_TERMINALS[ENDED_UNKNOWN_EFFECT]
+        if len(self.ended_states) > 1:
+            return STATE_BLOCKED
+        if self.ended_states:
+            return ENDED_STATE_TERMINALS[next(iter(self.ended_states))]
         if self.reasons():
             return STATE_BLOCKED
         if self.gate_mode == GATE_AUTHORITATIVE_PASSED:
@@ -1335,10 +1464,150 @@ def assess_traceability(assessment: Assessment, journal: Journal | None) -> None
             )
 
 
+def read_ended_facts(assessment: Assessment, record: dict[str, Any], where: str) -> None:
+    """Read ONE record's account of how the execution ended (Implementation Decision 61).
+
+    The three keys are present or absent AS A GROUP. All absent is a NAMED REASON -- how the execution
+    ended is unrecorded -- and never an assumed `completed`, because Decision 61 closes the outcome at
+    six values and an absent field is not one of them; that keeps every
+    `wave-verdict-conductor-record@1` written before these fields existed parseable rather than
+    silently successful. Facts that CONTRADICT each other are malformed input, exactly like any other
+    document that is not what it claims to be: this module refuses to resolve a record that says the
+    execution both completed and stopped somewhere, or that names an ending it does not substantiate.
+    """
+    present = [key for key in ENDED_KEYS if key in record]
+    if not present:
+        assessment.note(
+            8,
+            f"the conductor record {where} records no ended_state, so how the execution ended is "
+            "unrecorded; Implementation Decision 61 closes the wave outcome at six values and an "
+            "absent field is not one of them",
+        )
+        return
+    if len(present) != len(ENDED_KEYS):
+        missing = [key for key in ENDED_KEYS if key not in record]
+        raise InputError(
+            f"the conductor record {where} carries {present} without {missing}; the three ended-state "
+            "keys are present or absent AS A GROUP, so a record carrying only some of them is a record "
+            "whose ending has no complete account"
+        )
+    ended = record["ended_state"]
+    if ended not in ENDED_STATES:
+        raise InputError(
+            f"the conductor record {where} declares ended_state {ended!r}, which is not one of "
+            f"{list(ENDED_STATES)}; an unrecognised ending is not an ending this module may rank"
+        )
+    reasons = record.get("ended_reasons")
+    if not isinstance(reasons, list) or any(not isinstance(item, str) or not item for item in reasons):
+        raise InputError(
+            f"the conductor record {where} carries ended_reasons {reasons!r} rather than a list of "
+            "non-empty strings"
+        )
+    stage = record.get("last_proven_stage")
+    if ended == ENDED_COMPLETED:
+        if reasons:
+            raise InputError(
+                f"the conductor record {where} says the execution completed and still names "
+                "ended_reasons; a completed execution has no ending reason, so the two fields cannot "
+                "both be true and neither may be preferred over the other here"
+            )
+        if stage is not None:
+            raise InputError(
+                f"the conductor record {where} says the execution completed and names "
+                f"last_proven_stage {stage!r}; for a completed execution the last proven stage is the "
+                "execution, so the field is null"
+            )
+    elif not reasons:
+        raise InputError(
+            f"the conductor record {where} says the execution ended {ended} and names no reason, so "
+            "nothing in it states what ended the execution"
+        )
+    elif not isinstance(stage, str) or not stage:
+        raise InputError(
+            f"the conductor record {where} says the execution ended {ended} and its last_proven_stage "
+            f"is {stage!r} rather than a non-empty string; user story 91 leads a failure with where "
+            "evidence stops, not only with the fact that it stopped"
+        )
+    assessment.evidence["ended_accounts"].append(
+        {"ended_reasons": list(reasons), "ended_state": ended, "last_proven_stage": stage, "record": where}
+    )
+    if ended == ENDED_COMPLETED:
+        return
+    assessment.ended_states.setdefault(ended, []).append(where)
+    assessment.ended_reasons.append(
+        f"the conductor record {where} says the execution ended {ended} at last proven stage "
+        f"{stage!r}: {'; '.join(reasons)}"
+    )
+
+
+def resolve_ended_state(assessment: Assessment) -> None:
+    """Fold every record's ending into the ONE account the document publishes.
+
+    `Assessment.state` folds the same three tokens into a state; this publishes the facts behind that
+    fold. The two rules that are not simple bookkeeping:
+
+      * `unknown-effect` DOMINATES and is never talked down, so a peer ending recorded beside it is
+        named as outranked rather than resolved against.
+      * `failed` and `aborted` are PEERS. Two of them is a named disagreement and NO published ending,
+        because picking one would be this module inventing the fact it exists to read.
+
+    A `completed` account beside a non-`completed` one is named too: Decision 61's "process completion
+    and publication cannot manufacture success" is exactly the case of a later record claiming a wave
+    that crashed came out fine.
+    """
+    if not assessment.ended_states:
+        return
+    completed = [
+        account["record"]
+        for account in assessment.evidence["ended_accounts"]
+        if account["ended_state"] == ENDED_COMPLETED
+    ]
+    if completed:
+        assessment.ended_reasons.append(
+            f"the conductor record(s) {', '.join(completed)} say the execution completed while "
+            f"another record says it ended {', '.join(sorted(assessment.ended_states))}; a later "
+            "account of completion never talks down a recorded ending"
+        )
+    if ENDED_UNKNOWN_EFFECT in assessment.ended_states:
+        dominant = ENDED_UNKNOWN_EFFECT
+        outranked = sorted(token for token in assessment.ended_states if token != dominant)
+        if outranked:
+            assessment.ended_reasons.append(
+                f"an unknown effect outranks every other recorded ending ({', '.join(outranked)}): an "
+                "unknown effect is never talked down, and what follows it is recovery rather than "
+                "completion"
+            )
+    elif len(assessment.ended_states) > 1:
+        tokens = sorted(assessment.ended_states)
+        stated = "; ".join(f"{token} in {', '.join(assessment.ended_states[token])}" for token in tokens)
+        assessment.ended_reasons.append(
+            f"the supplied conductor records state different endings ({stated}), and "
+            f"{' outranks neither of the others, nor does '.join(tokens)}, so no ended state is picked "
+            "and this wave stays blocked until one account is withdrawn or corrected"
+        )
+        return
+    else:
+        dominant = next(iter(assessment.ended_states))
+    accounts = [
+        account
+        for account in assessment.evidence["ended_accounts"]
+        if account["ended_state"] == dominant
+    ]
+    assessment.evidence["ended_state"] = dominant
+    assessment.evidence["ended_reasons"] = [
+        reason for account in accounts for reason in account["ended_reasons"]
+    ]
+    # Published only when ONE account carries the dominant ending: two accounts of the same ending can
+    # name two stages, and choosing between them would be a pick. Both stay in `ended_accounts`.
+    assessment.evidence["last_proven_stage"] = (
+        accounts[0]["last_proven_stage"] if len(accounts) == 1 else None
+    )
+
+
 def assess_conductor_record(
-    assessment: Assessment, journal: Journal | None, record: dict[str, Any] | None, path: str | None
+    assessment: Assessment, journal: Journal | None, records: list[tuple[str, dict[str, Any]]]
 ) -> None:
-    """Condition 8: "the conductor records the verdict".
+    """Condition 8: "the conductor records the verdict", plus Decision 61's ended facts.
 
     A tool cannot be evidence of its own recording, so what is checked here is the conductor's own
     record of the state it is about to write down: which wave, which exact journal state it read,
@@ -1346,27 +1615,40 @@ def assess_conductor_record(
     external head anchor `wave-journal.py`'s `read_journal` names as the remedy for a rewritten last
     line or a truncated tail, and the conductor is the only party holding a copy that did not come
     out of the file being read.
+
+    MORE THAN ONE RECORD IS ADMITTED, because a wave that crashed and was resumed has two accounts of
+    how its execution ended, and argparse keeping only the last one would let the later account erase
+    the earlier silently. Every record is validated, anchored, and ordered against the same journal;
+    `resolve_ended_state` then folds their endings, which is what makes the no-talking-down rule mean
+    anything. `conductor_recorded_at` publishes the LATEST stamp, because that is the last instant at
+    which a conductor recorded a verdict over this wave.
     """
-    if record is None:
+    if not records:
         assessment.note(
             8,
             "no conductor record was supplied, so nothing shows the conductor read this wave's exact "
             "journal state and is recording a verdict over it",
         )
         return
-    where = str(path)
-    anchor = _text_field(record, "journal_digest", "conductor record", where)
-    if not _HEX64.match(anchor):
-        raise InputError(
-            f"the conductor record {where} carries a journal_digest that is not 64 lowercase hex "
-            "characters"
-        )
-    # Both are read for their presence: a record naming no destination and no recorder is a note to
-    # nobody, and `_text_field` refuses an empty or absent value as malformed input.
-    _text_field(record, "verdict_destination", "conductor record", where)
-    _text_field(record, "recorded_by", "conductor record", where)
-    recorded_at = _instant(record.get("recorded_at"), "the conductor record's recorded_at", where)
-    assessment.evidence["conductor_recorded_at"] = recorded_at
+    anchors: list[tuple[str, str, str]] = []
+    stamps: list[str] = []
+    for where, record in records:
+        anchor = _text_field(record, "journal_digest", "conductor record", where)
+        if not _HEX64.match(anchor):
+            raise InputError(
+                f"the conductor record {where} carries a journal_digest that is not 64 lowercase hex "
+                "characters"
+            )
+        # Both are read for their presence: a record naming no destination and no recorder is a note
+        # to nobody, and `_text_field` refuses an empty or absent value as malformed input.
+        _text_field(record, "verdict_destination", "conductor record", where)
+        _text_field(record, "recorded_by", "conductor record", where)
+        recorded_at = _instant(record.get("recorded_at"), "the conductor record's recorded_at", where)
+        read_ended_facts(assessment, record, where)
+        anchors.append((where, anchor, recorded_at))
+        stamps.append(recorded_at)
+    assessment.evidence["conductor_recorded_at"] = max(stamps)
+    resolve_ended_state(assessment)
     if journal is None:
         assessment.note(
             8,
@@ -1374,19 +1656,20 @@ def assess_conductor_record(
             "be compared with the journal it claims to be about",
         )
         return
-    if anchor != journal.journal_digest:
-        assessment.note(
-            8,
-            f"the conductor's retained journal_digest {anchor} is not this projection's "
-            f"{journal.journal_digest}: the journal has been rewritten at its head, truncated at its "
-            "tail, or this record is about a different read",
-        )
-    if recorded_at < journal.last_at:
-        assessment.note(
-            8,
-            f"the conductor record is stamped {recorded_at}, before the journal's last entry at "
-            f"{journal.last_at}, so it cannot be a record of this wave's completed evidence",
-        )
+    for _where, anchor, recorded_at in anchors:
+        if anchor != journal.journal_digest:
+            assessment.note(
+                8,
+                f"the conductor's retained journal_digest {anchor} is not this projection's "
+                f"{journal.journal_digest}: the journal has been rewritten at its head, truncated at "
+                "its tail, or this record is about a different read",
+            )
+        if recorded_at < journal.last_at:
+            assessment.note(
+                8,
+                f"the conductor record is stamped {recorded_at}, before the journal's last entry at "
+                f"{journal.last_at}, so it cannot be a record of this wave's completed evidence",
+            )
 
 
 def assess_critic(
@@ -1513,9 +1796,11 @@ def derive_command(args: argparse.Namespace) -> dict[str, Any]:
     if baseline is not None:
         require_schema(baseline, "schema_version", BASELINE_SCHEMA, "baseline comparison", args.baseline_comparison)
 
-    conductor = load_artifact(args.conductor_record, "conductor record") if args.conductor_record else None
-    if conductor is not None:
-        require_schema(conductor, "schema", CONDUCTOR_RECORD_SCHEMA, "conductor record", args.conductor_record)
+    conductors = []
+    for path in args.conductor_record:
+        document = load_artifact(path, "conductor record")
+        require_schema(document, "schema", CONDUCTOR_RECORD_SCHEMA, "conductor record", path)
+        conductors.append((path, document))
 
     findings = load_artifact(args.critic_findings, "critic findings") if args.critic_findings else None
     if findings is not None:
@@ -1527,7 +1812,7 @@ def derive_command(args: argparse.Namespace) -> dict[str, Any]:
         journal,
         [
             ("wave artifact manifest", (manifest or {}).get("wave_id")),
-            ("conductor record", (conductor or {}).get("wave_id")),
+            *[(f"conductor record {path}", document.get("wave_id")) for path, document in conductors],
             ("critic findings", (findings or {}).get("wave_id")),
             *[(f"review submission {path}", document.get("wave_id")) for path, document in reviews],
         ],
@@ -1544,11 +1829,17 @@ def derive_command(args: argparse.Namespace) -> dict[str, Any]:
     assess_fan_in(assessment, journal, args.fan_in_approval)
     assess_gate(assessment, receipt, args.authoritative_gate, focused, baseline)
     assess_traceability(assessment, journal)
-    assess_conductor_record(assessment, journal, conductor, args.conductor_record)
+    assess_conductor_record(assessment, journal, conductors)
     assess_critic(assessment, journal, findings, args.critic_findings)
 
     state = assessment.state()
-    gate_passes = None if assessment.gate_outcome is None else assessment.gate_outcome == OUTCOME_PASSED
+    # An execution that did not reach its end never proved the receipt's snapshot is this wave's
+    # result, so the top-level CLAIM is null rather than the receipt's fact. The fact itself stays in
+    # `gate`, where it is a statement about one receipt and not about the wave.
+    ended = state in (STATE_ABORTED, STATE_FAILED, STATE_UNKNOWN_EFFECT)
+    gate_passes = (
+        None if ended or assessment.gate_outcome is None else assessment.gate_outcome == OUTCOME_PASSED
+    )
     return {
         "schema": RESULT_SCHEMA,
         "command": "derive",
@@ -1713,9 +2004,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = _Parser(
         prog="wave-verdict.py",
         description=(
-            "Derive the one terminal wave state -- accepted, remediation-progress, or blocked -- from "
-            "one wave's emitted artifacts. Read-only, offline, subprocess-free, and effect-free: it "
-            "authorizes nothing."
+            "Derive the one terminal wave state -- Implementation Decision 61's accepted, "
+            "remediation-progress, blocked, aborted, failed, or unknown-effect -- from one wave's "
+            "emitted artifacts. Read-only, offline, subprocess-free, and effect-free: it authorizes "
+            "nothing."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1797,10 +2089,14 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument(
         "--conductor-record",
         dest="conductor_record",
-        default=None,
+        action="append",
+        default=[],
         help=(
             f"the conductor's {CONDUCTOR_RECORD_SCHEMA}: wave_id, the journal_digest it retained, "
-            "recorded_by, recorded_at, and verdict_destination"
+            "recorded_by, recorded_at, verdict_destination, and how the execution ended "
+            f"({', '.join(ENDED_STATES)}) with its reasons and last proven stage. Repeat once per "
+            "account: a wave that crashed and was resumed has two, an unknown effect outranks every "
+            "other ending, and two disagreeing endings are refused rather than picked"
         ),
     )
     command.add_argument(

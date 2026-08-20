@@ -34,6 +34,8 @@ from typing import Any
 ROOT = Path(__file__).parents[1]
 TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "wave-verdict.py"
 JOURNAL_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "wave-journal.py"
+#: The producer of the four submissions this tool consumes. `SealedSubmissionRoundTripTests` runs it.
+SUBMISSION_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "wave-submission.py"
 RUNTIME_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "runtime-assignment.py"
 BASELINE_TOOL = ROOT / "scripts" / "gate_baseline.py"
 RUNTIME_POLICY = ROOT / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
@@ -47,9 +49,19 @@ CRITIC_SCHEMA = "agentic-sdlc/wave-critic-findings@1"
 CONDUCTOR_RECORD_SCHEMA = "agentic-sdlc/wave-verdict-conductor-record@1"
 SERVED_SCHEMA = "agentic-sdlc/runtime-served-record@1"
 
+#: `wave-submission.py`'s `--kind` values for the four schemas above, in the same order.
+ARTIFACT_MANIFEST_KIND = "artifact-manifest"
+REVIEW_KIND = "review"
+CRITIC_KIND = "critic-findings"
+CONDUCTOR_RECORD_KIND = "conductor-record"
+
 ACCEPTED = "accepted"
 REMEDIATION_PROGRESS = "remediation-progress"
 BLOCKED = "blocked"
+#: Implementation Decision 61's other three, derived from how the execution ENDED.
+ABORTED = "aborted"
+FAILED = "failed"
+UNKNOWN_EFFECT = "unknown-effect"
 
 EXIT_OK = 0
 #: The undelivered-document code. A state this tool derived but could not put on stdout is neither a
@@ -537,7 +549,13 @@ class WaveCase(unittest.TestCase):
             },
         )
 
-    def write_conductor_record(self, **overrides: Any) -> Path:
+    def write_conductor_record(self, name: str = "conductor-record", **overrides: Any) -> Path:
+        """The record a conductor files for an execution that COMPLETED, unless a test says otherwise.
+
+        The three ended-state keys are part of the default because an absent `ended_state` is its own
+        named reason: leaving them out of the shared fixture would make every test in this module
+        exercise that reason instead of the condition it is about.
+        """
         record = {
             "schema": CONDUCTOR_RECORD_SCHEMA,
             "wave_id": WAVE_ID,
@@ -545,9 +563,22 @@ class WaveCase(unittest.TestCase):
             "recorded_by": "conductor",
             "recorded_at": T6,
             "verdict_destination": "the mission's wave receipt at receipts/wave-1.json",
+            "ended_state": "completed",
+            "ended_reasons": [],
+            "last_proven_stage": None,
         }
         record.update(overrides)
-        return self.store("conductor-record", record)
+        return self.store(name, record)
+
+    def write_ended_record(self, ended: str, name: str, **overrides: Any) -> Path:
+        """A record for an execution that did NOT complete, substantiated the way the schema requires."""
+        ending = {
+            "ended_state": ended,
+            "ended_reasons": [f"the wave's execution ended {ended} while the integrator was merging"],
+            "last_proven_stage": "the reviewer's acceptance of implement-a",
+        }
+        ending.update(overrides)
+        return self.write_conductor_record(name=name, **ending)
 
     def write_findings(self, findings: list[dict[str, Any]] | None = None, wave_id: str = WAVE_ID) -> Path:
         return self.store(
@@ -1651,6 +1682,388 @@ class ConductorRecordTests(WaveCase):
         self.assertIn("names wave 'wave-2'", self.reasons(document))
 
 
+class EndedStateCase(WaveCase):
+    """Shared assertions for Implementation Decision 61's three ended states.
+
+    Every test here starts from the SAME complete, gate-passing, `accepted` argument set and changes
+    only how the conductor's record says the execution ended, so the positive control is the control
+    every test asserts first: if the ended state stopped overriding, these tests would derive
+    `accepted` and fail.
+    """
+
+    def assert_ending_overrides(self, document: dict[str, Any], state: str, ended: str) -> None:
+        self.assertEqual(document["state"], state, self.reasons(document))
+        # The eight conditions are untouched: the completion evidence IS all there, and what the ended
+        # state overrides is the conclusion drawn from it, never a condition's own finding.
+        self.assertTrue(all(item["met"] for item in document["conditions"]), document["conditions"])
+        self.assertFalse(document["permits_normal_delivery"])
+        # The receipt's fact survives in `gate`; the top-level CLAIM does not, because an execution
+        # that did not reach its end never proved that snapshot is this wave's result.
+        self.assertIsNone(document["repository_gate_passes"])
+        self.assertEqual(document["gate"]["outcome"], "passed")
+        self.assertEqual(document["evidence"]["ended_state"], ended)
+        self.assertEqual(
+            document["evidence"]["last_proven_stage"], "the reviewer's acceptance of implement-a"
+        )
+        self.assertEqual(
+            document["evidence"]["ended_reasons"],
+            [f"the wave's execution ended {ended} while the integrator was merging"],
+        )
+        self.assertEqual(
+            [account["ended_state"] for account in document["evidence"]["ended_accounts"]], [ended]
+        )
+        self.assertIn(f"says the execution ended {ended}", self.reasons(document))
+        self.assertIn("last proven stage", self.reasons(document))
+
+
+class AbortedOutcomeTests(EndedStateCase):
+    """`aborted`: the execution was stopped before it completed."""
+
+    def test_an_aborted_execution_overrides_a_complete_gate_passing_evidence_set(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(self.write_ended_record(ABORTED, "record-aborted"))
+        document = self.derive(args)
+        self.assert_ending_overrides(document, ABORTED, ABORTED)
+        self.assertIn("stopped before it completed", document["consequence"])
+        self.assertIn("never that the wave delivered", document["consequence"])
+
+    def test_an_aborted_execution_with_no_reason_is_malformed_input(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        # POSITIVE CONTROL: the substantiated record derives `aborted`, so the refusal below is about
+        # the missing reason and not about the state.
+        args["--conductor-record"] = str(self.write_ended_record(ABORTED, "record-aborted"))
+        self.assertEqual(self.derive(args)["state"], ABORTED)
+        args["--conductor-record"] = str(
+            self.write_conductor_record(
+                name="record-unstated",
+                ended_state=ABORTED,
+                ended_reasons=[],
+                last_proven_stage="the reviewer's acceptance of implement-a",
+            )
+        )
+        done = self.derive_failure(args)
+        self.assertIn(b"ended aborted and names no reason", done.stderr)
+
+    def test_an_aborted_execution_with_no_last_proven_stage_is_malformed_input(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(self.write_ended_record(ABORTED, "record-aborted"))
+        self.assertEqual(self.derive(args)["state"], ABORTED)
+        args["--conductor-record"] = str(
+            self.write_ended_record(ABORTED, "record-stageless", last_proven_stage=None)
+        )
+        done = self.derive_failure(args)
+        self.assertIn(b"last_proven_stage is None rather than a non-empty string", done.stderr)
+
+
+class FailedOutcomeTests(EndedStateCase):
+    """`failed`: the execution ran and ended failed."""
+
+    def test_a_failed_execution_overrides_a_complete_gate_passing_evidence_set(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(self.write_ended_record(FAILED, "record-failed"))
+        document = self.derive(args)
+        self.assert_ending_overrides(document, FAILED, FAILED)
+        self.assertIn("ran and ended failed", document["consequence"])
+        self.assertIn("not a completed wave", document["consequence"])
+
+    def test_a_failed_execution_still_derives_failed_when_the_gate_receipt_is_red(self) -> None:
+        """A red gate would be `blocked` on its own; the ending is what the state comes from."""
+        args = self.remediation_args()
+        self.assertEqual(self.derive(args)["state"], REMEDIATION_PROGRESS)
+        args["--conductor-record"] = str(self.write_ended_record(FAILED, "record-failed"))
+        document = self.derive(args)
+        self.assertEqual(document["state"], FAILED, self.reasons(document))
+        self.assertIsNone(document["repository_gate_passes"])
+        self.assertEqual(document["gate"]["outcome"], "failed")
+        self.assertFalse(document["permits_normal_delivery"])
+
+    def test_an_ended_state_outside_the_four_tokens_is_malformed_input(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(self.write_ended_record(FAILED, "record-failed"))
+        self.assertEqual(self.derive(args)["state"], FAILED)
+        args["--conductor-record"] = str(self.write_ended_record("mostly-failed", "record-vague"))
+        done = self.derive_failure(args)
+        self.assertIn(b"declares ended_state 'mostly-failed'", done.stderr)
+        self.assertIn(b"not an ending this module may rank", done.stderr)
+
+
+class UnknownEffectOutcomeTests(EndedStateCase):
+    """`unknown-effect`: the execution ended leaving an effect of unknown extent."""
+
+    def test_an_unknown_effect_overrides_a_complete_gate_passing_evidence_set(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(self.write_ended_record(UNKNOWN_EFFECT, "record-unknown"))
+        document = self.derive(args)
+        self.assert_ending_overrides(document, UNKNOWN_EFFECT, UNKNOWN_EFFECT)
+        self.assertIn("effect of unknown extent", document["consequence"])
+        self.assertIn("recovery, not completion", document["consequence"])
+        self.assertIn("no later record may talk this state down", document["consequence"])
+
+    def test_the_unknown_effect_residual_says_the_effect_is_named_and_never_bounded(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(self.write_ended_record(UNKNOWN_EFFECT, "record-unknown"))
+        document = self.derive(args)
+        self.assertEqual(document["state"], UNKNOWN_EFFECT)
+        self.assertTrue(
+            any("never bounded" in residual for residual in document["residuals"]),
+            document["residuals"],
+        )
+        # POSITIVE CONTROL over the same assertion shape: the residual that WAS there before this
+        # state existed is still published, so the check above is about an addition and not about a
+        # rewritten list.
+        self.assertTrue(
+            any("freshness is underivable" in residual for residual in document["residuals"]),
+            document["residuals"],
+        )
+
+
+class EndedStatePrecedenceTests(WaveCase):
+    """The fold itself: dominance, the peer refusal, and what `completed` does not do."""
+
+    def test_an_unknown_effect_outranks_a_failed_account_recorded_beside_it(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = [
+            str(self.write_ended_record(FAILED, "record-failed")),
+            str(self.write_ended_record(UNKNOWN_EFFECT, "record-unknown")),
+        ]
+        document = self.derive(args)
+        self.assertEqual(document["state"], UNKNOWN_EFFECT, self.reasons(document))
+        self.assertEqual(document["evidence"]["ended_state"], UNKNOWN_EFFECT)
+        self.assertIn("an unknown effect outranks every other recorded ending (failed)", self.reasons(document))
+        # Both accounts are published; the outranked one is never dropped.
+        self.assertEqual(
+            sorted(account["ended_state"] for account in document["evidence"]["ended_accounts"]),
+            [FAILED, UNKNOWN_EFFECT],
+        )
+
+    def test_the_order_of_the_two_accounts_does_not_change_the_dominant_ending(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        first = str(self.write_ended_record(UNKNOWN_EFFECT, "record-unknown"))
+        second = str(self.write_ended_record(ABORTED, "record-aborted"))
+        args["--conductor-record"] = [first, second]
+        self.assertEqual(self.derive(args)["state"], UNKNOWN_EFFECT)
+        args["--conductor-record"] = [second, first]
+        self.assertEqual(self.derive(args)["state"], UNKNOWN_EFFECT)
+
+    def test_a_later_completed_account_never_talks_down_a_recorded_ending(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = [
+            str(self.write_ended_record(UNKNOWN_EFFECT, "record-unknown")),
+            str(self.write_conductor_record(name="record-completed")),
+        ]
+        document = self.derive(args)
+        self.assertEqual(document["state"], UNKNOWN_EFFECT, self.reasons(document))
+        self.assertIn("never talks down a recorded ending", self.reasons(document))
+
+    def test_two_disagreeing_peer_endings_are_refused_rather_than_picked(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = [
+            str(self.write_ended_record(FAILED, "record-failed")),
+            str(self.write_ended_record(ABORTED, "record-aborted")),
+        ]
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED, self.reasons(document))
+        self.assertIn("state different endings", self.reasons(document))
+        self.assertIn("no ended state is picked", self.reasons(document))
+        # NOTHING is published as the ending, because publishing one would be the pick this refuses.
+        self.assertIsNone(document["evidence"]["ended_state"])
+        self.assertIsNone(document["evidence"]["last_proven_stage"])
+        self.assertEqual(document["evidence"]["ended_reasons"], [])
+        self.assertEqual(
+            sorted(account["ended_state"] for account in document["evidence"]["ended_accounts"]),
+            [ABORTED, FAILED],
+        )
+
+    def test_an_ending_outranks_the_named_reasons_that_would_otherwise_block(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        # An unreviewed workstream is `blocked` on its own; the recorded ending is what this derives.
+        args.pop("--review")
+        args["--conductor-record"] = str(self.write_ended_record(ABORTED, "record-aborted"))
+        document = self.derive(args)
+        self.assertEqual(document["state"], ABORTED, self.reasons(document))
+        self.assertFalse(self.condition(document, 4)["met"])
+        self.assertIn("with no accepted review", self.reasons(document))
+
+    def test_a_completed_account_falls_through_to_the_evidence_derived_states(self) -> None:
+        """`completed` overrides nothing: all three older derivations must still be reachable."""
+        args = self.accepted_args()
+        accepted = self.derive(args)
+        self.assertEqual(accepted["state"], ACCEPTED)
+        self.assertIsNone(accepted["evidence"]["ended_state"])
+        self.assertEqual(accepted["evidence"]["ended_accounts"], [
+            {
+                "ended_reasons": [],
+                "ended_state": "completed",
+                "last_proven_stage": None,
+                "record": args["--conductor-record"],
+            }
+        ])
+        self.assertTrue(accepted["repository_gate_passes"])
+        self.assertTrue(accepted["permits_normal_delivery"])
+        args.pop("--review")
+        blocked = self.derive(args)
+        self.assertEqual(blocked["state"], BLOCKED)
+        self.setUp()
+        remediation = self.derive(self.remediation_args())
+        self.assertEqual(remediation["state"], REMEDIATION_PROGRESS)
+
+    def test_two_completed_accounts_publish_the_latest_stamp_and_no_ending(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = [
+            str(self.write_conductor_record(name="record-early", recorded_at=T5)),
+            str(self.write_conductor_record(name="record-late", recorded_at=T6)),
+        ]
+        document = self.derive(args)
+        self.assertEqual(document["state"], ACCEPTED, self.reasons(document))
+        self.assertEqual(document["evidence"]["conductor_recorded_at"], T6)
+        self.assertIsNone(document["evidence"]["ended_state"])
+
+    def test_a_second_record_is_validated_rather_than_overwritten_by_the_last_one(self) -> None:
+        """The reason `--conductor-record` repeats at all: argparse would have kept only the last."""
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = [
+            str(self.write_conductor_record(name="record-stale", journal_digest="b" * 64)),
+            str(self.write_conductor_record(name="record-good")),
+        ]
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED, self.reasons(document))
+        self.assertIn(f"retained journal_digest {'b' * 64} is not this projection's", self.reasons(document))
+        self.assertFalse(self.condition(document, 8)["met"])
+
+    def test_two_accounts_of_the_same_ending_publish_no_single_last_proven_stage(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = [
+            str(self.write_ended_record(FAILED, "record-failed-one")),
+            str(
+                self.write_ended_record(
+                    FAILED, "record-failed-two", last_proven_stage="the implementer's second attempt"
+                )
+            ),
+        ]
+        document = self.derive(args)
+        self.assertEqual(document["state"], FAILED, self.reasons(document))
+        # Two stages, so neither is published as THE stage; both stay in the accounts.
+        self.assertIsNone(document["evidence"]["last_proven_stage"])
+        self.assertEqual(
+            sorted(account["last_proven_stage"] for account in document["evidence"]["ended_accounts"]),
+            ["the implementer's second attempt", "the reviewer's acceptance of implement-a"],
+        )
+
+
+class EndedFactsInputTests(WaveCase):
+    """The three ended keys are present or absent AS A GROUP, and contradictions are exit 2."""
+
+    def test_a_record_with_no_ended_state_at_all_is_a_named_reason_rather_than_a_completed_one(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        record = json.loads(Path(args["--conductor-record"]).read_text(encoding="utf-8"))
+        for key in ("ended_state", "ended_reasons", "last_proven_stage"):
+            del record[key]
+        args["--conductor-record"] = str(self.store("record-silent", record))
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED, self.reasons(document))
+        self.assertIn("records no ended_state", self.reasons(document))
+        self.assertIn("how the execution ended is unrecorded", self.reasons(document))
+        self.assertFalse(self.condition(document, 8)["met"])
+        self.assertIsNone(document["evidence"]["ended_state"])
+        self.assertEqual(document["evidence"]["ended_accounts"], [])
+
+    def test_ended_facts_carried_without_the_state_they_belong_to_are_malformed_input(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        record = json.loads(Path(args["--conductor-record"]).read_text(encoding="utf-8"))
+        del record["ended_state"]
+        record["ended_reasons"] = ["the integrator's merge stopped part-way"]
+        args["--conductor-record"] = str(self.store("record-orphan", record))
+        done = self.derive_failure(args)
+        self.assertIn(b"present or absent AS A GROUP", done.stderr)
+
+    def test_partial_ended_key_group_membership_is_malformed_input(self) -> None:
+        """The exact gap: a record carrying two of the three ended keys must never derive silently.
+
+        POSITIVE CONTROLS bracket the negative cases: the all-three form (the shared fixture's default)
+        derives normally, and the zero-of-three legacy form still takes the named condition-8 path --
+        the group rule refuses only the two shapes in between.
+        """
+        args = self.accepted_args()
+        # POSITIVE CONTROL: all three keys present derives normally.
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        base = json.loads(Path(args["--conductor-record"]).read_text(encoding="utf-8"))
+
+        # POSITIVE CONTROL: zero of three keys present still takes the named condition-8 path.
+        silent = dict(base)
+        for key in ("ended_state", "ended_reasons", "last_proven_stage"):
+            del silent[key]
+        args["--conductor-record"] = str(self.store("record-partial-silent", silent))
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED, self.reasons(document))
+        self.assertIn("records no ended_state", self.reasons(document))
+        self.assertIn("how the execution ended is unrecorded", self.reasons(document))
+        self.assertFalse(self.condition(document, 8)["met"])
+        self.assertIsNone(document["evidence"]["ended_state"])
+        self.assertEqual(document["evidence"]["ended_accounts"], [])
+
+        # NEGATIVE: exactly two of three present, the third key entirely ABSENT (not null).
+        shapes = {
+            "ended_state and ended_reasons present, last_proven_stage absent": ("last_proven_stage",),
+            "ended_state and last_proven_stage present, ended_reasons absent": ("ended_reasons",),
+        }
+        for description, drop_keys in shapes.items():
+            with self.subTest(description):
+                record = dict(base)
+                for key in drop_keys:
+                    del record[key]
+                args["--conductor-record"] = str(
+                    self.store(f"record-partial-{'-'.join(drop_keys)}", record)
+                )
+                done = self.derive_failure(args)
+                self.assertIn(b"present or absent AS A GROUP", done.stderr)
+
+    def test_a_completed_record_that_names_an_ending_reason_is_malformed_input(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(
+            self.write_conductor_record(
+                name="record-arguing", ended_reasons=["the integrator's merge stopped part-way"]
+            )
+        )
+        done = self.derive_failure(args)
+        self.assertIn(b"says the execution completed and still names ended_reasons", done.stderr)
+
+    def test_a_completed_record_that_names_a_last_proven_stage_is_malformed_input(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(
+            self.write_conductor_record(name="record-staged", last_proven_stage="the fan-in")
+        )
+        done = self.derive_failure(args)
+        self.assertIn(b"says the execution completed and names last_proven_stage", done.stderr)
+
+    def test_ended_reasons_that_are_not_a_list_of_strings_are_malformed_input(self) -> None:
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--conductor-record"] = str(
+            self.write_ended_record(FAILED, "record-prose", ended_reasons="the merge stopped")
+        )
+        done = self.derive_failure(args)
+        self.assertIn(b"carries ended_reasons 'the merge stopped'", done.stderr)
+
+
 class CriticTests(WaveCase):
     """The conductor's own classification of the critic's advice."""
 
@@ -1979,10 +2392,20 @@ class ShapeTests(WaveCase):
         remediation = self.derive(self.remediation_args())
         self.setUp()
         blocked = self.derive({})
+        # Decision 61's other three, over one wave each: adding three states to the vocabulary must
+        # not have added a key to the document or moved a fact out of `evidence`.
+        endings = []
+        for ended in (ABORTED, FAILED, UNKNOWN_EFFECT):
+            self.setUp()
+            args = self.accepted_args()
+            args["--conductor-record"] = str(self.write_ended_record(ended, f"record-{ended}"))
+            document = self.derive(args)
+            self.assertEqual(document["state"], ended, self.reasons(document))
+            endings.append(document)
         self.assertEqual(accepted["state"], ACCEPTED)
         self.assertEqual(remediation["state"], REMEDIATION_PROGRESS)
         self.assertEqual(blocked["state"], BLOCKED)
-        for other in (remediation, blocked):
+        for other in (remediation, blocked, *endings):
             self.assertEqual(sorted(accepted), sorted(other))
             self.assertEqual(sorted(accepted["critic"]), sorted(other["critic"]))
             self.assertEqual(sorted(accepted["gate"]), sorted(other["gate"]))
@@ -2125,6 +2548,126 @@ class HostileDescriptorTests(WaveCase):
             env=constructed_environment(),
         )
         self.assertEqual(done.returncode, EXIT_INTERNAL)
+
+
+class SealedSubmissionRoundTripTests(WaveCase):
+    """The other half of Seed agentic-sdlc-4e5a: the four submissions now have a producer.
+
+    `skills/agentic-sdlc/tools/wave-submission.py` seals all four documents this module validates, so
+    the pairing is asserted from THIS side too: a change here that closed a key set, required a
+    different field, or rejected the added `digest` would fail here rather than in the producer's own
+    module, where it would look like someone else's problem.
+    """
+
+    def seal(self, kind: str, body: dict[str, Any], name: str) -> Path:
+        """Run the REAL producer over one body and file the sealed document in the canonical form."""
+        source = self.store(f"{name}-body", body)
+        done = subprocess.run(
+            [sys.executable, "-B", str(SUBMISSION_TOOL), "define", "--kind", kind, "--submission", str(source)],
+            capture_output=True,
+            cwd=str(self.root),
+            check=False,
+            env=constructed_environment(),
+        )
+        self.assertEqual(done.returncode, EXIT_OK, done.stderr.decode("utf-8", "replace"))
+        result = json.loads(done.stdout)
+        self.assertEqual(result["verdict"], "defined", " || ".join(result["reasons"]))
+        path = self.work / f"{name}-sealed.json"
+        path.write_bytes(canonical(result["submission"]))
+        return path
+
+    def read(self, path: Path) -> dict[str, Any]:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def sealed_args(self, **record_overrides: Any) -> dict[str, Any]:
+        """The accepted argument set with all four same-user assertions replaced by sealed ones."""
+        args = self.accepted_args()
+        args["--artifact-manifest"] = str(
+            self.seal(ARTIFACT_MANIFEST_KIND, self.read(Path(args["--artifact-manifest"])), "manifest")
+        )
+        args["--review"] = [str(self.seal(REVIEW_KIND, self.read(Path(args["--review"][0])), "review"))]
+        args["--critic-findings"] = str(
+            self.seal(CRITIC_KIND, self.read(Path(args["--critic-findings"])), "findings")
+        )
+        record = self.read(Path(args["--conductor-record"]))
+        # Asserted rather than assumed: the producer's closed key set requires all three ended keys,
+        # so a fixture that stopped carrying them would refuse to seal instead of deriving anything.
+        self.assertEqual(record["ended_state"], "completed")
+        record.update(record_overrides)
+        args["--conductor-record"] = str(self.seal(CONDUCTOR_RECORD_KIND, record, "conductor-record"))
+        return args
+
+    def test_an_accepted_wave_is_derived_from_four_sealed_submissions(self) -> None:
+        args = self.sealed_args()
+        for flag in ("--artifact-manifest", "--conductor-record", "--critic-findings"):
+            self.assertIn(b'"digest"', Path(args[flag]).read_bytes(), f"{flag} was not sealed")
+        document = self.derive(args)
+        self.assertEqual(document["state"], ACCEPTED, self.reasons(document))
+        self.assertTrue(all(item["met"] for item in document["conditions"]))
+        self.assertEqual(document["evidence"]["declared_artifacts"], sorted(OUTPUTS.values()))
+        self.assertEqual(document["evidence"]["reviewed_workstreams"], [IMPLEMENTER])
+        self.assertEqual(document["evidence"]["conductor_recorded_at"], T6)
+
+    def reseal_ending(self, args: dict[str, Any], ended: str, name: str) -> None:
+        """Re-seal the wave's conductor record with a different ending, through the REAL producer.
+
+        ONE wave, then ONE field changed: `accepted_args` initialises a journal and cannot be called
+        twice in a test, and re-sealing only the record is also the tighter comparison.
+        """
+        record = self.read(Path(args["--conductor-record"]))
+        del record["digest"]  # the producer refuses a body that already carries one
+        record.update(
+            ended_state=ended,
+            ended_reasons=[f"the integrator's merge ended {ended} after the second workstream landed"],
+            last_proven_stage="the reviewer's acceptance of implement-a",
+        )
+        args["--conductor-record"] = str(self.seal(CONDUCTOR_RECORD_KIND, record, name))
+        self.assertEqual(self.read(Path(args["--conductor-record"]))["ended_state"], ended)
+
+    def test_each_ended_state_the_producer_seals_derives_its_own_outcome(self) -> None:
+        """Implementation Decision 61's six values, closed across the producer/consumer seam.
+
+        The record is sealed by the real `wave-submission.py` for each ending, so the tokens this
+        module ranks are exactly the tokens that producer will emit: a vocabulary that drifted on
+        either side would derive the wrong state here rather than pass quietly on both.
+        """
+        args = self.sealed_args()
+        control = self.derive(args)
+        self.assertEqual(control["state"], ACCEPTED, self.reasons(control))
+        self.assertIsNone(control["evidence"]["ended_state"])
+        for ended, state in ((ABORTED, ABORTED), (FAILED, FAILED), (UNKNOWN_EFFECT, UNKNOWN_EFFECT)):
+            with self.subTest(ended=ended):
+                self.reseal_ending(args, ended, f"conductor-record-{ended}")
+                document = self.derive(args)
+                self.assertEqual(document["state"], state, self.reasons(document))
+                self.assertEqual(document["evidence"]["ended_state"], ended)
+                self.assertFalse(document["permits_normal_delivery"])
+                self.assertIsNone(document["repository_gate_passes"])
+                # POSITIVE CONTROL: the completion evidence is still complete, so the state came from
+                # the ending and not from something the reseal broke.
+                self.assertTrue(all(item["met"] for item in document["conditions"]), document["conditions"])
+
+    def test_the_residuals_say_an_ending_nobody_recorded_is_unobservable(self) -> None:
+        """The gap that REPLACED the old one: this module reads records, never executions."""
+        args = self.sealed_args()
+        self.reseal_ending(args, UNKNOWN_EFFECT, "conductor-record-unknown")
+        document = self.derive(args)
+        self.assertEqual(document["state"], UNKNOWN_EFFECT, self.reasons(document))
+        self.assertTrue(
+            any(
+                "ended_state" in residual and "conductor's own account" in residual
+                for residual in document["residuals"]
+            ),
+            document["residuals"],
+        )
+        # NEGATIVE: the residual that pinned the old gap is gone, because it is no longer true.
+        self.assertFalse(
+            any("NOT READ" in residual for residual in document["residuals"]), document["residuals"]
+        )
+        # POSITIVE CONTROL for that same absence check: a phrase that IS still published is found.
+        self.assertTrue(
+            any("re-derivation" in residual for residual in document["residuals"]), document["residuals"]
+        )
 
 
 class EnvironmentTests(WaveCase):
