@@ -41,6 +41,11 @@ What this deliberately does NOT do:
   front door. There is no `rm` here, no `unlink`, and no path this module touches directly. A
   name it cannot prove is the same upstream — from that channel's own lock file — is left
   exactly where it is.
+- **No door it did not evaluate.** Where a library has a second legitimate front door in a
+  different channel, that door is PRINTED with its exact command, its observed grammar, and its
+  prerequisite — never invoked. The collision precheck that ran belongs to the channel of the
+  door this module runs; installing through the other one would install behind a precheck that
+  never looked at its namespace.
 - **Installing is not endorsing.** A library listed here is reachable, not recommended.
   Licence, provenance, and content review remain the operator's.
 - **A successful install is evidence, not authorization.** It authorizes no push, no
@@ -79,6 +84,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -134,6 +140,11 @@ class Library:
     # can never be migrated, because there is nothing to prove sameness against.
     lock_source: str = ""
     lock_source_url: str = ""
+    # The observed grammar of a SECOND, independent front door that reaches the same upstream
+    # without an authenticated Claude Code session. Empty means this library has one door only.
+    # The package spec that door takes is `lock_source`, reused rather than duplicated so the two
+    # cannot drift apart: the `skills` CLI's own lock records exactly the string its `add` accepts.
+    cli_alternative: str = ""
     # Caveats that survive an accepted install: recorded, printed, and never silently dropped.
     caveats: tuple[str, ...] = field(default_factory=tuple)
 
@@ -157,8 +168,12 @@ MATTPOCOCK = Library(
     version="1.2.3",
     channel="plugin",
     # README "Installation (30-second setup)" -> "Claude Code": `claude plugins install
-    # mattpocock-skills`. The same section states it is already in the official marketplace,
-    # so there is deliberately no `marketplace add` step here to add.
+    # mattpocock-skills`. The same section states it is already in the official marketplace, so
+    # there is no `marketplace add` step here to add — but "already listed" is only true of an
+    # AUTHENTICATED session. Executed 2026-08-20 on a logged-out Claude Code 2.1.238:
+    # `claude plugin marketplace list` prints "No marketplaces configured" (exit 0) and this
+    # front door fails not-found-in-any-configured-marketplace. `claude plugin|plugins` are the
+    # same command, so the plural spelling here is the CLI's own alias, not a guess.
     front_door=("claude", "plugins", "install", "mattpocock-skills"),
     front_door_source="mattpocock/skills README, 'Installation (30-second setup)' -> Claude Code",
     requires=("claude",),
@@ -199,17 +214,29 @@ MATTPOCOCK = Library(
     # assumed: source "mattpocock/skills", sourceUrl the .git clone URL.
     lock_source="mattpocock/skills",
     lock_source_url="https://github.com/mattpocock/skills.git",
+    # Observed by running the CLI itself, not read from a README. `npx -y skills@latest --help`
+    # (skills CLI 1.5.23, executed 2026-08-20 in a container with no Claude Code login) prints
+    # `add <package>` under "Manage Skills", and under "Add Options": `-g, --global`,
+    # `-a, --agent <agents>`, `-s, --skill <skills>` ("use '*' for all skills"), `-y, --yes`.
+    # There is no per-subcommand help — `add --help` reprints the same page — so that page is
+    # the whole grammar this door is built from.
+    cli_alternative=(
+        "`npx -y skills@latest --help` (skills CLI 1.5.23): `add <package>` with Add Options"
+        " -g/--global, -a/--agent <agents>, -s/--skill <skills>, -y/--yes"
+    ),
     notes=(
         "Cheapest of the three by an order of magnitude: 25 entries, versioned, with a"
         " read-only managed update path.",
         "Plugin-namespaced, so a bare-name clash duplicates a capability rather than"
         " blocking an install. Its own README names that hazard: 'Pick one — installing"
         " both leaves you with every skill twice.'",
-        "The editable alternative front door is `npx skills@latest add mattpocock/skills`,"
-        " which writes flat files the operator owns. It is NOT wired here: it is the"
-        " channel that competes for flat names, and it prompts interactively for which"
-        " skills and which agents to take. When that channel already holds the names, the"
-        " `migrate` verb retires them through its own `remove` path first.",
+        "TWO doors, and they differ in what they need rather than in what they fetch. The"
+        " marketplace door above needs an authenticated Claude Code session; the `skills` CLI"
+        " door needs none. The CLI door is PRINTED, never invoked here: it writes flat names"
+        " the operator owns into the same directory this bundle's own entries occupy, so it is"
+        " the channel that competes for those names, and the plugin-channel precheck that ran"
+        " above is not the flat-channel one that door would need. When that channel already"
+        " holds the names, the `migrate` verb retires them through its own `remove` path first.",
         "Its own post-install step is `/setup-matt-pocock-skills`, once per repository.",
     ),
 )
@@ -329,7 +356,21 @@ HYPERRESEARCH = Library(
         "hyperresearch-15-polish",
         "hyperresearch-16-readability-audit",
     ),
+    # A RECORDED FIXTURE, not a live enumeration, and the difference is why it drifted once
+    # already. This front door has no verb that lists what it renders: `hyperresearch --help`
+    # at 0.10.0 exposes install/setup/init/status/... and nothing that enumerates agents, and
+    # `install --help` has no --dry-run, so there is no offline oracle to derive this from at
+    # status time. Recorded by executing `hyperresearch install --global` in a container and
+    # listing `~/.claude/agents`: 16 files, hyperresearch v0.10.0, 2026-08-20. It was 14 here
+    # against that same 0.10.0 upstream — browser-fetcher and cite-checker were missing, so
+    # `status` truthfully reported 14/14 while understating the surface by two files.
+    # `tests/test_external_libraries.py` pins this tuple against the same recorded set and
+    # names the version, so the next upstream release fails a named test instead of quietly
+    # under-reporting; `command_status` additionally reports any prefix-matching agent file this
+    # tuple does not name.
     extra_agents=(
+        "hyperresearch-browser-fetcher",
+        "hyperresearch-cite-checker",
         "hyperresearch-corpus-critic",
         "hyperresearch-depth-critic",
         "hyperresearch-depth-investigator",
@@ -354,6 +395,10 @@ HYPERRESEARCH = Library(
         " `hyperresearch install` verb does.",
         "Every name it writes is `hyperresearch`-prefixed, so its collision surface against"
         " this bundle is structurally empty rather than merely observed to be empty.",
+        "The agent files are a RECORDED set from an executed 0.10.0 install, not a live"
+        " enumeration: this front door exposes no verb that lists what it renders, so `status`"
+        " also reports any `hyperresearch`-prefixed agent file the recorded set does not name"
+        " rather than counting only what the set already knows about.",
         "Its rendered agent files carry static `model:` frontmatter, which"
         " `scripts/validate_bundle.py` rejects for agent files. That is a reason never to"
         " vendor its output; it is not a reason not to run its renderer in a home, where"
@@ -391,6 +436,18 @@ class Config:
     @property
     def plugins_state(self) -> Path:
         return self.home / ".claude" / "plugins" / "installed_plugins.json"
+
+    @property
+    def marketplaces_state(self) -> Path:
+        """Where Claude Code records the marketplaces a plugin name can be resolved against.
+
+        Read, never written. This is the offline half of `claude plugin marketplace list`: the
+        file is a JSON object keyed by marketplace name, and on a logged-out home it does not
+        exist at all, which is the same fact that command reports as "No marketplaces
+        configured". Reading it needs no subprocess, no network, and no credential, so the
+        empty-marketplace case can be named in a plan rather than only discovered by a failure.
+        """
+        return self.home / ".claude" / "plugins" / "known_marketplaces.json"
 
     @property
     def skill_lock(self) -> Path:
@@ -547,6 +604,18 @@ def present_names(directory: Path) -> tuple[str, ...]:
         return tuple(sorted(entry.name for entry in directory.iterdir()))
     except OSError as exc:
         raise ExternalLibraryError(f"cannot inspect {directory}: {exc}") from exc
+
+
+def expected_agent_files(library: Library) -> frozenset[str]:
+    """Every directory entry that counts as one of a library's recorded agent entries.
+
+    Both spellings are accepted because `present_names` reports whatever the directory holds: the
+    rendered `<name>.md` file, and a bare `<name>` for a layout that uses directories. This is
+    the set a prefix-matching entry is measured against to detect upstream drift.
+    """
+    return frozenset(library.extra_agents) | frozenset(
+        f"{name}.md" for name in library.extra_agents
+    )
 
 
 def describe_occupant(directory: Path, name: str) -> str:
@@ -739,6 +808,155 @@ def front_door_available(library: Library) -> str:
     return ", ".join(missing)
 
 
+# The prerequisite the marketplace door does not state and cannot check for itself. Executed
+# 2026-08-20 on Claude Code 2.1.238 in a container with no login: `claude plugin marketplace list`
+# printed "No marketplaces configured" at exit 0, and `claude plugins install mattpocock-skills`
+# then failed not-found-in-any-configured-marketplace. Upstream's README says the official
+# marketplace needs no `marketplace add`, which holds only once a session is authenticated and
+# that marketplace has registered. It is not testable credential-free, which is exactly why it is
+# written down rather than left for each operator to rediscover as an opaque not-found.
+MARKETPLACE_SESSION_PREREQUISITE = (
+    "the marketplace door needs an AUTHENTICATED Claude Code session. The official marketplace"
+    " upstream calls pre-listed registers only for a logged-in session: on a logged-out Claude"
+    " Code 2.1.238 `claude plugin marketplace list` reports no marketplaces and"
+    " `claude plugins install mattpocock-skills` fails not-found-in-any-configured-marketplace."
+    " Log in, or add a marketplace yourself, or use the second door, which needs no Claude"
+    " Code session at all"
+)
+
+# Both runners come from tools this repository already pins — node supplies `npx`, bun supplies
+# `bunx` — so naming them adds no bootstrap prerequisite under ADR-0002. npx is preferred only
+# because its `-y` suppresses the package-install prompt; `bunx skills@latest --version` was
+# executed on the same host and reported the same CLI version, 1.5.23.
+SKILLS_CLI_RUNNERS = ("npx", "bunx")
+
+
+def configured_marketplaces(config: Config) -> tuple[str, ...]:
+    """Marketplace names this home has configured. Absent and unreadable both mean none.
+
+    An empty result is a *reported* condition rather than a silent fallthrough: every caller
+    prints it, because "no marketplace is configured" is the whole explanation for the
+    marketplace door's not-found failure, and swallowing it is what made that failure opaque.
+    """
+    path = config.marketplaces_state
+    if not path.is_file():
+        return ()
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(document, dict):
+        return ()
+    return tuple(sorted(str(name) for name in document))
+
+
+def skills_cli_runner() -> str:
+    """The first pinned runner actually on PATH, or "" when neither is."""
+    for runner in SKILLS_CLI_RUNNERS:
+        if shutil.which(runner) is not None:
+            return runner
+    return ""
+
+
+def skills_cli_command(library: Library, runner: str = "") -> tuple[str, ...]:
+    """The `skills` CLI door for a library, built only from that CLI's observed grammar.
+
+    `-s '*' -a claude-code -y` is what makes it noninteractive: without them the CLI prompts for
+    which skills and which agents to take. The agent scope is deliberate and matches the removal
+    front door's — `--agent claude-code` keeps this pointed at one host's directory instead of
+    every agent that CLI knows about. `*` is a literal argument: nothing in this module runs
+    through a shell, so it is never word-split or glob-expanded against the caller's directory.
+    """
+    runner = runner or SKILLS_CLI_RUNNERS[0]
+    # npm's `-y` is "run this package without prompting"; bunx has no such flag and needs none.
+    prefix = (runner, "-y") if runner == "npx" else (runner,)
+    return prefix + (
+        "skills@latest",
+        "add",
+        library.lock_source,
+        "--global",
+        "--agent",
+        "claude-code",
+        "--skill",
+        "*",
+        "--yes",
+    )
+
+
+def paste_safe(command: tuple[str, ...]) -> str:
+    """Render a command the operator is expected to RUN THEMSELVES, safely quoted.
+
+    This module never uses a shell, so `--skill *` is a literal argument to it. A printed line is
+    different: it exists to be pasted into a shell, where a bare `*` glob-expands against
+    whatever directory the operator happens to be in and silently becomes a different command.
+    Quoting is therefore part of being honest about what to run, not cosmetic.
+    """
+    return shlex.join(command)
+
+
+def cli_alternative_report(library: Library, config: Config) -> list[str]:
+    """Report the second door, and say which door this library currently stands behind.
+
+    Both doors reach the same upstream and differ only in prerequisite. The marketplace door
+    stays PRIMARY whenever a `claude` binary and at least one configured marketplace are both
+    present. Otherwise the operator is directed at the CLI door, with its exact command.
+
+    The CLI door is printed, never invoked. It writes flat names into the same directory this
+    bundle's own entries occupy, so it is governed by the flat-channel collision rules rather
+    than the plugin-channel ones the precheck just applied. Running it from here would install
+    through a precheck that never evaluated its channel — the silent loss this module exists to
+    prevent — so the operator runs it, deliberately, or reaches for `migrate` instead.
+    """
+    if not library.cli_alternative:
+        return []
+    runner = skills_cli_runner()
+    command = paste_safe(skills_cli_command(library, runner))
+    missing_runner = "MISSING -> neither " + " nor ".join(SKILLS_CLI_RUNNERS) + " is on PATH"
+    lines = [
+        f"second door:  {command}",
+        f"  observed:   {library.cli_alternative}",
+        "  needs:      no Claude Code session. Writes FLAT names into"
+        f" {config.skills_dir}, so the plugin-channel precheck above does not cover it."
+        " Printed, never invoked here.",
+        f"  runner:     {runner or missing_runner}",
+    ]
+    marketplaces = configured_marketplaces(config)
+    if marketplaces:
+        lines.append(
+            f"marketplaces: {len(marketplaces)} configured in {config.marketplaces_state}"
+            f" ({', '.join(marketplaces)}), so the marketplace door above stays primary"
+        )
+        return lines
+    lines.append(
+        f"marketplaces: NONE configured in {config.marketplaces_state}, so the marketplace door"
+        " above cannot resolve this plugin yet"
+    )
+    lines.append(f"  prerequisite: {MARKETPLACE_SESSION_PREREQUISITE}")
+    lines.append(f"  DIRECTED:   use the second door instead: {command}")
+    return lines
+
+
+def empty_marketplace_hint(library: Library, config: Config) -> list[str]:
+    """The hint a failed marketplace install earns when this home configures no marketplace.
+
+    The signature is deliberately the OFFLINE one — a nonzero front-door exit plus zero
+    configured marketplaces — rather than a string matched against the front door's own output.
+    Matching its prose would mean capturing output the operator is already reading live, and it
+    would break the first time upstream rewords the message; the recorded state behind that
+    message is the same fact and is readable without touching the subprocess at all.
+    """
+    if not library.cli_alternative or configured_marketplaces(config):
+        return []
+    return [
+        f"why: {MARKETPLACE_SESSION_PREREQUISITE}",
+        "second door, which needs no Claude Code session:"
+        f" {paste_safe(skills_cli_command(library, skills_cli_runner()))}",
+        f"That door writes FLAT names into {config.skills_dir}, which the plugin-channel"
+        f" precheck did not evaluate, so run it yourself — or `libraries:migrate -- {library.key}`"
+        " if that channel already holds those names. Nothing here invokes it.",
+    ]
+
+
 def render_plan(check: Precheck, config: Config) -> list[str]:
     """Print exactly what will run, from where, at what version, and at what cost."""
     library = check.library
@@ -782,6 +1000,9 @@ def render_plan(check: Precheck, config: Config) -> list[str]:
     lines.append(
         f"front-door tool: {'MISSING -> ' + missing if missing else 'present'}"
     )
+    # A library with two legitimate doors must show both, and say which one it currently stands
+    # behind. Printing only the primary is what let a missing prerequisite read as a broken tool.
+    lines.extend(cli_alternative_report(library, config))
     for caveat in library.caveats:
         lines.append(f"caveat:       {caveat}")
     # `bundle_skill_count` is a note-text placeholder rather than a literal, so the count a
@@ -931,9 +1152,29 @@ def command_status(config: Config) -> tuple[int, list[str]]:
                 name for name in library.extra_agents if f"{name}.md" in present or name in present
             ]
             lines.append(
-                f"  agents: {len(found)}/{len(library.extra_agents)} present in"
-                f" {config.agents_dir}"
+                f"  agents: {len(found)}/{len(library.extra_agents)} of the recorded"
+                f" {library.version} set present in {config.agents_dir}"
             )
+            # The count above is true against a recorded set, which is exactly how it once read
+            # 14/14 in a home holding 16 files. This front door has no verb that enumerates what
+            # it renders, so the only honest drift signal available at status time is the
+            # residue: a prefix-matching file the recorded set does not name. Reported rather
+            # than dropped, because a total that omits it understates the selection surface.
+            expected = expected_agent_files(library)
+            unexpected = tuple(
+                sorted(
+                    entry
+                    for entry in present
+                    if library.owns(entry) and entry not in expected
+                )
+            )
+            if unexpected:
+                lines.append(
+                    f"  agents: {len(unexpected)} further {library.name_prefix}-prefixed"
+                    f" file(s) present that the recorded {library.version} set does not name,"
+                    f" so the surface is wider than the count above: {', '.join(unexpected)}."
+                    " Re-record the set against the current upstream."
+                )
     lines.append("")
     lines.append("Detection reads the filesystem only. It proves presence, not provenance.")
     return 0, lines
@@ -1023,6 +1264,10 @@ def command_install(keys: list[str], config: Config) -> tuple[int, list[str]]:
                 " infers success from having run a command, and no part of this counts as"
                 " authorization for any further effect."
             )
+            # A door that failed because its prerequisite is unmet must name that prerequisite
+            # AND the door that does not need it. Without both halves the operator reads a
+            # not-found as "this library is unreachable" and stops at a dead end that isn't one.
+            lines.extend(empty_marketplace_hint(library, config))
         elif check.skipped:
             lines.append(
                 "front door completed, but the collision precheck was SKIPPED, not passed."

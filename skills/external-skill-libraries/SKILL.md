@@ -70,11 +70,11 @@ instruction to run the installer:
 
 ## The three libraries, honestly costed
 
-| Library | Surface | Channel | Front door |
+| Library | Surface | Channel | Front door(s) |
 |---|---|---|---|
-| `mattpocock` | 25 skills | plugin (namespaced) | `claude plugins install mattpocock-skills` |
+| `mattpocock` | 25 skills | plugin (namespaced), **or** flat via the CLI door | **two doors, split by prerequisite.** `claude plugins install mattpocock-skills` needs an **authenticated** Claude Code session; `npx -y skills@latest add mattpocock/skills --global --agent claude-code --skill '*' --yes` needs none |
 | `ecc` | 284 declared / 280 measured skills, 67 agents, 94 commands | flat `~/.claude/skills/` | `npx -y -p ecc-universal ecc install --target claude --profile full` |
-| `hyperresearch` | 17 skills + 14 agents, rendered | flat, `hyperresearch`-prefixed | `uv tool install hyperresearch` |
+| `hyperresearch` | 17 skills + 16 agents, rendered | flat, `hyperresearch`-prefixed | `uv tool install hyperresearch` |
 
 **ECC's surface is the headline.** Against this bundle's 12 skills, 284 entries is a ~24×
 multiplication of what a selector must reason over, in exchange for a firing rate nobody has
@@ -102,20 +102,59 @@ it would write; `list` prints that command. Against the resolved `full` profile 
 file operations: 280 flat skill names, 67 agents, 94 commands, 122 rules files, 170 scripts.
 `--profile` accepts six narrower profiles (`ecc catalog profiles --json`) for a smaller surface.
 
-**mattpocock is cheap by an order of magnitude** — 25 versioned entries through an official
-marketplace plugin, already listed, so there is no `marketplace add` step to run first.
-Because a plugin is namespaced it cannot *lose* a name; its failure mode is the opposite one,
-duplication, which upstream names itself: "Pick one — installing both leaves you with every
-skill twice." Its editable npm front door (`npx skills@latest add mattpocock/skills`) is
-deliberately **not** wired for installing — that is the channel that competes for flat names,
-and it prompts interactively. When that channel already holds the names, `migrate` is the route:
-see below.
+**mattpocock is cheap by an order of magnitude** — 25 versioned entries — and it has **two
+legitimate front doors that differ in prerequisite, not in payload**. Because the plugin door is
+namespaced it cannot *lose* a name; its failure mode is the opposite one, duplication, which
+upstream names itself: "Pick one — installing both leaves you with every skill twice."
+
+- **The marketplace door needs an authenticated Claude Code session, and upstream does not say
+  so.** Its README calls the official marketplace already listed, so there is no `marketplace
+  add` step — true only once a session is logged in and that marketplace has registered.
+  Executed 2026-08-20 on a logged-out Claude Code 2.1.238: `claude plugin marketplace list`
+  prints "No marketplaces configured" at exit 0 and `claude plugins install mattpocock-skills`
+  fails not-found-in-any-configured-marketplace. The bundle's own task behaved correctly there —
+  real command, real exit code, install reported FAILED, no false success — but a not-found is a
+  dead-end-looking message for a library that is not a dead end. So `list` and `install` read the
+  marketplace state offline from `~/.claude/plugins/known_marketplaces.json`, keep the
+  marketplace door **primary** whenever at least one marketplace is configured (a missing
+  `claude` binary is reported by its own front-door-tool line, not by this check),
+  and otherwise print the prerequisite plus a `DIRECTED:` line naming the other door. When the
+  door fails with none configured, the failure hint names **both** halves: the
+  authenticated-session prerequisite and the exact alternative command.
+- **The `skills` CLI door needs no Claude session at all**, and both its runners come from tools
+  this repo already pins (`npx` from node, `bunx` from bun), so it adds no prerequisite. Its
+  grammar was read off the CLI itself — `npx -y skills@latest --help`, CLI 1.5.23 — not a README:
+  `add <package>` with `-g/--global`, `-a/--agent <agents>`, `-s/--skill <skills>` ("use `'*'` for
+  all skills"), `-y/--yes`. There is no per-subcommand help; `add --help` reprints the same page.
+  Those three scoping flags are what make it noninteractive, and `--agent claude-code` is the
+  same one-host scope the removal front door uses.
+- **That door is printed, never invoked by this tool.** It writes flat names the operator owns
+  into `~/.claude/skills/`, so it is governed by the **flat-channel** collision rules, not the
+  plugin-channel ones the precheck applied. Running it from here would install behind a precheck
+  that never looked at its namespace — the silent loss this module exists to prevent — so the
+  operator runs it deliberately. When that channel already holds the names, `migrate` is the
+  route instead: see below.
 
 **hyperresearch is not a skill library at all.** It is a CLI that *renders* skills and agents
 into a home or a project. Installing the tool writes no skills; its own `hyperresearch
 install` verb does (`--global` for the home). Every name it writes is `hyperresearch`-prefixed,
 so its collision surface against this bundle is structurally empty rather than merely
-observed to be empty. Its rendered agent files carry static `model:` frontmatter, which this
+observed to be empty.
+
+**Its 16 agent files are a recorded set, not a live enumeration, and that distinction bit once.**
+This front door exposes no verb that lists what it renders — `hyperresearch --help` at 0.10.0
+offers install/setup/init/status/… and nothing else, and `install --help` has no `--dry-run` — so
+the expected set can only be recorded from an executed install (`hyperresearch install --global`,
+then list `~/.claude/agents`; 16 files, v0.10.0, 2026-08-20). The list here stood at 14 against
+that **same** upstream version, missing `hyperresearch-browser-fetcher` and
+`hyperresearch-cite-checker`, so `status` reported a truthful `14/14` while understating the real
+selection surface by two files. Two things now catch the next drift instead: the set is pinned in
+`tests/test_external_libraries.py` against the version it was recorded from, so a change fails a
+named test rather than nothing; and `status` reports any further `hyperresearch`-prefixed agent
+file the recorded set does not name, so a home wider than the record says so on the operator's own
+machine. Re-record both sides together — never reconcile by editing one.
+
+Its rendered agent files carry static `model:` frontmatter, which this
 repo's validator rejects for agent files — a reason never to vendor its output, not a reason
 to refuse to run its renderer in a home, where this repository's validator has no
 jurisdiction.
