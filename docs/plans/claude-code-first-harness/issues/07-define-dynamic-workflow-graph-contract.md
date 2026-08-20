@@ -106,9 +106,9 @@ explicit blocked disposition; runtime receipts contain no unexplained substituti
 artifacts validate and match the recorded repository state; workstream reviews are accepted;
 fan-in was authorized; the admitted gate contract passes on the integrated snapshot; budgets,
 retries, plan revisions, and approvals are traceable; and the conductor records the verdict. A
-normal delivery wave requires the authoritative repository gate to pass. A remediation-ready wave
-instead requires its focused gates to pass and the exact global failure baseline not to worsen; it
-ends as `remediation-progress`, not `repository gate-passing` or write-ready. Workflow-process
+normal delivery wave requires the authoritative repository gate to pass. A remediation-progress
+wave instead requires its focused gates to pass and the exact global failure baseline not to
+worsen; it ends as `remediation-progress`, not `repository gate-passing` or write-ready. Workflow-process
 completion alone is not a product-success verdict.
 
 An adversarial critic classifies completion blockers separately from future improvement.

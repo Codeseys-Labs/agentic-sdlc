@@ -149,19 +149,33 @@ mutation.
 
 Use this phase order unless the task is clearly smaller:
 
-1. Frame: define done, constraints, repo state, queue state, and allowed blast radius.
+1. Frame: define done, constraints, repo state, queue state, and allowed blast radius. Seal a
+   Mission-shaped Frame's durable objective with `tools/mission-contract.py define`, and capture
+   the observed repo/queue facts with `tools/planning-snapshot.py capture`.
 2. Discover: assign read-only workers across code areas. Require file/line evidence.
 3. Research: only for external or load-bearing unknowns — a deep-research pipeline if the
    host provides one, otherwise primary sources directly.
 4. Plan: emit workstreams, dependencies, worktree strategy, gates, rollback, and Seeds updates.
+   Compile the WavePlan and its PlanDiff with `tools/wave-plan-compiler.py compile`/`diff`, then
+   admit the compiled plan against current state with `tools/wave-plan-admission.py admit` before
+   Act begins.
 5. Act: launch workers in separate worktrees for independent workstreams.
-6. Review: review stable branch/worktree snapshots, not only worker summaries.
-7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs.
+6. Review: review stable branch/worktree snapshots, not only worker summaries. Project a
+   read-only status view over the recorded journal, assignments, activation result, and gate
+   receipts with `tools/sdlc-observability-projection.py`, and verify each receipt's envelope and
+   correlation graph with `tools/receipt-envelope.py verify`/`check-graph` before trusting it.
+7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs. Derive the
+   wave's one terminal state — accepted, remediation-progress, or blocked — with
+   `tools/wave-verdict.py derive` rather than asserting it from worker summaries.
 8. Ship: squash/rebase, sync Seeds, open PR or commit according to repo policy. Before proposing
    any commit, PR, or squash text, load `../change-writing/SKILL.md` to author it; this phase still
    owns the squash/rebase/PR operations and the human still authorizes publication.
 
-Use backflow when review reveals an earlier phase was weak: re-enter Discover, Research, or Plan with a scoped task instead of restarting the whole run.
+Use backflow when review reveals an earlier phase was weak: re-enter Discover, Research, or Plan
+with a scoped task instead of restarting the whole run. Classify observed drift against the sealed
+plan with `tools/drift-classifier.py classify` before deciding backflow scope, and admit or refuse
+any proposed autonomous continuation past that point with `tools/auto-envelope.py
+admit-transition` against one preapproved envelope.
 
 ## Delegation Rules
 
@@ -170,12 +184,17 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
   when no certified delegation route is available, and is never a worker/model spawn or a
   `RuntimeAssignment` claim.
 - Every actual worker or model spawn is delegated execution. It requires the certified
-  `RuntimeAssignment` admission boundary below; a missing, inherited, unresolved, or unverified
-  route stops before dispatch and spawn. Do not relabel a worker as direct execution to bypass it.
+  `RuntimeAssignment` admission boundary below, admitted by `tools/runtime-assignment.py admit`
+  and classified afterward by `tools/runtime-assignment.py classify`; a missing, inherited,
+  unresolved, or unverified route stops before dispatch and spawn. Do not relabel a worker as
+  direct execution to bypass it.
 - Require every delegated worker to return a structured report for conductor capture. A
   write-capable worker may also maintain its assigned artifact; for a read-only worker, the
-  conductor persists the captured submission. Treat messages, status, and summaries as
-  advisory notifications, not acceptance evidence or authority.
+  conductor persists the captured submission. The conductor records each node's disposition in
+  the append-only journal with `tools/wave-journal.py record-node`, and seals and verifies a
+  worker's wave-evidence submission against that tool's closed submission schemas with
+  `tools/wave-submission.py` before treating it as captured. Treat messages, status, and
+  summaries as advisory notifications, not acceptance evidence or authority.
 - For long-running work, use the host's native background or persistent-task mechanism and
   durable artifact files. Do not hold one blocking call open indefinitely.
 - Use Claude Code workers for nested dynamic workflow execution on one bounded workstream. Do not let a nested Claude workflow own the whole project queue unless explicitly requested.
@@ -270,5 +289,7 @@ never globally). Slash commands (Claude Code): `/sdlc-init`, `/sdlc-frame`, `/sd
 - Do not run write-capable workers in the user's dirty checkout. Use a clean worktree.
 - Do not close Seeds from worker claims alone. Verify files, tests, and acceptance criteria.
 - Do not install, start, or enable cmux or tmux unless the user explicitly requests that environment change.
-- Do not recursively launch agents without a bound: cap workers, passes, and review/fix rounds.
+- Do not recursively launch agents without a bound: cap workers, passes, and review/fix rounds;
+  charge each pass against the conductor-owned ledger with `tools/pass-budget.py charge` (or
+  inspect it with `status`) so the cap is evidence-backed, not memory.
 - Do not push, force-push, rewrite history, alter secrets, or change CI settings unless the user explicitly authorizes that action.
