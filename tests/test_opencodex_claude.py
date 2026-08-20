@@ -1118,6 +1118,167 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("<ocx><claude>", log.read_text())
 
+    # --- cloud-provider-shaped model-slot overrides (executed 2026-08-20) -------------------
+    #
+    # THE GAP: with CLAUDE_CODE_USE_BEDROCK unset -- so every switch check above passed -- and
+    # ANTHROPIC_DEFAULT_SONNET_MODEL exporting `global.anthropic.claude-sonnet-5[1m]`, `launch`
+    # PROCEEDED and the session 400d at the Codex upstream, because the gateway does not read a
+    # provider-shaped id as native Anthropic passthrough and fell through to the DEFAULT provider.
+    # The refusal set covered switches, endpoints, base URLs and Console keys, and not this.
+    MODEL_SLOT_OVERRIDES = (
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+    )
+    # The shape families the refusal knows: region-prefixed Bedrock inference profiles, the bare
+    # Bedrock publisher form, and the two Vertex spellings.
+    CLOUD_SHAPED_MODEL_IDS = (
+        "global.anthropic.claude-sonnet-5[1m]",
+        "us.anthropic.claude-opus-4-5-v1:0",
+        "eu.anthropic.claude-haiku-4-5",
+        "anthropic.claude-3-5-haiku-20241022-v1:0",
+        "claude-sonnet-4@20250514",
+        "publishers/anthropic/models/claude-opus-4",
+    )
+    # THE POSITIVE CONTROL, and the reason this is a shape test rather than a presence test: these
+    # are the ordinary values of the same four variables. A plain alias is what the native half of
+    # this route serves, and a gateway id in the small-fast slot is a legitimate use of the routed
+    # half, so refusing either would break the launch this check exists to protect.
+    PLAIN_MODEL_IDS = (
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+        "claude-3-7-sonnet-latest",
+        "muse/muse-spark-1.2",
+    )
+
+    def test_launch_refuses_a_cloud_shaped_model_slot_exported_in_this_shell(self) -> None:
+        # Every one of the four slots, on the id that was actually measured failing.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            value = "global.anthropic.claude-sonnet-5[1m]"
+            with self.subTest(variable=name):
+                result, log = self.run_launcher("launch", parent_env={name: value})
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(name, result.stderr)
+                # A model id is not a credential, so unlike a base URL the value IS named -- with
+                # four slots to choose from, withholding it leaves the operator guessing.
+                self.assertIn(value, result.stderr)
+                # The refusal has to say WHY it is not a warning: the slot re-points an upstream.
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertNotIn("routed at", result.stdout)
+                # And it must land before anything is started or contacted.
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # Every shape family, on one slot, so a pattern narrowed to the Bedrock case fails here.
+        for value in self.CLOUD_SHAPED_MODEL_IDS:
+            with self.subTest(value=value):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_DEFAULT_SONNET_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL", result.stderr)
+                self.assertIn(value, result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # IN-TEST POSITIVE CONTROL. Exit 3 on six fixtures proves nothing about a refusal that
+        # simply refuses everything, so the ordinary values must still LAUNCH -- and reaching
+        # `ocx claude` in the trace is what distinguishes that from an exit-0 short circuit.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            with self.subTest(variable=name, control="plain alias"):
+                result, log = self.run_launcher(
+                    "launch", parent_env={name: "claude-sonnet-5"}
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("<ocx><claude>", log.read_text())
+        for value in self.PLAIN_MODEL_IDS:
+            with self.subTest(value=value, control="ordinary id"):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_SMALL_FAST_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_launch_refuses_a_cloud_shaped_model_slot_in_a_settings_env_block(self) -> None:
+        # The sibling channel every other refusal in this section covers twice: a settings `env`
+        # block is read on every launch and survives a clean shell, so a slot that refuses from the
+        # shell and passes silently from the file is the exact drift the shared jq program prevents.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            with self.subTest(variable=name, channel="global settings"):
+                result, log = self.run_launcher(
+                    "launch",
+                    global_settings={"env": {name: "us.anthropic.claude-opus-4-5-v1:0"}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(name, result.stderr)
+                self.assertIn("settings.json", result.stderr)
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertNotIn("routed at", result.stdout)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        for document in ("project_settings", "project_settings_local"):
+            with self.subTest(channel=document):
+                result, log = self.run_launcher(
+                    "launch",
+                    **{document: {"env": {
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-4@20250514"
+                    }}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_HAIKU_MODEL", result.stderr)
+                # The refusal names the document it actually read, not the global one.
+                self.assertIn(f"{self.project}/.claude/settings", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        with self.subTest(channel="explicit --settings"):
+            # The third settings source has its own refusal text, so it needs its own arm rather
+            # than the generic "routes Claude Code to a cloud provider" fallback, which is not what
+            # a model-slot id does.
+            result, log = self.run_launcher(
+                "launch",
+                "--settings",
+                '{"env":{"ANTHROPIC_SMALL_FAST_MODEL":"anthropic.claude-3-5-haiku-20241022-v1:0"}}',
+            )
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("ANTHROPIC_SMALL_FAST_MODEL", result.stderr)
+            self.assertIn("DEFAULT provider", result.stderr)
+            self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # IN-TEST POSITIVE CONTROL for the same channel.
+        result, log = self.run_launcher(
+            "launch", global_settings={"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5"}}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_status_reports_a_cloud_shaped_model_slot_instead_of_ok(self) -> None:
+        # `status` and `launch` read the same shell. A status that printed `ok` on an environment
+        # `launch` refuses would be the reassurance-about-an-unchecked-surface defect this section
+        # has already been fixed for once.
+        result, _ = self.run_launcher(
+            "status",
+            parent_env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "global.anthropic.claude-opus-4-5"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MISROUTED", result.stdout)
+        self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL", result.stdout)
+        self.assertIn("global.anthropic.claude-opus-4-5", result.stdout)
+        self.assertNotIn("nothing exported in this shell", result.stdout)
+
+        control, _ = self.run_launcher(
+            "status", parent_env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-5"}
+        )
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertNotIn("MISROUTED", control.stdout)
+        self.assertIn("nothing exported in this shell", control.stdout)
+
     def test_a_dangling_settings_symlink_is_treated_as_no_settings_at_all(self) -> None:
         # Claude Code reads this path and treats ENOENT as no settings, so a dotfile symlink whose
         # target moved carries no key that could outrank the gateway. Admitting it as absent matches
@@ -1226,6 +1387,29 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertIn("--settings <file-or-json>", result.stdout)
         self.assertIn("every occurrence for route-bypassing settings", result.stdout)
         self.assertIn("bytes and path are never printed", result.stdout)
+        # The refusal list is the operator-facing contract for this route, so a refusal the code
+        # performs and the help omits is a documentation defect, not a cosmetic gap.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            self.assertIn(name, result.stdout)
+
+    def test_launch_help_calls_the_unrecognized_model_line_cosmetic_and_bounds_the_observe_log(
+        self,
+    ) -> None:
+        # Two findings from the 2026-08-20 retest, both of which cost a careful reviewer a false
+        # negative. The `[claude-code:unrecognized_model]` line reads as a routing failure and is
+        # not one -- the same turn was receipt-verified as reaching its provider -- and a single
+        # empty `ocx observe logs` query was read as proof that nothing routed, when that log is a
+        # bounded rolling window in which absence means unknown.
+        result, _ = self.run_launcher("launch", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[claude-code:unrecognized_model]", result.stdout)
+        self.assertIn("cosmetic", result.stdout)
+        self.assertIn("NOT a routing failure", result.stdout)
+        self.assertIn("ocx observe logs --jsonl", result.stdout)
+        self.assertIn("rolling window", result.stdout)
+        self.assertIn("UNKNOWN", result.stdout)
+        self.assertIn("receipt", result.stdout)
 
     def test_status_names_the_documents_it_checked_instead_of_claiming_all_of_them(self) -> None:
         result, _ = self.run_launcher("status")

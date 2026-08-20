@@ -45,8 +45,9 @@
 # WHAT THIS SCRIPT DELIBERATELY DOES NOT DO
 #   * It never reads, copies, prints, or persists a credential. Claude Code holds its own login
 #     and `ocx claude` passes it to the gateway; this wrapper only checks NAMES, value PREFIXES,
-#     and base-URL SHAPES that would silently defeat the route, and never echoes a base URL
-#     because one can carry userinfo credentials (see assert_gateway_route_is_effective).
+#     and base-URL or model-id SHAPES that would silently defeat the route, and never echoes a
+#     base URL because one can carry userinfo credentials (see assert_gateway_route_is_effective).
+#     A model id is not a credential, so a refused one IS named.
 #   * It does not verify which model actually served a request. The qualification gate is the
 #     canary in docs/research/2026-08-05-gateway-selection-memo.md §4 (probes A, C, D, E, F).
 #     Whether that canary has been run, and its verdict, is recorded evidence this comment does
@@ -212,6 +213,12 @@ Refused (exit 3) when the route would not actually be used:
   * an ANTHROPIC_BASE_URL pointing anywhere but this host's loopback gateway, exported OR in a
     settings `env` block (an exported one is PRESERVED into the session; a settings one REPLACES
     what this route sets -- both measured),
+  * a cloud-provider model id in ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL or ANTHROPIC_SMALL_FAST_MODEL, exported or in a settings `env`
+    block: a Bedrock region or `anthropic.` publisher prefix, or a Vertex publisher path or
+    @<date> suffix. That slot picks which id serves a whole model family, so the gateway serves
+    that family from the DEFAULT provider instead of Anthropic (executed 2026-08-20: the session
+    400d). A plain claude-* alias is fine, and so is a gateway id such as muse/muse-spark-1.2,
   * an apiKeyHelper, or an sk-ant-api* Console key in ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (it
     takes the same native branch but bills API credits, not your subscription),
   * any explicit --settings value that is empty, not one JSON object or a readable file containing
@@ -228,6 +235,16 @@ and enterprise managed policy (/etc/claude-code/managed-settings.json and its dr
 the platform equivalents, and the WSL registry policy chain) -- that channel is administrator-
 owned and its effect on `env` could not be verified here, so this route neither refuses on it nor
 claims it is clean.
+
+On a routed launch Claude Code prints `[claude-code:unrecognized_model]` for the gateway id. That
+line is cosmetic SDK-registry noise -- the id is absent from the client's own model-metadata
+table -- and it is NOT a routing failure: receipt-verified 2026-08-20, the same turn reached its
+provider with routeKind explicit-provider and status 200.
+
+Which upstream actually served a turn is answered by a FRESH provider-naming receipt for that
+turn, never by this wrapper's output. `ocx observe logs --jsonl` is a bounded rolling window:
+rows appear and disappear and tail order is not time order, so re-query, sort by timestamp, and
+read an absent row as UNKNOWN rather than as proof that nothing routed.
 
 THIS TEXT IS THIS WRAPPER'S. To reach Claude Code's OWN --help, end this wrapper's options
 with `--`, which prepares a real session and forwards everything after it verbatim:
@@ -305,7 +322,8 @@ usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|config
                             through to Anthropic on your subscription; gateway models route to
                             their own providers -- both in one session. Fails closed if the
                             gateway never becomes healthy, and refuses (exit 3) when a
-                            provider-routing key, a non-loopback ANTHROPIC_BASE_URL, or a
+                            provider-routing key, a non-loopback ANTHROPIC_BASE_URL, a
+                            cloud-provider model id in a default/small-fast model slot, or a
                             Console API key would silently defeat the route. `launch --help`
                             names the settings documents that check reads.
   launch-ultracode [--yolo] [args...]  Apply the session-only {"ultracode":true} setting, then
@@ -621,7 +639,7 @@ ensure_gateway_up() {
 # scrub/isolation/refusal machinery existed to prevent exactly what this route now wants, and
 # it is gone.
 #
-# What remains guards four SILENT failures that would otherwise be indistinguishable from
+# What remains guards five SILENT failures that would otherwise be indistinguishable from
 # success, which matters more now that this is the default rather than a named escape hatch:
 #
 #   1. An ENABLED provider-routing switch, exported or in a settings.json `env` block,
@@ -642,9 +660,16 @@ ensure_gateway_up() {
 #      (hasAnthropicNativeCredential in server/claude-messages.ts), so it takes the SAME
 #      native branch and bills API credits while looking like subscription traffic. The
 #      prefix is the only thing separating the two.
+#   5. A cloud-provider-shaped id in one of the four default/small-fast MODEL SLOTS re-points a
+#      whole model family without touching any switch above: EXECUTED 2026-08-20 with
+#      CLAUDE_CODE_USE_BEDROCK unset and ANTHROPIC_DEFAULT_SONNET_MODEL exporting
+#      `global.anthropic.claude-sonnet-5[1m]`, `launch` proceeded and the session 400d at the Codex
+#      upstream because the gateway does not read that id as native passthrough and fell through to
+#      the DEFAULT provider. See $model_slot_overrides.
 #
-# Names, prefixes, and base-URL SHAPES only: no credential value is read, printed, copied, or
-# persisted, and a base URL is never echoed because it can carry userinfo credentials.
+# Names, prefixes, and base-URL or model-id SHAPES only: no credential value is read, printed,
+# copied, or persisted, and a base URL is never echoed because it can carry userinfo credentials.
+# A model id carries no secret, so a refused one is named rather than withheld.
 
 # ONE list per class, shared by the exported-environment check and the settings-document check
 # below. The two lists drifted apart once already -- the settings side was missing entries the
@@ -693,6 +718,49 @@ routing_endpoint_slots=(
 # STILL honouring ANTHROPIC_BASE_URL (the client's own message says its on-ramp REQUIRES that
 # variable plus ANTHROPIC_AUTH_TOKEN), so it does not defeat this route and refusing it would be a
 # false positive.
+
+# A THIRD CLASS, and neither a boolean nor an endpoint: these four carry a MODEL ID, and they
+# choose which id serves a whole model family for the session.
+#
+# EXECUTED 2026-08-20, which is why this is a refusal rather than a note. With
+# CLAUDE_CODE_USE_BEDROCK unset -- so every switch above read as off and every check above passed --
+# and ANTHROPIC_DEFAULT_SONNET_MODEL and its siblings still exporting Bedrock-shaped ids
+# (`global.anthropic.claude-sonnet-5[1m]` and kin), `launch` PROCEEDED and the session 400d at the
+# Codex upstream: the gateway does not recognize a `global.anthropic.*` id as native Anthropic
+# passthrough, so it fell through to the DEFAULT provider. The operator asked for Sonnet on their
+# subscription and got whichever provider is default, under a gateway banner.
+#
+# REFUSE, NOT WARN, and the refusal text says why: one of these variables changes which upstream
+# serves those slots as surely as a routing switch does. A warning on the channel that silently
+# re-points a whole model family is the fail-open shape every check in this section exists to
+# close, and the failure it produces -- an upstream 400, or worse a quietly substituted model --
+# names none of these variables.
+#
+# A MODEL ID IS NOT A CREDENTIAL. Unlike a base URL, a token, or a settings path, these refusals
+# may NAME the value: hiding it would leave the operator guessing which of four slots to fix, and
+# there is nothing secret in `us.anthropic.claude-opus-4-5-v1:0`.
+model_slot_overrides=(
+  ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL
+  ANTHROPIC_SMALL_FAST_MODEL
+)
+# ONE pattern for BOTH channels, on the same rule as $loopback_base_url_pattern above: bash `=~`
+# here and jq's `test()` in the settings program must not be able to disagree about which id is
+# cloud-provider-shaped. Everything in it is POSIX-ERE / Oniguruma common ground -- anchors,
+# alternation, escaped dots, a negated class, a bounded repeat -- so the two engines classify the
+# same fixtures identically.
+#
+# GROUNDED IN THE IDS THE REFUSALS ALREADY KNOW rather than in a guess about model naming: the
+# region-prefixed Bedrock inference profiles (`global.`/`us.`/`eu.`/`apac.`/GovCloud on
+# `anthropic.`), the bare Bedrock publisher form (`anthropic.claude-*`), and the two Vertex
+# spellings (a `publishers/anthropic/` or `projects/<p>/locations/...` path, and the `@<date>`
+# pinned-version suffix). A plain alias -- `claude-sonnet-5`, `claude-haiku-4-5` -- matches none of
+# them, and neither does a gateway id such as `muse/muse-spark-1.2`; both stay fine, because a
+# routed id in the small-fast slot is a legitimate use of this route.
+#
+# RESIDUAL, stated rather than hidden: `ANTHROPIC_MODEL` is the same class of hazard and is NOT in
+# the list. It was not part of the executed failure above, nothing here has measured it, and this
+# file does not refuse on an unmeasured guess -- so its coverage is not claimed either.
+cloud_provider_model_id_pattern='^(global|us|eu|apac|us-gov-west-1|us-gov-east-1)\.anthropic\.|^anthropic\.claude|^publishers/anthropic/|^projects/[^/]+/locations/|@[0-9]{8}$'
 
 # Truthiness for the boolean switches only. Case- and whitespace-insensitive so ` False ` is not
 # read as enabled. Non-boolean slots never reach this function.
@@ -782,6 +850,31 @@ gateway_bypassing_env_name() {
   return 1
 }
 
+# The exported half of the model-slot check, as `<name><tab><value>` for the first slot carrying a
+# cloud-provider-shaped id. The VALUE is returned deliberately -- the refusal prints it, because a
+# model id is not a credential and naming it is what makes the message actionable. Reported by this
+# function rather than by gateway_bypassing_env_name because the two say different things: a
+# routing switch means the gateway is not in the path at all, while this means the gateway IS in
+# the path and will serve those slots from the wrong upstream.
+cloud_shaped_model_slot_env() {
+  local name value
+  for name in "${model_slot_overrides[@]}"; do
+    value="${!name:-}"
+    [ -n "$value" ] || continue
+    if [[ "$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$value")" =~ $cloud_provider_model_id_pattern ]]; then
+      printf '%s\t%s' "$name" "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ONE sentence for both channels, so the exported and settings refusals cannot drift into
+# describing the same hazard differently. The caller supplies how the value was set.
+model_slot_refusal_reason() {
+  printf '%s' "that variable chooses which id serves a whole model family, so it re-points that family's upstream as surely as a routing switch does: the gateway does not recognize a cloud-provider id as native Anthropic passthrough, so those turns fall through to the DEFAULT provider and are answered -- or 400d -- under a gateway banner. Use a plain claude-* id, or drop the variable and pick the model per session with \`--model\`"
+}
+
 # The same switches in a settings document, plus two hazards that exist only there. Shell env is
 # checked separately above because a settings document is the channel an operator forgets: it is
 # read on every launch and survives a clean shell.
@@ -860,8 +953,10 @@ gateway_bypassing_env_name() {
 settings_bypass_classification() {
   jq -ers \
     --arg loopback "$loopback_base_url_pattern" \
+    --arg cloudmodel "$cloud_provider_model_id_pattern" \
     --argjson booleans "$(json_name_array "${routing_boolean_switches[@]}")" \
-    --argjson slots "$(json_name_array "${routing_endpoint_slots[@]}")" '
+    --argjson slots "$(json_name_array "${routing_endpoint_slots[@]}")" \
+    --argjson models "$(json_name_array "${model_slot_overrides[@]}")" '
     if length != 1 or (.[0] | type) != "object"
     then error("not exactly one settings object")
     else .[0]
@@ -888,8 +983,14 @@ settings_bypass_classification() {
         | select((slot(.) | ascii_downcase) | test($loopback) | not) ] as $base
     | [ "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"
         | select(slot(.) | startswith("sk-ant-api")) ] as $console
+    # The model-slot class, read by SHAPE through the same pattern the exported check uses. Only
+    # the NAME crosses back, because this program deliberately never puts document bytes into a
+    # shell variable: the settings refusal names the variable and the shape family rather than
+    # quoting the value, which is also why the exported channel -- the one that does hold the
+    # value -- is the channel that prints it.
+    | ($models | map(select(slot(.) | ascii_downcase | test($cloudmodel)))) as $model_slots
     | (if (.apiKeyHelper // null) != null then ["apiKeyHelper"] else [] end) as $helper
-    | ($switches + $endpoints + $base + $console + $helper) | first // "clean"
+    | ($switches + $endpoints + $base + $model_slots + $console + $helper) | first // "clean"
   '
 }
 
@@ -1039,6 +1140,8 @@ settings_argument_refusal() {
       refuse "$label sets $offending to an sk-ant-api* Console key, which takes the same native passthrough branch and bills API credits rather than your subscription" ;;
     ANTHROPIC_BASE_URL)
       refuse "$label sets ANTHROPIC_BASE_URL in its \`env\` block to an address that is not this host's loopback gateway, and that value REPLACES the one this launch sets, so the session would talk to it instead of the gateway" ;;
+    ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_SMALL_FAST_MODEL)
+      refuse "$label sets $offending in its \`env\` block to a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)" ;;
     *)
       refuse "$label carries $offending, which routes Claude Code to a cloud provider and bypasses this gateway" ;;
   esac
@@ -1094,7 +1197,7 @@ console_key_env_name() {
 }
 
 assert_gateway_route_is_effective() {
-  local offending document
+  local offending document value
   if offending="$(gateway_bypassing_env_name)"; then
     case "$offending" in
       # An exported base URL neither outranks nor replaces anything: opencodex PRESERVES it and
@@ -1104,6 +1207,14 @@ assert_gateway_route_is_effective() {
       *)
         refuse "$offending is exported and in force, which routes Claude Code to a cloud provider and bypasses the gateway entirely; unset it -- a switch whose value is 0, false, or empty already counts as off -- or set it per command in front of a plain \`claude\` run for that route" ;;
     esac
+  fi
+  # Checked with the exported switches above rather than after the documents, because it is the same
+  # channel: a slot set in this shell. A cloud switch still names itself first, since it defeats the
+  # route no matter what any model id says.
+  if offending="$(cloud_shaped_model_slot_env)"; then
+    value="${offending#*$'\t'}"
+    offending="${offending%%$'\t'*}"
+    refuse "$offending is exported as $value, a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)"
   fi
   if offending="$(bypassing_settings_document_and_key)"; then
     document="${offending%%$'\t'*}"
@@ -1123,6 +1234,8 @@ assert_gateway_route_is_effective() {
         # child process environment, so this address wins and the gateway is never contacted. The
         # value is never printed -- a base URL can carry userinfo credentials.
         refuse "$document sets ANTHROPIC_BASE_URL in its \`env\` block to an address that is not this host's loopback gateway, and that value REPLACES the one this launch sets, so the session would talk to it instead of the gateway; remove the key, or set it to http://127.0.0.1:<the port \`ccodex status\` reports>" ;;
+      ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_SMALL_FAST_MODEL)
+        refuse "$document sets $offending in its \`env\` block to a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)" ;;
       *)
         refuse "$document carries $offending, which routes Claude Code to a cloud provider and bypasses this gateway; move it to a per-command wrapper instead of a settings document Claude Code reads on every launch" ;;
     esac
@@ -1353,7 +1466,7 @@ cmd_status() {
   # so its session data IS the operator's own. What replaced that report is the route check --
   # a bypassing key is the one remaining way a launch can look routed and not be.
   printf '\n== gateway route reachability ==\n'
-  local blocker="" document=""
+  local blocker="" document="" slot_value=""
   if blocker="$(gateway_bypassing_env_name)"; then
     case "$blocker" in
       ANTHROPIC_BASE_URL)
@@ -1362,6 +1475,14 @@ cmd_status() {
       *)
         printf '  BYPASSED: %s is exported; a launch would reach a cloud provider, not this gateway\n' "$blocker" ;;
     esac
+  # Same order as assert_gateway_route_is_effective, and here for the same reason `status` names its
+  # documents: reporting `ok` on a shell that `launch` refuses would be the reassurance this section
+  # exists to stop giving. A model id is not a credential, so the value IS printed.
+  elif blocker="$(cloud_shaped_model_slot_env)"; then
+    slot_value="${blocker#*$'\t'}"
+    blocker="${blocker%%$'\t'*}"
+    printf '  MISROUTED: %s is exported as %s, a cloud-provider model id; a launch refuses --\n' "$blocker" "$slot_value"
+    printf '            that family would be served by the DEFAULT provider, not by Anthropic\n'
   elif blocker="$(bypassing_settings_document_and_key)"; then
     document="${blocker%%$'\t'*}"
     blocker="${blocker#*$'\t'}"
