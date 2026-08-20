@@ -223,6 +223,40 @@ went red on a clean machine. Reading a nonzero dry-run exit as "the tool broke" 
 A real `--yes` install with a missing front door still exits nonzero — that half is asserted
 separately so the fix cannot decay into blanket leniency.
 
+## A library with no front door: the ported class (pstack)
+
+Everything above is the **front-door class**: a library reachable because it publishes its own
+installable front door, which `install_external_libraries.py` invokes without copying a byte.
+Some libraries worth onboarding have no such front door at all — nothing for that script to
+invoke — and forcing one into the closed catalog above would misdescribe what actually happens.
+`docs/adr/0029-ported-libraries-are-a-second-external-library-catalog-class.md` names that
+second class **ported libraries**, and refines rather than supersedes ADR-0009: the closed
+three-row catalog, its mechanism, and its boundaries above are unchanged by it.
+
+`pstack` (`github.com/cursor/plugins/tree/main/pstack`, a Cursor-native workflow plugin) is the
+first, and so far only, ported-class member. It has no Claude Code front door — no marketplace
+plugin, no npm or PyPI package targeting this host — so onboarding it means executing
+`references/porting-a-foreign-plugin.md`, the recipe this skill already ships, against a
+**pristine read of upstream HEAD** (never against a working copy a prior port has already
+modified — that recipe's own checklist item 9), with the exact upstream commit read **recorded**
+as a pin per ADR-0029. The ported result lands in the operator's own plugin tree, under the
+operator's own ownership, registered through a local marketplace the operator points at their
+own checkout — never inside this repository; where the executed 2026-08-19 port landed is
+recorded in `docs/progress/2026-08-19-pstack-claude-code-port.md`. Re-porting on a later
+upstream change is a fresh recipe run against the new pristine HEAD with a new recorded pin,
+never a channel update, because there is no channel to subscribe to.
+
+The same three boundaries this skill applies to the front-door class apply here, unchanged:
+**no vendoring** (the ported plugin's files stay in the operator's home; nothing from
+`cursor/plugins` is copied into this repository, and no `NOTICE` entry is owed for it — this
+skill's own section and the recipe re-express the pattern in this bundle's own words rather
+than quoting the ported plugin's files); **name collision** is the operator's own, resolved in
+their own plugin tree by their own host's install/upgrade behavior, not by this skill's
+precheck, which only reasons about `install_external_libraries.py`'s destinations; **no
+installer-task automation** — ADR-0029 creates none, so there is no `libraries:*` verb, no
+`mise` task, and no addition to the closed catalog above for the ported class or for pstack
+specifically. Automating a port is a separate, not-yet-made decision.
+
 ## Standing boundaries
 
 - **This bundle never vendors upstream bytes.** No file from any library is copied into this
@@ -253,3 +287,9 @@ separately so the fix cannot decay into blanket leniency.
   decision and its evidence.
 - `docs/adr/0002-mise-is-the-single-front-door.md` — the prerequisite rule these front doors
   must not raise.
+- `references/porting-a-foreign-plugin.md` — the recipe the ported class points at: manifest
+  relocation, primitive substitution, the pristine-HEAD-only evidence rule, and what porting
+  deliberately does not make safe.
+- `docs/adr/0029-ported-libraries-are-a-second-external-library-catalog-class.md` — the
+  ported-class decision, pstack as its first member, and why it refines rather than
+  supersedes ADR-0009.

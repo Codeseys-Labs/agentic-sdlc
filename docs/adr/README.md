@@ -35,3 +35,4 @@ edit either accepted record or infer a stronger status.
 | [ADR-0026](0026-keep-threat-analysis-separate-from-human-risk-ownership.md) | Keep threat analysis separate from human risk ownership | accepted | 2026-08-15 |
 | [ADR-0027](0027-admit-compatibility-through-capability-evidence-above-published-minimums.md) | Admit compatibility through capability evidence above published minimums | accepted | 2026-08-15 |
 | [ADR-0028](0028-organize-the-claude-code-first-product-boundary-as-one-initiative.md) | Organize the Claude Code-first product boundary as one initiative | proposed | 2026-08-15 |
+| [ADR-0029](0029-ported-libraries-are-a-second-external-library-catalog-class.md) | Ported libraries are a second external-library catalog class | accepted | 2026-08-20 |
