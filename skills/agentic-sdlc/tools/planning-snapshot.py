@@ -1334,6 +1334,10 @@ def observe(args: argparse.Namespace, assessment: Assessment) -> dict[str, Any] 
             "git reported no symbolic ref for HEAD, which is the shape of a detached head, so there "
             "was no branch name to observe",
         )
+    # `unknowns.entries()` below returns a copy: every observation that can name an unknown must
+    # run (and be bound to a local, as `worktrees` already is) before that call, or an unknown it
+    # names is silently absent from the sealed document even though the observation itself ran.
+    wave_artifacts = observe_file_digests(Path(toplevel), WAVE_ARTIFACT_GLOB_DIR, "wave_artifacts", unknowns)
     body = {
         "dirty_state": dirty,
         "head": first,
@@ -1353,9 +1357,7 @@ def observe(args: argparse.Namespace, assessment: Assessment) -> dict[str, Any] 
         "schema": SNAPSHOT_SCHEMA,
         "stated_at": args.at,
         "unknowns": unknowns.entries(),
-        "wave_artifacts": observe_file_digests(
-            Path(toplevel), WAVE_ARTIFACT_GLOB_DIR, "wave_artifacts", unknowns
-        ),
+        "wave_artifacts": wave_artifacts,
         "worktrees": worktrees,
     }
     for conflict in unknowns.conflicts:

@@ -879,6 +879,52 @@ class LocalEvidenceTests(_SnapshotTestCase):
         verified = self.verify(sealed)
         self.assertEqual(verified["verdict"], VERIFIED, verified["reasons"])
 
+    def test_an_unreadable_wave_artifact_is_named_unknown_rather_than_dropped(self) -> None:
+        """Regression for the seed where `wave_artifacts` is observed AFTER `unknowns.entries()` is
+        taken in the `observe()` body literal: an unknown this observation names must still land in
+        the sealed `unknowns` list, not just be produced and then discarded."""
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses file permissions, so the probe cannot fail")
+        (self.root / ".sdlc").mkdir()
+        blocked = self.root / ".sdlc" / "wave-journal.json"
+        blocked.write_text('{"wave":1}', encoding="utf-8")
+        blocked.chmod(0o000)
+        self.addCleanup(blocked.chmod, 0o644)
+        readable = self.root / ".sdlc" / "wave-plan.json"
+        readable.write_text('{"plan":1}', encoding="utf-8")
+
+        sealed = self.sealed()
+
+        self.assertEqual(
+            [entry["path"] for entry in sealed["wave_artifacts"]],
+            [".sdlc/wave-plan.json"],
+            "the unreadable wave artifact was digested as though it could be read",
+        )
+        named = self.named(sealed)
+        self.assertIn(
+            "wave_artifacts:.sdlc/wave-journal.json",
+            named,
+            "an unknown that observe_file_digests named for the unreadable artifact was dropped "
+            "from the sealed document",
+        )
+        # Positive control: the readable artifact in the same directory IS digested and is NOT
+        # named unknown, so the assertion above is about the permission failure, not a directory
+        # this tool never observes at all.
+        self.assertNotIn(
+            "wave_artifacts:.sdlc/wave-plan.json",
+            named,
+            "a readable wave artifact was named unknown alongside the unreadable one",
+        )
+        self.assertIn(
+            {"path": ".sdlc/wave-plan.json", "sha256": hashlib.sha256(readable.read_bytes()).hexdigest()},
+            sealed["wave_artifacts"],
+            "the readable wave artifact was not digested",
+        )
+        # `wave_artifacts` is the other dimension a `:<detail>` suffix is admitted on, so the
+        # decorated name this capture actually named unknown must still verify.
+        verified = self.verify(sealed)
+        self.assertEqual(verified["verdict"], VERIFIED, verified["reasons"])
+
     def test_verify_refuses_a_policy_digests_list_that_is_not_sorted_by_path(self) -> None:
         (self.root / "policy").mkdir()
         (self.root / "policy" / "a-first.json").write_text('{"a":1}', encoding="utf-8")
