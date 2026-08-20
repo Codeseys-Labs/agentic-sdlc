@@ -55,11 +55,16 @@ choice needed before specification; it does not implement the product.
 
 ## Decision closure
 
-Two product choices remain open, each tracked as its own decision seed rather than resolved
-here: whether to restore or formally drop the `ccodex sdlc` profiles surface (seed
-`agentic-sdlc-c990`), and who owns release version selection at install time — the installer
-lifecycle, the release manifest, or the operator (seed `agentic-sdlc-0faa`). Every other product
-and architecture choice this map tracked is closed. The final brief is
+The last two product choices closed by operator decision on 2026-08-20. The `ccodex sdlc`
+profiles surface is formally dropped (seed `agentic-sdlc-c990`): each first-party profile keeps
+its own receipt-backed front door — `ccodex routes` for routed models, the AutoEnvelope admission
+chain for bounded recursion, the libraries tasks for companions — and `ccodex sdlc status`
+reports active profiles read-only without owning their mutation. Release version selection at
+install time is owned by the operator through mise's native pin (seed `agentic-sdlc-0faa`); the
+release manifest owns compatibility claims only, and the install lifecycle owns verification
+only, recording the exact resolved version into the ownership receipt and refusing a declared
+incompatibility rather than substituting a version silently. Every other product and
+architecture choice this map tracked was already closed. The final brief is
 [`to-spec-handoff.md`](to-spec-handoff.md) for those closed choices. Exact implementation schemas,
 archive layout, Workflow calls, XDG paths, usage readback, renderer tuples, and later queue
 dispositions belong to `/to-spec` discovery. Any implementation finding that would change a
