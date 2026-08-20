@@ -788,6 +788,17 @@ class QueueStateTests(_SnapshotTestCase):
         self.assertEqual(refused["verdict"], REFUSED, "an absent queue naming an unknown digest verified")
         self.assertIn("queue.sha256", " ".join(refused["reasons"]), "the refusal did not name queue.sha256")
 
+    def test_verify_refuses_a_queue_path_other_than_the_pinned_canonical_path(self) -> None:
+        sealed = self.sealed()
+        control = self.verify(sealed)
+        self.assertEqual(control["verdict"], VERIFIED, control["reasons"])
+        pinned = dict(sealed["queue"])
+        self.assertEqual(pinned["path"], ".seeds/issues.jsonl", "the fixture queue does not carry the pinned path")
+        mutated = self.reseal({**sealed, "queue": {**pinned, "path": "elsewhere/queue.jsonl"}})
+        refused = self.verify(mutated)
+        self.assertEqual(refused["verdict"], REFUSED, "a queue.path other than the one queue this schema owns was verified")
+        self.assertIn("queue.path", " ".join(refused["reasons"]), "the refusal did not name queue.path")
+
     def test_verify_refuses_a_present_queue_with_no_digest_and_an_unlisted_state(self) -> None:
         self.write_queue('{"id":"one"}\n')
         sealed = self.sealed()
@@ -868,6 +879,23 @@ class LocalEvidenceTests(_SnapshotTestCase):
         verified = self.verify(sealed)
         self.assertEqual(verified["verdict"], VERIFIED, verified["reasons"])
 
+    def test_verify_refuses_a_policy_digests_list_that_is_not_sorted_by_path(self) -> None:
+        (self.root / "policy").mkdir()
+        (self.root / "policy" / "a-first.json").write_text('{"a":1}', encoding="utf-8")
+        (self.root / "policy" / "b-second.json").write_text('{"b":2}', encoding="utf-8")
+        sealed = self.sealed()
+        self.assertEqual(
+            len(sealed["policy_digests"]), 2, "the fixture does not carry two entries to reorder"
+        )
+        control = self.verify(sealed)
+        self.assertEqual(control["verdict"], VERIFIED, control["reasons"])
+        reordered = self.reseal({**sealed, "policy_digests": list(reversed(sealed["policy_digests"]))})
+        refused = self.verify(reordered)
+        self.assertEqual(refused["verdict"], REFUSED, "a reordered policy_digests list was verified")
+        self.assertIn(
+            "policy_digests", " ".join(refused["reasons"]), "the refusal did not name policy_digests"
+        )
+
     def test_verify_refuses_a_digest_entry_whose_path_escapes_the_repository(self) -> None:
         (self.root / "policy").mkdir()
         (self.root / "policy" / "real.json").write_text("{}", encoding="utf-8")
@@ -940,6 +968,38 @@ class OutputPathTests(_SnapshotTestCase):
         self.assertEqual(result["verdict"], REFUSED, "the snapshot was written into the tree it describes")
         self.assertFalse(inside.exists(), "a refused capture created its output anyway")
         self.assertIn("worktree_path", " ".join(result["reasons"]), "the refusal did not name what it collided with")
+
+    def test_an_out_path_whose_symlinked_parent_resolves_inside_the_repository_is_refused(self) -> None:
+        inside = self.root / "inside-dir"
+        inside.mkdir()
+        linked_parent = self.work / "linked-parent"
+        try:
+            linked_parent.symlink_to(inside)
+        except OSError as exc:  # pragma: no cover - platform without user-creatable symlinks
+            self.skipTest(f"symlinks are unavailable here: {exc}")
+        target = linked_parent / "snapshot.json"
+        result = self.capture("--out", str(target))
+        self.assertEqual(
+            result["verdict"], REFUSED,
+            "the snapshot was written into the observed repository through a symlinked --out parent",
+        )
+        self.assertFalse(
+            (inside / "snapshot.json").exists(), "a refused capture wrote through the symlinked parent anyway"
+        )
+        self.assertIn("worktree_path", " ".join(result["reasons"]), "the refusal did not name what it collided with")
+        # Positive control: a symlinked parent that resolves OUTSIDE the repository still writes.
+        outside = self.work / "outside-dir"
+        outside.mkdir()
+        linked_elsewhere = self.work / "linked-elsewhere"
+        linked_elsewhere.symlink_to(outside)
+        self.rescript_git()
+        control_target = linked_elsewhere / "snapshot.json"
+        control = self.capture("--out", str(control_target))
+        self.assertEqual(control["verdict"], CAPTURED, control["reasons"])
+        self.assertTrue(
+            (outside / "snapshot.json").exists(),
+            "a capture through a symlinked parent resolving outside the repository did not write",
+        )
 
     def test_an_out_path_inside_the_observed_git_directory_is_refused(self) -> None:
         inside = self.root / ".git" / "snapshot.json"
