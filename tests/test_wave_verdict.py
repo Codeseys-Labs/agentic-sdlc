@@ -1681,6 +1681,22 @@ class ConductorRecordTests(WaveCase):
         self.assertEqual(document["state"], BLOCKED)
         self.assertIn("names wave 'wave-2'", self.reasons(document))
 
+    def test_a_recorded_at_with_an_arabic_indic_digit_is_malformed_input(self) -> None:
+        """Python's `re` `\\d` matches every Unicode `Nd` digit, not only ASCII 0-9.
+
+        `wave-submission.py`'s instant grammar is anchored on `[0-9]` and refuses this exact string;
+        this module's `_TIME` must refuse it too rather than silently admitting it. T6, the ASCII form
+        of the same instant and `write_conductor_record`'s default, is this test's own positive
+        control: the only change below is one character's script, never its value.
+        """
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        arabic_indic_recorded_at = "٢" + T6[1:]
+        args["--conductor-record"] = str(self.write_conductor_record(recorded_at=arabic_indic_recorded_at))
+        done = self.derive_failure(args)
+        self.assertIn(b"recorded_at", done.stderr)
+        self.assertIn(b"is not a YYYY-MM-DDTHH:MM:SSZ instant", done.stderr)
+
 
 class EndedStateCase(WaveCase):
     """Shared assertions for Implementation Decision 61's three ended states.

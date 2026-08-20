@@ -351,7 +351,7 @@ RESIDUALS = (
     "stage, and what the effect actually touched stays a recovery question no artifact here answers",
 )
 
-_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
+_TIME = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _READ_CHUNK = 1 << 20
 
