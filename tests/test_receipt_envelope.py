@@ -741,6 +741,30 @@ class GraphFindingTests(EnvelopeCase):
         # has one spelling no matter which receipt the walk reached first.
         self.assertEqual(found[0]["implicated_receipt_ids"][0], "node-a")
 
+    def test_a_loop_entered_through_a_tail_implicates_only_the_loop_and_rotates_to_its_smallest_id(
+        self,
+    ) -> None:
+        """The walk descends aaa -> zzz -> yyy -> zzz. The back edge closes yyy and zzz into a loop;
+        aaa is a TAIL that only leads into it and is not itself on the loop. The loop-extraction slice
+        must start at the point the walk RE-ENTERED the loop (zzz), not at the walk's own start (aaa),
+        and the canonical rotation must then lead with the loop's smallest id (yyy) so the same loop
+        has one spelling regardless of where the walk began descending."""
+        documents = [
+            receipt(receipt_id="aaa", ancestors=[reference("zzz")]),
+            receipt(receipt_id="zzz", ancestors=[reference("yyy")]),
+            receipt(receipt_id="yyy", ancestors=[reference("zzz")]),
+        ]
+        result = self.check_graph(documents)
+        self.assertEqual(result["verdict"], GRAPH_DEFECTIVE)
+        self.assertEqual([item["finding"] for item in result["findings"]], ["cyclic"])
+        found = result["findings"][0]
+        self.assertEqual(found["implicated_receipt_ids"], ["yyy", "zzz"], "aaa is a tail, not a loop member")
+        self.assertEqual(found["receipt_id"], "yyy", "the canonical rotation leads with the loop's smallest id")
+        self.assertIn("yyy -> zzz -> yyy", found["detail"])
+        # POSITIVE CONTROL: the same graph without the closing edge (yyy's reference back to zzz) is clean.
+        documents[2] = receipt(receipt_id="yyy", ancestors=[])
+        self.assert_clean(self.check_graph(documents, name="control"), 3)
+
     def test_a_repeated_receipt_id_is_duplicate_id_and_stops_reference_resolution(self) -> None:
         """A repeated id makes every reference naming it ambiguous, so resolution is not derived at
         all -- and `resolution_checked` is what tells a consumer that an empty dangling list means
@@ -1023,7 +1047,13 @@ class MalformedInputTests(EnvelopeCase):
         self.assertIn(b"is not UTF-8 text", self.assert_input_error("verify", "--receipt", str(path)))
 
     def test_json_nested_deeper_than_the_decoder_admits_is_malformed_input(self) -> None:
-        payload = b'{"body": {"a": ' + b"[" * 20000 + b"]" * 20000 + b"}}\n"
+        """The depth is DERIVED from this interpreter's own recursion limit, with the same 20x
+        headroom the original fixed 20000-deep payload carried over CPython's default limit of
+        1000, so the fixture stays deep enough to fail on any CPython rather than passing on a
+        newer one whose decoder or default limit moved -- which is exactly what let a fixed 20000
+        parse cleanly on Python 3.14+."""
+        depth = 20 * sys.getrecursionlimit()
+        payload = b'{"body": {"a": ' + b"[" * depth + b"]" * depth + b"}}\n"
         err = self.assert_input_error("verify", "--receipt", str(self.store_bytes("nest.json", payload)))
         self.assertIn(b"nests JSON deeper", err)
         self.assertNotIn(b"Traceback", err, "a recursion limit is a classified input error, not a traceback")
