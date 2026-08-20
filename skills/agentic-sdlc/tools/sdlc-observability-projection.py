@@ -10,7 +10,7 @@ and receipts" (product-spec, Slice 6). It is a PROJECTION, not a validator, a co
 it assembles one derived status document purely from artifact files that already exist on disk
 today, and it never writes anything anywhere. It prints one document to stdout and nothing else.
 
-FOUR OPTIONAL INPUTS, each independent of the others:
+THIRTEEN OPTIONAL INPUTS, each independent of the others:
 
     --wave-journal PATH        the append-only file `wave-journal.py`'s `init`/`record-*` verbs
                                 EMIT and its `project` verb READS. Because that format is a
@@ -35,7 +35,28 @@ FOUR OPTIONAL INPUTS, each independent of the others:
                                 directly, exactly as `activation-result.py` reads its own
                                 `--baseline-comparison`.
 
-NEVER MANUFACTURE SUCCESS. Three outcomes, and only three, for every one of the four inputs:
+    --mission-contract PATH       `agentic-sdlc/mission-contract@1`, from `mission-contract.py define`
+    --planning-snapshot PATH      `agentic-sdlc/planning-snapshot@1`, from `planning-snapshot.py capture`
+    --wave-plan PATH              `agentic-sdlc/wave-plan@1`, from `wave-plan-compiler.py compile --out`
+    --plan-diff PATH              `agentic-sdlc/plan-diff@1`, from that same run's `--diff-out`
+    --wave-plan-admission PATH    `agentic-sdlc/wave-plan-admission@1`, from `wave-plan-admission.py admit`
+    --drift-classification PATH   `agentic-sdlc/drift-classification@1`, from `drift-classifier.py classify`
+    --auto-envelope PATH          `agentic-sdlc/auto-envelope@1`, from `auto-envelope.py define`
+    --transition-receipt PATH     `agentic-sdlc/autonomous-transition-receipt@1`, from
+                                   `auto-envelope.py admit-transition`
+
+                                Those eight are the sealed slice-6 planning documents (T1/T2/T5/T6/
+                                T7/T8 in the slice-6 cartography), and all eight are read the SAME way
+                                because all eight are the same shape of thing: one self-contained
+                                document that declares its own schema and carries one `digest` over its
+                                own body. Each seal is RE-DERIVED here from this family's single
+                                canonical form -- sha256 over the canonical bytes of the document minus
+                                `digest`, the key excluded BY NAME -- re-expressed, never imported, so a
+                                truncated or edited document is `unreadable` rather than believed. None
+                                of them is a hash-chained ledger, so none needs `--wave-journal`'s
+                                invoke-the-sibling treatment.
+
+NEVER MANUFACTURE SUCCESS. Three outcomes, and only three, for every one of the thirteen inputs:
 
     absent       no path was supplied, or the supplied path does not exist. Named as absent.
     unreadable   the path exists but could not be read as the document it claims to be -- not a
@@ -52,13 +73,35 @@ An absent or unreadable input is never an error for this module: the projection 
 observability surface over evidence that arrives piecemeal, wave by wave.
 
 TWO VIEWS OF ONE DOCUMENT. The default view is a human BLUF-first read: the single most
-decision-relevant line first (one artifact's own top fact, in a fixed priority order --
-activation result, then the gate, then runtime assignment, then the wave journal -- because that
-is the order in which each fact subsumes the ones after it), then one section per artifact.
-`--json` emits the identical underlying document as canonical JSON
-(`agentic-sdlc/observability-projection@1`). Both views carry, verbatim, the sentence "this view is
-evidence, not authorization": nothing this module derives may be read as a grant to write, push,
-publish, mutate a PR, merge, or deploy.
+decision-relevant line first (one artifact's own top fact, in the fixed priority order `BLUF_ORDER`
+records -- the seven verdict-carrying kinds widest-consequence first, then the five descriptive ones
+in the family's own chain order -- because that is the order in which each fact subsumes the ones
+after it), then one section per artifact. `--json` emits the identical underlying document as
+canonical JSON (`agentic-sdlc/observability-projection@2`). Both views carry, verbatim, the sentence
+"this view is evidence, not authorization": nothing this module derives may be read as a grant to
+write, push, publish, mutate a PR, merge, or deploy.
+
+WHY @2 RATHER THAN @1. Adding the eight sealed kinds was not a purely additive change, so keeping
+`@1` would have been a lie in a field a consumer reads. Two facts move for EVERY document, including
+one produced by a caller who supplied none of the new flags: `artifacts` grows from four keys to
+twelve (each kind's section is always present, carrying `absent` when its flag was not supplied --
+that uniformity is the existing design, and making the new eight conditional instead would have
+created two classes of section and a `_leaf_sections` that counts differently depending on which
+flags were passed), and the BLUF priority order this docstring publishes now has two kinds inserted
+ABOVE `gate`, so the same inputs that produced a gate BLUF under `@1` can produce an admission or
+drift-classification BLUF now. Every `@1` field that survives is unchanged in name, type, and
+meaning: `schema`, `command`, `status`, `exit_code`, `evidence_notice`, `bluf`, and the four original
+`artifacts` sections field-for-field.
+
+NEVER RE-DERIVE A VERDICT THE ARTIFACT DOES NOT CARRY. Each of the eight is projected in its own
+vocabulary: the admission report's own `disposition`, the drift classification's own
+`overall_outcome`, the receipt's own `verdict`, the envelope's own recorded `validity_window`. This
+module does not decide whether that window is open (it reads no clock), does not rank one drift
+outcome against another (`drift-classifier.py` owns that ladder), does not turn a `blocked` report
+into a blocker-free one, and does not read a met check as an approval -- `admitted` is not
+`approved`, exactly as the report itself says. Counting what a document listed (how many checks it
+recorded met, how many changes it recorded semantic) restates the document; it does not add a
+verdict to it.
 
 FAIL CLOSED ON THE TOOL ITSELF, NOT ON THE EVIDENCE. Every predicate above only ever downgrades an
 input from "present" to "unreadable"; nothing here can upgrade an input, and nothing here can turn
@@ -68,7 +111,7 @@ EXITS. Implementation Decision 9 reserves 0 for a valid query, 1 for an unexpect
 failure, 2 for a grammar/argument error, 3 for a clean refusal before effect, and 4 after an
 admitted partial or unknown effect. This module's exit space is 0, 2, and 1 only, for the same
 reason `mission-contract.py` and `activation-result.py` give: **a tool that can cause no effect can
-neither refuse before one nor admit one.** Every one of the four inputs is optional, and an absent
+neither refuse before one nor admit one.** Every one of the thirteen inputs is optional, and an absent
 or unreadable one is folded into the exit-0 document rather than raised as a refusal. Exit 2 is
 reserved for the arguments themselves being unusable (an unknown flag, a missing option value);
 exit 1 additionally covers a stdout that cannot receive the one result document, because a
@@ -76,11 +119,28 @@ projection derived and not delivered is not a success.
 
 RESIDUALS, STATED EXACTLY.
 
-  * This first cut projects only what already exists today: the wave journal, a runtime-assignment
-    report, an activation result, and a gate receipt/baseline pair. MissionContract, PlanningSnapshot,
-    WavePlan, PlanDiff, AutoEnvelope, and the shared receipt envelope (T1/T2/T3/T5/T6/T7/T8 in the
-    slice-6 cartography) are not yet artifact kinds this module knows; adding one is an additive
-    extension of the reader registry below, never a rewrite of it.
+  * The eight sealed slice-6 kinds ARE projected now (this was the T4 row's reserved extension, and it
+    landed as eight more rows in the reader registry below rather than a rewrite of it). The wave
+    SUBMISSION schemas -- `agentic-sdlc/advisory-submission@1`, `worktree-submission@1`,
+    `fan-in-submission@1`, `outward-effect-submission@1`, which a wave plan node names in its
+    `output_schema` -- are still not kinds this module knows; they are a later increment once merged,
+    and until then a submission is invisible here even though the plan that expects it is not.
+  * T3's two schemas -- `receipt-envelope@1` and `receipt-envelope-result@1`, from `receipt-envelope.py`
+    -- are NOT among the eight projected kinds above: the eight come from six tickets (T1, T2, T5
+    twice, T6, T7, T8 twice), and T3 is not one of them. `auto-envelope.py`'s own transition-receipt
+    residual records that its receipt "does not adopt the merged receipt-envelope@1 ancestor form" yet
+    and names folding the two as "T4's extension to make" once it does; until that adoption lands, a
+    caller reading a `receipt-envelope@1` document today gets no section here.
+  * Only the FIELDS each projector records are projected, not every field the sealed document carries:
+    node bodies, per-change evidence and consequence prose, deferred-dimension reasons, per-assessment
+    grounds, checkpoint lists, and repository/host detail stay in the artifacts themselves. This is a
+    BLUF-first status surface, not a re-serialization; a consumer that needs a document's full body
+    must read that document.
+  * A closed vocabulary is enforced for four fields -- the admission `disposition`, the drift
+    classification's own `overall_outcome`, each drift assessment's own `outcome`, and the receipt
+    `verdict` -- mirroring `ACTIVATION_STATES`. A future tool that adds a fifth drift outcome will
+    therefore read as `unreadable` here until this table learns it, which is the intended failure
+    direction: an unrecognised verdict must not be projected as if this module understood it.
   * The wave journal's own `journal_digest` anchor (a rewrite-or-truncation detector across
     repeated reads over TIME) is not retained across invocations here: each run is independent, and
     a caller polling this module repeatedly must keep that anchor itself if it wants to detect a
@@ -102,9 +162,9 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
-RESULT_SCHEMA = "agentic-sdlc/observability-projection@1"
+RESULT_SCHEMA = "agentic-sdlc/observability-projection@2"
 EVIDENCE_NOTICE = "this view is evidence, not authorization"
 
 EXIT_OK = 0
@@ -148,7 +208,8 @@ def constructed_environment() -> dict[str, str]:
 
 
 class InputError(Exception):
-    """Raised only within this module's own JSON reading helpers; never escapes them."""
+    """Raised only within this module's own JSON reading helpers and its sealed-document projectors;
+    never escapes them -- each catch site turns it into one `unreadable` reason naming the input."""
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -548,16 +609,680 @@ def build_gate_section(receipt_path: str | None, baseline_path: str | None) -> d
     return {"receipt": receipt, "baseline": baseline, "cross_check": cross_check}
 
 
+# ---- the eight sealed slice-6 documents -------------------------------------------------------------
+#: Every one of these eight is a SELF-CONTAINED sealed document: it declares its own schema and carries
+#: its own `digest` over its own body, so it is read directly and its seal is re-derived here. None of
+#: them is a hash-chained ledger, so none needs the invoke-the-sibling treatment `--wave-journal` gets.
+
+MISSION_CONTRACT_SCHEMA = "agentic-sdlc/mission-contract@1"
+PLANNING_SNAPSHOT_SCHEMA = "agentic-sdlc/planning-snapshot@1"
+WAVE_PLAN_SCHEMA = "agentic-sdlc/wave-plan@1"
+PLAN_DIFF_SCHEMA = "agentic-sdlc/plan-diff@1"
+WAVE_PLAN_ADMISSION_SCHEMA = "agentic-sdlc/wave-plan-admission@1"
+DRIFT_CLASSIFICATION_SCHEMA = "agentic-sdlc/drift-classification@1"
+AUTO_ENVELOPE_SCHEMA = "agentic-sdlc/auto-envelope@1"
+TRANSITION_RECEIPT_SCHEMA = "agentic-sdlc/autonomous-transition-receipt@1"
+
+#: The one key every sealed document in this family adds to its own body, and the one this module
+#: excludes BY NAME when it re-derives that document's seal.
+DIGEST_KEY = "digest"
+
+#: Three CLOSED vocabularies, each copied from the tool that owns it: `wave-plan-admission.py`'s
+#: report disposition, `drift-classifier.py`'s outcome ladder, and `auto-envelope.py`'s receipt
+#: verdict. A value outside one of these is `unreadable`, exactly as an unknown activation state
+#: already is -- this module does not know what a fourth drift outcome would mean, and guessing would
+#: be manufacturing a verdict. It never RANKS them either: the ladder order is the owning tool's, and
+#: this module reports whichever value the document wrote.
+#:
+#: `overall_outcome` is additionally NULLABLE, and that null is load-bearing rather than missing data:
+#: `drift-classifier.py` seals `overall_outcome: null` beside a `no_drift_reason` sentence for an
+#: observation that names no change at all, and its own sentence says that is "not the same statement as
+#: a compatible classification of a change and not a claim that nothing changed". So a null outcome is
+#: projected AS null with that sentence beside it. Turning it into `compatible` here would be inventing
+#: the exact verdict the producer refused to write -- and `compatible`, while inside the closed set the
+#: schema allows, is unreachable from that tool's taxonomy table, so no real classification carries it.
+ADMISSION_DISPOSITIONS = ("admitted", "blocked")
+DRIFT_OUTCOMES = ("compatible", "revalidation-required", "replan-required", "hard-stop")
+RECEIPT_VERDICTS = ("admitted", "refused")
+
+
+def sealed_digest(document: dict[str, Any]) -> str:
+    """This family's ONE sealed-document derivation, re-expressed and never imported: sha256 over the
+    canonical bytes of the document minus `digest`, the key excluded BY NAME rather than by position.
+
+    All eight kinds below seal themselves with exactly this function -- `mission-contract.py`'s
+    `contract_digest`, `planning-snapshot.py`'s `snapshot_digest`, and the `document_digest` in
+    `wave-plan-compiler.py`, `wave-plan-admission.py`, `drift-classifier.py`, and `auto-envelope.py`
+    are the same three lines over the same canonical form -- so one re-derivation here covers all
+    eight. Like every other digest check in this module it is TAMPER DETECTION BY RE-DERIVATION, not a
+    security boundary against a same-OS-user forger.
+    """
+    body = {key: value for key, value in document.items() if key != DIGEST_KEY}
+    return hashlib.sha256(canonical_bytes(body)).hexdigest()
+
+
+def _need_text(value: Any, named: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise InputError(f"carries no {named}")
+    return value
+
+
+def _need_int(value: Any, named: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InputError(f"carries a {named} that is not an integer")
+    return value
+
+
+def _need_bool(value: Any, named: str) -> bool:
+    if not isinstance(value, bool):
+        raise InputError(f"carries a {named} that is not a boolean")
+    return value
+
+
+def _need_object(value: Any, named: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise InputError(f"carries a {named} that is not a JSON object")
+    return value
+
+
+def _need_entry(value: Any, named: str) -> dict[str, Any]:
+    """A member of a list, named by the list it came from, so the refusal reads as a sentence."""
+    if not isinstance(value, dict):
+        raise InputError(f"carries an entry in {named} that is not a JSON object")
+    return value
+
+
+def _need_list(value: Any, named: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise InputError(f"carries a {named} that is not a list")
+    return value
+
+
+def _need_texts(value: Any, named: str) -> list[str]:
+    items = _need_list(value, named)
+    if any(not isinstance(item, str) or not item for item in items):
+        raise InputError(f"carries a {named} that is not a list of non-empty strings")
+    return list(items)
+
+
+def _need_member(value: Any, named: str, allowed: tuple[str, ...]) -> str:
+    if value not in allowed:
+        raise InputError(f"carries {named} {value!r}, which is not one of the closed set {list(allowed)}")
+    return str(value)
+
+
+def _optional_text(value: Any) -> str | None:
+    """A field the owning schema itself declares nullable (`supersedes`, `no_delta_reason`,
+    `no_drift_reason`, a detached head's `branch`): absent and null are the same answer here."""
+    return value if isinstance(value, str) and value else None
+
+
+def _project_mission_contract(document: dict[str, Any]) -> dict[str, Any]:
+    authority = _need_object(document.get("authority"), "authority")
+    scope = _need_object(document.get("scope"), "scope")
+    completion = _need_object(document.get("completion_contract"), "completion_contract")
+    return {
+        "mission_id": _need_text(document.get("mission_id"), "mission_id"),
+        "objective": _need_text(document.get("objective"), "objective"),
+        "revision": _need_int(document.get("revision"), "revision"),
+        "stated_at": _need_text(document.get("stated_at"), "stated_at"),
+        "authority_ceiling": _need_text(authority.get("ceiling"), "authority.ceiling"),
+        "admitted_authority_classes": _need_texts(authority.get("admitted_classes"), "authority.admitted_classes"),
+        "stop_conditions": _need_texts(document.get("stop_conditions"), "stop_conditions"),
+        "in_scope": _need_texts(scope.get("in_scope"), "scope.in_scope"),
+        "non_goals": _need_texts(scope.get("non_goals"), "scope.non_goals"),
+        "success_criteria": _need_texts(completion.get("success_criteria"), "completion_contract.success_criteria"),
+        "terminal_criteria": _need_texts(completion.get("terminal_criteria"), "completion_contract.terminal_criteria"),
+        "supersedes": _optional_text(document.get("supersedes")),
+    }
+
+
+def _bluf_mission_contract(section: dict[str, Any]) -> str:
+    return (
+        f"mission {_flat(section['mission_id'])} revision {section['revision']}: "
+        f"{_flat(section['objective'])}"
+    )
+
+
+def _detail_mission_contract(section: dict[str, Any]) -> list[str]:
+    return [
+        f"  mission_id={_flat(section['mission_id'])} revision={section['revision']} "
+        f"stated_at={_flat(section['stated_at'])}",
+        f"  objective: {_flat(section['objective'])}",
+        f"  authority ceiling={_flat(section['authority_ceiling'])} "
+        f"admitted_classes={_flat(section['admitted_authority_classes'])}",
+        f"  stop_conditions={_flat(section['stop_conditions'])}",
+        f"  supersedes={_flat(section['supersedes'])}",
+    ]
+
+
+def _project_planning_snapshot(document: dict[str, Any]) -> dict[str, Any]:
+    head = _need_object(document.get("head"), "head")
+    dirty = _need_object(document.get("dirty_state"), "dirty_state")
+    queue = _need_object(document.get("queue"), "queue")
+    dimensions: list[str] = []
+    for entry in _need_list(document.get("unknowns"), "unknowns"):
+        dimensions.append(_need_text(_need_entry(entry, "unknowns").get("dimension"), "an unknown's dimension"))
+    return {
+        "stated_at": _need_text(document.get("stated_at"), "stated_at"),
+        "branch": _optional_text(head.get("branch")),
+        "commit_sha": _need_text(head.get("commit_sha"), "head.commit_sha"),
+        "tree_sha": _need_text(head.get("tree_sha"), "head.tree_sha"),
+        "dirty_state": {
+            key: _need_int(dirty.get(key), f"dirty_state.{key}")
+            for key in ("staged", "unstaged", "untracked", "unmerged")
+        },
+        "worktree_count": len(_need_list(document.get("worktrees"), "worktrees")),
+        "wave_artifact_count": len(_need_list(document.get("wave_artifacts"), "wave_artifacts")),
+        "policy_digest_count": len(_need_list(document.get("policy_digests"), "policy_digests")),
+        "queue_state": _need_text(queue.get("state"), "queue.state"),
+        "unknown_dimensions": dimensions,
+    }
+
+
+def _bluf_planning_snapshot(section: dict[str, Any]) -> str:
+    return (
+        f"planning snapshot stated at {_flat(section['stated_at'])}: head {_flat(section['branch'])} "
+        f"{_flat(section['commit_sha'])}, {len(section['unknown_dimensions'])} unknown dimension(s) recorded"
+    )
+
+
+def _detail_planning_snapshot(section: dict[str, Any]) -> list[str]:
+    dirty = section["dirty_state"]
+    return [
+        f"  stated_at={_flat(section['stated_at'])} branch={_flat(section['branch'])} "
+        f"commit_sha={_flat(section['commit_sha'])} tree_sha={_flat(section['tree_sha'])}",
+        f"  dirty_state staged={dirty['staged']} unstaged={dirty['unstaged']} untracked={dirty['untracked']} "
+        f"unmerged={dirty['unmerged']}",
+        f"  worktrees={section['worktree_count']} wave_artifacts={section['wave_artifact_count']} "
+        f"policy_digests={section['policy_digest_count']} queue_state={_flat(section['queue_state'])}",
+        f"  unknowns={_flat(section['unknown_dimensions'])}",
+    ]
+
+
+def _project_wave_plan(document: dict[str, Any]) -> dict[str, Any]:
+    inputs = _need_object(document.get("inputs"), "inputs")
+    head = _need_object(document.get("head"), "head")
+    limits = _need_object(document.get("limits"), "limits")
+    node_ids: list[str] = []
+    for entry in _need_list(document.get("nodes"), "nodes"):
+        node_ids.append(_need_text(_need_entry(entry, "nodes").get("node_id"), "a node's node_id"))
+    return {
+        "mission_id": _need_text(document.get("mission_id"), "mission_id"),
+        "revision": _need_int(document.get("revision"), "revision"),
+        "compiled_at": _need_text(document.get("compiled_at"), "compiled_at"),
+        "declared_concurrency": _need_int(document.get("declared_concurrency"), "declared_concurrency"),
+        "node_ids": node_ids,
+        "edge_count": len(_need_list(document.get("edges"), "edges")),
+        "mission_digest": _need_text(inputs.get("mission_digest"), "inputs.mission_digest"),
+        "snapshot_digest": _need_text(inputs.get("snapshot_digest"), "inputs.snapshot_digest"),
+        "head_commit_sha": _need_text(head.get("commit_sha"), "head.commit_sha"),
+        "max_concurrent_nodes": _need_int(limits.get("max_concurrent_nodes"), "limits.max_concurrent_nodes"),
+        "max_total_nodes": _need_int(limits.get("max_total_nodes"), "limits.max_total_nodes"),
+        "supersedes": _optional_text(document.get("supersedes")),
+    }
+
+
+def _bluf_wave_plan(section: dict[str, Any]) -> str:
+    return (
+        f"wave plan revision {section['revision']} for mission {_flat(section['mission_id'])}: "
+        f"{len(section['node_ids'])} node(s), {section['edge_count']} edge(s), declared concurrency "
+        f"{section['declared_concurrency']}"
+    )
+
+
+def _detail_wave_plan(section: dict[str, Any]) -> list[str]:
+    return [
+        f"  mission_id={_flat(section['mission_id'])} revision={section['revision']} "
+        f"compiled_at={_flat(section['compiled_at'])} supersedes={_flat(section['supersedes'])}",
+        f"  nodes={_flat(section['node_ids'])} edges={section['edge_count']}",
+        f"  declared_concurrency={section['declared_concurrency']} "
+        f"limits max_concurrent_nodes={section['max_concurrent_nodes']} "
+        f"max_total_nodes={section['max_total_nodes']}",
+        f"  inputs mission_digest={_flat(section['mission_digest'])} "
+        f"snapshot_digest={_flat(section['snapshot_digest'])}",
+    ]
+
+
+def _project_plan_diff(document: dict[str, Any]) -> dict[str, Any]:
+    kinds: list[str] = []
+    semantic = 0
+    changes = _need_list(document.get("changes"), "changes")
+    for entry in changes:
+        change = _need_entry(entry, "changes")
+        kinds.append(_need_text(change.get("kind"), "a change's kind"))
+        if _need_bool(change.get("semantic"), "a change's semantic"):
+            semantic += 1
+    return {
+        "mission_id": _need_text(document.get("mission_id"), "mission_id"),
+        "compiled_at": _need_text(document.get("compiled_at"), "compiled_at"),
+        "plan_digest": _need_text(document.get("plan_digest"), "plan_digest"),
+        "prior_plan_digest": _optional_text(document.get("prior_plan_digest")),
+        "change_count": len(changes),
+        "semantic_change_count": semantic,
+        "change_kinds": sorted(set(kinds)),
+        "no_delta_reason": _optional_text(document.get("no_delta_reason")),
+    }
+
+
+def _bluf_plan_diff(section: dict[str, Any]) -> str:
+    if section["no_delta_reason"] is not None:
+        return f"plan diff: {_flat(section['no_delta_reason'])}"
+    return (
+        f"plan diff for plan {_flat(section['plan_digest'])}: {section['change_count']} change(s), "
+        f"{section['semantic_change_count']} semantic, kinds {_flat(section['change_kinds'])}"
+    )
+
+
+def _detail_plan_diff(section: dict[str, Any]) -> list[str]:
+    return [
+        f"  mission_id={_flat(section['mission_id'])} compiled_at={_flat(section['compiled_at'])}",
+        f"  plan_digest={_flat(section['plan_digest'])} prior_plan_digest={_flat(section['prior_plan_digest'])}",
+        f"  changes={section['change_count']} semantic={section['semantic_change_count']} "
+        f"kinds={_flat(section['change_kinds'])}",
+        f"  no_delta_reason={_flat(section['no_delta_reason'])}",
+    ]
+
+
+def _project_wave_plan_admission(document: dict[str, Any]) -> dict[str, Any]:
+    inputs = _need_object(document.get("inputs"), "inputs")
+    observed = _need_object(document.get("observed"), "observed")
+    observed_head = _need_object(observed.get("head"), "observed.head")
+    met: list[str] = []
+    unmet: list[str] = []
+    blockers: list[str] = []
+    for entry in _need_list(document.get("checks"), "checks"):
+        check = _need_entry(entry, "checks")
+        slug = _need_text(check.get("slug"), "a check's slug")
+        (met if _need_bool(check.get("met"), f"the {slug} check's met") else unmet).append(slug)
+        blockers.extend(_need_texts(check.get("blockers"), f"the {slug} check's blockers"))
+    deferred: list[str] = []
+    for entry in _need_list(document.get("deferred_dimensions"), "deferred_dimensions"):
+        dimension = _need_entry(entry, "deferred_dimensions")
+        deferred.append(_need_text(dimension.get("dimension"), "a deferred dimension's name"))
+    return {
+        "disposition": _need_member(document.get("disposition"), "disposition", ADMISSION_DISPOSITIONS),
+        "admitted_at": _need_text(document.get("admitted_at"), "admitted_at"),
+        "mission_id": _need_text(document.get("mission_id"), "mission_id"),
+        "plan_revision": _need_int(document.get("plan_revision"), "plan_revision"),
+        "plan_digest": _need_text(inputs.get("plan_digest"), "inputs.plan_digest"),
+        "snapshot_digest": _need_text(inputs.get("snapshot_digest"), "inputs.snapshot_digest"),
+        "observed_commit_sha": _need_text(observed_head.get("commit_sha"), "observed.head.commit_sha"),
+        "observed_snapshot_stated_at": _need_text(
+            observed.get("snapshot_stated_at"), "observed.snapshot_stated_at"
+        ),
+        "checks_met": met,
+        "checks_not_met": unmet,
+        "blockers": blockers,
+        "deferred_dimensions": deferred,
+    }
+
+
+def _bluf_wave_plan_admission(section: dict[str, Any]) -> str:
+    return (
+        f"wave plan admission disposition: {_flat(section['disposition'])} -- "
+        f"{len(section['checks_met'])} check(s) met, {len(section['checks_not_met'])} not met, "
+        f"{len(section['blockers'])} blocker(s), {len(section['deferred_dimensions'])} deferred dimension(s)"
+    )
+
+
+def _detail_wave_plan_admission(section: dict[str, Any]) -> list[str]:
+    lines = [
+        f"  disposition={_flat(section['disposition'])} admitted_at={_flat(section['admitted_at'])} "
+        f"mission_id={_flat(section['mission_id'])} plan_revision={section['plan_revision']}",
+        f"  checks met={_flat(section['checks_met'])}",
+        f"  checks not met={_flat(section['checks_not_met'])}",
+        f"  observed commit_sha={_flat(section['observed_commit_sha'])} "
+        f"snapshot_stated_at={_flat(section['observed_snapshot_stated_at'])}",
+        f"  deferred_dimensions={_flat(section['deferred_dimensions'])}",
+    ]
+    lines.extend(f"  blocker: {_flat(blocker)}" for blocker in section["blockers"])
+    return lines
+
+
+def _project_drift_classification(document: dict[str, Any]) -> dict[str, Any]:
+    binding = _need_object(document.get("binding"), "binding")
+    assessments: list[dict[str, Any]] = []
+    for entry in _need_list(document.get("assessments"), "assessments"):
+        assessment = _need_entry(entry, "assessments")
+        assessments.append(
+            {
+                "kind": _need_text(assessment.get("kind"), "an assessment's kind"),
+                "subject": _need_text(assessment.get("subject"), "an assessment's subject"),
+                "outcome": _need_member(assessment.get("outcome"), "an assessment's outcome", DRIFT_OUTCOMES),
+            }
+        )
+    no_drift_reason = _optional_text(document.get("no_drift_reason"))
+    recorded_outcome = document.get("overall_outcome")
+    if recorded_outcome is None and no_drift_reason is None:
+        raise InputError("records neither an overall_outcome nor a no_drift_reason, so it says nothing at all")
+    outcome = None if recorded_outcome is None else _need_member(recorded_outcome, "overall_outcome", DRIFT_OUTCOMES)
+    return {
+        "overall_outcome": outcome,
+        "classified_at": _need_text(document.get("classified_at"), "classified_at"),
+        "mission_id": _need_text(document.get("mission_id"), "mission_id"),
+        "plan_digest": _need_text(document.get("plan_digest"), "plan_digest"),
+        "plan_revision": _need_int(document.get("plan_revision"), "plan_revision"),
+        "observation_id": _need_text(document.get("observation_id"), "observation_id"),
+        "observed_at": _need_text(document.get("observed_at"), "observed_at"),
+        "bound": _need_bool(binding.get("bound"), "binding.bound"),
+        "binding_ground": _optional_text(binding.get("ground")),
+        "assessments": assessments,
+        "no_drift_reason": no_drift_reason,
+    }
+
+
+def _bluf_drift_classification(section: dict[str, Any]) -> str:
+    """A null outcome gets the document's OWN no-drift sentence, never a substituted verdict."""
+    if section["overall_outcome"] is None:
+        return (
+            f"drift classification of plan revision {section['plan_revision']} records NO overall "
+            f"outcome: {_flat(section['no_drift_reason'])}"
+        )
+    return (
+        f"drift classification overall outcome: {_flat(section['overall_outcome'])} over "
+        f"{len(section['assessments'])} assessment(s) of plan revision {section['plan_revision']}"
+    )
+
+
+def _detail_drift_classification(section: dict[str, Any]) -> list[str]:
+    lines = [
+        f"  overall_outcome={_flat(section['overall_outcome'])} classified_at={_flat(section['classified_at'])} "
+        f"mission_id={_flat(section['mission_id'])}",
+        f"  plan_digest={_flat(section['plan_digest'])} plan_revision={section['plan_revision']}",
+        f"  observation_id={_flat(section['observation_id'])} observed_at={_flat(section['observed_at'])} "
+        f"bound={section['bound']}",
+        f"  binding ground={_flat(section['binding_ground'])} no_drift_reason={_flat(section['no_drift_reason'])}",
+    ]
+    lines.extend(
+        f"  assessment: kind={_flat(entry['kind'])} subject={_flat(entry['subject'])} "
+        f"outcome={_flat(entry['outcome'])}"
+        for entry in section["assessments"]
+    )
+    return lines
+
+
+def _project_auto_envelope(document: dict[str, Any]) -> dict[str, Any]:
+    bound = _need_object(document.get("bound_plan"), "bound_plan")
+    window = _need_object(document.get("validity_window"), "validity_window")
+    concurrency = _need_object(document.get("concurrency_limits"), "concurrency_limits")
+    retry = _need_object(document.get("retry_policy"), "retry_policy")
+    egress = _need_object(document.get("egress_allowlist"), "egress_allowlist")
+    gated: list[str] = []
+    for entry in _need_list(document.get("checkpoints"), "checkpoints"):
+        checkpoint = _need_entry(entry, "checkpoints")
+        kind = _need_text(checkpoint.get("kind"), "a checkpoint's kind")
+        if _need_bool(checkpoint.get("requires_human_disposition"), f"the {kind} checkpoint's requirement"):
+            gated.append(kind)
+    return {
+        "envelope_id": _need_text(document.get("envelope_id"), "envelope_id"),
+        "stated_at": _need_text(document.get("stated_at"), "stated_at"),
+        "bound_plan_digest": _need_text(bound.get("plan_digest"), "bound_plan.plan_digest"),
+        "bound_plan_revision": _need_int(bound.get("plan_revision"), "bound_plan.plan_revision"),
+        "bound_snapshot_digest": _need_text(bound.get("snapshot_digest"), "bound_plan.snapshot_digest"),
+        "not_before": _need_text(window.get("not_before"), "validity_window.not_before"),
+        "not_after": _need_text(window.get("not_after"), "validity_window.not_after"),
+        "allowed_authority_classes": _need_texts(
+            document.get("allowed_authority_classes"), "allowed_authority_classes"
+        ),
+        "allowed_effect_classes": _need_texts(document.get("allowed_effect_classes"), "allowed_effect_classes"),
+        "tool_allowlist": _need_texts(document.get("tool_allowlist"), "tool_allowlist"),
+        "graph_change_allowlist": _need_texts(document.get("graph_change_allowlist"), "graph_change_allowlist"),
+        "egress_posture": _need_text(egress.get("posture"), "egress_allowlist.posture"),
+        "egress_destinations": _need_texts(egress.get("destinations"), "egress_allowlist.destinations"),
+        "max_concurrent_nodes": _need_int(
+            concurrency.get("max_concurrent_nodes"), "concurrency_limits.max_concurrent_nodes"
+        ),
+        "max_recursion_generations": _need_int(
+            concurrency.get("max_recursion_generations"), "concurrency_limits.max_recursion_generations"
+        ),
+        "max_attempts_per_node": _need_int(retry.get("max_attempts_per_node"), "retry_policy.max_attempts_per_node"),
+        "max_total_retries": _need_int(retry.get("max_total_retries"), "retry_policy.max_total_retries"),
+        "stop_rules": _need_texts(document.get("stop_rules"), "stop_rules"),
+        "checkpoints_requiring_human_disposition": gated,
+    }
+
+
+def _bluf_auto_envelope(section: dict[str, Any]) -> str:
+    """The window is stated, never evaluated: this module reads no clock, so it can say what
+    `validity_window` records and must not say the window is open."""
+    return (
+        f"auto envelope {_flat(section['envelope_id'])}: validity window "
+        f"{_flat(section['not_before'])} .. {_flat(section['not_after'])}, bound to plan revision "
+        f"{section['bound_plan_revision']}"
+    )
+
+
+def _detail_auto_envelope(section: dict[str, Any]) -> list[str]:
+    return [
+        f"  envelope_id={_flat(section['envelope_id'])} stated_at={_flat(section['stated_at'])}",
+        f"  validity_window not_before={_flat(section['not_before'])} not_after={_flat(section['not_after'])}",
+        f"  bound_plan plan_digest={_flat(section['bound_plan_digest'])} "
+        f"plan_revision={section['bound_plan_revision']} "
+        f"snapshot_digest={_flat(section['bound_snapshot_digest'])}",
+        f"  allowed_authority_classes={_flat(section['allowed_authority_classes'])}",
+        f"  allowed_effect_classes={_flat(section['allowed_effect_classes'])}",
+        f"  tool_allowlist={_flat(section['tool_allowlist'])} "
+        f"graph_change_allowlist={_flat(section['graph_change_allowlist'])}",
+        f"  egress posture={_flat(section['egress_posture'])} "
+        f"destinations={_flat(section['egress_destinations'])}",
+        f"  concurrency max_concurrent_nodes={section['max_concurrent_nodes']} "
+        f"max_recursion_generations={section['max_recursion_generations']}",
+        f"  retry max_attempts_per_node={section['max_attempts_per_node']} "
+        f"max_total_retries={section['max_total_retries']}",
+        f"  stop_rules={_flat(section['stop_rules'])}",
+        f"  checkpoints requiring a human disposition="
+        f"{_flat(section['checkpoints_requiring_human_disposition'])}",
+    ]
+
+
+def _project_transition_receipt(document: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "verdict": _need_member(document.get("verdict"), "verdict", RECEIPT_VERDICTS),
+        "at": _need_text(document.get("at"), "at"),
+        "envelope_digest": _need_text(document.get("envelope_digest"), "envelope_digest"),
+        "transition_digest": _need_text(document.get("transition_digest"), "transition_digest"),
+        "reasons": _need_texts(document.get("reasons"), "reasons"),
+    }
+
+
+def _bluf_transition_receipt(section: dict[str, Any]) -> str:
+    return (
+        f"autonomous transition receipt verdict: {_flat(section['verdict'])} at {_flat(section['at'])} "
+        f"({len(section['reasons'])} reason(s))"
+    )
+
+
+def _detail_transition_receipt(section: dict[str, Any]) -> list[str]:
+    lines = [
+        f"  verdict={_flat(section['verdict'])} at={_flat(section['at'])}",
+        f"  envelope_digest={_flat(section['envelope_digest'])} "
+        f"transition_digest={_flat(section['transition_digest'])}",
+    ]
+    lines.extend(f"  reason: {_flat(reason)}" for reason in section["reasons"])
+    return lines
+
+
+class SealedReader(NamedTuple):
+    """One row of the sealed-document half of the reader registry.
+
+    `kind` is simultaneously the `artifacts` key, the argparse dest, and (with underscores turned into
+    hyphens) the flag name, so a row cannot drift from its own flag. `schema` is the MATCHER -- the
+    exact string the document must declare -- and `sealed_digest` is the parser's one check beyond
+    JSON well-formedness. `project` states the document's own fields in its own vocabulary; `headline`
+    and `detail` render those already-projected fields and read no document themselves, so neither can
+    smuggle in a fact the projector did not record.
+    """
+
+    kind: str
+    label: str
+    schema: str
+    help: str
+    project: Any
+    headline: Any
+    detail: Any
+
+
+SEALED_READERS: tuple[SealedReader, ...] = (
+    SealedReader(
+        kind="mission_contract",
+        label="mission contract",
+        schema=MISSION_CONTRACT_SCHEMA,
+        help="path to a sealed mission-contract.py contract",
+        project=_project_mission_contract,
+        headline=_bluf_mission_contract,
+        detail=_detail_mission_contract,
+    ),
+    SealedReader(
+        kind="planning_snapshot",
+        label="planning snapshot",
+        schema=PLANNING_SNAPSHOT_SCHEMA,
+        help="path to a sealed planning-snapshot.py capture",
+        project=_project_planning_snapshot,
+        headline=_bluf_planning_snapshot,
+        detail=_detail_planning_snapshot,
+    ),
+    SealedReader(
+        kind="wave_plan",
+        label="wave plan",
+        schema=WAVE_PLAN_SCHEMA,
+        help="path to a sealed wave-plan-compiler.py compiled plan",
+        project=_project_wave_plan,
+        headline=_bluf_wave_plan,
+        detail=_detail_wave_plan,
+    ),
+    SealedReader(
+        kind="plan_diff",
+        label="plan diff",
+        schema=PLAN_DIFF_SCHEMA,
+        help="path to a sealed wave-plan-compiler.py plan diff",
+        project=_project_plan_diff,
+        headline=_bluf_plan_diff,
+        detail=_detail_plan_diff,
+    ),
+    SealedReader(
+        kind="wave_plan_admission",
+        label="wave plan admission report",
+        schema=WAVE_PLAN_ADMISSION_SCHEMA,
+        help="path to a sealed wave-plan-admission.py report",
+        project=_project_wave_plan_admission,
+        headline=_bluf_wave_plan_admission,
+        detail=_detail_wave_plan_admission,
+    ),
+    SealedReader(
+        kind="drift_classification",
+        label="drift classification",
+        schema=DRIFT_CLASSIFICATION_SCHEMA,
+        help="path to a sealed drift-classifier.py classification",
+        project=_project_drift_classification,
+        headline=_bluf_drift_classification,
+        detail=_detail_drift_classification,
+    ),
+    SealedReader(
+        kind="auto_envelope",
+        label="auto envelope",
+        schema=AUTO_ENVELOPE_SCHEMA,
+        help="path to a sealed auto-envelope.py envelope",
+        project=_project_auto_envelope,
+        headline=_bluf_auto_envelope,
+        detail=_detail_auto_envelope,
+    ),
+    SealedReader(
+        kind="transition_receipt",
+        label="autonomous transition receipt",
+        schema=TRANSITION_RECEIPT_SCHEMA,
+        help="path to a sealed auto-envelope.py autonomous-transition receipt",
+        project=_project_transition_receipt,
+        headline=_bluf_transition_receipt,
+        detail=_detail_transition_receipt,
+    ),
+)
+
+SEALED_READERS_BY_KIND: dict[str, SealedReader] = {reader.kind: reader for reader in SEALED_READERS}
+
+
+def flag_for(kind: str) -> str:
+    return "--" + kind.replace("_", "-")
+
+
+def build_sealed_section(path: str | None, reader: SealedReader) -> dict[str, Any]:
+    """The one path every sealed kind takes: read, match the schema, re-derive the seal, project.
+
+    Each step can only downgrade the input to `unreadable` WITH a reason naming this kind, and every
+    other input keeps its own independent outcome.
+    """
+    if path is None:
+        return {"presence": PRESENCE_ABSENT, "path": None, "reason": None}
+    presence, doc, reason = _read_json_object(path, reader.label)
+    if presence != PRESENCE_PRESENT or doc is None:
+        return {"presence": presence, "path": path, "reason": reason}
+    declared = doc.get("schema")
+    if declared != reader.schema:
+        return {
+            "presence": PRESENCE_UNREADABLE,
+            "path": path,
+            "reason": f"the {reader.label} {path} declares schema {declared!r}, not {reader.schema!r}",
+        }
+    recorded = doc.get(DIGEST_KEY)
+    if not isinstance(recorded, str) or not recorded:
+        return {
+            "presence": PRESENCE_UNREADABLE,
+            "path": path,
+            "reason": f"the {reader.label} {path} carries no digest, so its seal cannot be re-derived",
+        }
+    if sealed_digest(doc) != recorded:
+        return {
+            "presence": PRESENCE_UNREADABLE,
+            "path": path,
+            "reason": f"the {reader.label} {path} does not verify: its digest does not re-derive",
+        }
+    try:
+        fields = reader.project(doc)
+    except InputError as exc:
+        return {"presence": PRESENCE_UNREADABLE, "path": path, "reason": f"the {reader.label} {path} {exc}"}
+    return {"presence": PRESENCE_PRESENT, "path": path, "reason": None, **fields}
+
+
+def _sealed_builder(reader: SealedReader) -> Any:
+    """A factory, not an inline lambda: a lambda closing over the loop variable would bind the LAST
+    reader for every row."""
+    return lambda args: build_sealed_section(getattr(args, reader.kind), reader)
+
+
+def sealed_bluf(reader: SealedReader, section: dict[str, Any]) -> str | None:
+    """Absent and unreadable are worded identically for all eight kinds; only the present line differs,
+    which is why a row supplies `headline` alone."""
+    if section["presence"] == PRESENCE_ABSENT:
+        return None
+    if section["presence"] == PRESENCE_UNREADABLE:
+        return f"the {reader.label} is unreadable: {_flat(section['reason'])}"
+    return reader.headline(section)
+
+
+def _sealed_bluf_row(kind: str) -> tuple[str, Any]:
+    reader = SEALED_READERS_BY_KIND[kind]
+    return kind, lambda section: sealed_bluf(reader, section)
+
+
+def render_sealed_section(reader: SealedReader, section: dict[str, Any]) -> list[str]:
+    lines = [f"== {reader.label} ==", _presence_line(reader.label, section)]
+    if section["presence"] == PRESENCE_PRESENT:
+        lines.extend(reader.detail(section))
+    lines.append("")
+    return lines
+
+
 # ---- the table-driven reader registry --------------------------------------------------------------
 #: One entry per artifact kind: how to build its section from the parsed CLI arguments. Iterated in
 #: this fixed order both to assemble `artifacts` and, separately, to pick the BLUF line -- adding a
-#: kind later (T1/T2/T5/T6/T7/T8's artifacts) is one more row here, never a rewrite of this loop.
+#: kind is one more row here, never a rewrite of this loop. The eight sealed slice-6 kinds are
+#: appended from `SEALED_READERS` rather than spelled out twice.
 ARTIFACT_KINDS: tuple[tuple[str, Any], ...] = (
     ("wave_journal", lambda args: build_wave_journal_section(args.wave_journal)),
     ("runtime_assignment", lambda args: build_runtime_assignment_section(args.runtime_assignment)),
     ("activation_result", lambda args: build_activation_result_section(args.activation_result)),
     ("gate", lambda args: build_gate_section(args.gate_receipt, args.gate_baseline)),
-)
+) + tuple((reader.kind, _sealed_builder(reader)) for reader in SEALED_READERS)
 
 
 def build_artifacts(args: argparse.Namespace) -> dict[str, Any]:
@@ -625,19 +1350,37 @@ def _bluf_wave_journal(section: dict[str, Any]) -> str | None:
     return f"wave {_flat(section['wave_id'])}: {len(missing)} required node(s) missing a disposition: {_flat(missing)}"
 
 
-#: Priority order for the single most decision-relevant line: each fact subsumes the ones after it
-#: (an activation refusal matters more than one node's missing disposition), so the FIRST kind that
-#: has anything to say wins, and the rest are read from the per-artifact sections below it.
+#: Priority order for the single most decision-relevant line: each fact subsumes the ones after it, so
+#: the FIRST kind that has anything to say wins and the rest are read from the per-artifact sections
+#: below it. An unreadable input is something to say, so it outranks every PRESENT kind below it.
+#:
+#: The seven verdict-carrying kinds come first, widest consequence first: a refused activation means no
+#: wave may write at all; a blocked admission report means THIS wave may not start, which subsumes what
+#: its plan then drifted into; a hard-stop drift classification means the plan the wave is running is no
+#: longer the plan; the gate is the repository's own pass/fail; a runtime assignment decides one node's
+#: spawn; a transition receipt decides one proposed autonomous step inside a wave; and a missing node
+#: disposition in the journal is the narrowest of them. The five descriptive kinds follow in the
+#: family's own chain order -- MissionContract + PlanningSnapshot -> WavePlan -> PlanDiff ->
+#: AutoEnvelope -- because none of them carries a verdict at all: they say what was intended, observed,
+#: compiled, changed, and bounded, and any of them can still headline when it is all the caller has.
 BLUF_ORDER: tuple[tuple[str, Any], ...] = (
     ("activation_result", _bluf_activation_result),
+    _sealed_bluf_row("wave_plan_admission"),
+    _sealed_bluf_row("drift_classification"),
     ("gate", _bluf_gate),
     ("runtime_assignment", _bluf_runtime_assignment),
+    _sealed_bluf_row("transition_receipt"),
     ("wave_journal", _bluf_wave_journal),
+    _sealed_bluf_row("mission_contract"),
+    _sealed_bluf_row("planning_snapshot"),
+    _sealed_bluf_row("wave_plan"),
+    _sealed_bluf_row("plan_diff"),
+    _sealed_bluf_row("auto_envelope"),
 )
 
 
 def _leaf_sections(artifacts: dict[str, Any]) -> tuple[dict[str, Any], ...]:
-    """The five independently-supplied paths, gate's receipt/baseline split out of its section --
+    """The thirteen independently-supplied paths, gate's receipt/baseline split out of its section --
     the same granularity `--gate-receipt`/`--gate-baseline` are supplied at."""
     gate = artifacts["gate"]
     return (
@@ -646,7 +1389,7 @@ def _leaf_sections(artifacts: dict[str, Any]) -> tuple[dict[str, Any], ...]:
         artifacts["activation_result"],
         gate["receipt"],
         gate["baseline"],
-    )
+    ) + tuple(artifacts[reader.kind] for reader in SEALED_READERS)
 
 
 def compute_bluf(artifacts: dict[str, Any]) -> str:
@@ -751,6 +1494,12 @@ def render_human(document: dict[str, Any]) -> str:
     if gate["cross_check"] is not None:
         lines.append(f"  cross_check same_gate={gate['cross_check']['same_gate']}")
     lines.append("")
+
+    # The eight sealed kinds in the family's own chain order, one section each, from the same table
+    # `artifacts` was assembled from -- so a new row cannot be projected into `--json` and forgotten
+    # in the human view.
+    for reader in SEALED_READERS:
+        lines.extend(render_sealed_section(reader, artifacts[reader.kind]))
 
     return "\n".join(lines) + "\n"
 
@@ -859,9 +1608,11 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="sdlc-observability-projection.py",
         description=(
             "Read-only observability projection over already-recorded agentic-SDLC evidence: a "
-            "wave journal, a runtime-assignment report, an activation result, and a gate "
-            "receipt/baseline pair, each optional. Never writes anything; it is evidence, not "
-            "authorization."
+            "wave journal, a runtime-assignment report, an activation result, a gate "
+            "receipt/baseline pair, and the eight sealed slice-6 planning documents (mission "
+            "contract, planning snapshot, wave plan, plan diff, wave-plan admission report, drift "
+            "classification, auto envelope, autonomous-transition receipt), each optional. Never "
+            "writes anything; it is evidence, not authorization."
         ),
         epilog=EPILOG,
     )
@@ -882,6 +1633,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="path to a gate_baseline.py compare report for the same --gate-receipt",
     )
+    for reader in SEALED_READERS:
+        parser.add_argument(flag_for(reader.kind), dest=reader.kind, default=None, help=reader.help)
     parser.add_argument("--json", dest="json_output", action="store_true", help="emit the machine document instead")
     return parser
 
