@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -21,12 +22,26 @@ spec.loader.exec_module(pass_budget)
 GOAL = "Ship the offline observer"
 
 
-def run(target: Path, *args: str) -> subprocess.CompletedProcess:
+def run(target: Path, *args: str, fault: str | None = None) -> subprocess.CompletedProcess:
+    """One subprocess with a CONSTRUCTED environment.
+
+    Nothing is inherited from `os.environ`: an ambient fault variable, or an ambient anything
+    the tool grows a reading of later, must not be able to redden or green this suite. The
+    interpreter is addressed by absolute path, so no PATH entry is needed or consulted.
+    """
+    env: dict[str, str] = {}
+    if fault is not None:
+        env[pass_budget.FAULT_ENV] = fault
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *args, "--goal", GOAL, "--target", str(target)],
+        [sys.executable, "-B", str(SCRIPT), *args, "--goal", GOAL, "--target", str(target)],
         capture_output=True,
         text=True,
+        env=env,
     )
+
+
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class PassBudgetNumbersTests(unittest.TestCase):
@@ -37,67 +52,89 @@ class PassBudgetNumbersTests(unittest.TestCase):
             {"global": 6, "frame": 1, "discover": 2, "research": 2, "plan": 2, "act": 3},
         )
 
+    def test_exit_codes_are_decision_nine(self) -> None:
+        self.assertEqual(
+            (
+                pass_budget.EXIT_OK,
+                pass_budget.EXIT_INTERNAL,
+                pass_budget.EXIT_INPUT,
+                pass_budget.EXIT_REFUSED,
+                pass_budget.EXIT_PARTIAL,
+            ),
+            (0, 1, 2, 3, 4),
+        )
+
 
 class PassBudgetLibraryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.target = Path(self.tmp.name)
+        self.slug = pass_budget.slugify(GOAL)
+
+    def charge(self, state: dict, phase: str, attempt_id: str) -> dict:
+        return pass_budget.charge_pass(self.target, state, phase, attempt_id)
+
+    def fresh(self) -> dict:
+        return pass_budget.load_state(self.target, self.slug, GOAL)
 
     def test_phase_cap_refusal_names_the_blocker(self) -> None:
-        slug = pass_budget.slugify(GOAL)
-        state = pass_budget.load_state(self.target, slug, GOAL)
-        for _ in range(pass_budget.PASS_BUDGETS["frame"]):
-            result = pass_budget.charge_pass(self.target, state, "frame")
+        state = self.fresh()
+        for index in range(pass_budget.PASS_BUDGETS["frame"]):
+            result = self.charge(state, "frame", f"frame-{index}")
             self.assertTrue(result["allowed"], result["reason"])
             state = result["state"]
-        result = pass_budget.charge_pass(self.target, state, "frame")
+        result = self.charge(state, "frame", "frame-over")
         self.assertFalse(result["allowed"])
         self.assertIn("REFUSED", result["reason"])
         self.assertIn("frame", result["reason"])
         self.assertIn("This is a refusal, not a completion", result["reason"])
         self.assertEqual(result["state"]["stop_reason"], "bound-tripped")
 
-    def test_unknown_phase_refused_and_lists_known_phases(self) -> None:
-        slug = pass_budget.slugify(GOAL)
-        state = pass_budget.load_state(self.target, slug, GOAL)
-        result = pass_budget.charge_pass(self.target, state, "bogus")
-        self.assertFalse(result["allowed"])
-        self.assertIn("unknown phase 'bogus'", result["reason"])
+    def test_unknown_phase_is_an_input_error_before_any_effect(self) -> None:
+        state = self.fresh()
+        with self.assertRaises(pass_budget.BudgetError) as caught:
+            self.charge(state, "bogus", "attempt-1")
+        self.assertEqual(caught.exception.code, pass_budget.EXIT_INPUT)
+        self.assertIn("unknown phase 'bogus'", caught.exception.reason)
         for phase in ("frame", "discover", "research", "plan", "act"):
-            self.assertIn(phase, result["reason"])
-        self.assertNotIn("global", result["reason"].split(":", 1)[1].split(";")[0])
+            self.assertIn(phase, caught.exception.reason)
+        # POSITIVE CONTROL: the same channel accepts the phases it just listed, so the refusal
+        # above is about `bogus` and not about the argument being unusable in general.
+        self.assertTrue(self.charge(state, "act", "attempt-1")["allowed"])
+        # `global` is a budget, never a chargeable phase.
+        with self.assertRaises(pass_budget.BudgetError) as caught_global:
+            self.charge(self.fresh(), "global", "attempt-2")
+        self.assertEqual(caught_global.exception.code, pass_budget.EXIT_INPUT)
 
     def test_global_cap_refuses_even_when_phase_cap_not_hit(self) -> None:
-        slug = pass_budget.slugify(GOAL)
-        state = pass_budget.load_state(self.target, slug, GOAL)
+        state = self.fresh()
         # Spend the global budget (6) across phases with room to spare individually:
         # discover(2) + research(2) + plan(2) = 6, none of which trips its own phase cap.
         sequence = ["discover", "discover", "research", "research", "plan", "plan"]
-        for phase in sequence:
-            result = pass_budget.charge_pass(self.target, state, phase)
+        for index, phase in enumerate(sequence):
+            result = self.charge(state, phase, f"attempt-{index}")
             self.assertTrue(result["allowed"], result["reason"])
             state = result["state"]
         self.assertEqual(state["passes"]["global"], 6)
         # The 7th charge is act(1/3): the phase cap is nowhere near tripped, but global is.
-        result = pass_budget.charge_pass(self.target, state, "act")
+        result = self.charge(state, "act", "attempt-6")
         self.assertFalse(result["allowed"])
         self.assertIn("REFUSED: global budget", result["reason"])
         self.assertEqual(result["state"]["passes"]["act"], 1)
         self.assertLess(result["state"]["passes"]["act"], pass_budget.PASS_BUDGETS["act"])
 
     def test_refused_charge_still_persists_the_increment(self) -> None:
-        slug = pass_budget.slugify(GOAL)
-        state = pass_budget.load_state(self.target, slug, GOAL)
-        for _ in range(pass_budget.PASS_BUDGETS["frame"]):
-            state = pass_budget.charge_pass(self.target, state, "frame")["state"]
+        state = self.fresh()
+        for index in range(pass_budget.PASS_BUDGETS["frame"]):
+            state = self.charge(state, "frame", f"frame-{index}")["state"]
         before_global = state["passes"]["global"]
-        result = pass_budget.charge_pass(self.target, state, "frame")
+        result = self.charge(state, "frame", "frame-over")
         self.assertFalse(result["allowed"])
         # Count-then-refuse: the refused attempt still incremented and persisted.
         self.assertEqual(result["state"]["passes"]["frame"], pass_budget.PASS_BUDGETS["frame"] + 1)
         self.assertEqual(result["state"]["passes"]["global"], before_global + 1)
-        reloaded = pass_budget.load_state(self.target, slug, GOAL)
+        reloaded = pass_budget.load_state(self.target, self.slug, GOAL)
         self.assertEqual(reloaded["passes"]["frame"], pass_budget.PASS_BUDGETS["frame"] + 1)
         self.assertEqual(reloaded["passes"]["global"], before_global + 1)
 
@@ -108,6 +145,238 @@ class PassBudgetLibraryTests(unittest.TestCase):
         long_goal = "a" * 80
         self.assertEqual(pass_budget.slugify(long_goal), "a" * 48)
 
+    def test_malformed_attempt_id_is_an_input_error(self) -> None:
+        state = self.fresh()
+        for bad in ("", "-leading-hyphen", "has space", "has/slash", "x" * 65):
+            with self.subTest(attempt_id=bad):
+                with self.assertRaises(pass_budget.BudgetError) as caught:
+                    self.charge(state, "act", bad)
+                self.assertEqual(caught.exception.code, pass_budget.EXIT_INPUT)
+        # POSITIVE CONTROL: an id of the admitted shape passes the very same check.
+        self.assertTrue(self.charge(state, "act", "a" * 64)["allowed"])
+
+    def test_legacy_schema_one_ledger_is_accepted_and_keyed_from_then_on(self) -> None:
+        path = pass_budget.mission_path(self.target, self.slug)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "agentic-sdlc/pass-budget-state@1",
+                    "goal": GOAL,
+                    "slug": self.slug,
+                    "passes": {"global": 2, "frame": 1, "discover": 1, "research": 0, "plan": 0, "act": 0},
+                    "history": [],
+                    "stop_reason": "running",
+                }
+            ),
+            encoding="utf-8",
+        )
+        state = self.fresh()
+        self.assertEqual(state["passes"]["global"], 2)
+        first = self.charge(state, "act", "attempt-a")
+        self.assertTrue(first["allowed"])
+        self.assertEqual(first["state"]["schema"], pass_budget.SCHEMA)
+        digest = sha256_of(path)
+        replay = self.charge(pass_budget.load_state(self.target, self.slug, GOAL), "act", "attempt-a")
+        self.assertEqual(replay["reason"], first["reason"])
+        self.assertEqual(sha256_of(path), digest)
+
+    def test_unreadable_schema_is_a_clean_refusal(self) -> None:
+        path = pass_budget.mission_path(self.target, self.slug)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "somebody-elses/ledger@9", "passes": {}}), encoding="utf-8")
+        with self.assertRaises(pass_budget.BudgetError) as caught:
+            self.fresh()
+        self.assertEqual(caught.exception.code, pass_budget.EXIT_REFUSED)
+        # POSITIVE CONTROL: the same reader accepts this tool's own schema at the same path.
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": pass_budget.SCHEMA,
+                    "goal": GOAL,
+                    "slug": self.slug,
+                    "passes": {phase: 0 for phase in pass_budget.PASS_BUDGETS},
+                    "charges": {},
+                    "history": [],
+                    "stop_reason": "running",
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.fresh()["schema"], pass_budget.SCHEMA)
+
+
+class PassBudgetIdempotencyTests(unittest.TestCase):
+    """agentic-sdlc-f891: a retried charge for the SAME logical attempt must converge."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name)
+        self.slug = pass_budget.slugify(GOAL)
+        self.path = pass_budget.mission_path(self.target, self.slug)
+
+    def test_regression_retrying_one_attempt_does_not_spend_a_second_pass(self) -> None:
+        """The reproduced defect: charge, retry the same attempt, ledger double-charged."""
+        first = run(self.target, "charge", "act", "--attempt-id", "attempt-a")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        after_first = json.loads(self.path.read_text(encoding="utf-8"))["passes"]
+        self.assertEqual((after_first["act"], after_first["global"]), (1, 1))
+
+        retry = run(self.target, "charge", "act", "--attempt-id", "attempt-a")
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        after_retry = json.loads(self.path.read_text(encoding="utf-8"))["passes"]
+        # Before the fix this was (2, 2): one logical attempt spent two passes against both
+        # the phase budget and the global budget.
+        self.assertEqual((after_retry["act"], after_retry["global"]), (1, 1))
+
+    def test_keyed_retry_returns_the_same_result_and_leaves_the_ledger_byte_identical(self) -> None:
+        first = run(self.target, "charge", "plan", "--attempt-id", "attempt-a")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        digest = sha256_of(self.path)
+
+        retry = run(self.target, "charge", "plan", "--attempt-id", "attempt-a")
+        self.assertEqual(retry.returncode, first.returncode)
+        self.assertEqual(retry.stdout, first.stdout)
+        self.assertEqual(sha256_of(self.path), digest)
+
+        # POSITIVE CONTROL: the digest channel does move when a real second charge lands, so
+        # the unchanged digest above is convergence and not a frozen assertion.
+        other = run(self.target, "charge", "plan", "--attempt-id", "attempt-b")
+        self.assertEqual(other.returncode, 0, other.stderr)
+        self.assertNotEqual(sha256_of(self.path), digest)
+
+    def test_two_different_keys_both_charge(self) -> None:
+        for index, attempt in enumerate(("attempt-a", "attempt-b"), start=1):
+            completed = run(self.target, "charge", "act", "--attempt-id", attempt)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(f"pass {index}/3 for act", completed.stdout)
+        passes = json.loads(self.path.read_text(encoding="utf-8"))["passes"]
+        self.assertEqual((passes["act"], passes["global"]), (2, 2))
+
+    def test_a_refused_charge_converges_to_the_same_refusal(self) -> None:
+        for attempt in ("f-1",):
+            self.assertEqual(run(self.target, "charge", "frame", "--attempt-id", attempt).returncode, 0)
+        refused = run(self.target, "charge", "frame", "--attempt-id", "f-2")
+        self.assertEqual(refused.returncode, 0, refused.stderr)
+        self.assertIn("REFUSED", refused.stdout)
+        digest = sha256_of(self.path)
+        replay = run(self.target, "charge", "frame", "--attempt-id", "f-2")
+        self.assertEqual(replay.stdout, refused.stdout)
+        self.assertEqual(replay.returncode, refused.returncode)
+        self.assertEqual(sha256_of(self.path), digest)
+
+    def test_reusing_one_key_for_a_different_phase_is_refused_before_any_effect(self) -> None:
+        self.assertEqual(run(self.target, "charge", "act", "--attempt-id", "attempt-a").returncode, 0)
+        digest = sha256_of(self.path)
+        conflict = run(self.target, "charge", "plan", "--attempt-id", "attempt-a")
+        self.assertEqual(conflict.returncode, pass_budget.EXIT_REFUSED, conflict.stderr)
+        self.assertIn("attempt-a", conflict.stderr)
+        self.assertEqual(sha256_of(self.path), digest)
+        # POSITIVE CONTROL: `plan` itself is chargeable under a key of its own, so the refusal
+        # is about the reused key and not about the phase.
+        self.assertEqual(run(self.target, "charge", "plan", "--attempt-id", "attempt-b").returncode, 0)
+        self.assertNotEqual(sha256_of(self.path), digest)
+
+    def test_an_unkeyed_charge_is_refused_as_a_grammar_error(self) -> None:
+        unkeyed = run(self.target, "charge", "act")
+        self.assertEqual(unkeyed.returncode, pass_budget.EXIT_INPUT, unkeyed.stderr)
+        self.assertIn("attempt-id", unkeyed.stderr)
+        self.assertFalse(self.path.exists())
+        # POSITIVE CONTROL: the keyed form at this same target does create the ledger, so the
+        # absence above is the refusal and not an unwritable target directory.
+        self.assertEqual(run(self.target, "charge", "act", "--attempt-id", "attempt-a").returncode, 0)
+        self.assertTrue(self.path.is_file())
+
+
+class PassBudgetEffectTests(unittest.TestCase):
+    """Decision 9 honesty: what already happened decides the code, at one derivation point."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name)
+        self.slug = pass_budget.slugify(GOAL)
+        self.path = pass_budget.mission_path(self.target, self.slug)
+
+    def test_crash_after_the_durable_write_still_costs_the_pass(self) -> None:
+        """The property the fix must NOT break, asserted as a positive control on both sides."""
+        crashed = run(self.target, "charge", "act", "--attempt-id", "attempt-a", fault="after-write")
+        self.assertEqual(crashed.returncode, pass_budget.EXIT_PARTIAL, crashed.stderr)
+        self.assertTrue(self.path.is_file(), "the durable increment must survive the crash")
+        passes = json.loads(self.path.read_text(encoding="utf-8"))["passes"]
+        self.assertEqual((passes["act"], passes["global"]), (1, 1), "a crash must not hand out a free pass")
+
+        # POSITIVE CONTROL for the other direction: crashing BEFORE the write leaves no ledger,
+        # which proves the ledger above was written by the charge and not by the fault seam.
+        other = Path(self.tmp.name) / "before"
+        early = run(other, "charge", "act", "--attempt-id", "attempt-a", fault="before-write")
+        self.assertEqual(early.returncode, pass_budget.EXIT_INTERNAL, early.stderr)
+        self.assertFalse(pass_budget.mission_path(other, self.slug).exists())
+
+    def test_crash_after_the_durable_write_reports_four_on_an_existing_ledger_too(self) -> None:
+        """The ordinary case: `.sdlc/` already exists, so no directory creation is admitted.
+
+        Written because a mutation that deleted the temp-file admission survived the test above:
+        the directory-creation admission happened to carry it. Once the directory exists, the
+        write's own admission is the only thing standing between a moved ledger and a reported
+        exit 1, so this is the input that distinguishes them.
+        """
+        first = run(self.target, "charge", "act", "--attempt-id", "attempt-a")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertTrue(self.path.parent.is_dir())
+
+        crashed = run(self.target, "charge", "act", "--attempt-id", "attempt-b", fault="after-write")
+        self.assertEqual(crashed.returncode, pass_budget.EXIT_PARTIAL, crashed.stderr)
+        self.assertIn("already happened", crashed.stderr)
+        passes = json.loads(self.path.read_text(encoding="utf-8"))["passes"]
+        self.assertEqual((passes["act"], passes["global"]), (2, 2))
+
+        # POSITIVE CONTROL: the same second charge without the fault also lands 2/2 at exit 0, so
+        # the count above is the charge's own increment and not something the seam wrote.
+        clean = Path(self.tmp.name) / "clean"
+        self.assertEqual(run(clean, "charge", "act", "--attempt-id", "attempt-a").returncode, 0)
+        self.assertEqual(run(clean, "charge", "act", "--attempt-id", "attempt-b").returncode, 0)
+        clean_passes = json.loads(pass_budget.mission_path(clean, self.slug).read_text(encoding="utf-8"))["passes"]
+        self.assertEqual((clean_passes["act"], clean_passes["global"]), (2, 2))
+
+    def test_a_landed_increment_never_reports_a_clean_pre_effect_refusal(self) -> None:
+        crashed = run(self.target, "charge", "act", "--attempt-id", "attempt-a", fault="after-write:3")
+        # The site asked for 3 (a clean refusal); the ledger has moved, so the honest answer is 4.
+        self.assertEqual(crashed.returncode, pass_budget.EXIT_PARTIAL, crashed.stderr)
+        self.assertNotEqual(crashed.returncode, pass_budget.EXIT_REFUSED)
+        self.assertIn("already happened", crashed.stderr)
+        # POSITIVE CONTROL: the same requested 3 BEFORE any effect comes out as 3, so the
+        # escalation channel really can carry 3 and the 4 above is derived, not hardcoded.
+        other = Path(self.tmp.name) / "before"
+        early = run(other, "charge", "act", "--attempt-id", "attempt-a", fault="before-write:3")
+        self.assertEqual(early.returncode, pass_budget.EXIT_REFUSED, early.stderr)
+        self.assertNotIn("already happened", early.stderr)
+
+    def test_a_budget_refusal_is_a_completed_charge_not_a_failure(self) -> None:
+        self.assertEqual(run(self.target, "charge", "frame", "--attempt-id", "f-1").returncode, 0)
+        refused = run(self.target, "charge", "frame", "--attempt-id", "f-2")
+        # Decision 9 has no code for "refused AFTER the effect the doctrine requires": the
+        # charge completed exactly, so the verdict rides in the result, not in the exit code.
+        self.assertEqual(refused.returncode, pass_budget.EXIT_OK, refused.stderr)
+        self.assertIn("REFUSED", refused.stdout)
+        self.assertIn("REFUSED", refused.stderr)  # loud on the advisory channel too
+        passes = json.loads(self.path.read_text(encoding="utf-8"))["passes"]
+        self.assertEqual(passes["frame"], 2)
+        # POSITIVE CONTROL: exit 0 here is not "every charge exits 0" -- a grammar error on the
+        # same verb still moves the code.
+        self.assertEqual(run(self.target, "charge", "nope", "--attempt-id", "f-3").returncode, pass_budget.EXIT_INPUT)
+
+    def test_a_corrupt_ledger_is_a_clean_refusal_for_charge_and_status(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("{not json", encoding="utf-8")
+        digest = sha256_of(self.path)
+        charge = run(self.target, "charge", "act", "--attempt-id", "attempt-a")
+        self.assertEqual(charge.returncode, pass_budget.EXIT_REFUSED, charge.stderr)
+        status = run(self.target, "status")
+        self.assertEqual(status.returncode, pass_budget.EXIT_REFUSED, status.stderr)
+        self.assertEqual(sha256_of(self.path), digest, "a refused read must not rewrite the ledger")
+
 
 class PassBudgetCLITests(unittest.TestCase):
     def setUp(self) -> None:
@@ -116,15 +385,15 @@ class PassBudgetCLITests(unittest.TestCase):
         self.target = Path(self.tmp.name)
 
     def test_persistence_across_processes(self) -> None:
-        first = run(self.target, "charge", "plan")
+        first = run(self.target, "charge", "plan", "--attempt-id", "p-1")
         self.assertEqual(first.returncode, 0, first.stderr)
 
-        second = run(self.target, "charge", "plan")
+        second = run(self.target, "charge", "plan", "--attempt-id", "p-2")
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("pass 2/2 for plan", second.stdout)
 
-        third = run(self.target, "charge", "plan")
-        self.assertEqual(third.returncode, 1, third.stdout)
+        third = run(self.target, "charge", "plan", "--attempt-id", "p-3")
+        self.assertEqual(third.returncode, 0, third.stdout)
         self.assertIn("REFUSED", third.stdout)
 
         status = run(self.target, "status")
@@ -139,11 +408,12 @@ class PassBudgetCLITests(unittest.TestCase):
         self.assertTrue(state_path.is_file())
         on_disk = json.loads(state_path.read_text(encoding="utf-8"))
         self.assertEqual(on_disk["passes"]["plan"], 3)
+        self.assertEqual(sorted(on_disk["charges"]), ["p-1", "p-2", "p-3"])
 
     def test_cli_unknown_phase_exit_code(self) -> None:
-        completed = run(self.target, "charge", "not-a-phase")
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn("unknown phase", completed.stdout)
+        completed = run(self.target, "charge", "not-a-phase", "--attempt-id", "attempt-a")
+        self.assertEqual(completed.returncode, pass_budget.EXIT_INPUT)
+        self.assertIn("unknown phase", completed.stderr)
 
     def test_cli_status_before_any_charge(self) -> None:
         completed = run(self.target, "status")
@@ -152,6 +422,11 @@ class PassBudgetCLITests(unittest.TestCase):
         self.assertEqual(payload["passes"], {phase: 0 for phase in pass_budget.PASS_BUDGETS})
         self.assertEqual(payload["stop_reason"], "running")
         self.assertEqual(payload["budgets"], pass_budget.PASS_BUDGETS)
+        self.assertEqual(payload["charges"], 0)
+
+    def test_an_unknown_fault_point_is_an_input_error(self) -> None:
+        completed = run(self.target, "charge", "act", "--attempt-id", "attempt-a", fault="not-a-point")
+        self.assertEqual(completed.returncode, pass_budget.EXIT_INPUT, completed.stderr)
 
 
 if __name__ == "__main__":
