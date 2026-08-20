@@ -252,6 +252,11 @@ Read only what is needed:
   draft-review text. It never stages, commits, pushes, mutates PRs, merges, or deploys.
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 - `references/evidence-discipline.md`: whether any advisory submission's claim may be made at all — the five-class evidence vocabulary, the anti-inflation rule (a class is assigned once and never raised later), disposition-row/gap-register discipline, and the receipt-is-not-a-control-when-author-equals-verifier rule.
+- `references/readiness-composition.md`: which surface owns each pre-effect readiness
+  dimension and in what order — `ccodex sdlc doctor` (host and install state),
+  `planning-snapshot capture` (observed repository state with named unknowns), and
+  `wave-plan-admission admit` (the wave-effect gate) — plus why no unified readiness
+  guard is queued (`agentic-sdlc-9857`).
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
   alternate VCS substrate is activated by this bundle.
 - `references/skill-authoring.md`: admission floor, the four-gate test, the ≥2-of-5
