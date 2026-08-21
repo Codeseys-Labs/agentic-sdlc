@@ -34,7 +34,25 @@ the same target. They differ only in the gate:
     write-ready          the gate receipt's derived `outcome` is `passed`
     remediation-ready    `outcome` is `failed`, the failing set is `identified` (exact NAMES, never
                          `unparsed`), and a `gate_baseline.py` comparison of THIS receipt reports
-                         exact non-worsening measured on an undrifted pinned toolchain
+                         exact non-worsening measured on an undrifted pinned toolchain, against a
+                         baseline receipt this module independently reads and confirms is the one
+                         the comparison names
+
+A `gate_baseline.py` comparison binds its CANDIDATE side by value already -- the gate label plus
+the exact failing set and outcome a consumer compares against its own receipt -- and that needs no
+digest. Its BASELINE side used to bind nothing at all: a comparison computed against another
+repository's baseline receipt, or a report hand-written to name no receipt whatsoever, read
+identically to a genuine one and reached remediation-ready. `gate_baseline.py` now stamps
+`baseline_cwd` and `baseline_self_digest` onto every comparison it emits, copied verbatim off the
+baseline receipt it verified; this module requires both to be present, requires the stamped `cwd`
+to agree with the target every other artifact already agreed on, and requires a `--baseline-receipt`
+this module reads for itself whose `self_digest` agrees with the stamp -- so the comparison's claim
+about which receipt it baselines is checked against a receipt this module verified on its own, not
+merely restated from the comparison's own say-so. A comparison stamped with a foreign `cwd`, a
+digest that does not match the supplied receipt, or no stamp at all (the pre-stamp schema) is
+refused by name rather than treated as an equally valid baseline: these artifacts are cheap to
+regenerate, and admitting an unstamped comparison with a named downgrade would let exactly the gap
+this closes keep working for however long an operator's tooling has not been refreshed.
 
 `outcome` partitions {passed, failed, unobserved}, and `unobserved` reaches neither state: a gate
 that produced no verdict cannot be evidence that it passed, and it cannot be a baseline either
@@ -325,7 +343,9 @@ class Assessment:
             "activation_operation_id": None,
             "activation_receipt_digest": None,
             "activation_status": None,
+            "baseline_cwd": None,
             "baseline_non_worsening": None,
+            "baseline_self_digest": None,
             "baseline_toolchain_drifted": None,
             "gate": None,
             "gate_failing_tests": None,
@@ -488,7 +508,10 @@ def assess_activation(
 
 
 def assess_gate(
-    assessment: Assessment, receipt: dict[str, Any] | None, baseline: dict[str, Any] | None
+    assessment: Assessment,
+    receipt: dict[str, Any] | None,
+    baseline: dict[str, Any] | None,
+    baseline_receipt: dict[str, Any] | None,
 ) -> None:
     """The one predicate that separates the two ready states, and the only exact-baseline gate."""
     if receipt is None:
@@ -500,7 +523,14 @@ def assess_gate(
     if failures is not None:
         assessment.evidence["gate_failing_tests"] = sorted(failures["names"])
     if baseline is not None:
+        # Surfaced verbatim off the comparison document, exactly as the two fields above are --
+        # including on a path that refuses below, so a human reading a REFUSED result can still see
+        # which baseline the comparison named. `gate_baseline.py` stamps these off the receipt IT
+        # verified; the checks further down independently re-verify the stamp against
+        # `baseline_receipt` before trusting it for the ready/refused decision itself.
+        assessment.evidence["baseline_cwd"] = baseline.get("baseline_cwd")
         assessment.evidence["baseline_non_worsening"] = baseline.get("non_worsening")
+        assessment.evidence["baseline_self_digest"] = baseline.get("baseline_self_digest")
         assessment.evidence["baseline_toolchain_drifted"] = baseline.get("toolchain_drifted")
     if assessment.outcome == OUTCOME_UNOBSERVED:
         assessment.refuse(
@@ -560,6 +590,52 @@ def assess_gate(
             "worsens the baseline cannot be established"
         )
         return
+    # Baseline IDENTITY, not just the candidate-side values already checked above. Every check from
+    # here down closes the gap `activation-result.py` used to have: a comparison naming no receipt
+    # at all -- computed against another repository's baseline, or hand-written altogether -- read
+    # identically to a genuine one, because nothing bound the report to the baseline receipt it
+    # claimed to compare. `gate_baseline.py` now stamps `baseline_cwd`/`baseline_self_digest`
+    # verbatim off the receipt it verified; a report from before that stamp existed carries neither
+    # key, and admitting it with a named downgrade would keep the exact gap working for however
+    # long an operator's `gate_baseline.py` build lagged this one, so it is refused by name instead.
+    if "baseline_cwd" not in baseline or "baseline_self_digest" not in baseline:
+        assessment.refuse(
+            "the baseline comparison carries no baseline_cwd/baseline_self_digest stamp, so it "
+            "predates baseline identity stamping and cannot be bound to a baseline receipt; "
+            "re-run scripts/gate_baseline.py compare to produce a stamped comparison"
+        )
+        return
+    stamped_cwd = baseline.get("baseline_cwd")
+    if stamped_cwd != assessment.target:
+        assessment.refuse(
+            f"the baseline comparison's stamped baseline cwd ({stamped_cwd!r}) does not agree with "
+            f"the target ({assessment.target!r}), so it may be a comparison against another "
+            "repository's baseline receipt"
+        )
+        return
+    if baseline_receipt is None:
+        assessment.refuse(
+            "no baseline receipt was supplied, so the baseline comparison's stamped "
+            "baseline_self_digest cannot be independently verified against the receipt it names"
+        )
+        return
+    if baseline.get("baseline_self_digest") != baseline_receipt.get("self_digest"):
+        assessment.refuse(
+            "the baseline comparison's stamped baseline_self_digest does not agree with the "
+            "supplied baseline receipt's self_digest, so the comparison cannot be trusted to be "
+            "about that receipt"
+        )
+        return
+    if baseline_receipt.get("cwd") != assessment.target:
+        # Belt and suspenders over the check above: the STAMP could in principle be forged to name
+        # this target while the digest genuinely matches a receipt from elsewhere. The receipt this
+        # module read for itself is the ground truth, so its own `cwd` is checked directly too.
+        assessment.refuse(
+            "the independently-read baseline receipt's own cwd "
+            f"({baseline_receipt.get('cwd')!r}) does not agree with the target "
+            f"({assessment.target!r})"
+        )
+        return
     if baseline.get("newly_failing") or not non_worsening:
         assessment.refuse(
             "the candidate worsens the baseline, newly failing: "
@@ -587,6 +663,7 @@ def derive_command(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     baseline = load_artifact(args.baseline_comparison, "baseline comparison") if args.baseline_comparison else None
     if baseline is not None:
         require_schema(baseline, "schema_version", BASELINE_SCHEMA, "baseline comparison", args.baseline_comparison)
+    baseline_receipt = load_gate_receipt(args.baseline_receipt) if args.baseline_receipt else None
 
     assessment = Assessment()
     assess_target(
@@ -602,7 +679,7 @@ def derive_command(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     assess_classification(assessment, classification)
     assess_manifest(assessment, contract, plan, args.plan)
     assess_activation(assessment, activation, plan)
-    assess_gate(assessment, receipt, baseline)
+    assess_gate(assessment, receipt, baseline, baseline_receipt)
 
     state = assessment.state()
     result = {
@@ -682,6 +759,15 @@ def main(argv: list[str] | None = None) -> int:
         dest="baseline_comparison",
         default=None,
         help="gate_baseline.py compare report; only a failed gate needs one",
+    )
+    command.add_argument(
+        "--baseline-receipt",
+        dest="baseline_receipt",
+        default=None,
+        help=(
+            "the gate_receipt.py receipt --baseline-comparison was computed against; required to "
+            "independently verify the comparison's stamped baseline identity"
+        ),
     )
     args = parser.parse_args(argv)
     try:

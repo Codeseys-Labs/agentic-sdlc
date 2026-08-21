@@ -239,10 +239,16 @@ def gate_receipt(
     return receipt
 
 
+#: The `baseline_failing` default `baseline_report()` uses, factored out so a test that also needs
+#: a real baseline RECEIPT (to stamp and to independently supply as `--baseline-receipt`) can build
+#: one carrying the identical failing set with `gate_receipt(target, outcome="failed", names=...)`.
+DEFAULT_BASELINE_FAILING = ("fixture.Case.test_alpha", "fixture.Case.test_beta")
+
+
 def baseline_report(
     *,
     gate: str = GATE_LABEL,
-    baseline_failing: tuple[str, ...] = ("fixture.Case.test_alpha", "fixture.Case.test_beta"),
+    baseline_failing: tuple[str, ...] = DEFAULT_BASELINE_FAILING,
     candidate_failing: tuple[str, ...] = ("fixture.Case.test_alpha",),
     candidate_outcome: str = "failed",
     non_worsening: bool | None = None,
@@ -250,7 +256,20 @@ def baseline_report(
     toolchain_drifted: bool = False,
     omit_non_worsening: bool = False,
     non_worsening_value: Any = "unset",
+    baseline_receipt: dict[str, Any] | None = None,
+    baseline_cwd: Any = "unset",
+    baseline_self_digest: Any = "unset",
+    omit_stamp: bool = False,
 ) -> dict[str, Any]:
+    """Mirrors `scripts/gate_baseline.py compare`'s own report shape, stamp included.
+
+    `baseline_receipt` is the real receipt this report is "about": when given, `baseline_cwd` and
+    `baseline_self_digest` are read off it verbatim, exactly as `gate_baseline.py compare` reads
+    them off the receipt it loaded. `baseline_cwd`/`baseline_self_digest` accept an explicit
+    override (sentinel `"unset"` so `None` is a distinct, choosable value) for tests that need a
+    WRONG stamp deliberately; `omit_stamp` drops both keys to build the pre-stamp, older-schema
+    shape `gate_baseline.py` used to emit.
+    """
     before, after = set(baseline_failing), set(candidate_failing)
     computed = sorted(after - before) if newly_failing is None else list(newly_failing)
     report = {
@@ -266,6 +285,13 @@ def baseline_report(
         "non_worsening": (not computed) if non_worsening is None else non_worsening,
         "toolchain_drifted": toolchain_drifted,
     }
+    if not omit_stamp:
+        report["baseline_cwd"] = (
+            (baseline_receipt or {}).get("cwd") if baseline_cwd == "unset" else baseline_cwd
+        )
+        report["baseline_self_digest"] = (
+            (baseline_receipt or {}).get("self_digest") if baseline_self_digest == "unset" else baseline_self_digest
+        )
     if non_worsening_value != "unset":
         report["non_worsening"] = non_worsening_value
     if omit_non_worsening:
@@ -347,9 +373,16 @@ class DerivationCase(unittest.TestCase):
             "activation": activation_result(self.target, plan),
             "gate-receipt": gate_receipt(self.target),
             "baseline-comparison": None,
+            "baseline-receipt": None,
         }
         pieces.update(overrides)
         return pieces
+
+    def baseline_receipt_doc(self, names: tuple[str, ...] = DEFAULT_BASELINE_FAILING) -> dict[str, Any]:
+        """The real gate receipt a baseline comparison's stamp is checked against, at this case's
+        own target -- a pure function of `self.target` plus `names`, so two calls with the same
+        `names` are byte-identical and carry the same `self_digest`."""
+        return gate_receipt(self.target, outcome="failed", names=names)
 
     def derive(self, pieces: dict[str, Any] | None = None, *, extra: tuple[str, ...] = ()) -> tuple[dict[str, Any], int]:
         if pieces is None:
@@ -416,10 +449,12 @@ class WriteReadyTests(DerivationCase):
 class RemediationReadyTests(DerivationCase):
     def remediation(self, **overrides: Any) -> dict[str, Any]:
         names = ("fixture.Case.test_alpha",)
+        baseline_doc = self.baseline_receipt_doc()
         pieces = self.evidence(
             **{
                 "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
-                "baseline-comparison": baseline_report(candidate_failing=names),
+                "baseline-comparison": baseline_report(candidate_failing=names, baseline_receipt=baseline_doc),
+                "baseline-receipt": baseline_doc,
             }
         )
         pieces.update(overrides)
@@ -434,6 +469,14 @@ class RemediationReadyTests(DerivationCase):
         self.assertEqual(result["reasons"], [])
         self.assertEqual(result["evidence"]["gate_failing_tests"], ["fixture.Case.test_alpha"])
         self.assertIs(result["evidence"]["baseline_non_worsening"], True)
+        # agentic-sdlc-de3a (D4): the result surfaces the baseline's own identity in evidence too --
+        # not just whether it was non-worsening -- so a human reading the result alone can see WHICH
+        # baseline receipt (by cwd and self_digest) backed this remediation-ready verdict.
+        baseline_doc = self.baseline_receipt_doc()
+        self.assertEqual(
+            (result["evidence"]["baseline_cwd"], result["evidence"]["baseline_self_digest"]),
+            (str(self.target), baseline_doc["self_digest"]),
+        )
 
     def test_remediation_ready_never_claims_the_gate_passes(self) -> None:
         remediation, _ = self.derive(self.remediation())
@@ -514,7 +557,9 @@ class RemediationReadyTests(DerivationCase):
         pieces = self.remediation(
             **{
                 "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
-                "baseline-comparison": baseline_report(candidate_failing=names),
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names, baseline_receipt=self.baseline_receipt_doc()
+                ),
             }
         )
         result, _ = self.derive(pieces)
@@ -562,6 +607,121 @@ class RemediationReadyTests(DerivationCase):
         )
         result, _ = self.derive(pieces)
         self.assert_refused(result, "does not state non_worsening as a boolean")
+
+    # ---- baseline IDENTITY: gate-baseline-comparison/v1's baseline_cwd/baseline_self_digest stamp,
+    # closing agentic-sdlc-de3a (the 6b0d Fable-lane finding: a comparison could name another
+    # repository's baseline receipt, or no receipt at all, and still reach remediation-ready). Every
+    # test here reuses `self.remediation()` as the POSITIVE control it already asserts first, so a
+    # regression that silently stops enforcing the mutated check is caught rather than a fixture
+    # that always refuses for an unrelated reason.
+
+    def test_baseline_stamped_with_a_foreign_cwd_refuses_by_name(self) -> None:
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        names = ("fixture.Case.test_alpha",)
+        baseline_doc = self.baseline_receipt_doc()
+        pieces = self.remediation(
+            **{
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names,
+                    baseline_receipt=baseline_doc,
+                    # The digest genuinely matches `baseline_doc`; only the STAMPED cwd is wrong --
+                    # exactly the shape a comparison computed against another repository's baseline
+                    # receipt would carry.
+                    baseline_cwd=str(self.root / "another-repository"),
+                )
+            }
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "does not agree with the target")
+        self.assert_refused(result, "another repository's baseline receipt")
+
+    def test_baseline_stamped_with_a_case_swapped_cwd_refuses_by_name(self) -> None:
+        """agentic-sdlc-de3a (D3): `str(self.target).swapcase()` is a DIFFERENT path from the
+        target byte-for-byte, but folds to the identical string under a case-insensitive compare --
+        so this is the one fixture that would survive a mutant that lowercased both sides before
+        comparing, where `test_baseline_stamped_with_a_foreign_cwd_refuses_by_name`'s unrelated
+        `another-repository` path would not (it still differs after folding, so that mutant would
+        keep refusing it for the wrong reason)."""
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        swapped = str(self.target).swapcase()
+        self.assertNotEqual(swapped, str(self.target))  # the fixture must actually differ
+        self.assertEqual(swapped.lower(), str(self.target).lower())  # ...only by case
+        names = ("fixture.Case.test_alpha",)
+        baseline_doc = self.baseline_receipt_doc()
+        pieces = self.remediation(
+            **{
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names,
+                    baseline_receipt=baseline_doc,
+                    baseline_cwd=swapped,
+                )
+            }
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "does not agree with the target")
+
+    def test_baseline_with_a_tampered_self_digest_refuses_by_name(self) -> None:
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        names = ("fixture.Case.test_alpha",)
+        baseline_doc = self.baseline_receipt_doc()
+        pieces = self.remediation(
+            **{
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names,
+                    baseline_receipt=baseline_doc,
+                    # The stamped cwd genuinely agrees with the target; only the digest is edited,
+                    # as if a byte of the baseline side were changed after the report was written.
+                    baseline_self_digest="0" * 64,
+                )
+            }
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "does not agree with the supplied baseline receipt")
+
+    def test_an_unstamped_older_schema_comparison_no_longer_reaches_remediation_ready(self) -> None:
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        names = ("fixture.Case.test_alpha",)
+        pieces = self.remediation(
+            **{"baseline-comparison": baseline_report(candidate_failing=names, omit_stamp=True)}
+        )
+        self.assertNotIn("baseline_cwd", pieces["baseline-comparison"])
+        self.assertNotIn("baseline_self_digest", pieces["baseline-comparison"])
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "predates baseline identity stamping")
+
+    def test_a_stamped_comparison_with_no_supplied_baseline_receipt_refuses_by_name(self) -> None:
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        pieces = self.remediation(**{"baseline-receipt": None})
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "no baseline receipt was supplied")
+
+    def test_a_baseline_receipt_whose_own_cwd_disagrees_with_the_target_refuses(self) -> None:
+        """The belt-and-suspenders check: a stamp forged to CLAIM this target, over a digest that
+        genuinely matches a receipt independently read from somewhere else, must not slip through
+        just because the stamp and the target happen to agree."""
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        names = ("fixture.Case.test_alpha",)
+        elsewhere = self.root / "elsewhere"
+        foreign_receipt = gate_receipt(elsewhere, outcome="failed", names=DEFAULT_BASELINE_FAILING)
+        pieces = self.remediation(
+            **{
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names,
+                    baseline_receipt=foreign_receipt,
+                    baseline_cwd=str(self.target),  # forged to agree with the target
+                ),
+                "baseline-receipt": foreign_receipt,
+            }
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "independently-read baseline receipt's own cwd")
+        self.assert_refused(result, "does not agree with the target")
 
 
 class GateRefusalTests(DerivationCase):
@@ -861,6 +1021,7 @@ class ExhaustiveMatrixTests(DerivationCase):
                         for plan_document_choice in ("clean", "dirty"):
                             chosen = plan if plan_document_choice == "clean" else dirty
                             label = f"{verdict}/{outcome}/{failures_state}/{with_baseline}/{activation_status}/{plan_document_choice}"
+                            baseline_doc = self.baseline_receipt_doc(names or DEFAULT_BASELINE_FAILING)
                             pieces = self.evidence(
                                 classification=classification(self.target, verdict=verdict),
                                 plan=chosen,
@@ -874,9 +1035,12 @@ class ExhaustiveMatrixTests(DerivationCase):
                                     "gate-receipt": gate_receipt(
                                         self.target, outcome=outcome, names=names, failures_state=failures_state
                                     ),
-                                    "baseline-comparison": baseline_report(candidate_failing=names)
+                                    "baseline-comparison": baseline_report(
+                                        candidate_failing=names, baseline_receipt=baseline_doc
+                                    )
                                     if with_baseline
                                     else None,
+                                    "baseline-receipt": baseline_doc if with_baseline else None,
                                 },
                             )
                             cases.append((label, pieces))
@@ -1092,12 +1256,14 @@ class ResultContractTests(DerivationCase):
 
     def test_result_key_set_is_fixed_across_states(self) -> None:
         names = ("fixture.Case.test_alpha",)
+        baseline_doc = self.baseline_receipt_doc(names)
         ready, _ = self.derive()
         remediation, _ = self.derive(
             self.evidence(
                 **{
                     "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
-                    "baseline-comparison": baseline_report(candidate_failing=names),
+                    "baseline-comparison": baseline_report(candidate_failing=names, baseline_receipt=baseline_doc),
+                    "baseline-receipt": baseline_doc,
                 }
             )
         )
@@ -1116,7 +1282,9 @@ class ResultContractTests(DerivationCase):
                     "activation_operation_id",
                     "activation_receipt_digest",
                     "activation_status",
+                    "baseline_cwd",
                     "baseline_non_worsening",
+                    "baseline_self_digest",
                     "baseline_toolchain_drifted",
                     "gate",
                     "gate_failing_tests",
@@ -1400,7 +1568,7 @@ class JourneyTests(unittest.TestCase):
         )
         return out
 
-    def derive(self, *, baseline: Path | None = None) -> dict[str, Any]:
+    def derive(self, *, baseline: Path | None = None, baseline_receipt: Path | None = None) -> dict[str, Any]:
         argv = [
             str(TOOL), "derive",
             "--classification", str(self.artifacts / "classification.json"),
@@ -1411,6 +1579,8 @@ class JourneyTests(unittest.TestCase):
         ]
         if baseline is not None:
             argv.extend(["--baseline-comparison", str(baseline)])
+        if baseline_receipt is not None:
+            argv.extend(["--baseline-receipt", str(baseline_receipt)])
         done = self.run_tool(*argv, expect=0)
         self.assertEqual(done.stdout, canonical(json.loads(done.stdout)))
         return json.loads(done.stdout)
@@ -1473,7 +1643,15 @@ class JourneyTests(unittest.TestCase):
         report = json.loads(compared.stdout)
         self.assertIs(report["non_worsening"], True)
         self.assertEqual(report["fixed"], ["fixture.Case.test_beta"])
-        result = self.derive(baseline=report_path)
+        # The stamp `gate_baseline.py compare` wrote is checked against the REAL receipt it was
+        # computed from, `baseline_path` -- the exact artifact `--baseline-receipt` names below.
+        self.assertEqual(report["baseline_cwd"], str(self.target))
+        baseline_receipt_doc = json.loads(baseline_path.read_bytes())
+        self.assertEqual(report["baseline_self_digest"], baseline_receipt_doc["self_digest"])
+        # POSITIVE CONTROL, the honest same-repo chain: every artifact below was produced by a real
+        # tool over this one real repository, `--baseline-receipt` included, so this is the case the
+        # de3a fix must still admit -- not merely a case that some OTHER refusal fails to trip.
+        result = self.derive(baseline=report_path, baseline_receipt=baseline_path)
         self.assertEqual(result["state"], REMEDIATION_READY, result)
         self.assertEqual(result["classification"], "brownfield")
         self.assertEqual(result["consequence"], REMEDIATION_CONSEQUENCE)
@@ -1482,10 +1660,18 @@ class JourneyTests(unittest.TestCase):
         self.assertEqual(result["reasons"], [])
         self.assertEqual(result["evidence"]["gate_failing_tests"], ["fixture.Case.test_alpha"])
         self.assertIs(result["evidence"]["baseline_non_worsening"], True)
-        # The same chain WITHOUT the baseline is the positive control for the baseline requirement.
+        # The same chain WITHOUT the baseline COMPARISON is the positive control for the comparison
+        # requirement.
         without = self.derive()
         self.assertEqual(without["state"], REFUSED)
         self.assertIn("no baseline comparison was supplied", " || ".join(without["reasons"]))
+        # The same chain WITHOUT the baseline RECEIPT (comparison supplied, receipt withheld) is the
+        # positive control for the de3a identity requirement itself: a real, honest, correctly
+        # stamped comparison still refuses when nothing is supplied to independently check the stamp
+        # against.
+        unverified = self.derive(baseline=report_path)
+        self.assertEqual(unverified["state"], REFUSED)
+        self.assertIn("no baseline receipt was supplied", " || ".join(unverified["reasons"]))
 
 
 if __name__ == "__main__":

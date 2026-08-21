@@ -32,6 +32,17 @@ Every way this comparison could be VACUOUSLY true is a refusal rather than a gre
     * two different gate labels — different gates run different tests, so a subset across them is
       meaningless.
 
+The report also STAMPS the baseline's own identity: `baseline_cwd` and `baseline_self_digest`,
+copied verbatim off the verified baseline receipt this process loaded. Without them the report
+names no baseline at all — only which tests it failed with — so a consumer trusting a
+`non_worsening` verdict could be shown a comparison computed against another repository's baseline
+receipt, or a report hand-written to name no receipt whatsoever. A consumer that independently
+holds (or re-reads) that same receipt can re-derive both fields and refuse on disagreement; see
+`activation-result.py`'s `assess_gate`, which is exactly that consumer. The candidate side needs no
+matching digest, because its value is already bound elsewhere: the gate label plus the exact
+failing set and outcome a consumer compares against its own already-verified receipt. Stamping is
+additive to `SCHEMA_VERSION`, not a bump of it — see the constant below for why.
+
 Exit codes follow the repository's effect-aware contract (Implementation Decision 9), and the
 comparison's own success is kept separate from the verdict it reports:
 
@@ -76,7 +87,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import gate_receipt  # noqa: E402 - resolved against the repository root above
 
-#: The report payload's own version, independent of the receipt schema it reads.
+#: The report payload's own version, independent of the receipt schema it reads. Adding
+#: `baseline_cwd`/`baseline_self_digest` did NOT bump this: every other consumer of this schema
+#: (`skills/agentic-sdlc/tools/wave-verdict.py`, `skills/agentic-sdlc/tools/
+#: sdlc-observability-projection.py`) checks this exact string and reads only the specific keys it
+#: needs, never an exhaustive key set, so an additive field is backward compatible and a version
+#: bump would fail every one of them closed for no gain. A consumer that must distinguish a
+#: pre-stamp report from a stamped one (`activation-result.py`) does so by checking for the two
+#: keys directly, which is the only thing a stamped-vs-unstamped question can mean when the schema
+#: string itself does not change.
 SCHEMA_VERSION = "gate-baseline-comparison/v1"
 
 #: The candidate's failing set is a subset of the baseline's.
@@ -135,6 +154,18 @@ def _load_receipt(raw: str, side: str) -> dict[str, Any]:
         raise ComparisonError(
             f"the {side} receipt {raw} predates the outcome taxonomy, so what its failing set means "
             "cannot be established; re-record it",
+            EXIT_USAGE,
+        )
+    # Mirrors the outcome check just above, and for the same reason `compare` needs it: a receipt
+    # admitted here with no `cwd` -- the key altogether absent, or present as an explicit `null` --
+    # would stamp `baseline_cwd: null` onto every comparison that loads it as the baseline, naming no
+    # location at all (agentic-sdlc-de3a, finding D1). `.get` collapses both shapes to `None`, and
+    # neither is distinguished by name because the outcome check above does not distinguish its own
+    # two shapes either.
+    if not isinstance(receipt.get("cwd"), str):
+        raise ComparisonError(
+            f"the {side} receipt {raw} carries no cwd, so its own identity cannot be established; "
+            "re-record it with a cwd",
             EXIT_USAGE,
         )
     return receipt
@@ -203,6 +234,13 @@ def compare(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, An
         "gate": baseline.get("gate"),
         "baseline_outcome": baseline.get("outcome"),
         "candidate_outcome": candidate.get("outcome"),
+        # Baseline identity, stamped verbatim off the verified receipt just loaded (see the module
+        # docstring): the ONLY two fields a consumer needs to independently re-derive and refuse a
+        # comparison about a different repository or a receipt it cannot verify. `_load_receipt` now
+        # requires both `cwd` and `self_digest` to be present strings (agentic-sdlc-de3a, finding
+        # D1), so neither is ever null on a receipt this function accepted.
+        "baseline_cwd": baseline.get("cwd"),
+        "baseline_self_digest": baseline.get("self_digest"),
         "baseline_failing": sorted(before),
         "candidate_failing": sorted(after),
         "newly_failing": newly_failing,

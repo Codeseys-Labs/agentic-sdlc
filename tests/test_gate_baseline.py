@@ -55,6 +55,7 @@ def _make_receipt(
     state: str = gate_receipt.FAILURES_IDENTIFIED,
     with_failures: bool = True,
     argv: list[str] | None = None,
+    cwd: str = "/tmp/fixture",
 ) -> dict[str, object]:
     """A verifiable receipt whose failing set is exactly `names`."""
     if status is None:
@@ -70,7 +71,7 @@ def _make_receipt(
         status=status,
         log_bytes=b"",
         lock_bytes=lock_bytes,
-        cwd="/tmp/fixture",
+        cwd=cwd,
         failures=failures,
     )
 
@@ -380,6 +381,38 @@ class InvalidInputTests(_BaselineTestCase):
         self.assertEqual(ok.returncode, gate_baseline.EXIT_OK, ok.stderr)
         self.assertEqual(self._report(ok)["baseline_outcome"], gate_receipt.OUTCOME_FAILED)
 
+    def test_a_verifying_baseline_receipt_with_no_cwd_is_refused_not_stamped_null(self) -> None:
+        """agentic-sdlc-de3a (D1): a receipt admitted with no `cwd` would stamp `baseline_cwd: null`
+        onto the report -- naming no baseline location at all -- rather than being refused. Mirrors
+        `test_a_verifying_receipt_with_no_outcome_is_refused_not_given_a_verdict` exactly: dropping a
+        field and re-sealing the digest is a legitimately VERIFIABLE receipt (`verify_receipt`
+        re-derives over whatever non-self_digest fields are present), so this is what makes the
+        presence check load-bearing rather than redundant with verification.
+        """
+        full = _make_receipt(("m.A.test_one",), cwd="/tmp/repo-with-a-cwd")
+        body = {k: v for k, v in full.items() if k not in ("self_digest", "cwd")}
+        resealed = dict(body)
+        resealed["self_digest"] = gate_receipt.canonical_digest(body)
+        self.assertNotIn("cwd", resealed)
+        self.assertIn("failures", resealed)
+        # Not a tamper case: this receipt re-derives, so exit 2 below cannot come from verification.
+        self.assertTrue(gate_receipt.verify_receipt(resealed))
+        for label, pair in (
+            ("baseline", (resealed, _make_receipt(("m.A.test_one",)))),
+            ("candidate", (_make_receipt(("m.A.test_one",)), resealed)),
+        ):
+            with self.subTest(side=label):
+                proc = self._compare(*pair)
+                self.assertEqual(proc.returncode, gate_baseline.EXIT_USAGE, proc.stderr)
+                self.assertIn("carries no cwd", proc.stderr)
+                self.assertEqual(proc.stdout, "")
+        # POSITIVE CONTROL: the identical receipt WITH its cwd compares cleanly and stamps the
+        # report with it, so the refusal above is the absent cwd and not the resealing, the failing
+        # set, or the fixture.
+        ok = self._compare(full, _make_receipt(("m.A.test_one",)))
+        self.assertEqual(ok.returncode, gate_baseline.EXIT_OK, ok.stderr)
+        self.assertEqual(self._report(ok)["baseline_cwd"], "/tmp/repo-with-a-cwd")
+
     def test_both_receipt_paths_are_required(self) -> None:
         good = self._write("good.json", _make_receipt(("m.A.test_one",)))
         for args in (["compare"], ["compare", "--baseline", str(good)], ["compare", "--candidate", str(good)]):
@@ -397,6 +430,52 @@ class ReportAndEffectTests(_BaselineTestCase):
         reparsed = json.loads(proc.stdout)
         self.assertEqual(proc.stdout.encode("utf-8"), gate_receipt.canonical_json(reparsed) + b"\n")
         self.assertEqual(reparsed["schema_version"], gate_baseline.SCHEMA_VERSION)
+
+    def test_the_report_stamps_the_baseline_receipts_cwd_and_self_digest(self) -> None:
+        """agentic-sdlc-de3a: the report names WHICH receipt it baselines, not just which tests it
+        failed with, so a consumer can independently check the stamp against a receipt it holds."""
+        baseline = _make_receipt(("m.A.test_one", "m.A.test_two"), cwd="/tmp/repo-one")
+        proc = self._compare(baseline, _make_receipt(("m.A.test_one",)))
+        self.assertEqual(proc.returncode, gate_baseline.EXIT_OK, proc.stderr)
+        report = self._report(proc)
+        self.assertEqual(report["baseline_cwd"], "/tmp/repo-one")
+        self.assertEqual(report["baseline_cwd"], baseline["cwd"])
+        self.assertEqual(report["baseline_self_digest"], baseline["self_digest"])
+        # Only the BASELINE side is stamped: the candidate side is already bound by value (the gate
+        # label plus its exact failing set and outcome), so a digest there would be redundant.
+        self.assertNotIn("candidate_cwd", report)
+        self.assertNotIn("candidate_self_digest", report)
+        # POSITIVE CONTROL: a baseline receipt from a DIFFERENT cwd, with a necessarily different
+        # self_digest, stamps DIFFERENT values -- so the equalities above are reading the receipt
+        # this comparison actually loaded, not a hardcoded fixture constant that happens to match.
+        other_baseline = _make_receipt(("m.A.test_one", "m.A.test_two"), cwd="/tmp/repo-two")
+        other_proc = self._compare(other_baseline, _make_receipt(("m.A.test_one",)))
+        other_report = self._report(other_proc)
+        self.assertEqual(other_report["baseline_cwd"], "/tmp/repo-two")
+        self.assertNotEqual(other_report["baseline_cwd"], report["baseline_cwd"])
+        self.assertNotEqual(other_report["baseline_self_digest"], report["baseline_self_digest"])
+
+    def test_the_report_key_set_includes_exactly_the_baseline_identity_stamp(self) -> None:
+        proc = self._compare(_make_receipt(("m.A.test_one",)), _make_receipt(("m.A.test_one",)))
+        self.assertEqual(proc.returncode, gate_baseline.EXIT_OK, proc.stderr)
+        self.assertEqual(
+            set(self._report(proc)),
+            {
+                "schema_version",
+                "gate",
+                "baseline_outcome",
+                "candidate_outcome",
+                "baseline_cwd",
+                "baseline_self_digest",
+                "baseline_failing",
+                "candidate_failing",
+                "newly_failing",
+                "fixed",
+                "still_failing",
+                "non_worsening",
+                "toolchain_drifted",
+            },
+        )
 
     def test_the_comparison_writes_nothing(self) -> None:
         baseline = self._write("baseline.json", _make_receipt(("m.A.test_one", "m.A.test_two")))
