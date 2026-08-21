@@ -53,6 +53,59 @@ LIFECYCLE_VERBS = {
 # `install` requires an explicit host. There is no default and no wildcard.
 LIFECYCLE_HOSTS = ("claude",)
 
+# ---- host-level lifecycle readiness ----------------------------------------------------------
+# The host-level half of pre-effect readiness is READ here and nowhere else (agentic-sdlc-9857,
+# spec Decision 8): selected payload versus activated version, distribution-activation receipt
+# presence and seal validity, interrupted transitions, and the contract's declared
+# incompatibilities against the observed host.  Nothing below repairs, networks, executes a host,
+# resolves a version, or acquires writer authority, and every location is a parameter so a test
+# points the observation at its own plane instead of at the operator's.
+STATE_PLANE_DIRECTORY = "agentic-sdlc"
+ACQUISITION_PLANE = ("acquisition", "receipts")
+ACTIVATION_PLANE = ("activation", "receipts")
+ACQUISITION_RECEIPT_SCHEMA = "release-candidate-acquisition-receipt/v1"
+ACQUISITION_TERMINAL_PHASE = "installed-unselected"
+ACQUISITION_SELECTION = "absent"
+ACTIVATION_VALIDATOR_MODULE = "distribution_activation_receipt"
+# Re-expressed from that module so a drifted vocabulary is REFUSED by name rather than silently
+# reinterpreted; `load_activation_validator` compares these against the module's own constants and
+# declines the whole dimension when they disagree.  A guessed matrix would read as an observation.
+EXPECTED_RECEIPT_KIND = "distribution-activation"
+EXPECTED_RECEIPT_VOCABULARIES = {
+    "EFFECT_STATES": ("complete", "none", "partial", "unknown"),
+    "OPERATIONS": ("install", "uninstall", "update"),
+    "TERMINAL_PHASES": ("activated", "activated-partial", "not-activated", "retired", "unknown"),
+    "VERSION_SOURCES": ("adapter-readback", "archive-manifest", "request"),
+}
+# A transition that stopped between its phases. `unknown` is included on purpose: a receipt that
+# cannot state its own effect is exactly the case an operator must be told about.
+INTERRUPTED_EFFECT_STATES = ("partial", "unknown")
+INTERRUPTED_TERMINAL_PHASES = ("activated-partial", "unknown")
+ACTIVE_TERMINAL_PHASES = ("activated", "activated-partial")
+# `request` is the refused member of that closed set: a requested version is what the caller asked
+# for, never what an adapter read back, so it never becomes an activated version here.
+PROVEN_VERSION_SOURCES = ("adapter-readback", "archive-manifest")
+# One receipt is a few kilobytes. The ceiling means an oversized or truncated file is NAMED as
+# unreadable instead of being read into this process, and the document bound means an unbounded
+# directory cannot turn a bounded read into a scan.
+MAX_PLANE_DOCUMENT_BYTES = 65536
+MAX_PLANE_DOCUMENTS = 64
+MAX_FINDING_MESSAGE_CHARS = 240
+MAX_VERSION_CHARS = 64
+# Two reasons a finding maps onto a code by EXACT equality rather than by searching the prose: a
+# substring test over a message would silently reclassify the day an `strerror` happened to contain
+# the word, and these two states are not "unreadable".
+PLANE_SYMLINK_REASON = "is a symlink, which this reader reports instead of following"
+PLANE_OVERFULL_REASON = (
+    f"holds more than {MAX_PLANE_DOCUMENTS} documents, so this reader read only the first "
+    f"{MAX_PLANE_DOCUMENTS} of them"
+)
+# Written out rather than spelled `[0-9a-f]`-by-regex-class shorthand: `\d` admits the Arabic-Indic
+# `٩`, so a digest spelled in it would read as the same value while comparing unequal to it.
+_HEX_CHARACTERS = "0123456789abcdef"
+_VERSION_CHARACTERS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.+-"
+_DISPLAY_ESCAPES = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
 
 class UsageError(ValueError):
     pass
@@ -246,11 +299,16 @@ def _candidate_manifest(root: Path) -> dict[str, Any]:
     return manifest
 
 
-def load_checkout(root: Path) -> dict[str, Any]:
+def load_release_contract(root: Path) -> dict[str, Any]:
+    """Read the tracked release contract once, so the identity and the compatibility declaration
+    are two views of ONE observed document rather than two reads that could disagree."""
     path = root / "policy" / "release-contract.v1.json"
     if path.is_symlink() or not path.is_file():
         raise ReportInvariantError(f"release contract is unavailable: {path}")
-    contract = strict_json_document(path.read_bytes(), path)
+    return strict_json_document(path.read_bytes(), path)
+
+
+def checkout_identity(contract: dict[str, Any]) -> dict[str, Any]:
     checkout = contract.get("checkout")
     if contract.get("schema_version") != "release-contract/v1" or checkout != EXPECTED_CHECKOUT:
         raise ReportInvariantError("release contract does not establish the checkout-development 0.7.3 identity")
@@ -495,13 +553,653 @@ def sorted_projection(projection: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def observe_projections(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def escape_display(value: str) -> str:
+    """Escape every control character before an artifact-derived value reaches a rendered line.
+
+    The human render writes finding messages straight to a terminal, so a bare newline in a
+    filename or in a validator reason forges a line of this command's own output, a ``\\r``
+    overwrites the line already printed, and an ``\\x1b[2J`` clears the reader's screen.  The
+    STORED value is never touched: this is a rendering rule.  It is re-expressed here rather than
+    imported because the receipt validator is an OPTIONAL sibling and a rendering rule may not
+    depend on a file that can be absent; the test module proves the two agree character for
+    character.
+    """
+    out: list[str] = []
+    for char in value:
+        if char in _DISPLAY_ESCAPES:
+            out.append(_DISPLAY_ESCAPES[char])
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            out.append(f"\\x{ord(char):02x}")
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def bounded_message(text: str) -> str:
+    """One escaped, length-bounded, never-empty finding message."""
+    escaped = escape_display(text) or "no reason was stated"
+    if len(escaped) <= MAX_FINDING_MESSAGE_CHARS:
+        return escaped
+    return escaped[:MAX_FINDING_MESSAGE_CHARS] + " (truncated)"
+
+
+def plane_locator(prefix: str, name: str) -> str:
+    """One opaque, deterministic locator for a document whose NAME is not this reader's to echo.
+
+    A plane directory can hold a file whose name is caller-chosen text, and the ownership
+    projections already render opaque locators for exactly that reason.  A well-formed receipt is
+    named ``<64 lowercase hex>.json``, which carries no operator content, so that name is kept;
+    anything else is named by a digest of itself, which stays stable across runs and distinguishes
+    two unrecognised neighbours without republishing either name.
+    """
+    stem = name[:-5] if name.endswith(".json") else ""
+    if len(stem) == 64 and all(character in _HEX_CHARACTERS for character in stem):
+        return f"{prefix}://{stem}"
+    digest = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
+    return f"{prefix}://unrecognised-{digest[:16]}"
+
+
+def safe_version(value: object) -> str | None:
+    """Admit a version only in the shape the receipt family admits, so no free text is echoed."""
+    if not isinstance(value, str) or not value or len(value) > MAX_VERSION_CHARS:
+        return None
+    if any(character not in _VERSION_CHARACTERS for character in value):
+        return None
+    if value[0] in ".+-" or value[-1] in ".+-":
+        return None
+    return value
+
+
+def strict_plane_json(text: str) -> dict[str, Any]:
+    """Parse one plane document with the duplicate-key and BOTH non-finite guards applied.
+
+    ``parse_constant`` never sees ``1e400``: the decoder turns it into ``inf`` by itself, so the
+    parsed value is walked as well.  A repeated key is refused rather than resolved to whichever
+    copy came last, because a document with two meanings has no observation in it.
+    """
+    document = strict_json_document(text.encode("utf-8"), Path("plane document"))
+    _check_finite(document)
+    return document
+
+
+def read_plane_document(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """Read one plane document read-only, or NAME why it could not be read. Never follows a link.
+
+    ``lstat`` before the open is load-bearing twice: a symlink is a redirected state surface this
+    reader reports instead of following, and opening a FIFO would block until a writer that may
+    never arrive.  The size is bounded before and after the read, so a file that grows between the
+    two is named rather than read.
+    """
+    try:
+        item = path.lstat()
+    except OSError as exc:
+        return None, f"cannot be read ({exc.strerror or exc.__class__.__name__})"
+    if stat.S_ISLNK(item.st_mode):
+        return None, PLANE_SYMLINK_REASON
+    if not stat.S_ISREG(item.st_mode):
+        return None, "is not a regular file"
+    if item.st_size > MAX_PLANE_DOCUMENT_BYTES:
+        return None, f"is larger than the {MAX_PLANE_DOCUMENT_BYTES}-byte ceiling"
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_PLANE_DOCUMENT_BYTES + 1)
+    except OSError as exc:
+        return None, f"cannot be read ({exc.strerror or exc.__class__.__name__})"
+    if len(raw) > MAX_PLANE_DOCUMENT_BYTES:
+        return None, f"grew past the {MAX_PLANE_DOCUMENT_BYTES}-byte ceiling while being read"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError:
+        return None, "is not UTF-8 text"
+    try:
+        return strict_plane_json(text), None
+    except Exception as exc:  # noqa: BLE001 - any parse outcome is one classification, never a raise
+        return None, f"is not one strict JSON object ({exc})"
+
+
+def list_plane_documents(directory: Path) -> tuple[list[str], str | None]:
+    """List one plane directory's candidate document names, bounded and sorted, or name the absence.
+
+    ``absent`` is a state, not a failure: a distribution that was never activated has no plane, and
+    that reads as absent with a reason rather than as a defect this reader invented.
+    """
+    try:
+        item = directory.lstat()
+    except FileNotFoundError:
+        return [], "absent"
+    except OSError as exc:
+        return [], f"cannot be listed ({exc.strerror or exc.__class__.__name__})"
+    if stat.S_ISLNK(item.st_mode):
+        return [], PLANE_SYMLINK_REASON
+    if not stat.S_ISDIR(item.st_mode):
+        return [], "is not a directory"
+    try:
+        names = sorted(entry.name for entry in os.scandir(directory))
+    except OSError as exc:
+        return [], f"cannot be listed ({exc.strerror or exc.__class__.__name__})"
+    documents = [name for name in names if name.endswith(".json")]
+    if len(documents) > MAX_PLANE_DOCUMENTS:
+        return documents[:MAX_PLANE_DOCUMENTS], PLANE_OVERFULL_REASON
+    return documents, None
+
+
+def load_activation_validator(
+    script_path: Path, guard: ModuleType
+) -> tuple[ModuleType | None, str | None]:
+    """Load the receipt family's own seal validator, or name why the seal cannot be assessed.
+
+    The validator is an optional sibling: a distribution that ships this reader without it is not
+    broken, it simply cannot state seal validity, and an unassessable seal is recorded as unknown
+    with a reason rather than assumed valid OR reported as invalid.  A drifted closed vocabulary
+    declines the same way, because a matrix this reader guessed would read as an observation.
+    """
+    path = script_path.with_name(f"{ACTIVATION_VALIDATOR_MODULE}.py")
+    if path.is_symlink() or not path.is_file():
+        return None, "the distribution-activation seal validator is absent from this distribution"
+    try:
+        module = guard.load_sibling(script_path, ACTIVATION_VALIDATOR_MODULE)
+    except Exception as exc:  # noqa: BLE001 - an unloadable validator is unknown, never a raise
+        return None, f"the distribution-activation seal validator could not be loaded ({exc})"
+    for name in ("derive", "VERDICT_VALIDATED", "RECEIPT_KIND", *EXPECTED_RECEIPT_VOCABULARIES):
+        if not hasattr(module, name):
+            return None, f"the distribution-activation seal validator exposes no {name}"
+    if getattr(module, "RECEIPT_KIND", None) != EXPECTED_RECEIPT_KIND:
+        return None, "the distribution-activation seal validator names another receipt kind"
+    for name, expected in EXPECTED_RECEIPT_VOCABULARIES.items():
+        if tuple(getattr(module, name)) != expected:
+            return None, f"the distribution-activation seal validator's {name} vocabulary drifted"
+    if not callable(module.derive):
+        return None, "the distribution-activation seal validator exposes no callable derive"
+    return module, None
+
+
+def receipt_observation(
+    locator: str, *, state: str, seal_valid: bool | None, reason: str | None
+) -> dict[str, Any]:
+    """One receipt observation with every field present and nothing yet read out of the document.
+
+    Shared by the assessed and the unassessable paths so a field added to one is never missing from
+    the other, and so no consumer has to tell an absent key from a null one.
+    """
+    return {
+        "locator": locator,
+        "seal_valid": seal_valid,
+        "state": state,
+        "reason": reason,
+        "activated_version": None,
+        "requested_version": None,
+        "version_source": None,
+        "operation": None,
+        "terminal_phase": None,
+        "effect_state": None,
+        "archive_sha256": None,
+        "candidate_id": None,
+        "unknown_subjects": [],
+        "interrupted": False,
+    }
+
+
+def observe_activation_receipt(
+    document: dict[str, Any], validator: ModuleType, locator: str
+) -> dict[str, Any]:
+    """Assess ONE distribution-activation receipt through the family's own validator.
+
+    The subject handed to ``derive`` is the opaque locator, so no absolute path can reach a reason
+    line.  Nothing is read out of a receipt that did not validate: an unvalidated document's fields
+    are unchecked text, and echoing them would publish exactly what the seal exists to bound.
+    """
+    observation = receipt_observation(locator, state="invalid", seal_valid=False, reason=None)
+    try:
+        result = validator.derive("validate", document, locator)
+    except Exception as exc:  # noqa: BLE001 - a validator that cannot assess is unknown, not a crash
+        observation["state"] = "unassessed"
+        observation["reason"] = f"the seal validator could not assess this receipt ({exc})"
+        return observation
+    if not isinstance(result, dict) or result.get("verdict") != validator.VERDICT_VALIDATED:
+        reasons = [reason for reason in (result or {}).get("reasons", []) if isinstance(reason, str)]
+        observation["reason"] = reasons[0] if reasons else "the seal validator stated no reason"
+        return observation
+    body = document.get("body")
+    if not isinstance(body, dict):
+        observation["state"] = "unassessed"
+        observation["reason"] = "the validated receipt carries no body object"
+        return observation
+    unknowns = body.get("unknowns")
+    subjects = sorted(
+        {
+            entry["subject"]
+            for entry in (unknowns if isinstance(unknowns, list) else [])
+            if isinstance(entry, dict) and isinstance(entry.get("subject"), str)
+        }
+    )
+    version_source = body.get("version_source")
+    resolved = safe_version(body.get("resolved_version"))
+    observation.update(
+        {
+            "seal_valid": True,
+            "state": "validated",
+            "operation": body.get("operation") if isinstance(body.get("operation"), str) else None,
+            "terminal_phase": body.get("terminal_phase") if isinstance(body.get("terminal_phase"), str) else None,
+            "effect_state": body.get("effect_state") if isinstance(body.get("effect_state"), str) else None,
+            "version_source": version_source if isinstance(version_source, str) else None,
+            "requested_version": safe_version(body.get("requested_version")),
+            # A resolved version counts as ACTIVATED only from a source that read it back. The
+            # requested value is what the caller asked for and never becomes readback.
+            "activated_version": resolved if version_source in PROVEN_VERSION_SOURCES else None,
+            "archive_sha256": body.get("archive_sha256") if isinstance(body.get("archive_sha256"), str) else None,
+            "candidate_id": body.get("candidate_id") if isinstance(body.get("candidate_id"), str) else None,
+            "unknown_subjects": subjects,
+        }
+    )
+    observation["interrupted"] = (
+        observation["effect_state"] in INTERRUPTED_EFFECT_STATES
+        or observation["terminal_phase"] in INTERRUPTED_TERMINAL_PHASES
+    )
+    return observation
+
+
+def observe_selected_payload(
+    directory: Path,
+    read_document: Any = read_plane_document,
+) -> dict[str, Any]:
+    """Observe the acquired candidates the acquisition plane recorded: the selectable payloads.
+
+    The acquisition receipt is SEALED and is never mutated, opened for writing, or re-derived here
+    (agentic-sdlc-0cce); it is read for the identity it already states.  It carries no version, so
+    the payload version comes from the candidate root's own manifest and is unknown-with-a-reason
+    whenever that manifest cannot be read.
+    """
+    names, listing_reason = list_plane_documents(directory)
+    payloads: list[dict[str, Any]] = []
+    unreadable: list[dict[str, str]] = []
+    for name in names:
+        locator = plane_locator("acquisition-receipt", name)
+        document, reason = read_document(directory / name)
+        if document is None:
+            unreadable.append({"locator": locator, "reason": reason or "cannot be read"})
+            continue
+        if document.get("schema_version") != ACQUISITION_RECEIPT_SCHEMA:
+            unreadable.append(
+                {"locator": locator, "reason": f"is not one {ACQUISITION_RECEIPT_SCHEMA} document"}
+            )
+            continue
+        archive = document.get("archive_sha256")
+        root_value = document.get("candidate_root_absolute_physical_path")
+        version, version_reason = (None, "the receipt states no candidate root")
+        if isinstance(root_value, str) and root_value:
+            version, version_reason = observe_candidate_version(Path(root_value), read_document)
+        payloads.append(
+            {
+                "locator": locator,
+                "archive_sha256": archive if isinstance(archive, str) else None,
+                "terminal_phase": document.get("terminal_phase")
+                if isinstance(document.get("terminal_phase"), str)
+                else None,
+                "selection": document.get("selection") if isinstance(document.get("selection"), str) else None,
+                "acquired": document.get("terminal_phase") == ACQUISITION_TERMINAL_PHASE
+                and document.get("selection") == ACQUISITION_SELECTION,
+                "payload_version": version,
+                "payload_version_reason": version_reason,
+            }
+        )
+    state = "absent" if not payloads and not unreadable else "observed"
+    return {
+        "state": state,
+        "listing_reason": listing_reason,
+        "payloads": payloads,
+        "unreadable": unreadable,
+        "versions": sorted({payload["payload_version"] for payload in payloads if payload["payload_version"]}),
+    }
+
+
+def observe_candidate_version(
+    candidate_root: Path, read_document: Any = read_plane_document
+) -> tuple[str | None, str | None]:
+    """Read one acquired candidate's own product version out of its manifest, or name the absence."""
+    document, reason = read_document(candidate_root / "manifest.json")
+    if document is None:
+        return None, f"the candidate manifest {reason or 'cannot be read'}"
+    version = safe_version(document.get("product_version"))
+    if version is None:
+        return None, "the candidate manifest states no admissible product_version"
+    return version, None
+
+
+def observe_activation(
+    directory: Path,
+    validator: ModuleType | None,
+    validator_reason: str | None,
+    read_document: Any = read_plane_document,
+) -> dict[str, Any]:
+    """Observe the distribution-activation plane: presence, seal validity, versions, transitions."""
+    names, listing_reason = list_plane_documents(directory)
+    receipts: list[dict[str, Any]] = []
+    unreadable: list[dict[str, str]] = []
+    for name in names:
+        locator = plane_locator("activation-receipt", name)
+        document, reason = read_document(directory / name)
+        if document is None:
+            unreadable.append({"locator": locator, "reason": reason or "cannot be read"})
+            continue
+        if validator is None:
+            receipts.append(
+                receipt_observation(
+                    locator,
+                    state="unassessed",
+                    seal_valid=None,
+                    reason=validator_reason or "the seal cannot be assessed",
+                )
+            )
+            continue
+        receipts.append(observe_activation_receipt(document, validator, locator))
+    validated = [receipt for receipt in receipts if receipt["state"] == "validated"]
+    activated = [
+        receipt for receipt in validated if receipt["terminal_phase"] in ACTIVE_TERMINAL_PHASES
+    ]
+    versions = sorted({receipt["activated_version"] for receipt in activated if receipt["activated_version"]})
+    if not receipts and not unreadable:
+        state = "absent"
+    elif unreadable or any(receipt["state"] == "invalid" for receipt in receipts):
+        state = "unreadable"
+    elif any(receipt["state"] != "validated" for receipt in receipts):
+        # The plane is readable; its SEALS are what could not be assessed, and those are different
+        # states an operator acts on differently.
+        state = "unassessed"
+    elif len(versions) > 1:
+        state = "ambiguous"
+    else:
+        state = "observed"
+    return {
+        "state": state,
+        "listing_reason": listing_reason,
+        "validator_reason": validator_reason,
+        "receipts": receipts,
+        "unreadable": unreadable,
+        "activated_versions": versions,
+        # An activated receipt whose version has no proven source states no activated version, and
+        # the difference between "not supplied" and "supplied unusable" is kept.
+        "unversioned_activations": [
+            receipt["locator"] for receipt in activated if not receipt["activated_version"]
+        ],
+        "interrupted": [receipt["locator"] for receipt in receipts if receipt["interrupted"]],
+    }
+
+
+def reconcile_activation(activation: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
+    """Correlate each activated distribution with an acquired payload, consulting recorded unknowns.
+
+    A receipt that RECORDS an unknown about ``archive_sha256`` has already said its own payload
+    identity was not observed, so this reader may not then treat that digest as a fact: the
+    correlation is unknown, not matched and not unmatched.
+    """
+    acquired = {
+        payload["archive_sha256"]
+        for payload in selection["payloads"]
+        if payload["acquired"] and payload["archive_sha256"]
+    }
+    unknown: list[str] = []
+    unmatched: list[str] = []
+    matched: list[str] = []
+    for receipt in activation["receipts"]:
+        if receipt["state"] != "validated" or receipt["terminal_phase"] not in ACTIVE_TERMINAL_PHASES:
+            continue
+        if "archive_sha256" in receipt["unknown_subjects"] or not receipt["archive_sha256"]:
+            unknown.append(receipt["locator"])
+        elif receipt["archive_sha256"] in acquired:
+            matched.append(receipt["locator"])
+        else:
+            unmatched.append(receipt["locator"])
+    selected = selection["versions"]
+    activated = activation["activated_versions"]
+    if not activated or not selected:
+        delta = "unknown"
+    elif set(activated) == set(selected):
+        delta = "same"
+    else:
+        delta = "different"
+    return {
+        "matched": sorted(matched),
+        "unknown": sorted(unknown),
+        "unmatched": sorted(unmatched),
+        "selected_versions": selected,
+        "activated_versions": activated,
+        "version_delta": delta,
+    }
+
+
+def observe_host_compatibility(
+    contract: dict[str, Any], observed_host_version: str | None = None
+) -> dict[str, Any]:
+    """Compare the contract's DECLARED incompatibilities against the observed host.
+
+    No version arithmetic happens here.  ``minimum_host_version`` is declared eligibility-only, and
+    ordering two version strings requires a scheme this reader would have to invent, so the only
+    verdict taken is exact membership in the declared-incompatible list.  The host version itself is
+    not observable by a read-only command -- it requires executing the host -- so it is unknown with
+    that reason unless a caller supplies an already-observed value.
+    """
+    compatibility = contract.get("compatibility")
+    core = compatibility.get("core") if isinstance(compatibility, dict) else None
+    declared = compatibility.get("known_incompatible_host_versions") if isinstance(compatibility, dict) else None
+    if not isinstance(core, dict) or not isinstance(declared, list):
+        return {
+            "state": "unknown",
+            "host": None,
+            "minimum_host_version": None,
+            "observed_host_version": None,
+            "reason": "the release contract declares no compatibility surface",
+            "declared_incompatible": [],
+        }
+    incompatible = sorted({value for value in declared if isinstance(value, str) and value})
+    supplied = safe_version(observed_host_version)
+    if observed_host_version is None:
+        state, reason = "unknown", (
+            "the host version is not observable by a read-only command: reading it means executing "
+            "the host, which this reader never does"
+        )
+    elif supplied is None:
+        state, reason = "unknown", "the supplied host version is not an admissible version string"
+    elif supplied in incompatible:
+        state, reason = "declared-incompatible", (
+            f"the release contract declares host version {supplied} incompatible"
+        )
+    else:
+        state, reason = "not-declared-incompatible", (
+            "the observed host version is not on the declared-incompatible list; the declared "
+            "minimum is eligibility only and is not decided here"
+        )
+    return {
+        "state": state,
+        "host": core.get("host") if isinstance(core.get("host"), str) else None,
+        "minimum_host_version": safe_version(core.get("minimum_host_version")),
+        "observed_host_version": supplied,
+        "reason": reason,
+        "declared_incompatible": incompatible,
+    }
+
+
+def observe_readiness(
+    contract: dict[str, Any],
+    *,
+    acquisition_receipts: Path,
+    activation_receipts: Path,
+    validator: ModuleType | None,
+    validator_reason: str | None,
+    observed_host_version: str | None = None,
+    read_document: Any = read_plane_document,
+) -> dict[str, Any]:
+    """One read-only host-level readiness observation. Every location above is a parameter."""
+    selection = observe_selected_payload(acquisition_receipts, read_document)
+    activation = observe_activation(activation_receipts, validator, validator_reason, read_document)
+    return {
+        "activation": activation,
+        "compatibility": observe_host_compatibility(contract, observed_host_version),
+        "reconciliation": reconcile_activation(activation, selection),
+        "selection": selection,
+    }
+
+
+def reason_code(reason: str) -> str:
+    """Map one named read failure onto the report's closed code set by exact reason identity."""
+    if reason == PLANE_SYMLINK_REASON:
+        return "state-symlinked"
+    if reason == PLANE_OVERFULL_REASON:
+        return "state-ambiguous"
+    return "state-unreadable"
+
+
+def readiness_finding(code: str, message: str, locator: str) -> dict[str, str]:
+    return {"code": code, "component": "checkout", "message": bounded_message(message), "path": locator}
+
+
+def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
+    """Project the readiness observation onto the report's CLOSED finding vocabulary.
+
+    Only a state the v1 vocabulary can name honestly becomes a finding.  An absent plane, an
+    unknown host version, and an activated version that differs from the selected payload are
+    dimension VALUES, not defects, and this reader does not borrow a defect code to state one: the
+    report policy carries no `distribution` dimension and no code for a version delta, and widening
+    a byte-pinned policy is not this surface's authority.
+    """
+    findings: list[dict[str, str]] = []
+    activation = readiness["activation"]
+    selection = readiness["selection"]
+    for prefix, plane in (("activation-plane", activation), ("acquisition-plane", selection)):
+        reason = plane["listing_reason"]
+        if reason is not None and reason != "absent":
+            findings.append(
+                readiness_finding(
+                    reason_code(reason),
+                    f"the {prefix.replace('-', ' ')} directory {reason}",
+                    f"{prefix}://receipts",
+                )
+            )
+        for item in plane["unreadable"]:
+            findings.append(
+                readiness_finding(
+                    reason_code(item["reason"]),
+                    f"a recorded {prefix.split('-')[0]} document {item['reason']}",
+                    item["locator"],
+                )
+            )
+    for receipt in activation["receipts"]:
+        if receipt["state"] == "invalid":
+            findings.append(
+                readiness_finding(
+                    "state-malformed",
+                    "the recorded distribution-activation receipt did not validate: "
+                    f"{receipt['reason']}",
+                    receipt["locator"],
+                )
+            )
+        elif receipt["state"] == "unassessed":
+            findings.append(
+                readiness_finding(
+                    "state-ambiguous",
+                    f"the recorded distribution-activation receipt was not assessed: {receipt['reason']}",
+                    receipt["locator"],
+                )
+            )
+        if receipt["interrupted"]:
+            findings.append(
+                readiness_finding(
+                    "pending-recovery",
+                    "the recorded distribution-activation transition did not complete "
+                    f"(effect {receipt['effect_state']}, phase {receipt['terminal_phase']})",
+                    receipt["locator"],
+                )
+            )
+    if len(activation["activated_versions"]) > 1:
+        findings.append(
+            readiness_finding(
+                "state-ambiguous",
+                "the activation plane records more than one activated version: "
+                + ", ".join(activation["activated_versions"]),
+                "activation-plane://receipts",
+            )
+        )
+    for locator in activation["unversioned_activations"]:
+        findings.append(
+            readiness_finding(
+                "state-ambiguous",
+                "the recorded activation states no version from a source that read it back",
+                locator,
+            )
+        )
+    reconciliation = readiness["reconciliation"]
+    for locator in reconciliation["unknown"]:
+        findings.append(
+            readiness_finding(
+                "state-ambiguous",
+                "the recorded activation names no observed payload digest, so which acquired "
+                "payload is activated cannot be determined here",
+                locator,
+            )
+        )
+    for locator in reconciliation["unmatched"]:
+        findings.append(
+            readiness_finding(
+                "state-ambiguous",
+                "the activated distribution matches no acquired payload on this host, so its "
+                "version cannot be corroborated here",
+                locator,
+            )
+        )
+    compatibility = readiness["compatibility"]
+    if compatibility["state"] == "declared-incompatible":
+        findings.append(
+            readiness_finding(
+                "state-unsupported",
+                compatibility["reason"],
+                "release-contract://compatibility/known_incompatible_host_versions",
+            )
+        )
+    return findings
+
+
+def observe_host_readiness(
+    contract: dict[str, Any], adapters: tuple[ModuleType, ModuleType, ModuleType]
+) -> dict[str, Any]:
+    """Resolve this host's two lifecycle planes and observe them, reusing the guarded adapters.
+
+    The planes live under the operator's own XDG state root beside the ownership documents the
+    projections already read (spec Decision 11), and the acquisition layout is the one
+    ``release_candidate_acquisition`` writes.  Resolution is separated from observation so a test
+    can hand ``observe_readiness`` its own directories.
+    """
+    guard, operator_tools, _bundle = adapters
+    state_root = operator_tools.state_root_for(operator_tools.absolute(Path.home()))
+    plane = state_root / STATE_PLANE_DIRECTORY
+    validator, validator_reason = load_activation_validator(Path(__file__), guard)
+    return observe_readiness(
+        contract,
+        acquisition_receipts=plane.joinpath(*ACQUISITION_PLANE),
+        activation_receipts=plane.joinpath(*ACTIVATION_PLANE),
+        validator=validator,
+        validator_reason=validator_reason,
+    )
+
+
+def load_read_only_adapters() -> tuple[ModuleType, ModuleType, ModuleType]:
+    """Install the process guard once and load the two ownership adapters by absolute path.
+
+    Extracted so the ownership projections and the readiness observation share ONE guarded load:
+    installing the guard twice would nest its wrappers, and loading the adapters twice would give
+    two module objects whose blocked-mutator state is separately owned.
+    """
     script_path = Path(__file__)
     guard = load_guard(script_path)
     guard.install()
     operator_tools = guard.load_sibling(script_path, "install_operator_tools")
     bundle = guard.load_sibling(script_path, "install_skill_bundle")
     guard.block_lifecycle_mutators(operator_tools, bundle)
+    return guard, operator_tools, bundle
+
+
+def observe_projections(
+    root: Path, adapters: tuple[ModuleType, ModuleType, ModuleType] | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    _guard, operator_tools, bundle = adapters if adapters is not None else load_read_only_adapters()
 
     home = operator_tools.absolute(Path.home())
     state_root = operator_tools.state_root_for(home)
@@ -773,7 +1471,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(canonical_json(observation))
             return 0
         policy = load_policy(root)
-        checkout = load_checkout(root)
+        contract = load_release_contract(root)
+        checkout = checkout_identity(contract)
         admitted, runtime, reason = runtime_admission()
         if not admitted:
             report = make_report(
@@ -789,7 +1488,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             emit(report, json_output)
             return 3
-        operator_tools, bundle = observe_projections(root)
+        adapters = load_read_only_adapters()
+        operator_tools, bundle = observe_projections(root, adapters)
+        # The host-level readiness dimensions are read for every reader verb rather than for
+        # `doctor` alone: the four verbs render ONE semantic report, and a verb that hid a
+        # malformed activation receipt the neighbouring verb reported would make `inspect --json`
+        # a differently-shaped truth about the same host.
+        readiness = observe_host_readiness(contract, adapters)
         report = make_report(
             policy,
             command,
@@ -798,7 +1503,7 @@ def main(argv: list[str] | None = None) -> int:
             runtime,
             operator_tools,
             bundle,
-            [],
+            readiness_findings(readiness),
             exit_class="ok",
         )
         emit(report, json_output)
