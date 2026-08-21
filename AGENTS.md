@@ -260,8 +260,8 @@ model selection as policy.
   `launch` still refuses (exit 3) when the route would not actually be used: a provider-routing key
   (`CLAUDE_CODE_USE_BEDROCK`-class, exported or in a persistent settings `env`), an
   `apiKeyHelper`, an `sk-ant-api*` Console key, a cloud-provider-shaped model id (Bedrock or
-  Vertex form) in `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL`, or
-  an explicit `--settings` value that is uncheckable
+  Vertex form) in `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU,FABLE}_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+  or `ANTHROPIC_MODEL`, or an explicit `--settings` value that is uncheckable
   or carries the same blocker — the provider switch bypasses the gateway entirely, the Console
   key takes the same native branch but bills API credits, and a cloud-provider id in a model slot
   re-points that model family to the gateway's default provider instead of Anthropic (a plain
@@ -355,7 +355,8 @@ Mutating global Claude settings still requires explicit operation-specific appro
 does it: the global file is read, never written, copied, or linked. `ccodex launch` refuses (exit 3)
 rather than editing anything when a persistent or explicit settings document would defeat the route
 — a provider-routing switch in `env`, an `apiKeyHelper`, an `sk-ant-api*` Console key, or a
-cloud-provider-shaped model id in a default/small-fast model slot. Explicit
+cloud-provider-shaped model id in a model slot — `ANTHROPIC_MODEL`, an `ANTHROPIC_DEFAULT_*_MODEL`
+tier slot, or `ANTHROPIC_SMALL_FAST_MODEL`. Explicit
 `--settings` values must be one JSON object or a readable file containing one; every occurrence is
 inspected before gateway startup and accepted argv is forwarded unchanged. An `sk-ant-oat*` login
 is accepted wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares

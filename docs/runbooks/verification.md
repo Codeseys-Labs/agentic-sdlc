@@ -132,8 +132,11 @@ private `~/.codex`, using the operator's own `~/.claude` login for the native ha
 **`ccodex status`'s provider table and its honesty lines.** `status` prints gateway supervision
 state, the configured-provider table, a configured-vs-live comparison, and a route-reachability
 line that is `ok`, `BYPASSED` (something in the environment or settings would route around the
-gateway even if it were up), `MISBILLED` (an `sk-ant-api*` Console key would take the native
-branch but bill API credits), or `UNKNOWN` (a settings document it could not read); the separate
+gateway even if it were up), `MISROUTED` (a model slot exported in this shell — `ANTHROPIC_MODEL`,
+an `ANTHROPIC_DEFAULT_*_MODEL` tier slot, or `ANTHROPIC_SMALL_FAST_MODEL` — holds a
+cloud-provider-shaped id, so that family would be served by the DEFAULT provider instead of
+Anthropic), `MISBILLED` (an `sk-ant-api*` Console key would take the native branch but bill API
+credits), or `UNKNOWN` (a settings document it could not read); the separate
 supervision line above it is `healthy`, `HALF-UP`, or `DOWN`. `status` never asserts liveness it
 cannot verify — a `DOWN` gateway is reported as down, not guessed at. Captured live on the operator host today, with `CLAUDE_CODE_USE_BEDROCK` exported in
 this shell:

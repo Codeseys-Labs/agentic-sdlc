@@ -223,11 +223,13 @@ Refused (exit 3) when the route would not actually be used:
     settings `env` block (an exported one is PRESERVED into the session; a settings one REPLACES
     what this route sets -- both measured),
   * a cloud-provider model id in ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL or ANTHROPIC_SMALL_FAST_MODEL, exported or in a settings `env`
-    block: a Bedrock region or `anthropic.` publisher prefix, or a Vertex publisher path or
-    @<date> suffix. That slot picks which id serves a whole model family, so the gateway serves
-    that family from the DEFAULT provider instead of Anthropic (executed 2026-08-20: the session
-    400d). A plain claude-* alias is fine, and so is a gateway id such as muse/muse-spark-1.2,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_FABLE_MODEL, ANTHROPIC_SMALL_FAST_MODEL, or
+    ANTHROPIC_MODEL, exported or in a settings `env` block: a Bedrock region or `anthropic.`
+    publisher prefix, or a Vertex publisher path or @<date> suffix (leading/trailing whitespace
+    around the id does not defeat this check). That slot picks which id serves a whole model
+    family, so the gateway serves that family from the DEFAULT provider instead of Anthropic
+    (executed 2026-08-20: the session 400d). A plain claude-* alias is fine, and so is a gateway id
+    such as muse/muse-spark-1.2,
   * an apiKeyHelper, or an sk-ant-api* Console key in ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (it
     takes the same native branch but bills API credits, not your subscription),
   * any explicit --settings value that is empty, not one JSON object or a readable file containing
@@ -687,7 +689,8 @@ ensure_gateway_up() {
 #      (hasAnthropicNativeCredential in server/claude-messages.ts), so it takes the SAME
 #      native branch and bills API credits while looking like subscription traffic. The
 #      prefix is the only thing separating the two.
-#   5. A cloud-provider-shaped id in one of the four default/small-fast MODEL SLOTS re-points a
+#   5. A cloud-provider-shaped id in one of the six MODEL SLOTS -- `ANTHROPIC_MODEL`, an
+#      `ANTHROPIC_DEFAULT_*_MODEL` tier slot, or `ANTHROPIC_SMALL_FAST_MODEL` -- re-points a
 #      whole model family without touching any switch above: EXECUTED 2026-08-20 with
 #      CLAUDE_CODE_USE_BEDROCK unset and ANTHROPIC_DEFAULT_SONNET_MODEL exporting
 #      `global.anthropic.claude-sonnet-5[1m]`, `launch` proceeded and the session 400d at the Codex
@@ -746,7 +749,7 @@ routing_endpoint_slots=(
 # variable plus ANTHROPIC_AUTH_TOKEN), so it does not defeat this route and refusing it would be a
 # false positive.
 
-# A THIRD CLASS, and neither a boolean nor an endpoint: these four carry a MODEL ID, and they
+# A THIRD CLASS, and neither a boolean nor an endpoint: these six carry a MODEL ID, and they
 # choose which id serves a whole model family for the session.
 #
 # EXECUTED 2026-08-20, which is why this is a refusal rather than a note. With
@@ -764,11 +767,18 @@ routing_endpoint_slots=(
 # names none of these variables.
 #
 # A MODEL ID IS NOT A CREDENTIAL. Unlike a base URL, a token, or a settings path, these refusals
-# may NAME the value: hiding it would leave the operator guessing which of four slots to fix, and
+# may NAME the value: hiding it would leave the operator guessing which of six slots to fix, and
 # there is nothing secret in `us.anthropic.claude-opus-4-5-v1:0`.
+#
+# ANTHROPIC_MODEL and ANTHROPIC_DEFAULT_FABLE_MODEL joined the four above once MEASURED, not on a
+# guess: `skills/model-tier-rightsizing/references/workflow-prompt-budget.md` records
+# `effectiveModelEnv()` (`src/claude/context-windows.ts`) injecting `ANTHROPIC_MODEL` and
+# `ANTHROPIC_DEFAULT_OPUS/SONNET/FABLE/HAIKU_MODEL` as the SAME tier-slot set -- so both are the
+# identical hazard class as the original four and a cloud-shaped id in either re-points that
+# family exactly as it would in ANTHROPIC_DEFAULT_SONNET_MODEL.
 model_slot_overrides=(
   ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL
-  ANTHROPIC_SMALL_FAST_MODEL
+  ANTHROPIC_DEFAULT_FABLE_MODEL ANTHROPIC_SMALL_FAST_MODEL ANTHROPIC_MODEL
 )
 # ONE pattern for BOTH channels, on the same rule as $loopback_base_url_pattern above: bash `=~`
 # here and jq's `test()` in the settings program must not be able to disagree about which id is
@@ -784,10 +794,27 @@ model_slot_overrides=(
 # them, and neither does a gateway id such as `muse/muse-spark-1.2`; both stay fine, because a
 # routed id in the small-fast slot is a legitimate use of this route.
 #
-# RESIDUAL, stated rather than hidden: `ANTHROPIC_MODEL` is the same class of hazard and is NOT in
-# the list. It was not part of the executed failure above, nothing here has measured it, and this
-# file does not refuse on an unmeasured guess -- so its coverage is not claimed either.
+# TRIMMED before either engine tests the shape. MEASURED: with a single leading space,
+# `ANTHROPIC_DEFAULT_SONNET_MODEL=' global.anthropic.claude-sonnet-5[1m]'` launched clean, because
+# every `^`-anchored alternative in the pattern above anchors immediately and a leading space
+# defeats it while the id is still, in every way that matters to the upstream, the same
+# cloud-provider id. Leading AND trailing whitespace are stripped -- trailing matters too, because
+# the last alternative anchors on `$` -- and ONLY whitespace is stripped: internal spelling is
+# untouched, so a genuinely malformed id (one with embedded whitespace) still fails to match and
+# is treated as an ordinary, non-cloud-shaped value rather than papered over.
 cloud_provider_model_id_pattern='^(global|us|eu|apac|us-gov-west-1|us-gov-east-1)\.anthropic\.|^anthropic\.claude|^publishers/anthropic/|^projects/[^/]+/locations/|@[0-9]{8}$'
+
+# ONE trim for BOTH engines, on the same rule as $cloud_provider_model_id_pattern above: bash
+# stripping leading/trailing whitespace one way while jq's `sub()` strips it another would let the
+# two channels disagree about the same exported-vs-settings value. Bash's own parameter-expansion
+# idiom (POSIX `[:space:]`, no subprocess) on this side; `sub("^\\s+";"")`/`sub("\\s+$";"")` on the
+# jq side below -- both remove ONLY leading/trailing runs, never anything internal.
+trim_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
 
 # Truthiness for the boolean switches only. Case- and whitespace-insensitive so ` False ` is not
 # read as enabled. Non-boolean slots never reach this function.
@@ -884,11 +911,16 @@ gateway_bypassing_env_name() {
 # routing switch means the gateway is not in the path at all, while this means the gateway IS in
 # the path and will serve those slots from the wrong upstream.
 cloud_shaped_model_slot_env() {
-  local name value
+  local name value trimmed
   for name in "${model_slot_overrides[@]}"; do
     value="${!name:-}"
     [ -n "$value" ] || continue
-    if [[ "$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$value")" =~ $cloud_provider_model_id_pattern ]]; then
+    # $value is what the refusal PRINTS (verbatim, including any stray whitespace, because that is
+    # what the operator actually exported); $trimmed is what the SHAPE is tested against, so a
+    # leading or trailing space cannot slip an otherwise cloud-shaped id past the anchored pattern.
+    trimmed="$(trim_whitespace "$value")"
+    [ -n "$trimmed" ] || continue
+    if [[ "$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$trimmed")" =~ $cloud_provider_model_id_pattern ]]; then
       printf '%s\t%s' "$name" "$value"
       return 0
     fi
@@ -1015,7 +1047,14 @@ settings_bypass_classification() {
     # shell variable: the settings refusal names the variable and the shape family rather than
     # quoting the value, which is also why the exported channel -- the one that does hold the
     # value -- is the channel that prints it.
-    | ($models | map(select(slot(.) | ascii_downcase | test($cloudmodel)))) as $model_slots
+    #
+    # TRIMMED first, on the same rule trim_whitespace applies to the exported channel: a leading or
+    # trailing space in the value a settings document carries must not be able to slip the
+    # ^/$-anchored pattern any more than the same space in the shell can. Only leading/trailing
+    # whitespace is removed; internal spelling still reaches test($cloudmodel) unmodified.
+    | ($models | map(select(
+        slot(.) | sub("^\\s+"; "") | sub("\\s+$"; "") | ascii_downcase | test($cloudmodel)
+      ))) as $model_slots
     | (if (.apiKeyHelper // null) != null then ["apiKeyHelper"] else [] end) as $helper
     | ($switches + $endpoints + $base + $model_slots + $console + $helper) | first // "clean"
   '
@@ -1167,7 +1206,7 @@ settings_argument_refusal() {
       refuse "$label sets $offending to an sk-ant-api* Console key, which takes the same native passthrough branch and bills API credits rather than your subscription" ;;
     ANTHROPIC_BASE_URL)
       refuse "$label sets ANTHROPIC_BASE_URL in its \`env\` block to an address that is not this host's loopback gateway, and that value REPLACES the one this launch sets, so the session would talk to it instead of the gateway" ;;
-    ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_SMALL_FAST_MODEL)
+    ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_DEFAULT_FABLE_MODEL|ANTHROPIC_SMALL_FAST_MODEL|ANTHROPIC_MODEL)
       refuse "$label sets $offending in its \`env\` block to a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)" ;;
     *)
       refuse "$label carries $offending, which routes Claude Code to a cloud provider and bypasses this gateway" ;;
@@ -1261,7 +1300,7 @@ assert_gateway_route_is_effective() {
         # child process environment, so this address wins and the gateway is never contacted. The
         # value is never printed -- a base URL can carry userinfo credentials.
         refuse "$document sets ANTHROPIC_BASE_URL in its \`env\` block to an address that is not this host's loopback gateway, and that value REPLACES the one this launch sets, so the session would talk to it instead of the gateway; remove the key, or set it to http://127.0.0.1:<the port \`ccodex status\` reports>" ;;
-      ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_SMALL_FAST_MODEL)
+      ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_DEFAULT_FABLE_MODEL|ANTHROPIC_SMALL_FAST_MODEL|ANTHROPIC_MODEL)
         refuse "$document sets $offending in its \`env\` block to a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)" ;;
       *)
         refuse "$document carries $offending, which routes Claude Code to a cloud provider and bypasses this gateway; move it to a per-command wrapper instead of a settings document Claude Code reads on every launch" ;;

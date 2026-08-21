@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
+import re
 import unittest
 
 
@@ -44,20 +46,72 @@ CLAIM_VALIDATE_BUNDLE_ERRORS_ONLY_EXIT = (
 )
 
 # docs/runbooks/verification.md, section 3 ("`ccodex status`'s provider table and its honesty
-# lines"), the route-reachability sentence; scripts/opencodex-claude.sh cmd_status's four
+# lines"), the route-reachability sentence; scripts/opencodex-claude.sh cmd_status's five
 # route-reachability printf lines.
 CLAIM_OPENCODEX_ROUTE_TOKENS = (
     "a route-reachability line that is `ok`, `BYPASSED` (something in the environment or"
-    " settings would route around the gateway even if it were up), `MISBILLED` (an"
+    " settings would route around the gateway even if it were up), `MISROUTED` (a model slot"
+    " exported in this shell — `ANTHROPIC_MODEL`, an `ANTHROPIC_DEFAULT_*_MODEL` tier slot, or"
+    " `ANTHROPIC_SMALL_FAST_MODEL` — holds a cloud-provider-shaped id, so that family would be"
+    " served by the DEFAULT provider instead of Anthropic), `MISBILLED` (an"
     " `sk-ant-api*` Console key would take the native branch but bill API credits), or"
     " `UNKNOWN` (a settings document it could not read)",
     (
         r'''printf '  ok      : nothing exported in this shell, and no key in the documents below, outranks\n' ''',
         r'''printf '  BYPASSED: %s is exported; a launch would reach a cloud provider, not this gateway\n' "$blocker"''',
+        r'''printf '  MISROUTED: %s is exported as %s, a cloud-provider model id; a launch refuses --\n' "$blocker" "$slot_value"''',
         r'''printf '  MISBILLED: %s holds an sk-ant-api* Console key; native turns would bill credits\n' "$blocker"''',
         r'''printf '  UNKNOWN : %s could not be checked (%s); a launch refuses rather than assume it is clean\n' "$document" "${blocker#unreadable:}"''',
     ),
 )
+
+# TOKEN EXHAUSTIVENESS for the same claim, added because assert_claim above only checks PRESENCE:
+# the runbook could state a subset of what cmd_status's route-reachability block actually prints,
+# or a superset, and assert_claim would still pass either way. This pair of helpers extracts each
+# side of the SAME comparison independently of CLAIM_OPENCODEX_ROUTE_TOKENS, straight from the
+# runbook's own sentence and the script's own printf lines, so the exhaustiveness check in
+# test_opencodex_route_reachability_tokens_are_exhaustive below does not just re-derive from the
+# constant its sibling test already checked -- that would let the two sides of the SAME drift move
+# together silently. Adding a sixth outcome to cmd_status without documenting it in the runbook
+# sentence -- or documenting one there that the live block no longer prints -- fails this test.
+_ROUTE_LABEL_PATTERN = re.compile(r"printf '  ([A-Za-z][A-Za-z-]*)\s*:")
+
+
+def _live_route_reachability_labels() -> frozenset[str]:
+    source = OPENCODEX_CLAUDE_SH.read_text(encoding="utf-8")
+    start = source.index("== gateway route reachability ==")
+    end = source.index("== attribution log stream ==", start)
+    return frozenset(_ROUTE_LABEL_PATTERN.findall(source[start:end]))
+
+
+def _documented_route_reachability_labels() -> frozenset[str]:
+    """The runbook's own top-level backtick tokens for this sentence, PAREN DEPTH aware.
+
+    `MISBILLED`'s own parenthetical names `` `sk-ant-api*` `` as part of its explanation, so a
+    naive "every backtick span in the sentence" extraction would return that shape fragment as a
+    sixth route label. Tracking paren depth and only collecting a backtick span at depth 0 is what
+    keeps that nested example out of the documented SET without hand-listing which spans to skip.
+    """
+    text = _normalize(RUNBOOK.read_text(encoding="utf-8"))
+    start = text.index("a route-reachability line that is")
+    end = text.index("; the separate supervision line", start)
+    sentence = text[start:end]
+    tokens: list[str] = []
+    depth = 0
+    index = 0
+    while index < len(sentence):
+        character = sentence[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif character == "`" and depth == 0:
+            close = sentence.index("`", index + 1)
+            tokens.append(sentence[index + 1 : close])
+            index = close
+        index += 1
+    return frozenset(tokens)
+
 
 # Same runbook sentence, its supervision-line half; cmd_status's three `state` printf lines.
 CLAIM_OPENCODEX_SUPERVISION_TOKENS = (
@@ -89,6 +143,49 @@ CLAIM_BUNDLE_STATUS_OK_CONFLICT_ABSENT = (
     "`N ok, M conflict, K absent`",
     r'''return f"{counts['ok']} ok, {counts['conflict']} conflict, {counts['absent']} absent"''',
 )
+
+# SNAPSHOT taken here, after every CLAIM_* constant above and before the class body, so it can
+# never see a name a test method or helper defines later. This is the coverage guard's other half
+# (see test_every_claim_constant_is_exercised_by_exactly_one_test_method): deleting one CLAIM_*
+# constant and its one test method together leaves every REMAINING per-claim check green, because
+# the deleted claim simply is not iterated any more. A per-name check alone cannot see a claim that
+# no longer exists, so the total COUNT is pinned as a literal a silent deletion has to walk through
+# rather than being caught in passing. Adding or removing a claim means updating this number in the
+# same change -- which is the point: the update itself is the record that the change was deliberate.
+_CLAIM_NAMES = tuple(sorted(name for name in globals() if name.startswith("CLAIM_")))
+
+
+def _assert_claim_call_sites() -> dict[str, list[str]]:
+    """Map each name in _CLAIM_NAMES to the test methods whose body calls
+    `self.assert_claim(<that name>, ...)` with it as the literal first argument.
+
+    AST-based rather than a source-text/regex search: a test that merely READS a CLAIM_* constant
+    for some other purpose (as test_opencodex_route_reachability_tokens_are_exhaustive would, had
+    it reused CLAIM_OPENCODEX_ROUTE_TOKENS instead of re-deriving both of its sides independently)
+    must not count as "exercising" it here -- only an actual assert_claim call does, which is the
+    one place a claim's fragment-and-pattern pair is genuinely checked.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"), filename=str(Path(__file__)))
+    (class_def,) = (
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "VerificationRunbookContractTests"
+    )
+    call_sites: dict[str, list[str]] = {name: [] for name in _CLAIM_NAMES}
+    for member in class_def.body:
+        if not (isinstance(member, ast.FunctionDef) and member.name.startswith("test_")):
+            continue
+        for node in ast.walk(member):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "assert_claim"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in call_sites
+            ):
+                call_sites[node.args[0].id].append(member.name)
+    return call_sites
 
 
 class VerificationRunbookContractTests(unittest.TestCase):
@@ -128,6 +225,26 @@ class VerificationRunbookContractTests(unittest.TestCase):
     def test_opencodex_route_reachability_tokens(self) -> None:
         self.assert_claim(CLAIM_OPENCODEX_ROUTE_TOKENS, OPENCODEX_CLAUDE_SH)
 
+    def test_opencodex_route_reachability_tokens_are_exhaustive(self) -> None:
+        # The presence check above passes on a documented SUBSET or SUPERSET of what cmd_status
+        # actually prints; this requires the two SETS to be equal. Both sides are derived
+        # independently of CLAIM_OPENCODEX_ROUTE_TOKENS and of each other -- see the two helpers'
+        # own docstrings -- so a real drift in either the runbook sentence or the script's printf
+        # lines fails here even if nobody remembered to touch the pattern tuple above.
+        documented = _documented_route_reachability_labels()
+        live = _live_route_reachability_labels()
+        # POSITIVE CONTROL: both extractions must find SOMETHING, or an anchor silently stopped
+        # matching (a renamed section heading, a reworded sentence) and an empty-vs-empty
+        # comparison would pass for the wrong reason.
+        self.assertTrue(documented, "no backtick route-reachability tokens found in the runbook")
+        self.assertTrue(live, "no printf route-reachability labels found in cmd_status")
+        self.assertEqual(
+            documented,
+            live,
+            "docs/runbooks/verification.md's route-reachability sentence and cmd_status's "
+            "route-reachability printf block name different outcome sets",
+        )
+
     def test_opencodex_supervision_tokens(self) -> None:
         self.assert_claim(CLAIM_OPENCODEX_SUPERVISION_TOKENS, OPENCODEX_CLAUDE_SH)
 
@@ -141,6 +258,32 @@ class VerificationRunbookContractTests(unittest.TestCase):
 
     def test_bundle_status_ok_conflict_absent_line(self) -> None:
         self.assert_claim(CLAIM_BUNDLE_STATUS_OK_CONFLICT_ABSENT, INSTALL_SKILL_BUNDLE_PY)
+
+    def test_every_claim_constant_is_exercised_by_exactly_one_test_method(self) -> None:
+        # Deleting one CLAIM_* constant AND its one test method together leaves every REMAINING
+        # per-claim test green -- "Ran 6" instead of "Ran 7", with no failure naming what shrank.
+        # The pinned count below is what makes that shrink loud: it has to be bumped in the SAME
+        # change that adds or removes a claim, and bumping it is the record that the change was
+        # deliberate rather than an accident this suite stayed silent about.
+        self.assertEqual(
+            len(_CLAIM_NAMES),
+            7,
+            "a CLAIM_* constant was added or removed without updating this pinned count "
+            f"(current constants: {list(_CLAIM_NAMES)!r})",
+        )
+        # The complementary half: an EXISTING claim that lost its one assert_claim call (or picked
+        # up a second, redundant one) without the constant itself disappearing, which the count
+        # above cannot see because the name is still there.
+        call_sites = _assert_claim_call_sites()
+        for claim_name in _CLAIM_NAMES:
+            with self.subTest(claim=claim_name):
+                methods = call_sites[claim_name]
+                self.assertEqual(
+                    len(methods),
+                    1,
+                    f"{claim_name} must be checked by exactly one assert_claim call, found in: "
+                    f"{methods!r}",
+                )
 
 
 if __name__ == "__main__":

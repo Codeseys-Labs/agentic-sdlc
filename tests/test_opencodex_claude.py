@@ -1129,7 +1129,13 @@ class OpenCodexClaudeTests(unittest.TestCase):
         "ANTHROPIC_DEFAULT_SONNET_MODEL",
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        # RESIDUAL from the 8b1e1ba fix, now closed: `skills/model-tier-rightsizing/references/`
+        # `workflow-prompt-budget.md` records `effectiveModelEnv()` injecting these two into the
+        # SAME tier-slot set as the original four, so a cloud-shaped id in either is the identical
+        # hazard -- it re-points a whole model family without touching any switch above.
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
         "ANTHROPIC_SMALL_FAST_MODEL",
+        "ANTHROPIC_MODEL",
     )
     # The shape families the refusal knows: region-prefixed Bedrock inference profiles, the bare
     # Bedrock publisher form, and the two Vertex spellings.
@@ -1142,7 +1148,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
         "publishers/anthropic/models/claude-opus-4",
     )
     # THE POSITIVE CONTROL, and the reason this is a shape test rather than a presence test: these
-    # are the ordinary values of the same four variables. A plain alias is what the native half of
+    # are the ordinary values of the same six variables. A plain alias is what the native half of
     # this route serves, and a gateway id in the small-fast slot is a legitimate use of the routed
     # half, so refusing either would break the launch this check exists to protect.
     PLAIN_MODEL_IDS = (
@@ -1153,7 +1159,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
     )
 
     def test_launch_refuses_a_cloud_shaped_model_slot_exported_in_this_shell(self) -> None:
-        # Every one of the four slots, on the id that was actually measured failing.
+        # Every one of the six slots, on the id that was actually measured failing.
         for name in self.MODEL_SLOT_OVERRIDES:
             value = "global.anthropic.claude-sonnet-5[1m]"
             with self.subTest(variable=name):
@@ -1162,7 +1168,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 3, result.stderr)
                 self.assertIn(name, result.stderr)
                 # A model id is not a credential, so unlike a base URL the value IS named -- with
-                # four slots to choose from, withholding it leaves the operator guessing.
+                # six slots to choose from, withholding it leaves the operator guessing.
                 self.assertIn(value, result.stderr)
                 # The refusal has to say WHY it is not a warning: the slot re-points an upstream.
                 self.assertIn("DEFAULT provider", result.stderr)
@@ -1253,6 +1259,65 @@ class OpenCodexClaudeTests(unittest.TestCase):
         # IN-TEST POSITIVE CONTROL for the same channel.
         result, log = self.run_launcher(
             "launch", global_settings={"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5"}}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    # RESIDUAL (1) from the 8b1e1ba fix: every alternative in $cloud_provider_model_id_pattern
+    # anchors on `^` or `$`, so a stray leading or trailing space around an otherwise cloud-shaped
+    # id slipped past both engines. MEASURED before the fix:
+    # `ANTHROPIC_DEFAULT_SONNET_MODEL=' global.anthropic.claude-sonnet-5[1m]'` (one leading space)
+    # launched clean.
+    PADDED_CLOUD_SHAPED_MODEL_IDS = (
+        " global.anthropic.claude-sonnet-5[1m]",
+        "global.anthropic.claude-sonnet-5[1m] ",
+        "  us.anthropic.claude-opus-4-5-v1:0  ",
+        "\tanthropic.claude-3-5-haiku-20241022-v1:0\t",
+        "claude-sonnet-5@20250101 ",
+    )
+
+    def test_launch_refuses_a_cloud_shaped_model_slot_padded_with_whitespace(self) -> None:
+        # Both engines -- bash `=~` for the exported channel, jq's `test()` for the settings
+        # channel -- must trim before they test the shape, or the same padded value refuses from
+        # one channel and passes silently from the other exactly the way the two channels drifted
+        # apart once already (see the "ONE list per class" comment above model_slot_overrides).
+        for value in self.PADDED_CLOUD_SHAPED_MODEL_IDS:
+            with self.subTest(channel="exported", value=repr(value)):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_DEFAULT_SONNET_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL", result.stderr)
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+            with self.subTest(channel="global settings", value=repr(value)):
+                result, log = self.run_launcher(
+                    "launch",
+                    global_settings={"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": value}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL", result.stderr)
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # POSITIVE CONTROL: the same padding around an ORDINARY alias must not become a false
+        # refusal. Trimming exists to widen the SHAPE match, not to introduce a side effect that
+        # starts refusing a padded plain value this route never refused before.
+        for value in (" claude-sonnet-5", "claude-sonnet-5 ", "  claude-sonnet-5  "):
+            with self.subTest(control="padded plain alias", channel="exported", value=repr(value)):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_DEFAULT_SONNET_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("<ocx><claude>", log.read_text())
+
+        result, log = self.run_launcher(
+            "launch",
+            global_settings={"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "  claude-sonnet-5  "}},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("<ocx><claude>", log.read_text())
@@ -1388,9 +1453,12 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertIn("every occurrence for route-bypassing settings", result.stdout)
         self.assertIn("bytes and path are never printed", result.stdout)
         # The refusal list is the operator-facing contract for this route, so a refusal the code
-        # performs and the help omits is a documentation defect, not a cosmetic gap.
+        # performs and the help omits is a documentation defect, not a cosmetic gap. Minor residual
+        # from the 8b1e1ba fix, closed: this one-line usage() mention had no dedicated assertion at
+        # all, and it now also states the trim behaviour rather than just the six variable names.
         for name in self.MODEL_SLOT_OVERRIDES:
             self.assertIn(name, result.stdout)
+        self.assertIn("does not defeat this check", result.stdout)
 
     def test_launch_help_calls_the_unrecognized_model_line_cosmetic_and_bounds_the_observe_log(
         self,
