@@ -59,6 +59,12 @@ MUTATING_MODULES = {
     "update": "ccodex_sdlc_update.py",
     "uninstall": "ccodex_sdlc_uninstall.py",
 }
+# The real checkout's per-verb module inventory, pinned explicitly: install and uninstall shipped
+# (agentic-sdlc-bfe9, agentic-sdlc-bbfe), update is the remaining separate ticket. The ticket that
+# lands ccodex_sdlc_update.py flips its entry here and re-points the real-checkout dispatch
+# assertions the same way bfe9/bbfe did. Absent-module refusals for every verb stay covered
+# forever through the shadow checkout, which plants its own modules.
+ABSENT_MODULES = ("update",)
 # The four reader usage lines, pinned as literals rather than derived from the function under test.
 # A refactor that reflows them is a change to a shipped grammar surface and must fail here.
 READER_USAGE_LINES = (
@@ -449,8 +455,17 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                 with self.subTest(verb=verb):
                     completed = self.run_dispatcher(dispatcher, environment, "sdlc", *vector)
                     self.assertEqual(completed.returncode, 3, completed.stderr)
-                    self.assertIn(f"ccodex sdlc {verb} is unavailable in this distribution", completed.stderr)
-                    self.assertIn(str(ROOT / "scripts" / MUTATING_MODULES[verb]), completed.stderr)
+                    if verb in ABSENT_MODULES:
+                        self.assertIn(
+                            f"ccodex sdlc {verb} is unavailable in this distribution", completed.stderr
+                        )
+                        self.assertIn(str(ROOT / "scripts" / MUTATING_MODULES[verb]), completed.stderr)
+                    else:
+                        # The shipped module itself refuses pre-effect, in its own name; the
+                        # loader's absence refusal appearing here would mean dispatch never
+                        # reached it.
+                        self.assertIn(f"error: ccodex sdlc {verb} ", completed.stderr)
+                        self.assertNotIn("is unavailable in this distribution", completed.stderr)
                     self.assertNotIn("Traceback", completed.stderr)
                     self.assertEqual(completed.stdout, "")
             # Positive control: the same dispatcher still serves a reader verb end to end.
@@ -528,11 +543,12 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                     self.assertIn("usage: ccodex sdlc", completed.stderr)
                     self.assertIn(fragment, completed.stderr)
             # Positive control: the one admitted spelling is NOT a grammar error. It reaches the
-            # module boundary and refuses there instead, which is what makes the exit-2s above
-            # attributable to the spelling rather than to the verb being unreachable.
+            # shipped install module and refuses there pre-effect, which is what makes the exit-2s
+            # above attributable to the spelling rather than to the verb being unreachable.
             admitted = self.run_dispatcher(dispatcher, environment, "sdlc", "install", "--host", "claude")
             self.assertEqual(admitted.returncode, 3, admitted.stderr)
-            self.assertIn("ccodex sdlc install is unavailable in this distribution", admitted.stderr)
+            self.assertIn("ccodex sdlc install refused before any effect", admitted.stderr)
+            self.assertNotIn("usage: ccodex sdlc", admitted.stderr)
             self.assertFalse(query_state.exists())
 
     def test_a_control_character_in_a_refused_argument_cannot_forge_an_output_line(self) -> None:
@@ -581,10 +597,17 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             with self.subTest(verb=verb):
                 path = reader.lifecycle_module_path(verb)
                 self.assertEqual(path, ROOT / "scripts" / module_name)
-                self.assertFalse(
-                    path.exists(),
-                    "this ticket extends the grammar only; the per-verb modules are separate tickets",
-                )
+                if verb in ABSENT_MODULES:
+                    self.assertFalse(
+                        path.exists(),
+                        "this verb's per-verb module is a separate, not-yet-landed ticket",
+                    )
+                else:
+                    self.assertTrue(
+                        path.exists(),
+                        "a shipped per-verb module went missing; dispatch would silently regress"
+                        " to the absence refusal",
+                    )
         self.assertEqual(sorted(reader.LIFECYCLE_VERBS), ["install", "uninstall", "update"])
         self.assertEqual(reader.LIFECYCLE_HOSTS, ("claude",))
 
