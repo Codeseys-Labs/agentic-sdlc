@@ -157,7 +157,7 @@ plane and blocks only direct Claude installation, so a selected Codex plane stil
 Without the trust step every later `mise` command in the repository exits with `config files are not trusted`. Resolving the lock downloads
 roughly 1.3 GB across the 12 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
 so skipping the explicit install step does not avoid the cost — the first `mise run <task>`
-installs all 12 without prompting. `mise run check` last measured 654 tests in 814s with
+installs all 12 without prompting. `mise run check` last measured 3308 tests in 913s with
 `OK (skipped=13)` on Linux, its `validate` and `secrets` leaves each under 2s, so budget about 15
 minutes and expect longer on a loaded host. Both figures go stale by design — the count grows
 with the suite and the clock varies by host — and the gate's verdict is the evidence.
