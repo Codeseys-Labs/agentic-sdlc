@@ -5,8 +5,14 @@ WHAT THIS MODULE IS FOR.  The per-verb modules -- ``test_ccodex_sdlc_install.py`
 Nothing proved that the FOUR verbs answer the operator with ONE exit vocabulary, that the same three
 operator-owned files survive every one of them, or that the words a lifecycle result prints never
 read as authorization.  This module is that cross-verb conformance suite.  It adds no production
-behaviour and it changes no production file: a conformance check that needed a production edit is
-recorded as a FINDING in this module's own prose instead of being fixed here.
+behaviour of its own.
+
+It was first landed with three checks PINNING defects it had found rather than asserting the honest
+behaviour, each named FINDING in its own prose.  All three are now fixed in production and the checks
+assert the honest behaviour: the retirement of an entry the activation recorded ``foreign``
+(agentic-sdlc-9b9a), the recovery of an interrupted transaction on a host that has filed a real
+activation receipt (agentic-sdlc-3bb8), and the exit class of an admitted partial retirement
+(agentic-sdlc-d7b3).  Each of those three checks names its seed and states what production does now.
 
 THE FIVE EXIT CLASSES, re-expressed from the shipped spec rather than imported from any module under
 test, so a table a module quietly renumbered fails here instead of agreeing with itself:
@@ -39,7 +45,8 @@ an admitted vector and shows it is neither exit 2 nor inert; a "no authorization
 also run over a fabricated authorizing line and shown to flag it; a "these bytes survived" assertion
 is paired with a run whose bytes the same comparison would have caught changing.
 
-FINDINGS this suite had to work around are recorded at the class that hit them, prefixed FINDING.
+A finding this suite cannot fix in production stays recorded at the class that hit it, prefixed
+FINDING, rather than being asserted as if it were the contract.
 """
 
 from __future__ import annotations
@@ -736,13 +743,13 @@ class SpecDecisionNineTest(Conformance):
             "update": (update_module.EXIT_OK, update_module.EXIT_REFUSED, update_module.EXIT_UNKNOWN),
             "uninstall": (
                 uninstall_module.EXIT_RETIRED,
-                uninstall_module.EXIT_ATTENTION,
+                uninstall_module.EXIT_PARTIAL,
                 uninstall_module.EXIT_REFUSED,
                 uninstall_module.EXIT_UNKNOWN,
             ),
             "recover": (
                 recover.EXIT_RECOVERED,
-                recover.EXIT_ATTENTION,
+                recover.EXIT_PARTIAL,
                 recover.EXIT_REFUSED,
                 recover.EXIT_UNKNOWN,
             ),
@@ -753,13 +760,24 @@ class SpecDecisionNineTest(Conformance):
                     self.assertIn(value, ADMITTED_EXIT_CLASSES)
         self.assertEqual((0, 3, 4), declared["install"])
         self.assertEqual((0, 3, 4), declared["update"])
-        # FINDING (exit-1-as-attention).  ``uninstall`` and ``recover`` spell exit 1 ``EXIT_ATTENTION``
-        # and return it for an outcome their OWN sealed receipt records as ``effect_state: partial``
-        # -- see ``UninstallAttentionFindingTest``.  Decision 9 assigns 1 to "unexpected internal
-        # failure" and 4 to "an admitted partial or unknown effect".  This assertion pins the
-        # divergence rather than hiding it: the value IS 1 today, and it is reported, not fixed here.
-        self.assertEqual((0, 1, 3, 4), declared["uninstall"])
-        self.assertEqual((0, 1, 3, 4), declared["recover"])
+        # The two verbs that can report an admitted PARTIAL effect name that class separately from an
+        # unknown one, and Decision 9 gives both the same class 4 -- so 4 appears twice and the set is
+        # the same {0, 3, 4} the other two verbs declare.  Neither may carry 1: exit 1 is "unexpected
+        # internal failure", and both of these outcomes are named, sealed, and expected
+        # (agentic-sdlc-d7b3).
+        self.assertEqual((0, 4, 3, 4), declared["uninstall"])
+        self.assertEqual((0, 4, 3, 4), declared["recover"])
+        for verb in ("install", "update", "uninstall", "recover"):
+            with self.subTest(verb=verb):
+                self.assertEqual({EXIT_OK, EXIT_REFUSED, EXIT_UNKNOWN}, set(declared[verb]))
+                self.assertNotIn(EXIT_INTERNAL, declared[verb])
+        # Positive control: the same attribute lookup that found no exit-1 constant on either module
+        # DOES find one where a module declares it, so the absence above is a fact about these tables.
+        self.assertFalse(hasattr(uninstall_module, "EXIT_ATTENTION"))
+        self.assertFalse(hasattr(recover, "EXIT_ATTENTION"))
+        gate_receipt = _load(ROOT / "scripts" / "gate_receipt.py", "exit_conformance_gate_receipt")
+        self.assertEqual(EXIT_INTERNAL, gate_receipt.EXIT_INTERNAL)
+        self.assertEqual(EXIT_UNKNOWN, gate_receipt.EXIT_PARTIAL)
 
 
 # ---- (1a) exit 2: the closed grammar matrix --------------------------------------------------------
@@ -1416,18 +1434,58 @@ class InternalFailureExitOneTest(Conformance):
                 self.assertEqual(EXIT_OK, control.returncode, control.stderr)
 
     def test_no_shipped_lifecycle_module_can_return_one_by_its_own_exit_table(self) -> None:
-        """``install`` and ``update`` declare no exit-1 constant at all; the other two do."""
+        """No mutating verb declares an exit-1 constant, so none of the four can return 1 by name.
+
+        ``uninstall`` and ``recover`` used to: they spelled exit 1 ``EXIT_ATTENTION`` and returned it
+        for an outcome their OWN sealed receipt records as an admitted effect (agentic-sdlc-d7b3).
+        Both now spell Decision 9's class 4 ``EXIT_PARTIAL``, which is the name the repository's other
+        effect-aware producers already use for it.
+        """
         install_module = _load(ROOT / "scripts" / "ccodex_sdlc_install.py", "exit_one_install")
         update_module = _load(ROOT / "scripts" / "ccodex_sdlc_update.py", "exit_one_update")
+        uninstall_module = _load(ROOT / "scripts" / "ccodex_sdlc_uninstall.py", "exit_one_uninstall")
         for module in (install_module, update_module):
             self.assertEqual({0, 3, 4}, {module.EXIT_OK, module.EXIT_REFUSED, module.EXIT_UNKNOWN})
-            self.assertFalse(hasattr(module, "EXIT_ATTENTION"), module.__name__)
-            self.assertFalse(hasattr(module, "EXIT_INTERNAL"), module.__name__)
-        # Positive control: the two verbs that DO declare an exit-1 constant are found by the same
-        # lookup, so the absence above is a fact about these modules.
-        uninstall_module = _load(ROOT / "scripts" / "ccodex_sdlc_uninstall.py", "exit_one_uninstall")
-        self.assertEqual(1, uninstall_module.EXIT_ATTENTION)
-        self.assertEqual(1, recover.EXIT_ATTENTION)
+        self.assertEqual(
+            {0, 3, 4},
+            {
+                uninstall_module.EXIT_RETIRED,
+                uninstall_module.EXIT_PARTIAL,
+                uninstall_module.EXIT_REFUSED,
+                uninstall_module.EXIT_UNKNOWN,
+            },
+        )
+        self.assertEqual(
+            {0, 3, 4},
+            {recover.EXIT_RECOVERED, recover.EXIT_PARTIAL, recover.EXIT_REFUSED, recover.EXIT_UNKNOWN},
+        )
+        for module in (install_module, update_module, uninstall_module, recover):
+            with self.subTest(module=module.__name__):
+                self.assertFalse(hasattr(module, "EXIT_ATTENTION"), module.__name__)
+                self.assertFalse(hasattr(module, "EXIT_INTERNAL"), module.__name__)
+                # No name on the module resolves to 1 at all, so the class cannot be reached by a
+                # differently-spelled constant either.
+                names = [
+                    name
+                    for name in dir(module)
+                    if name.startswith("EXIT_")
+                    and isinstance(getattr(module, name), int)
+                    and not isinstance(getattr(module, name), bool)
+                ]
+                self.assertNotEqual([], names, module.__name__)
+                for name in names:
+                    self.assertIn(getattr(module, name), (0, 3, 4), f"{module.__name__}.{name}")
+        # POSITIVE CONTROL: the identical ``EXIT_*`` scan DOES find an exit-1 constant on a shipped
+        # module that legitimately declares one -- the gate-receipt producer, whose 1 is a pre-effect
+        # internal failure -- so the absences above are facts about these four tables and not a scan
+        # that would pass over any module at all.
+        gate_receipt = _load(ROOT / "scripts" / "gate_receipt.py", "exit_one_gate_receipt")
+        found = [
+            name
+            for name in dir(gate_receipt)
+            if name.startswith("EXIT_") and getattr(gate_receipt, name) == EXIT_INTERNAL
+        ]
+        self.assertEqual(["EXIT_INTERNAL"], found)
 
 
 # ---- (2) foreign preservation, cross-verb ----------------------------------------------------------
@@ -1451,9 +1509,9 @@ class ForeignPreservationTest(Conformance):
     * PRECIOUS NON-INVENTORY -- a file no receipt inventory ever mentions.  No verb may touch it, and
       no verb may name it either: a blast radius that reaches it would show up as a name in a report.
 
-    FINDING (foreign-entry-removed-by-uninstall) is proved in
-    ``test_finding_uninstall_removes_the_entry_install_recorded_as_foreign``: the foreign file does
-    NOT survive ``uninstall``.  That test pins the observed removal rather than fixing production.
+    ``test_uninstall_preserves_the_entry_install_recorded_as_foreign`` closes the fourth corner: the
+    foreign file must survive ``uninstall`` too, and it must survive BECAUSE the inventory row says
+    ``foreign``, not because a digest happened to disagree (agentic-sdlc-9b9a).
     """
 
     def layout(self) -> Plane:
@@ -1545,65 +1603,88 @@ class ForeignPreservationTest(Conformance):
         # preservation above is the ownership proof failing and not a retirement that removed nothing.
         self.assertFalse(plane.destination("skills/alpha-skill").exists())
 
-    def test_finding_uninstall_removes_the_entry_install_recorded_as_foreign(self) -> None:
-        """FINDING (foreign-entry-removed-by-uninstall).  This pins a DEFECT, it does not bless it.
+    def test_uninstall_preserves_the_entry_install_recorded_as_foreign(self) -> None:
+        """The data-loss corner (agentic-sdlc-9b9a), now asserted as the honest behaviour.
 
         ``install`` records an occupied destination as ``prestate: foreign, disposition: preserved``
-        and stores the FOREIGN file's own digest as that entry's ``content_sha256``.  ``uninstall``
-        then proves ownership by comparing the on-disk digest against that inventory digest -- and
-        that comparison succeeds, because the digest recorded IS the operator's file.  ``prestate``
-        and ``disposition`` are never consulted, so the retirement deletes a file the activation
-        explicitly refused to adopt.
+        and stores the FOREIGN file's own digest as that entry's ``content_sha256`` -- which is honest
+        observation, so the record is not what changed.  What changed is the CONSUMER: ``uninstall``
+        used to prove removability from ``current == recorded`` alone, and that comparison SUCCEEDS
+        here precisely because the digest recorded is the operator's file, so the retirement deleted
+        the one file the activation explicitly refused to adopt.
 
         AGENTS.md: "Lifecycle mutation adopts only exact eligible prior owned state.  Foreign,
         modified, conflicting, or ambiguous entries are preserved and reported.  Removal proves
-        unchanged ownership before deletion."  Unchangedness was proved here; OWNERSHIP never was.
-
-        The assertion below is the OBSERVED behaviour, so this module stays green and honest.  When
-        production is fixed, this test fails -- and its replacement is the assertion in the docstring.
+        unchanged ownership before deletion."  Unchangedness was proved; OWNERSHIP never was.  The
+        classifier now reads the row's own ``prestate`` first, so the digest can never authorize this
+        deletion -- and the reason code asserted below is ``recorded-foreign``, which is reachable
+        ONLY from that record and not from any disk fact.
         """
         plane = self.layout()
         self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "install", "--host", "claude").returncode)
         entries = {entry["entry_name"]: entry for entry in json.loads(plane.pointer.read_text())["body"]["entries"]}
         self.assertEqual("foreign", entries[FOREIGN_ENTRY]["prestate"])
         self.assertEqual("preserved", entries[FOREIGN_ENTRY]["disposition"])
+        # The digest the retirement will compare against IS the operator's own file, so a
+        # digest-only ownership proof would succeed.  Pinned here, because it is the whole hazard.
+        self.assertEqual(
+            bundle.digest(plane.destination(FOREIGN_ENTRY)), entries[FOREIGN_ENTRY]["content_sha256"]
+        )
 
         completed = plane.dispatch("sdlc", "uninstall")
 
         self.assert_admitted_class(completed)
-        self.assertFalse(
-            plane.destination(FOREIGN_ENTRY).exists(),
-            "FINDING: if this now passes, production was fixed -- delete this test and assert survival",
+        self.assertEqual(
+            FOREIGN_BYTES,
+            plane.destination(FOREIGN_ENTRY).read_text(encoding="utf-8"),
+            "the operator's own file must survive a retirement that never owned it",
         )
-        self.assertIn(f"removed: {FOREIGN_ENTRY}", completed.stdout)
-        self.assertNotIn(f"preserved: {FOREIGN_ENTRY}", completed.stdout)
-        # Positive control: the same run DOES preserve an entry whose digest disagrees with the
-        # inventory, so the removal above is the digest agreeing and not a verb that removes blindly.
+        self.assertIn(f"preserved: {FOREIGN_ENTRY}", completed.stdout)
+        self.assertNotIn(f"removed: {FOREIGN_ENTRY}", completed.stdout)
+        # The preservation came from the RECORD, not from a digest that happened to disagree.
+        self.assertIn("recorded-foreign", completed.stdout)
+        # An admitted partial effect: entries were retired, one was preserved, and the class is 4.
+        self.assertEqual(EXIT_UNKNOWN, completed.returncode, completed.stdout)
+        self.assertIn("partly-retired", completed.stdout)
+        # POSITIVE CONTROL 1: the same run DID remove the two entries it really owned, so the
+        # preservation above is a decision about one row and not a verb that retires nothing.
+        self.assertIn(f"removed: {OWNED_ENTRY}", completed.stdout)
+        self.assertFalse(plane.destination(OWNED_ENTRY).exists())
+        self.assertFalse(plane.destination("skills/alpha-skill").exists())
+        # POSITIVE CONTROL 2: the foreign entry survives in the OTHER digest state too -- edited after
+        # the install, so ``current != recorded`` -- which is the case that already worked.  Keeping it
+        # shows the record-based preservation did not replace the digest-based one.
         plane_two = self.layout()
         self.assertEqual(EXIT_OK, plane_two.dispatch("sdlc", "install", "--host", "claude").returncode)
         plane_two.destination(FOREIGN_ENTRY).write_text("edited after the install\n", encoding="utf-8")
         second = plane_two.dispatch("sdlc", "uninstall")
-        self.assertTrue(plane_two.destination(FOREIGN_ENTRY).exists())
+        self.assertEqual(
+            "edited after the install\n",
+            plane_two.destination(FOREIGN_ENTRY).read_text(encoding="utf-8"),
+        )
         self.assertIn(f"preserved: {FOREIGN_ENTRY}", second.stdout)
 
 
-class UninstallAttentionFindingTest(Conformance):
-    """FINDING (exit-1-as-attention).  A partial retirement exits 1, where Decision 9 assigns 4.
+class UninstallAdmittedEffectExitFourTest(Conformance):
+    """An admitted retirement effect is Decision 9's class 4, in both of its shapes.
 
-    ``ccodex_sdlc_uninstall.py`` names exit 1 ``EXIT_ATTENTION`` and returns it for two outcomes:
-    ``partly-retired`` (some entries removed, some preserved) and ``not-retired`` (nothing moved).
-    Its own sealed receipt records ``effect_state: partial`` for the first.  Decision 9 (spec:227-229)
-    assigns 1 to "unexpected internal failure" and 4 to "an admitted partial or unknown effect", so a
-    caller that branches on the documented vocabulary reads an admitted partial effect as a crash.
-    The module documents the choice as the reused convention of the installer's own ``_uninstall``.
+    ``ccodex_sdlc_uninstall.py`` used to name exit 1 ``EXIT_ATTENTION`` and return it for two
+    outcomes: ``partly-retired`` (some entries removed, some preserved) and ``not-retired`` (nothing
+    moved).  Its own sealed receipt records ``effect_state: partial`` for the first and ``none`` for
+    the second.  Decision 9 (spec:227-229) assigns 1 to "unexpected internal failure" and 4 to "an
+    admitted partial or unknown effect", so a caller that branched on the documented vocabulary read an
+    admitted effect as a crash.  Both now return 4 (agentic-sdlc-d7b3).
 
-    ``recover`` carries the same ``EXIT_ATTENTION`` convention for a preserved classified conflict.
+    ``not-retired`` is 4 rather than 3 for a reason the third test in this class pins by execution:
+    Decision 9's 3 is a "clean refusal BEFORE effect", and this outcome is not one.  It ran the whole
+    assessment and sealed the terminal receipt that CONSUMES this activation's one retirement, so a
+    caller told "3, nothing happened, retry" is told something false -- the retry is refused by name.
 
-    The assertions below pin the OBSERVED behaviour.  They are the finding's evidence, not its
-    endorsement.
+    ``recover`` carried the same exit-1 convention for a preserved classified conflict and is fixed
+    with it; ``tests/test_ccodex_sdlc_recover_apply.py`` owns that verb's two cases.
     """
 
-    def test_finding_a_partly_retired_plane_exits_one_while_its_receipt_records_partial(self) -> None:
+    def test_a_partly_retired_plane_exits_four_and_its_receipt_records_partial(self) -> None:
         plane = self.plane()
         plane.acquire_a()
         self.install_once(plane)
@@ -1612,7 +1693,7 @@ class UninstallAttentionFindingTest(Conformance):
         completed = plane.dispatch("sdlc", "uninstall")
 
         self.assert_admitted_class(completed)
-        self.assertEqual(EXIT_INTERNAL, completed.returncode, completed.stdout)
+        self.assertEqual(EXIT_UNKNOWN, completed.returncode, completed.stdout)
         self.assertIn("partly-retired", completed.stdout)
         terminal = [
             path for path in plane.receipts() if json.loads(path.read_text())["body"]["operation"] == "uninstall"
@@ -1620,22 +1701,25 @@ class UninstallAttentionFindingTest(Conformance):
         body = self.sealed(plane, terminal[0])["body"]
         self.assertEqual("partial", body["effect_state"])
         self.assertEqual("unknown", body["terminal_phase"])
-        # The divergence, stated as an assertion: the receipt says partial, and the exit says 1.
-        self.assertNotEqual(EXIT_UNKNOWN, completed.returncode)
-        # POSITIVE CONTROL: a fully owned plane exits 0 with ``complete``, so exit 1 above is the
-        # preserved entry and not a verb that always exits 1.
+        # The receipt says partial and the exit says 4: one vocabulary, two surfaces that agree.
+        self.assertNotEqual(EXIT_INTERNAL, completed.returncode)
+        # POSITIVE CONTROL: a fully owned plane exits 0 with ``complete``, so exit 4 above is the
+        # preserved entry and not a verb that always exits 4.
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
         clean = control.dispatch("sdlc", "uninstall")
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
 
-    def test_finding_a_plane_whose_entries_already_left_exits_one_for_no_effect_at_all(self) -> None:
-        """``not-retired``: nothing moved, ``effect_state: none`` -- and the exit class is still 1.
+    def test_a_plane_whose_entries_already_left_exits_four_and_its_receipt_records_none(self) -> None:
+        """``not-retired``: no destination moved, ``effect_state: none`` -- and the class is 4.
 
-        Decision 9 has two classes for an outcome with no effect: 0 for a closed requested result and
-        3 for a clean refusal before effect.  1 is "unexpected internal failure", and nothing here is
-        unexpected: the operator removed the entries by hand and the retirement found them absent.
+        Nothing here is unexpected, so 1 is wrong.  0 would be wrong too: the plane is not in the
+        requested end state as far as this verb can prove, which is why its own receipt terminates
+        ``not-activated`` rather than ``retired``.  And 3 would be wrong because this run is not a
+        refusal before effect: it sealed a terminal receipt, and the assertion at the end of this test
+        EXECUTES the consequence -- the second pass is refused by name, so "nothing happened, retry"
+        would have been false.
         """
         plane = self.plane()
         plane.acquire_a()
@@ -1651,7 +1735,8 @@ class UninstallAttentionFindingTest(Conformance):
         completed = plane.dispatch("sdlc", "uninstall")
 
         self.assert_admitted_class(completed)
-        self.assertEqual(EXIT_INTERNAL, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual(EXIT_UNKNOWN, completed.returncode, completed.stdout + completed.stderr)
+        self.assertNotEqual(EXIT_INTERNAL, completed.returncode)
         self.assertIn("not-retired", completed.stdout)
         terminal = [
             path for path in plane.receipts() if json.loads(path.read_text())["body"]["operation"] == "uninstall"
@@ -1659,8 +1744,14 @@ class UninstallAttentionFindingTest(Conformance):
         body = self.sealed(plane, terminal[0])["body"]
         self.assertEqual("none", body["effect_state"])
         self.assertEqual("not-activated", body["terminal_phase"])
-        # Positive control: the same harness reports 0 for a plane whose entries are all present, so
-        # exit 1 above is the absent entries and not a verb that always exits 1.
+        # WHY NOT 3: this run is not repeatable, so it was not a refusal before effect.  Executed, not
+        # asserted from the docstring -- and the tree DID change, by exactly the receipt it sealed.
+        self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
+        repeat = plane.dispatch("sdlc", "uninstall")
+        self.assertEqual(EXIT_REFUSED, repeat.returncode, repeat.stdout + repeat.stderr)
+        self.assertIn("a second retirement of one activation is refused rather than repeated", repeat.stderr)
+        # POSITIVE CONTROL: the same harness reports 0 for a plane whose entries are all present, so
+        # exit 4 above is the absent entries and not a verb that always exits 4.
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
@@ -1668,7 +1759,7 @@ class UninstallAttentionFindingTest(Conformance):
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
 
     def test_a_second_retirement_of_one_activation_is_a_clean_refusal_not_a_repeat(self) -> None:
-        """The honest neighbour of the two findings above: this outcome IS Decision 9's exit 3."""
+        """The honest neighbour of the two above: THIS outcome IS Decision 9's exit 3."""
         plane = self.plane()
         plane.acquire_a()
         self.install_once(plane)
@@ -1765,7 +1856,11 @@ class StalePrestateTest(Conformance):
         ]
         self.assertNotEqual(approved, fresh)
         applied = plane.dispatch("sdlc", "recover", "--apply", fresh)
-        self.assertIn(applied.returncode, (EXIT_OK, EXIT_INTERNAL), applied.stderr)
+        # 0 if every selected transition settled, 4 if something was preserved and named: either way
+        # the plan was ADMITTED rather than refused as stale.  Never 1 -- exit 1 is "unexpected
+        # internal failure" and a named preservation is not one (agentic-sdlc-d7b3).
+        self.assertIn(applied.returncode, (EXIT_OK, EXIT_UNKNOWN), applied.stderr)
+        self.assertNotEqual(EXIT_INTERNAL, applied.returncode)
         self.assertNotIn("is not the plan this host's state derives", applied.stderr)
 
 
@@ -1882,23 +1977,23 @@ class CrashHonestyTest(Conformance):
             "terminal", json.loads(control.journals()[0].read_text(encoding="utf-8"))["phase"]
         )
 
-    def test_finding_recover_apply_is_unreachable_once_a_real_activation_receipt_exists(self) -> None:
-        """FINDING (recover-apply-blocked-by-activation-receipt-names).  A pinned DEFECT.
+    def test_recover_apply_completes_a_killed_update_on_a_host_with_a_real_activation_receipt(self) -> None:
+        """The recovery chain on the host that can actually crash mid-update (agentic-sdlc-3bb8).
 
         ``install`` and ``update`` file activation receipts as
         ``<operation>-<operation-id>-<instant>.json``.  ``ccodex_sdlc_recover.py`` reads that same
-        directory and admits only ``<64 lowercase hex>.json``, naming anything else
-        ``activation-receipt://unrecognised-<16 hex>`` and refusing the whole apply: "unrecognised
-        evidence is preserved and refused rather than interpreted".
+        directory and used to admit only ``<64 lowercase hex>.json`` -- a grammar no lifecycle verb
+        has ever written -- naming its own plane's receipts ``activation-receipt://unrecognised-<16
+        hex>`` and refusing the whole apply.  So on every host that had completed one install or
+        update, ``recover --apply`` refused at exit 3 for the digest ``recover --dry-run`` had offered
+        seconds earlier, and the interrupted transaction stayed outstanding with NO executable
+        recovery path.  The chain in the first test of this class only worked because a killed FIRST
+        install has not filed a receipt yet.
 
-        So on any host that has completed one install or update -- which is every host that can
-        crash mid-update -- ``recover --apply`` refuses at exit 3 for the digest ``recover --dry-run``
-        offered seconds earlier, and the interrupted transaction stays outstanding with no executable
-        recovery path.  ``recover --dry-run`` does not mention the unrecognised document at all, so
-        the operator is not warned before approving.
-
-        The chain in ``test_a_killed_install_leaves_no_pointer_and_the_recovery_chain_completes_it``
-        works only because a killed FIRST install has not filed a receipt yet.
+        Recognising a name means naming it, validating it through the family's own checker, and
+        LEAVING IT IN PLACE.  All three are asserted, the last by bytes.  Two controls follow the
+        chain: a clean host with no filed receipt still applies, and a plane holding a genuinely alien
+        neighbour still refuses without echoing its name.
         """
         plane = self.plane()
         plane.acquire_a()
@@ -1906,8 +2001,10 @@ class CrashHonestyTest(Conformance):
         filed = plane.receipts()
         self.assertEqual(1, len(filed))
         stem = filed[0].name[: -len(".json")]
-        self.assertNotEqual(64, len(stem), "the finding is about the NAME, so its shape is pinned here")
+        self.assertNotEqual(64, len(stem), "the fix is about the NAME, so its shape is pinned here")
         self.assertTrue(stem.startswith("install-op-"), stem)
+        self.assertTrue(recover.is_lifecycle_receipt_stem(stem), stem)
+        receipt_bytes = filed[0].read_bytes()
 
         plane.acquire_b()
         killed = plane.drive("ccodex_sdlc_update", [], fault=self.SIGKILL_FAULT)
@@ -1915,26 +2012,33 @@ class CrashHonestyTest(Conformance):
         outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"]
         self.assertEqual(1, len(outstanding), "there IS an interrupted transaction to recover")
 
-        # The assessment offers a digest and says nothing about the unrecognised receipt.
+        # 1. THE ASSESSMENT PLANS IT and names no unrecognised evidence: the plane's own receipt is
+        # its own evidence.
         digest, assessment = self.plan_digest(plane)
         self.assertNotIn("unrecognised", assessment.stderr)
-        before = tree_hash(*plane.observed_roots())
+        self.assertIn(f"ccodex sdlc recover --apply {digest}", assessment.stderr)
 
+        # 2. THE APPLY COMPLETES IT.
         applied = plane.dispatch("sdlc", "recover", "--apply", digest)
 
         self.assert_admitted_class(applied)
-        self.assertEqual(EXIT_REFUSED, applied.returncode, applied.stdout + applied.stderr)
-        self.assertIn("activation-receipt://unrecognised-", applied.stderr)
-        self.assertIn("a document this plane cannot name", applied.stderr)
-        self.assertEqual("", applied.stdout)
-        self.assertEqual(before, tree_hash(*plane.observed_roots()), "at least it touched nothing")
-        # THE TRANSACTION IS STILL OUTSTANDING: the crash has no executable recovery on this host.
-        self.assertEqual(
-            outstanding,
-            json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"],
+        self.assertEqual(EXIT_OK, applied.returncode, applied.stdout + applied.stderr)
+        self.assertNotIn("unrecognised", applied.stderr)
+        self.assertIn("recovered", applied.stdout)
+
+        # 3. TERMINAL STATE COHERENT: nothing outstanding, nothing left to recover, and the receipt
+        # this run read as evidence is byte-identical -- recognised means READ, never rewritten.
+        self.assertEqual({}, json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"])
+        self.assertIn(
+            "nothing to recover, so no plan digest is offered",
+            plane.dispatch("sdlc", "recover", "--dry-run").stderr,
         )
+        self.assertEqual([filed[0]], plane.receipts())
+        self.assertEqual(receipt_bytes, filed[0].read_bytes())
+        self.assertTrue(plane.pointer.is_file(), "the activation this plane states is untouched")
+        self.assert_no_authority_claim(applied.stdout, applied.stderr, assessment.stderr)
         # POSITIVE CONTROL: the identical interrupted state on a host with NO filed activation
-        # receipt applies cleanly, so the refusal above is the receipt's NAME and nothing else.
+        # receipt still applies cleanly, so the apply above is not the receipt gate being switched off.
         control = self.plane()
         control.acquire_a()
         self.kill_an_install(control)
@@ -1943,6 +2047,99 @@ class CrashHonestyTest(Conformance):
         recovered = control.dispatch("sdlc", "recover", "--apply", control_digest)
         self.assertEqual(EXIT_OK, recovered.returncode, recovered.stderr)
         self.assertNotIn("unrecognised", recovered.stderr)
+        # NEGATIVE CONTROL: a genuinely alien neighbour in the same plane still refuses the whole
+        # apply, and its name is still never echoed -- so the recognised set was widened to this
+        # plane's own grammar and not opened to whatever a directory happens to hold.
+        alien_plane = self.plane()
+        alien_plane.acquire_a()
+        self.kill_an_install(alien_plane)
+        alien = alien_plane.activation_dir / "receipts" / "operator-notes.json"
+        alien.parent.mkdir(parents=True, exist_ok=True)
+        alien.write_text("{}\n", encoding="utf-8")
+        alien_digest, alien_assessment = self.plan_digest(alien_plane)
+        blocked = alien_plane.dispatch("sdlc", "recover", "--apply", alien_digest)
+        self.assertEqual(EXIT_REFUSED, blocked.returncode, blocked.stdout + blocked.stderr)
+        self.assertIn("activation-receipt://unrecognised-", blocked.stderr)
+        self.assertIn("a document this plane cannot name", blocked.stderr)
+        self.assertNotIn("operator-notes", blocked.stderr)
+        self.assertNotIn("operator-notes", alien_assessment.stderr)
+
+    def test_recover_apply_refuses_a_lifecycle_receipt_that_fails_its_own_family_validation(self) -> None:
+        """A name this plane RECOGNISES must still be VALIDATED -- never admitted by name alone.
+
+        The test above pins that ``verify_receipt_evidence`` widened its recognised set to this
+        plane's own lifecycle-receipt grammar (agentic-sdlc-3bb8), so a real install/update receipt is
+        no longer refused as unrecognised.  The docstring on ``verify_receipt_evidence`` promises
+        THREE things for a recognised name: it is named, VALIDATED through the family's own checker,
+        and LEFT IN PLACE.  This test pins the middle promise, which the test above cannot: it never
+        disturbs the receipt's bytes, so it would still pass even if the digest re-check and the
+        ``dar.load_document`` / ``dar.derive("validate", ...)`` read that follow the name check were
+        skipped entirely.
+
+        The filed receipt is byte-flipped BEFORE the recovery plan is even derived, so the plan's own
+        recorded digest for this receipt is the digest of the CORRUPTED bytes.  Apply's re-check of
+        live bytes against that recorded digest therefore agrees -- the tamper is invisible to the
+        "did it move" check -- and the only remaining thing that can catch it is the load/validate
+        read a few lines later.  A change that admitted a recognised stem immediately after the name
+        test, before either of those two reads, would pass every assertion above unchanged while
+        silently treating this corrupted receipt as verified evidence.
+        """
+        plane = self.plane()
+        plane.acquire_a()
+        self.install_once(plane)
+        filed = plane.receipts()
+        self.assertEqual(1, len(filed))
+        receipt_path = filed[0]
+        stem = receipt_path.name[: -len(".json")]
+        self.assertTrue(recover.is_lifecycle_receipt_stem(stem), stem)
+        original_bytes = receipt_path.read_bytes()
+
+        plane.acquire_b()
+        killed = plane.drive("ccodex_sdlc_update", [], fault=self.SIGKILL_FAULT)
+        self.assertEqual(-9, killed.returncode)
+        outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"]
+        self.assertEqual(1, len(outstanding), "there IS an interrupted transaction to recover")
+
+        # Corrupt the filed receipt's bytes BEFORE the plan is derived at all: the plan's recorded
+        # digest for this receipt will be the CORRUPTED digest, so apply's bytes-moved check cannot
+        # be what catches this -- only the load/validate read that follows it can.
+        corrupted = bytearray(original_bytes)
+        corrupted[0] ^= 0xFF
+        receipt_path.write_bytes(bytes(corrupted))
+        self.assertNotEqual(original_bytes, receipt_path.read_bytes())
+
+        digest, assessment = self.plan_digest(plane)
+        self.assertNotIn("unrecognised", assessment.stderr)
+        self.assertIn(f"ccodex sdlc recover --apply {digest}", assessment.stderr)
+        before_apply = tree_hash(*plane.observed_roots())
+
+        # THE REFUSAL: the corrupted receipt is named by its own recognised locator, never treated as
+        # verified, and nothing moves.
+        applied = plane.dispatch("sdlc", "recover", "--apply", digest)
+        self.assertEqual(EXIT_REFUSED, applied.returncode, applied.stdout + applied.stderr)
+        self.assertIn(f"activation-receipt://{stem}", applied.stderr)
+        self.assertNotIn("unrecognised", applied.stderr)
+        self.assertEqual(before_apply, tree_hash(*plane.observed_roots()), "a refusal moves nothing")
+        still_outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"]
+        self.assertEqual(outstanding, still_outstanding, "the outstanding transaction is untouched")
+        self.assert_no_authority_claim(applied.stdout, applied.stderr, assessment.stderr)
+
+        # POSITIVE CONTROL: restore the EXACT original bytes and the identical chain completes, which
+        # is what shows the refusal above was the corrupted content and not the receipt gate itself
+        # misfiring on this plane.
+        receipt_path.write_bytes(original_bytes)
+        self.assertEqual(original_bytes, receipt_path.read_bytes())
+        restored_digest, restored_assessment = self.plan_digest(plane)
+        self.assertNotIn("unrecognised", restored_assessment.stderr)
+        restored = plane.dispatch("sdlc", "recover", "--apply", restored_digest)
+        self.assert_admitted_class(restored)
+        self.assertEqual(EXIT_OK, restored.returncode, restored.stdout + restored.stderr)
+        self.assertIn("recovered", restored.stdout)
+        self.assertNotIn("unrecognised", restored.stderr)
+        self.assertEqual({}, json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"])
+        self.assertEqual([receipt_path], plane.receipts())
+        self.assertEqual(original_bytes, receipt_path.read_bytes(), "recognised means READ, never rewritten")
+        self.assert_no_authority_claim(restored.stdout, restored.stderr, restored_assessment.stderr)
 
 
 # ---- (5) old-schema reads --------------------------------------------------------------------------

@@ -70,7 +70,10 @@ ENVELOPE_SCHEMA = "agentic-sdlc/receipt-envelope@1"
 #: The exit classes, spelled out here rather than imported from the module under test, so a table this
 #: module quietly renumbered would fail rather than agree with itself.
 EXIT_RETIRED = 0
-EXIT_ATTENTION = 1
+#: Spec Implementation Decision 9's class 4 -- "an admitted partial or unknown effect" -- which is what
+#: a retirement that preserved or found-absent at least one inventory entry produces.  It was 1 for one
+#: release; 1 is "unexpected internal failure" (agentic-sdlc-d7b3).
+EXIT_PARTIAL = 4
 EXIT_REFUSED = 3
 EXIT_UNKNOWN = 4
 
@@ -353,6 +356,174 @@ class EndToEnd(Harness):
 # ---- ownership proof -----------------------------------------------------------------------------
 
 
+class RecordedPrestateProof(Harness):
+    """The record's own ownership statement is consulted BEFORE the digest (agentic-sdlc-9b9a).
+
+    An activation that finds a destination occupied by an entry it does not own records
+    ``prestate: foreign, disposition: preserved`` and -- honestly, because that is what it observed --
+    stores THE OPERATOR'S OWN digest as that row's ``content_sha256``.  A retirement that proved
+    removability from ``current == recorded`` alone therefore deleted exactly the file the activation
+    refused to adopt, and it deleted it BECAUSE the record was accurate.  Every test here plants the
+    digest-AGREEING case, which is the one a digest-only proof gets wrong.
+    """
+
+    def test_an_entry_the_activation_recorded_as_foreign_is_preserved_though_its_digest_agrees(self) -> None:
+        entries = self.plant_owned()
+        operator_own = self.plane.write_file("commands/sdlc-frame.md", "# the operator's own frame\n")
+        recorded = self.plane.entry_digest("commands/sdlc-frame.md")
+        entries.append(
+            entry_record(
+                "commands/sdlc-frame.md", recorded, prestate="foreign", disposition="preserved"
+            )
+        )
+        self.plane.seal_active(entries)
+        before = operator_own.read_bytes()
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_PARTIAL, report)
+        self.assertEqual(operator_own.read_bytes(), before)
+        self.assertIn("preserved: commands/sdlc-frame.md (recorded-foreign:", report)
+        self.assertNotIn("removed: commands/sdlc-frame.md", report)
+        # The hazard, pinned: the digest MATCHED, so a digest-only proof would have removed this file.
+        self.assertEqual(recorded, bundle.digest(operator_own))
+        # Positive control in the same run: the entries the activation really owned WERE removed, so
+        # the preservation is a decision about one row and not a verb that retires nothing.
+        self.assertIn("removed: agents/sdlc-implementer.md", report)
+        self.assertFalse((self.plane.plane_root / "agents" / "sdlc-implementer.md").exists())
+        rows = {row["entry_name"]: row for row in self.plane.terminal_receipt()["body"]["entries"]}
+        self.assertEqual(rows["commands/sdlc-frame.md"]["prestate"], "foreign")
+        self.assertEqual(rows["commands/sdlc-frame.md"]["disposition"], "preserved")
+        self.assertEqual(
+            dar.derive("validate", self.plane.terminal_receipt(), "receipt")["verdict"], "validated"
+        )
+
+    def test_an_entry_the_activation_recorded_as_modified_is_preserved_though_its_digest_agrees(self) -> None:
+        entries = self.plant_owned()
+        hand_edited = self.plane.write_file("agents/sdlc-critic.md", "# hand-edited by the operator\n")
+        recorded = self.plane.entry_digest("agents/sdlc-critic.md")
+        entries.append(
+            entry_record(
+                "agents/sdlc-critic.md", recorded, prestate="modified", disposition="preserved"
+            )
+        )
+        self.plane.seal_active(entries)
+        before = hand_edited.read_bytes()
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_PARTIAL, report)
+        self.assertEqual(hand_edited.read_bytes(), before)
+        self.assertIn("preserved: agents/sdlc-critic.md (recorded-modified:", report)
+        self.assertNotIn("removed: agents/sdlc-critic.md", report)
+        self.assertEqual(recorded, bundle.digest(hand_edited))
+        self.assertIn("removed: skills/agentic-sdlc", report)
+        self.assertEqual(
+            dar.derive("validate", self.plane.terminal_receipt(), "receipt")["verdict"], "validated"
+        )
+
+    def test_an_activation_whose_only_entry_is_foreign_retires_nothing_and_still_seals(self) -> None:
+        """The all-foreign plane: no destination moves, and the receipt still validates as ``none``."""
+        operator_own = self.plane.write_file("commands/sdlc-frame.md", "# the operator's own frame\n")
+        self.plane.seal_active(
+            [
+                entry_record(
+                    "commands/sdlc-frame.md",
+                    self.plane.entry_digest("commands/sdlc-frame.md"),
+                    prestate="foreign",
+                    disposition="preserved",
+                )
+            ]
+        )
+        before = operator_own.read_bytes()
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_PARTIAL, report)
+        self.assertEqual(operator_own.read_bytes(), before)
+        body = self.plane.terminal_receipt()["body"]
+        self.assertEqual(body["effect_state"], "none")
+        self.assertEqual(body["terminal_phase"], "not-activated")
+        self.assertEqual(
+            dar.derive("validate", self.plane.terminal_receipt(), "receipt")["verdict"], "validated"
+        )
+        # Positive control: the same harness reaches `retired` when the one entry is really owned.
+        second = Plane(self.temp / "owned-instead")
+        second.write_file("commands/sdlc-frame.md", "# an entry this lifecycle installed\n")
+        second.seal_active(
+            [entry_record("commands/sdlc-frame.md", second.entry_digest("commands/sdlc-frame.md"))]
+        )
+        code_two, report_two = second.run()
+        self.assertEqual(code_two, EXIT_RETIRED, report_two)
+
+    def test_a_row_that_records_no_usable_prestate_is_never_removable(self) -> None:
+        """The unknowns, at the classifier: the family validates these away, so they are proved here.
+
+        A supplied-but-unusable prestate and a not-supplied one are DIFFERENT records and get different
+        classes, because a consumer that collapsed them would report "the activation said nothing" for a
+        row that said something this module could not read.
+        """
+        config = self.plane.config()
+        planted = self.plane.write_file("agents/sdlc-planner.md", "# planner\n")
+        digest_value = self.plane.entry_digest("agents/sdlc-planner.md")
+        row = {
+            "content_sha256": digest_value,
+            "disposition": "installed",
+            "entry_name": "agents/sdlc-planner.md",
+            "prestate": "owned",
+        }
+        # POSITIVE CONTROL FIRST: this exact row, with a prestate that claims owned bytes, IS removable.
+        self.assertEqual(
+            ("owned-exact", planted, digest_value), target.classify_entry(bundle, config, row)
+        )
+        not_supplied = {key: value for key, value in row.items() if key != "prestate"}
+        self.assertEqual(
+            ("unrecorded-prestate", planted, None), target.classify_entry(bundle, config, not_supplied)
+        )
+        for unusable in (None, "", "owned-exact", "OWNED", 0, True, ["owned"], {"owned": True}):
+            with self.subTest(prestate=repr(unusable)):
+                self.assertEqual(
+                    ("unrecognised-prestate", planted, None),
+                    target.classify_entry(bundle, config, {**row, "prestate": unusable}),
+                )
+        # Neither class maps to `owned`, so neither can reach the plan's remove list.
+        for name in ("unrecorded-prestate", "unrecognised-prestate", "recorded-foreign", "recorded-modified"):
+            with self.subTest(classification=name):
+                self.assertIn(name, target.CLASSES)
+                self.assertNotEqual("owned", target.CLASS_PRESTATE[name])
+
+    def test_a_recorded_foreign_row_is_not_even_stated_on_disk_before_it_is_preserved(self) -> None:
+        """A row that can never be removed needs no disk fact, so none is read.
+
+        The digest is reported as ``None`` deliberately: reading through a parent that may itself be a
+        link would leave the plane this receipt describes, for an answer that cannot change the outcome.
+        """
+        config = self.plane.config()
+        self.plane.write_file("commands/sdlc-frame.md", "# the operator's own frame\n")
+        present = {
+            "content_sha256": self.plane.entry_digest("commands/sdlc-frame.md"),
+            "disposition": "preserved",
+            "entry_name": "commands/sdlc-frame.md",
+            "prestate": "foreign",
+        }
+        classification, destination, current = target.classify_entry(bundle, config, present)
+        self.assertEqual("recorded-foreign", classification)
+        self.assertEqual(self.plane.plane_root / "commands" / "sdlc-frame.md", destination)
+        self.assertIsNone(current)
+        # And an ABSENT foreign row gets the same class rather than being described as owned-and-gone.
+        absent = {**present, "entry_name": "commands/never-planted.md"}
+        self.assertEqual(
+            ("recorded-foreign", self.plane.plane_root / "commands" / "never-planted.md", None),
+            target.classify_entry(bundle, config, absent),
+        )
+        # Positive control: a name that resolves nowhere inside the plane still refuses on the NAME,
+        # so the prestate consultation did not displace the path check that runs before it.
+        self.assertEqual(
+            ("ambiguous-name", None, None),
+            target.classify_entry(bundle, config, {**present, "entry_name": "../outside.md"}),
+        )
+
+
 class OwnershipProof(Harness):
     def test_a_modified_entry_is_preserved_byte_for_byte_while_an_owned_one_is_removed(self) -> None:
         entries = self.plant_owned()
@@ -363,7 +534,7 @@ class OwnershipProof(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertEqual(modified.read_bytes(), before)
         self.assertIn("preserved: agents/sdlc-reviewer.md (modified-content:", report)
         # Positive control in the same test: the owned entries in the same run WERE removed, so this
@@ -390,7 +561,7 @@ class OwnershipProof(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertTrue(link.is_symlink())
         self.assertTrue(outside.is_file())
         self.assertEqual(outside.read_text(encoding="utf-8"), "# outside the plane\n")
@@ -411,7 +582,7 @@ class OwnershipProof(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertTrue((real / "nested" / "thing.md").is_file())
         self.assertIn("preserved: commands/nested/thing.md (retargeted-parent:", report)
         self.assertIn("removed: agents/sdlc-implementer.md", report)
@@ -438,7 +609,7 @@ class OwnershipProof(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertEqual(unprovable.read_bytes(), before)
         self.assertIn("preserved: agents/sdlc-planner.md (unprovable-inventory:", report)
         self.assertIn("inherited unknown: entry-content about agents/sdlc-planner.md", report)
@@ -451,7 +622,7 @@ class OwnershipProof(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertIn("absent: agents/sdlc-cartographer.md (", report)
         body = self.plane.terminal_receipt()["body"]
         rows = {row["entry_name"]: row for row in body["entries"]}
@@ -466,7 +637,7 @@ class OwnershipProof(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         body = self.plane.terminal_receipt()["body"]
         self.assertEqual(body["effect_state"], "none")
         self.assertEqual(body["terminal_phase"], "not-activated")
@@ -622,7 +793,7 @@ class Interruption(Harness):
 
         code, report = self.plane.run(checkpoint=mutate)
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertTrue(victim.is_file())
         self.assertEqual(victim.read_text(encoding="utf-8"), "# rewritten between the proof and the rename\n")
         self.assertIn("changed after its transaction was armed", report)
@@ -641,7 +812,7 @@ class Interruption(Harness):
 
         code, report = self.plane.run(checkpoint=interrupt)
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertTrue((self.plane.plane_root / "agents" / "sdlc-implementer.md").is_file())
         self.assertFalse((self.plane.plane_root / "skills" / "agentic-sdlc").exists())
         self.assertIn("could not be quarantined, so it was preserved untouched", report)
@@ -854,7 +1025,7 @@ class RenderingAndDataLoss(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         for raw in ("\r", "\x1b"):
             self.assertNotIn(raw, report)
         self.assertIn("planted\\r\\x1b[2Jcleared\\nforged: line", report)
@@ -915,7 +1086,7 @@ class RenderingAndDataLoss(Harness):
 
         code, report = self.plane.run()
 
-        self.assertEqual(code, EXIT_ATTENTION, report)
+        self.assertEqual(code, EXIT_PARTIAL, report)
         self.assertFalse((self.plane.plane_root / "agents" / "sdlc-implementer.md").exists())
         body = self.plane.terminal_receipt()["body"]
         self.assertEqual(body["effect_state"], "partial")
@@ -960,8 +1131,12 @@ class DispatchContract(unittest.TestCase):
 
     def test_the_exit_table_is_the_closed_set_the_dispatcher_admits(self) -> None:
         module = self.load_as_the_dispatcher_does()
-        table = [module.EXIT_RETIRED, module.EXIT_ATTENTION, module.EXIT_REFUSED, module.EXIT_UNKNOWN]
-        self.assertEqual(table, [EXIT_RETIRED, EXIT_ATTENTION, EXIT_REFUSED, EXIT_UNKNOWN])
+        table = [module.EXIT_RETIRED, module.EXIT_PARTIAL, module.EXIT_REFUSED, module.EXIT_UNKNOWN]
+        self.assertEqual(table, [EXIT_RETIRED, EXIT_PARTIAL, EXIT_REFUSED, EXIT_UNKNOWN])
+        # Decision 9 has ONE class for both admitted-effect states, so 4 appears twice; the one
+        # class it must NEVER carry is 1, and no name on this module resolves to it.
+        self.assertNotIn(1, table)
+        self.assertFalse(hasattr(module, "EXIT_ATTENTION"))
         for value in table:
             self.assertIsInstance(value, int)
             self.assertNotIsInstance(value, bool)

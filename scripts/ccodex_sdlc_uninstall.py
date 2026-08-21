@@ -19,9 +19,14 @@ directory contents.
 
 OWNERSHIP IS PROVED BEFORE EVERY DELETION
 -----------------------------------------
-An entry is removed only when it exists, is not a symlink surprise, is reached without traversing a
-symlinked parent inside the plane, and its CURRENT content digest equals the digest the inventory
-recorded -- under the one reused digest definition in ``install_skill_bundle.digest``.  Modified,
+An entry is removed only when THE INVENTORY ROW ITSELF CLAIMS THIS LIFECYCLE OWNED THE BYTES -- a
+recorded ``prestate`` of ``absent`` or ``owned`` -- and it exists, is not a symlink surprise, is
+reached without traversing a symlinked parent inside the plane, and its CURRENT content digest equals
+the digest the inventory recorded, under the one reused digest definition in
+``install_skill_bundle.digest``.  Both halves are load-bearing and neither substitutes for the other:
+an activation that preserved a foreign or already-modified destination records the OPERATOR'S OWN
+digest for that row, so the digest half alone would prove the bytes unchanged and delete a file this
+lifecycle explicitly refused to adopt.  Modified,
 foreign, retargeted, unreadable, unprovable, and absent entries are PRESERVED and NAMED.  Detection
 authorizes nothing: an entry outside the inventory is never removed, adopted, repaired, or reported
 as owned, and the collection directories themselves are never removed even when the last inventory
@@ -77,13 +82,19 @@ from typing import Any, Callable
 
 #: Exit classes.  The dispatcher admits 0-4 and treats anything else as an unknown effect.
 EXIT_RETIRED = 0
-#: Effects happened exactly as planned, but the plane is not fully retired: at least one inventory
-#: entry was preserved or already absent.  This is the reused convention of the installer's own
-#: ``_uninstall``, which returns 1 for a partial pass that named its conflicts.
-EXIT_ATTENTION = 1
 #: A clean refusal BEFORE any effect.  Nothing moved.
 EXIT_REFUSED = 3
-#: Something moved and the outcome cannot be proved.  No absence of effect may be claimed.
+#: An ADMITTED PARTIAL EFFECT: this run sealed a terminal receipt for a plane it did not fully retire,
+#: because at least one inventory entry was preserved or already absent.  Spec Implementation Decision
+#: 9 assigns 4 to "an admitted partial or unknown effect" and 1 to "unexpected internal failure", and
+#: nothing about a named preservation is unexpected -- so the value is 4, spelled with this repository's
+#: own name for that class (``gate_baseline``/``gate_receipt`` both use ``EXIT_PARTIAL = 4``).  It was
+#: 1 for one release, borrowed from the installer's ``_uninstall`` convention; a caller that branched
+#: on the documented vocabulary read an admitted partial effect as a crash (agentic-sdlc-d7b3).
+EXIT_PARTIAL = 4
+#: Something moved and the outcome cannot be proved.  No absence of effect may be claimed.  It shares
+#: exit 4 with ``EXIT_PARTIAL`` because Decision 9 has ONE class for both admitted-effect states; the
+#: two constants stay distinct because the receipt's ``effect_state`` distinguishes them.
 EXIT_UNKNOWN = 4
 
 JOURNAL_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-journal@1"
@@ -112,12 +123,32 @@ RETIRABLE_OPERATIONS = ("install", "update")
 #: strength of it would turn an unknown into a deletion.
 RETIRABLE_PHASES = ("activated", "activated-partial")
 
+#: The prestates a validated inventory row can carry, re-expressed rather than imported so this
+#: decision can still be made when the sibling that owns the vocabulary is unavailable.  A row whose
+#: prestate is not one of these four is an UNKNOWN, never an ownership claim.
+RECORDED_PRESTATES = ("absent", "owned", "foreign", "modified")
+#: The recorded prestates that say the activation NEVER OWNED the bytes at that destination, mapped to
+#: the class each one gets here.  ``foreign`` means an entry this lifecycle does not own already
+#: occupied the destination; ``modified`` means an owned entry had already lost its recorded identity.
+#: In BOTH cases the activation preserved the operator's bytes and recorded THE OPERATOR'S OWN digest
+#: as that row's ``content_sha256``, so a current==recorded comparison proves the bytes are unchanged
+#: since that observation and proves NOTHING about ownership.  Consulting the record here is what
+#: keeps the digest proof from authorizing the one deletion the activation explicitly refused.
+UNOWNED_PRESTATE_CLASS = {"foreign": "recorded-foreign", "modified": "recorded-modified"}
+#: One sentinel, so a row that supplies no ``prestate`` key at all is distinguishable from a row that
+#: supplies the key with an unusable value.  ``None`` cannot serve: it is itself a supplied value.
+_PRESTATE_NOT_SUPPLIED = object()
+
 #: The closed classification vocabulary.  Exactly one applies to each inventory entry, and each maps
 #: to one receipt prestate.  ``owned-exact`` is the ONLY removable class.
 CLASSES = (
     "owned-exact",
     "absent",
     "modified-content",
+    "recorded-foreign",
+    "recorded-modified",
+    "unrecorded-prestate",
+    "unrecognised-prestate",
     "foreign-symlink",
     "foreign-type",
     "foreign-unreadable",
@@ -129,6 +160,10 @@ CLASS_PRESTATE = {
     "owned-exact": "owned",
     "absent": "absent",
     "modified-content": "modified",
+    "recorded-foreign": "foreign",
+    "recorded-modified": "modified",
+    "unrecorded-prestate": "foreign",
+    "unrecognised-prestate": "foreign",
     "foreign-symlink": "foreign",
     "foreign-type": "foreign",
     "foreign-unreadable": "foreign",
@@ -140,6 +175,24 @@ CLASS_REASON = {
     "owned-exact": "the current content digest equals the digest the inventory recorded",
     "absent": "the inventory records this entry as owned and nothing is there",
     "modified-content": "the current content digest differs from the digest the inventory recorded",
+    "recorded-foreign": (
+        "the activation recorded this destination as foreign and preserved it, so the digest the "
+        "inventory carries is the operator's own content; matching it proves the bytes are unchanged "
+        "since that observation and never proves this lifecycle owns them"
+    ),
+    "recorded-modified": (
+        "the activation recorded this destination as already modified outside this lifecycle and "
+        "preserved it, so the digest the inventory carries is the operator's own content; matching it "
+        "proves the bytes are unchanged since that observation and never proves ownership"
+    ),
+    "unrecorded-prestate": (
+        "the inventory row supplies no prestate at all, so what the activation observed at this "
+        "destination is not recorded and ownership cannot be proved"
+    ),
+    "unrecognised-prestate": (
+        "the inventory row supplies a prestate outside the closed set, so what the activation "
+        "observed at this destination cannot be read and ownership cannot be proved"
+    ),
     "foreign-symlink": (
         "a link stands where the inventory recorded activated content; this plane is copy-activated, "
         "and removing a link whose target may lie outside the plane is not a removal this receipt "
@@ -397,7 +450,18 @@ def classify_entry(
 ) -> tuple[str, Path | None, str | None]:
     """Return ``(class, destination, current_digest)`` for one inventory entry.
 
-    The recorded digest is consulted first, because an inventory row whose ``content_sha256`` is null
+    THE RECORDED PRESTATE IS CONSULTED BEFORE ANY DISK FACT (agentic-sdlc-9b9a).  A digest comparison
+    answers "are these bytes what was observed", which is not the question a deletion needs answered.
+    An activation that found an entry it does not own occupying a destination records
+    ``prestate: foreign, disposition: preserved`` and -- honestly, because that is what it observed --
+    stores THE OPERATOR'S OWN digest as that row's ``content_sha256``.  A consumer that proves
+    removability from ``current == recorded`` alone therefore deletes exactly the file the activation
+    refused to adopt, and it deletes it because the record is accurate.  So the record's own statement
+    about ownership is read first, and a row that does not claim owned bytes is preserved and named
+    the same way a modified owned entry is.  A prestate that is missing or outside the closed set is an
+    unknown, and an unknown is never removable either.
+
+    The recorded digest is consulted next, because an inventory row whose ``content_sha256`` is null
     -- a supplied-but-missing digest the receipt declared as an unknown -- can never be proved
     unchanged, and reading a null as "no proof needed" is exactly the defect that would delete an
     entry nobody digested.
@@ -406,6 +470,17 @@ def classify_entry(
     destination = resolve_destination(config, name)
     if destination is None:
         return "ambiguous-name", None, None
+
+    # Not digested, and the destination is not even stat'ed, for the classes below: none of them can
+    # ever be removed, so no disk fact could change the outcome, and a read through a parent that may
+    # itself be a link would leave the plane this receipt describes for no gain.
+    recorded_prestate = entry.get("prestate", _PRESTATE_NOT_SUPPLIED)
+    if recorded_prestate is _PRESTATE_NOT_SUPPLIED:
+        return "unrecorded-prestate", destination, None
+    if recorded_prestate not in RECORDED_PRESTATES:
+        return "unrecognised-prestate", destination, None
+    if recorded_prestate in UNOWNED_PRESTATE_CLASS:
+        return UNOWNED_PRESTATE_CLASS[recorded_prestate], destination, None
 
     recorded = entry.get("content_sha256")
     recorded_ok = isinstance(recorded, str) and bool(_HEX64.match(recorded))
@@ -978,11 +1053,18 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
     elif len(removed) == len(observations):
         effect_state, terminal_phase, exit_class, state = "complete", "retired", EXIT_RETIRED, "retired"
     elif not removed:
-        # Nothing moved. The honest negative of this family: no effect, and the plane is not retired.
-        effect_state, terminal_phase, exit_class, state = "none", "not-activated", EXIT_ATTENTION, "not-retired"
+        # No DESTINATION moved, and the receipt says so: `effect_state: none`. The exit class is still
+        # 4, because this run is not a refusal. It ran the whole assessment and SEALED the terminal
+        # receipt that consumes this activation's one retirement -- a second pass is refused by name
+        # from here on -- while removing none of the entries the operator asked it to retire. Decision
+        # 9's 3 is reserved for "clean refusal BEFORE effect", which every other exit-3 path here
+        # satisfies by writing no receipt at all; reporting this outcome as 3 would tell a caller
+        # nothing happened and it may retry, and the retry refuses. So the honest class is 4: the
+        # effect on the request is admitted and partial, and the receipt names every preserved entry.
+        effect_state, terminal_phase, exit_class, state = "none", "not-activated", EXIT_PARTIAL, "not-retired"
     else:
         # ``partial`` admits only ``unknown`` for an uninstall in the family's matrix.
-        effect_state, terminal_phase, exit_class, state = "partial", "unknown", EXIT_ATTENTION, "partly-retired"
+        effect_state, terminal_phase, exit_class, state = "partial", "unknown", EXIT_PARTIAL, "partly-retired"
 
     # An inherited or fresh null digest is NAMED as an unknown by the family's producer, and the family
     # refuses `complete` beside any unknown -- correctly, because an effect whose own observations could
@@ -991,7 +1073,7 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
     if effect_state == "complete":
         for label, value in (("archive-digest", body["archive_sha256"]), ("journal-digest", journal_sha256)):
             if value is None:
-                effect_state, terminal_phase, exit_class, state = "partial", "unknown", EXIT_ATTENTION, "partly-retired"
+                effect_state, terminal_phase, exit_class, state = "partial", "unknown", EXIT_PARTIAL, "partly-retired"
                 attention.append(
                     f"every inventory entry was removed, but this retirement records {label} as unknown, "
                     "so its effect is partial rather than complete"

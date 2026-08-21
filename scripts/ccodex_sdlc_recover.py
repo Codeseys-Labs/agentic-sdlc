@@ -42,11 +42,18 @@ from typing import Any
 
 #: Every selected transition reached a durable terminal state and nothing was preserved unhandled.
 EXIT_RECOVERED = 0
-#: Recovery ran and something the operator must look at was preserved and named.
-EXIT_ATTENTION = 1
 #: A clean refusal BEFORE any effect, named.
 EXIT_REFUSED = 3
-#: An effect was admitted and its completion cannot be claimed.
+#: An ADMITTED PARTIAL EFFECT: recovery ran, and something the operator must look at was preserved and
+#: named, so not every selected transition reached a durable terminal state.  Spec Implementation
+#: Decision 9 assigns 4 to "an admitted partial or unknown effect" and 1 to "unexpected internal
+#: failure"; a named preservation is neither unexpected nor internal, so the value is 4, spelled with
+#: this repository's own name for that class (``gate_baseline``/``gate_receipt`` both use
+#: ``EXIT_PARTIAL = 4``).  It was 1 for one release (agentic-sdlc-d7b3).
+EXIT_PARTIAL = 4
+#: An effect was admitted and its completion cannot be claimed.  It shares exit 4 with
+#: ``EXIT_PARTIAL`` because Decision 9 has ONE class for both admitted-effect states; the two
+#: constants stay distinct because the reported lines distinguish them.
 EXIT_UNKNOWN = 4
 
 HOST = "claude"
@@ -77,6 +84,20 @@ MAX_RECEIPT_DOCUMENTS = 64
 #: Written out rather than spelled with a regex digit class: ``\d`` admits the Arabic-Indic ``٩``, so
 #: a digest spelled in it would read as the same value while comparing unequal to it.
 _HEX_CHARACTERS = "0123456789abcdef"
+_DIGIT_CHARACTERS = "0123456789"
+_TOKEN_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+#: The activation-receipt filename grammar THIS PLANE'S OWN lifecycle verbs derive.
+#: ``ccodex_sdlc_install`` and ``ccodex_sdlc_update`` file ``<verb>-<operation-id>-<compact
+#: instant>.json``, each validated as one lowercase ASCII token by the module that writes it, and
+#: ``ccodex_sdlc_uninstall`` files ``uninstall-<the receipt id it retired>.json``.  Recognising exactly
+#: this shape is recognising this host's own evidence; it is NOT a general "looks like a filename"
+#: test.  The anchors are what keep it narrow: an operator's own neighbour in the plane
+#: (``operator-notes.json``, or a name that happens to carry a credential-shaped string) matches no
+#: verb prefix and no trailing instant, stays unrecognised, and is refused without its name being
+#: echoed (agentic-sdlc-3bb8).
+LIFECYCLE_RECEIPT_VERBS = ("install", "update")
+RETIREMENT_RECEIPT_PREFIX = "uninstall-"
 _ESCAPES = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 #: Journal document states. ``absent`` is a state, not a defect: a host that never installed has no
@@ -163,15 +184,64 @@ def is_plan_digest(value: object) -> bool:
     )
 
 
-def plane_locator(prefix: str, name: str) -> str:
-    """One opaque, deterministic locator for a plane document whose NAME is not ours to echo.
+def is_compact_instant(value: str) -> bool:
+    """``YYYYMMDDThhmmssZ`` lowercased: the exact trailing token the lifecycle verbs derive.
 
-    A well-formed receipt is named ``<64 lowercase hex>.json``, which carries no operator content, so
-    that name is kept; anything else is named by a digest of itself, which stays stable across runs
-    and distinguishes two unrecognised neighbours without republishing either name.
+    ``receipt_identity`` in both writing modules builds it as the receipt's stated instant with the
+    separators stripped and the whole token lowercased.  Tested by digit MEMBERSHIP rather than with
+    ``[0-9]`` inside a ``\\d`` class, so a name spelled with the Arabic-Indic ``٩`` is not admitted as
+    the same shape while comparing unequal to it.
+    """
+    if len(value) != 16 or value[8] != "t" or value[15] != "z":
+        return False
+    return all(character in _DIGIT_CHARACTERS for character in value[:8] + value[9:15])
+
+
+def is_operation_token(value: str) -> bool:
+    """One lowercase ASCII token -- ``[a-z0-9]([a-z0-9-]*[a-z0-9])?`` -- spelled by membership.
+
+    This is the operation-id shape the writing modules validate before they name a receipt.  A leading
+    or trailing ``-`` is refused, and ``.`` and every separator are outside the admitted set, so a
+    recognised stem can never traverse out of the directory it was listed from.
+    """
+    if not value or value[0] not in _TOKEN_CHARACTERS or value[-1] not in _TOKEN_CHARACTERS:
+        return False
+    return all(character in _TOKEN_CHARACTERS or character == "-" for character in value)
+
+
+def is_lifecycle_receipt_stem(value: str) -> bool:
+    """Is this stem a name this plane's OWN lifecycle verbs derive for an activation receipt?
+
+    ``install-<operation-id>-<compact instant>``, ``update-<operation-id>-<compact instant>``, and
+    ``uninstall-`` prefixed onto either of those.  Anchored at BOTH ends on purpose: an unanchored
+    "lowercase token" test would admit any hyphenated neighbour an operator dropped in the plane, and
+    naming such a document would both echo a name that is not ours to echo and read foreign content as
+    this host's evidence.
+    """
+    if value.startswith(RETIREMENT_RECEIPT_PREFIX):
+        value = value[len(RETIREMENT_RECEIPT_PREFIX) :]
+    for verb in LIFECYCLE_RECEIPT_VERBS:
+        if not value.startswith(f"{verb}-"):
+            continue
+        remainder = value[len(verb) + 1 :]
+        operation, separator, instant = remainder.rpartition("-")
+        return bool(separator) and is_operation_token(operation) and is_compact_instant(instant)
+    return False
+
+
+def plane_locator(prefix: str, name: str) -> str:
+    """One deterministic locator for a plane document, opaque when the NAME is not ours to echo.
+
+    Two name shapes carry no operator content and are therefore kept verbatim: ``<64 lowercase
+    hex>.json``, and the activation-receipt grammar the lifecycle verbs themselves derive
+    (``is_lifecycle_receipt_stem``).  Keeping the second is the fix for agentic-sdlc-3bb8: those are
+    the receipts THIS host filed, so treating them as unnameable made every real activation's plane
+    unverifiable and left an interrupted transaction with no executable recovery.  Anything else is
+    named by a digest of itself, which stays stable across runs and distinguishes two unrecognised
+    neighbours without republishing either name.
     """
     stem = name[:-5] if name.endswith(".json") else ""
-    if len(stem) == 64 and all(character in _HEX_CHARACTERS for character in stem):
+    if is_plan_digest(stem) or is_lifecycle_receipt_stem(stem):
         return f"{prefix}://{stem}"
     digest = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
     return f"{prefix}://unrecognised-{digest[:16]}"
@@ -543,6 +613,13 @@ def verify_receipt_evidence(dar: ModuleType, receipts: dict[str, Any], directory
     derivation and this check is NAMED as movement rather than validated as if it were the approved
     one.  A neighbour whose name this plane cannot recognise is ambiguous evidence and refuses:
     guessing which file an opaque locator meant is exactly the guess that must not happen here.
+
+    RECOGNISED means named, validated, and LEFT IN PLACE -- never rewritten, moved, or repaired.  The
+    recognised set is this plane's own two grammars (``is_plan_digest`` and
+    ``is_lifecycle_receipt_stem``); before agentic-sdlc-3bb8 it was the digest grammar alone, which no
+    lifecycle verb has ever used to name a receipt, so every host that had completed one install or
+    update refused its own evidence here and had no executable recovery for an interrupted
+    transaction.  A genuinely alien filename still refuses, by the same line, without echoing itself.
     """
     if receipts["state"] in JOURNAL_BLOCKING_STATES:
         raise Refusal(
@@ -563,7 +640,7 @@ def verify_receipt_evidence(dar: ModuleType, receipts: dict[str, Any], directory
                 " evidence cannot be verified"
             )
         stem = locator.split("://", 1)[-1]
-        if not is_plan_digest(stem):
+        if not (is_plan_digest(stem) or is_lifecycle_receipt_stem(stem)):
             raise Refusal(
                 f"the activation receipts plane holds {locator}, a document this plane cannot name;"
                 " unrecognised evidence is preserved and refused rather than interpreted"
@@ -774,7 +851,7 @@ def run(argv: list[str], ledger: dict[str, bool], *, home: Path | None = None) -
         "public_channel null and release_claim none: this recovery states no published release"
         " exists, and it authorizes no push, publication, merge, or deployment"
     )
-    return (EXIT_ATTENTION if partial else EXIT_RECOVERED), lines
+    return (EXIT_PARTIAL if partial else EXIT_RECOVERED), lines
 
 
 def main(argv: list[str] | None = None) -> int:

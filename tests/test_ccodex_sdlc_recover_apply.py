@@ -467,6 +467,57 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
             with self.subTest(value=rejected):
                 self.assertFalse(recover.is_plan_digest(rejected))
 
+    def test_the_receipt_names_the_lifecycle_verbs_write_are_recognised_and_nothing_else_is(self) -> None:
+        """agentic-sdlc-3bb8: this plane must be able to NAME its own activation receipts.
+
+        ``install``/``update`` file ``<verb>-<operation-id>-<compact instant>.json`` and ``uninstall``
+        files ``uninstall-<the id it retired>.json``.  Admitting only ``<64 hex>.json`` -- a grammar no
+        verb ever writes -- made every real host's own evidence unnameable and refused the whole apply.
+        The recogniser is anchored at BOTH ends, which is what keeps an operator's own neighbour out.
+        """
+        operation = "op-" + hashlib.sha256(b"an operation").hexdigest()[:32]
+        for accepted in (
+            f"install-{operation}-20260819t080000z",
+            f"update-{operation}-20260819t080000z",
+            f"uninstall-install-{operation}-20260819t080000z",
+            "install-op-x-20260819t080000z",
+        ):
+            with self.subTest(accepted=accepted):
+                self.assertTrue(recover.is_lifecycle_receipt_stem(accepted))
+                self.assertEqual(
+                    f"activation-receipt://{accepted}",
+                    recover.plane_locator("activation-receipt", f"{accepted}.json"),
+                )
+        for refused in (
+            "operator-notes",
+            "sk" + "-ant-api-a-credential-shaped-neighbour",
+            "notes-20260819t080000z",
+            f"install-{operation}-20260819T080000Z",
+            f"install--20260819t080000z",
+            f"install-{operation}-2026081t080000z",
+            f"install-{operation}-20260819t080000",
+            f"-install-{operation}-20260819t080000z",
+            f"install-{operation}-20260819t080000z-",
+            f"install-{operation}-٢٠٢٦٠٨١٩t080000z",
+            "installer-notes-20260819t080000z",
+            "../etc/passwd",
+            "",
+        ):
+            with self.subTest(refused=refused):
+                self.assertFalse(recover.is_lifecycle_receipt_stem(refused))
+                self.assertTrue(
+                    recover.plane_locator("activation-receipt", f"{refused}.json").startswith(
+                        "activation-receipt://unrecognised-"
+                    )
+                )
+        # The digest grammar still names itself, so widening the recogniser replaced nothing.
+        digest = hashlib.sha256(b"a well-formed receipt name").hexdigest()
+        self.assertFalse(recover.is_lifecycle_receipt_stem(digest))
+        self.assertEqual(
+            f"activation-receipt://{digest}",
+            recover.plane_locator("activation-receipt", f"{digest}.json"),
+        )
+
     def test_the_dry_run_renders_the_digest_and_changes_nothing_at_all(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -730,7 +781,10 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             applied = self.run_dispatcher(
                 dispatcher, environment, "sdlc", "recover", "--apply", fresh
             )
-            self.assertIn(applied.returncode, (0, 1), applied.stderr)
+            # 0 if every selected transition settled, 4 if something was preserved and named -- either
+            # way the plan was ADMITTED.  4 rather than 1 since agentic-sdlc-d7b3: Decision 9 assigns 1
+            # to an unexpected internal failure, which a named preservation is not.
+            self.assertIn(applied.returncode, (0, 4), applied.stderr)
             self.assertNotIn("is not the plan this host's state derives", applied.stderr)
 
     def test_a_foreign_digest_nobody_derived_refuses_before_any_effect(self) -> None:
@@ -779,7 +833,9 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
                 dispatcher, environment, "sdlc", "recover", "--apply", digest
             )
 
-            self.assertEqual(applied.returncode, 1, applied.stderr)
+            # Decision 9's class 4: an admitted partial effect, named and preserved.  It was 1 --
+            # "unexpected internal failure" -- for one release (agentic-sdlc-d7b3).
+            self.assertEqual(applied.returncode, 4, applied.stderr)
             self.assertIn("interrupted conflict", applied.stdout)
             self.assertIn("preserved state is never overwritten or deleted", applied.stdout)
             self.assertEqual(foreign.read_bytes(), payload_before)
@@ -819,7 +875,9 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
                 dispatcher, environment, "sdlc", "recover", "--apply", digest
             )
 
-            self.assertEqual(applied.returncode, 1, applied.stderr)
+            # Decision 9's class 4: an admitted partial effect, named and preserved.  It was 1 --
+            # "unexpected internal failure" -- for one release (agentic-sdlc-d7b3).
+            self.assertEqual(applied.returncode, 4, applied.stderr)
             self.assertIn("operator-tools: preserved conflict:", applied.stdout)
             self.assertEqual(state.read_bytes(), before_state)
             self.assertEqual(command.read_bytes(), before_command)
