@@ -189,6 +189,15 @@ forwarded verbatim to the default provider rather than refused, so bare and pref
 unknown ID behave identically. These fields exist only on the gateway route; a direct-adapter
 receipt records `adapter_response_readback` and carries neither.
 
+A gateway's own refusal is not evidence about a provider. An HTTP 413 from opencodex's
+input-admission preflight — an inbound token estimate above the route's ceiling × 2.5 — is refused
+locally before any provider request exists, so `rightsize.py` records it as
+`input_admission_refused`, its own classification: fail-closed like every other identity failure,
+but never readable as a provider, model, or quota fault, and never a verified receipt. The gateway
+log fields and route-kind union named here were re-verified against opencodex `2.28.0`; behaviors
+that need a live gateway to observe stay attributed to the `2.11.1` measurement until the `2.28.0`
+canary re-measures them (`references/model-routing-calibration.md`).
+
 The policy validates only certified requested tuples. Claude base tuples remain eligible outside
 OCX Ultracode Workflow; exact Claude `[1m]` forms are invalid until tuple-specific policy evidence
 exists, so that mode stops before dispatch rather than selecting the base tuple. GPT `[1m]` forms

@@ -217,6 +217,16 @@ The gateway can. Therefore:
 - An over-window request can surface as an opaque upstream refusal rather than a recoverable
   one, because a gateway that rewrites the upstream error text defeats wording-matched
   automatic compact-and-retry. Manual compaction is then the only recovery.
+- One over-window case is **not** upstream at all and must not be recorded as one. A 413 whose
+  error type is `input_admission_refused` (new in `2.28.0`; a live `2.11.1` gateway never emits
+  it) is opencodex's own input-admission preflight — an inbound token estimate above the route's
+  ceiling × 2.5, refused locally before any provider request — so the attempt reaches no
+  upstream: its attribution record exists but correlates to no provider serve. Other 413s exist,
+  local (buffer and body-size limits) and upstream (Anthropic's own `request_too_large` on the
+  passthrough route), so match the error type, never the bare status. `rightsize.py:
+  identity_evidence` names the preflight class distinctly from a generic `transport-status`, and
+  it is still fail-closed: no receipt, no admitted result. The remedy for the preflight class is
+  a smaller packet or a larger-window route, never a retry against the same route and prompt.
 - A window at or below the client's documented minimum floor cannot be matched by the floor
   variable at all. Keep such routes to bounded packets.
 
@@ -242,6 +252,16 @@ provider-side truncation instead of a clean local compaction. 272000 sits inside
 for both the 5.6 family and `gpt-5.5`, and because the client applies `min(believed window,
 env)`, a smaller model such as `gpt-5.3-codex-spark` stays accounted at its own 100000 rather
 than being pulled up to the floor.
+
+**The default has moved away from the floor, so the floor must be set explicitly.** opencodex
+`2.28.0` raises `AUTO_COMPACT_WINDOW_DEFAULT` to **829800** (it was 350000 through `2.11.1`). An
+unset compact window therefore now sits far behind every window in the selected set — the exact
+truncation-instead-of-compaction failure the 272000 choice exists to avoid — and it also drops the
+injected-slot extended-context mark from any sub-1M route, because marking a window below the
+compact window is what the predicate refuses. Read on this host 2026-08-20 with a read-only
+`ocx config show --json`: `claudeCode.autoCompactWindow` **is** explicitly `272000`, so the
+adopted floor is applied here rather than merely documented, and `autoContext` is absent
+(default-on). Treat an absent explicit value on any other host as 829800, not as 272000.
 
 **This floor under-uses `gpt-5.4` and the muse models by design.** Both carry roughly 1M, so a
 272000 floor leaves most of their window unreachable. That is the accepted cost of one process-
@@ -301,9 +321,13 @@ rounded figure is both wrong and changes whether the extended-context marking pr
 And because the pool is shared, recording the window without also setting the output ceiling
 reintroduces the starvation hazard above.
 
-This is a documented step, not an applied one: no such map is configured, so a reader must treat
-it as a deliberate action requiring the operator's own authorization rather than as current
-state.
+This was recorded as a documented step rather than an applied one, and on this host that has
+changed: read 2026-08-20 with a read-only `ocx config show --json`, the `muse` provider block
+carries exactly this map, all three entries at 1048576. Two things follow. Applying it anywhere
+else is still a deliberate mutation requiring the operator's own authorization — one host's
+configuration is not a default. And the second condition above is live rather than hypothetical
+here: the map is set, so the output ceiling has to be set alongside it or the shared-pool
+starvation hazard is a present risk, not a future one.
 
 ### Requested context form is a request, never proof of the served window
 
@@ -404,6 +428,20 @@ qualification canary (`docs/research/2026-08-07-opencodex-qualification-canary.m
 C1 and C2) against one live gateway deployment, and each replaces a rule that looked safe and
 was not.
 
+**Version attribution, because the pin moved from `2.11.1` to `2.28.0`.** Both rules were measured
+against a live `2.11.1` gateway on 2026-08-07. A 2026-08-19 diff of the published `2.28.0` tarball
+against `2.11.1` re-verified the machine surface they read, so the FIELDS and the alarm are current:
+`ocx observe logs --jsonl` still emits the same per-request fields (`requestId`, `requestedModel`,
+`resolvedModel`, `provider`, `status`, `routeDecision.selected`), `routeKind` still carries the same
+union including `default-provider`, the served `GET /v1/models` catalog keeps its shape, and the
+exit codes the wrapper branches on are unchanged. What the diff could NOT verify is any behavior
+that requires a live gateway to observe — the response body's alias echo and model relabel, the
+dated-snapshot suppression, and effective-context behavior — because the live gateway on this host
+was still serving `2.11.1` when the diff was read; the restart that would move it is an explicit
+operator step, not part of a pin bump. Those remain `2.11.1` observations, and the `2.28.0`
+qualification canary is what re-measures them. Do not restate one as current merely because the
+pin advanced.
+
 1. **Catalog membership, not a provider-prefix convention.** The canary requested
    `anthropic/claude-opus-5` and bare `claude-opus-5` and got *identical* behavior: neither was
    refused by the router. Both were classified `routeKind: "default-provider"` and forwarded
@@ -456,7 +494,8 @@ G1–G7) — and the decision record `docs/adr/0007-muse-spark-direct-route.md` 
 predates the two-route decision; its title and Decision are authoritative).
 
 **Why the gateway route is primary.** It has a per-request attribution channel that is observed
-**independently of the request string**, and its independence is *proved* rather than assumed:
+**independently of the request string**, and its independence is *proved* rather than assumed
+(the body-echo divergence below is a `2.11.1` observation — see the version attribution above):
 for `muse/muse-spark-1.2` the response body echoes `muse/muse-spark-1.2` while the log records
 `resolvedModel: muse-spark-1.2`. Because a second channel disagrees with the body, the log is
 demonstrably not a replay of the request — the same alias-echo divergence the canary found. The
@@ -499,7 +538,16 @@ sources: `ocx provider list` reads the config file, while the running gateway's 
 `GET /v1/models` reads the process catalog. `scripts/opencodex-claude.sh status` performs that
 comparison and reports **NOT-LIVE** for any configured-but-unserved provider; `configure` prints
 the required sequence after a successful mutation. Confirm liveness before dispatching —
-`provider add` succeeding is not evidence of it. Related caveats: `ocx provider test` reads
+`provider add` succeeding is not evidence of it. By opencodex `2.28.0` (absent in `2.11.1`) the sync half can be
+**catalog-only**: with the Codex integration off, or an external `model_provider` owning
+`config.toml`, it reports a `CodexSyncResult` status of `catalog-only` and leaves `config.toml`,
+the journal, and history untouched (the catalog and models-cache files under `~/.codex` may
+still refresh). That changes the blast radius of the sync, not G1 — the restart is still required, the
+window still fails open, and a sync that WOULD rewrite `~/.codex` still needs its own explicit
+approval. Note too that the wrapper admits a not-yet-configured provider by NAME against the
+registry roster it pins, so a name it has never heard of is refused rather than admitted by
+absence; `2.28.0` added `chutes`, `featherless`, `nous`, `novita`, and `xiaomi-mimo` to that
+roster. Related caveats: `ocx provider test` reads
 liveness rather than configuration (a failure means "not live", not "not configured"), and
 `provider add` performs **no adapter validation**, so a mistyped adapter is stored silently and
 must be verified against a live request (**G7**).

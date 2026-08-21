@@ -1068,7 +1068,28 @@ def identity_evidence(route: dict[str, Any], records: list[dict[str, Any]]) -> d
     groups = {record.get("conversationId") for record in terminal if record.get("conversationId") is not None}
     if len(groups) > 1 or not terminal:
         return {"verified": False, "failure": "ambiguous-attribution"}
-    if any(record.get("status") != 200 for record in terminal):
+    statuses = [record.get("status") for record in terminal]
+    # A 413 whose error type is `input_admission_refused` (new in 2.28.0; a live 2.11.1 gateway
+    # never emits it) is not an upstream answer: opencodex estimates the inbound token count and
+    # refuses locally, before any provider request, when the estimate exceeds the route's
+    # ceiling * 2.5. No upstream request was made, so the attempt says nothing about the provider
+    # or the model, and the remedy is a smaller prompt or a larger-window route rather than a
+    # retry against the same transport. Other 413s exist -- local buffer/body limits and
+    # Anthropic's own request_too_large upstream on the passthrough route -- so the bare status
+    # is not the class; this classifier keys on the status today and reading the error type is
+    # the recorded residual hardening. Still fail-closed -- `verified` stays False and the
+    # attempt is a route failure either way.
+    #
+    # A mixed non-200 set stays `transport-status` on purpose: naming a batch by its 413 would
+    # hide a 500 sitting beside it. A missing or non-integer `status` is not 200 and not 413, so an
+    # absent field also stays the generic refusal rather than being read as an admission verdict.
+    if statuses and all(status == 413 for status in statuses):
+        return {
+            "verified": False,
+            "failure": "input_admission_refused",
+            "observed_statuses": statuses,
+        }
+    if any(status != 200 for status in statuses):
         return {"verified": False, "failure": "transport-status"}
     excerpts: list[dict[str, Any]] = []
     for record in terminal:

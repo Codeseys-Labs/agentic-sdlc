@@ -76,8 +76,17 @@
 #     config file does not put it in the running gateway's catalog: `ocx sync` plus a gateway
 #     restart is required, and in the window between, a request naming the new provider's model
 #     falls through to the DEFAULT provider (see print_sync_required_notice). This wrapper
-#     reports that gap mechanically and refuses to close it silently, because `ocx sync`
-#     rewrites shared ~/.codex config and is its own authorized operation.
+#     reports that gap mechanically and refuses to close it silently, because a `sync` that
+#     rewrites shared ~/.codex config is its own authorized operation.
+#   * By opencodex 2.28.0 (absent in 2.11.1), a sync is not always a ~/.codex config write. With the Codex integration
+#     turned off, or with an external `model_provider` owning `config.toml`, the sync is
+#     CATALOG-ONLY: it reports a `CodexSyncResult` status of `catalog-only` and leaves
+#     config.toml, the journal, and history untouched (it may still refresh the catalog and
+#     models-cache files under ~/.codex), and a `validateOnly` injection preflight fails a bad config before any
+#     partial rewrite. That narrows the blast radius; it does not move the authorization. This
+#     wrapper cannot tell which of the two branches a given host will take without running the
+#     sync, so it keeps printing the sequence and still never runs it: a sync that WOULD rewrite
+#     ~/.codex needs its own explicit approval.
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -298,8 +307,13 @@ mutation/import/export, and unknown future upstream routes fail closed with exit
 A provider add/edit/remove writes the CONFIG FILE only. It is NOT in the running gateway
 until `ocx sync` plus a restart, and until then a request naming it falls through to the
 DEFAULT provider. This route prints that sequence after a successful mutation and never
-runs it for you: `ocx sync` rewrites shared ~/.codex config and a restart interrupts
-in-flight turns, so each is separately authorized.
+runs it for you: a sync can rewrite shared ~/.codex config and a restart interrupts
+in-flight turns, so each is separately authorized. By opencodex 2.28.0 (absent in 2.11.1)
+the sync is catalog-only -- leaving config.toml, the journal, and history untouched, though
+it may still refresh the catalog and models-cache files under ~/.codex -- when the Codex
+integration is off or an external `model_provider` owns `config.toml`. A sync that WOULD rewrite ~/.codex still
+needs its own approval, and this route cannot tell the two branches apart without
+running it.
 
 Pass a key via piped stdin (`ocx account add-key <name>`) rather than --api-key where
 possible: argv is readable by every process on this host via `ps`.
@@ -551,9 +565,18 @@ not_live_providers() {
   done <<<"$configured"
 }
 
-# Printed after every admitted provider mutation. The sequence is NOT run for the operator:
-# `ocx sync` rewrites shared ~/.codex state and a restart interrupts in-flight turns, so each
-# is its own authorized operation rather than a side effect of a configuration edit.
+# Printed after every admitted provider mutation. The sequence is NOT run for the operator: a
+# sync can rewrite shared ~/.codex state and a restart interrupts in-flight turns, so each is its
+# own authorized operation rather than a side effect of a configuration edit.
+#
+# By opencodex 2.28.0 (absent in 2.11.1) the write half is CONDITIONAL: with the Codex integration
+# off, or with an external `model_provider` owning `config.toml`, the sync reports a
+# `CodexSyncResult` status of `catalog-only` and leaves config.toml, the journal, and history
+# untouched (it may still refresh the catalog and models-cache files under ~/.codex), and a
+# `validateOnly` injection preflight fails a
+# bad config before any partial rewrite. Which branch a host takes is not knowable from here
+# without running the sync, so the notice keeps naming the ~/.codex exposure: the narrower branch
+# lowers the blast radius, never the authorization.
 print_sync_required_notice() {
   local route="$1"
   cat <<EOF
@@ -568,8 +591,12 @@ Until then a request naming this provider's model does NOT fail closed. It is cl
 \`routeKind: "default-provider"\` and forwarded to the DEFAULT provider, so it is attempted and
 billed against the wrong upstream while the attribution log records the wrong provider.
 
-Neither step is run for you: \`ocx sync\` rewrites shared ~/.codex config and a restart
-interrupts in-flight turns, so both are separately authorized operations.
+Neither step is run for you: a \`sync\` can rewrite shared ~/.codex config and a restart
+interrupts in-flight turns, so both are separately authorized operations. By opencodex
+2.28.0 (absent in 2.11.1) the sync is catalog-only when the Codex integration is off or an
+external model_provider owns config.toml -- config.toml, the journal, and history stay
+untouched, though the catalog and models-cache files under ~/.codex may still refresh; a sync that WOULD rewrite ~/.codex
+still needs its own approval.
 
 Confirm the provider went live before dispatching anything to it:
   ccodex status
@@ -1593,9 +1620,17 @@ explicit_non_anthropic_endpoint_argument() {
   $found
 }
 
+# The fallback for a provider that is NOT YET in the config file: a registry name upstream ships
+# but the operator has not added, so `configured_provider_class` returns absent (3) and there is
+# no baseUrl to classify. Every name here is one the upstream registry serves from a
+# non-Anthropic endpoint. It is a positive list on purpose -- an unrecognized name is refused,
+# not admitted -- so a registry that grows leaves this list narrow rather than wrong, and the
+# only cost of a stale entry is a refusal the operator resolves by adding the provider first.
+# Read from the opencodex 2.28.0 registry roster; the five names 2.28.0 added over 2.11.1 are
+# chutes, featherless, nous, novita, and xiaomi-mimo.
 known_non_anthropic_provider() {
   case "$(normalize_identifier "$1")" in
-    cursor|xai|command-code|kimi|kiro|openai-apikey|umans|opencode-go|neuralwatt|openrouter|cline-pass|cline|orcarouter|bizrouter|groq|google|google-vertex|google-antigravity|azure-openai|ollama|vllm|lm-studio|deepseek|cerebras|deepinfra|hyperbolic|baseten|commandcode|together|fireworks|firepass|moonshot|huggingface|nvidia|venice|zai|zhipu-bigmodel|nanogpt|synthetic|siliconflow|qwen-cloud|tencent-coding-plan|volcengine|volcengine-coding-plan|volcengine-agent-plan|qianfan|alibaba|alibaba-token-plan|alibaba-token-plan-intl|parallel|zenmux|litellm|ollama-cloud|mistral|minimax|minimax-cn|kimi-code|opencode-zen|vercel-ai-gateway|opencode-free|xiaomi|kilo|mimo-free|cloudflare-ai-gateway|cloudflare-workers-ai|github-copilot|gitlab-duo|openai) return 0 ;;
+    cursor|xai|command-code|kimi|kiro|openai-apikey|umans|opencode-go|neuralwatt|openrouter|cline-pass|cline|orcarouter|bizrouter|groq|google|google-vertex|google-antigravity|azure-openai|ollama|vllm|lm-studio|deepseek|cerebras|deepinfra|hyperbolic|baseten|commandcode|together|fireworks|firepass|moonshot|huggingface|nvidia|venice|zai|zhipu-bigmodel|nanogpt|synthetic|siliconflow|chutes|featherless|nous|novita|qwen-cloud|tencent-coding-plan|volcengine|volcengine-coding-plan|volcengine-agent-plan|qianfan|alibaba|alibaba-token-plan|alibaba-token-plan-intl|parallel|zenmux|litellm|ollama-cloud|mistral|minimax|minimax-cn|kimi-code|opencode-zen|vercel-ai-gateway|opencode-free|xiaomi|xiaomi-mimo|kilo|mimo-free|cloudflare-ai-gateway|cloudflare-workers-ai|github-copilot|gitlab-duo|openai) return 0 ;;
     *) return 1 ;;
   esac
 }

@@ -198,9 +198,14 @@ Two rules that outrank convenience:
    unstated omission and a reasoned one look identical in a diff six months later.
 
 **A pin and the permission to use a tool a particular way are separate decisions — and the
-separation survives the pin.** As of 2026-08-09 this bundle DOES pin
-`npm:@bitkyc08/opencodex` (version 2.11.1, MIT, npm backend, `depends = ["node"]`), by
-explicit operator decision recorded in `docs/adr/0005`. An earlier revision of this skill
+separation survives the pin.** This bundle DOES pin `npm:@bitkyc08/opencodex` (MIT, npm backend,
+`depends = ["node"]`), by explicit operator decision recorded in `docs/adr/0005`. The pin was taken
+at 2.11.1 on 2026-08-09 and moved to 2.28.0 on 2026-08-20; `mise.toml` holds the exact number and
+is the only authority for it, because a version quoted in prose here goes stale at the next bump
+with nothing failing to say so. A bump is its own reviewed change: the wrapper's parsed contracts
+and the behavioral prose in `skills/model-tier-rightsizing/references/` were re-diffed against the
+new tarball, and the live-gateway restart that would re-measure runtime behavior stayed an explicit
+operator step rather than riding along with the pin. An earlier revision of this skill
 left it unpinned while the subscription-passthrough question was open; `docs/adr/0003`
 closed that question, so the packaging decision was made on its own merits — like the two
 npm pins above, the npm backend locks version+backend only, and the npm registry needs no

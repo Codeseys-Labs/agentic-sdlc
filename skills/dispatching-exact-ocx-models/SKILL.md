@@ -40,6 +40,17 @@ compare observed provider/model to the assignment. Requested identity is not rea
 prompt echo nor a response-body model label proves the route. Record effective effort/context only
 when independently exposed, otherwise mark them unavailable rather than copying requested values.
 
+On the OCX gateway the attribution surface is `ocx observe logs --jsonl`, correlated by
+`requestId`: `resolvedModel`, `provider`, `status`, and `routeDecision.routeKind`/`.selected` are
+the fields that carry identity, and `routeKind: "default-provider"` means the router did not
+recognize the target — an alarm, not a route. Those fields were re-verified against opencodex
+`2.28.0`. Two refusals are not identity evidence and must not be recorded as provider faults: an
+HTTP 413 whose error type is `input_admission_refused` (new in 2.28.0, absent from a live 2.11.1
+gateway) is opencodex's own input-admission preflight (estimated input above the route ceiling
+× 2.5) refusing locally before any provider request — other 413s exist locally and upstream, so
+match the error type, not the bare status — and a configured-but-unsynced provider
+is served by the DEFAULT provider instead of failing closed. Both stop the dispatch.
+
 If identity is ambiguous, mismatched, or uncorrelated, discard the result and stop or use the
 assignment's predeclared fallback. **No verified receipt, no dispatch** means no result may enter the
 production handoff as if the assignment ran.

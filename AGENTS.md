@@ -269,6 +269,19 @@ model selection as policy.
   before gateway startup, then accepted arguments are forwarded unchanged. An `sk-ant-oat*` login
   is accepted; no credential value or selected settings path is printed. A healthy launch is still
   not model-identity evidence.
+  `ocx:configure` admits only reviewed non-Anthropic provider/account routes, and a mutation there
+  writes the CONFIG FILE only: the wrapper prints the required `ocx sync` plus `ccodex restart` and
+  runs neither, because until both have run a request naming the new provider is classified
+  `routeKind: "default-provider"` and billed against the DEFAULT provider instead of failing
+  closed. By opencodex 2.28.0 (absent in 2.11.1) the sync is not always a `~/.codex` config write — with the Codex
+  integration off, or an external `model_provider` owning `config.toml`, it reports a
+  `CodexSyncResult` status of `catalog-only`, leaving `config.toml`, the journal, and history untouched (the catalog and models-cache files under `~/.codex` may still refresh), and a `validateOnly`
+  injection preflight fails a bad config before any partial rewrite. That narrows the blast radius,
+  not the authorization: a sync that WOULD rewrite shared `~/.codex` still requires its own
+  explicit approval, and which branch a host takes is not knowable without running it. A provider
+  absent from the config file is admitted only by name against the registry roster the wrapper
+  pins (2.28.0 adds `chutes`, `featherless`, `nous`, `novita`, `xiaomi-mimo`); an unlisted name is
+  refused, never admitted by absence.
   Muse Spark has no tasks of its own: it is one provider registered in the gateway, whose models
   appear in the single flat live catalog as namespaced ids, so
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a

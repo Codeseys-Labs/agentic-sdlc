@@ -1674,6 +1674,38 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertExactTracedOcxRoute(log, "login", "xai", "two words")
 
+    # THE ALLOWLIST IS THE ADMISSION RULE for a provider that is not in the config file yet, and
+    # nothing pinned its CONTENTS. A registry name opencodex serves but this list has never heard
+    # of is refused, which is the correct default and also a silent papercut when the registry
+    # grows: the five names opencodex 2.28.0 added over 2.11.1 were refused by a wrapper that was
+    # otherwise fully current. Each is named here, so dropping one from
+    # `known_non_anthropic_provider` fails this test instead of surfacing as an operator's
+    # unexplained exit 3. MEASURED on a /tmp copy with `novita` removed from the case list: this
+    # test fails on that subTest and the whole rest of the module still passes.
+    def test_configure_admits_every_registry_provider_name_the_allowlist_claims(self) -> None:
+        for provider in (
+            "chutes", "featherless", "nous", "novita", "xiaomi-mimo",
+            # 2.11.1-era names, kept so a rewrite of the list cannot narrow it silently.
+            "xai", "openrouter", "groq", "xiaomi",
+        ):
+            with self.subTest(provider=provider):
+                # An EMPTY config is the case under test: absent from the config file is what
+                # sends classification to the allowlist rather than to a baseUrl.
+                result, log = self.run_launcher("configure", "login", provider, config={"providers": {}})
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTracedOcxRoute(log, "login", provider)
+
+    def test_configure_still_refuses_a_provider_no_allowlist_entry_claims(self) -> None:
+        # The positive control for the test above: absence from the config file must not admit by
+        # itself. If this passes while the list is empty, that test proves nothing.
+        result, log = self.run_launcher(
+            "configure", "login", "not-a-registry-provider", config={"providers": {}}
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertOnlyReadOnlyOcxRoutes(log, "<ocx><config><show><--json>")
+
     def test_configure_allows_third_party_anthropic_wire_adapter(self) -> None:
         result, log = self.run_launcher(
             "configure", "provider", "add", "xiaomi", "--adapter", "anthropic",

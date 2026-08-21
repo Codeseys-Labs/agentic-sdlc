@@ -229,6 +229,13 @@ per model whether that model's selector carries the `[1m]` marker. The marking p
 - otherwise mark only if `autoContext` is on **and** window > `AUTO_CONTEXT_FLOOR` (200,000)
   **and** window ≥ the compact window.
 
+> **CORRECTION, 2026-08-20 — the injected default is now 829,800.** This memo measured 2.11.1-era
+> source, where `AUTO_COMPACT_WINDOW_DEFAULT` was 350_000; opencodex 2.28.0 sets it to 829_800.
+> The predicate itself is unchanged, so the second branch's floor rose with the constant: a
+> sub-1M route is marked only at a window ≥ 829,800 unless an explicit lower compact window is
+> set. The measurement above stands as of its date; the current value lives in
+> `skills/model-tier-rightsizing/references/workflow-prompt-budget.md` §7.2.
+
 The last conjunct is the safety property, and its comment states the hazard directly:
 "marking a model whose real window is BELOW the compact window would put the compaction
 safety net behind the real API limit (mid-session 400s)."
@@ -500,6 +507,13 @@ raising the compact window past 372,000 unmarks the entire 5.6 family, and past 
 unmarks `gpt-5.4` too. The knob is genuinely two-sided: there is no single value that is
 right for a 100,000-token model and a 1,048,576-token model in one session.
 
+> **CORRECTION, 2026-08-20 — under opencodex 2.28.0 the injected default is 829,800, not
+> 350,000.** The two-sidedness described here is unchanged and now bites without any tuning: the
+> default alone sits above every window in the selected set, so it unmarks the 5.6 family
+> (372,000) and `gpt-5.5` (272,000) and puts compaction behind their real ceilings. The adopted
+> 272000 floor (§8.2) must therefore be set explicitly; it can no longer be approximated by
+> leaving the default in place.
+
 **(b) A request over a smaller model's window surfaces as an opaque upstream 400.** This is
 documented rather than hypothesized (§4.7): when a gateway "enforces a smaller context than
 the model's native window and rewrites the upstream error," Claude Code's automatic
@@ -744,6 +758,11 @@ set through the gateway's own persistent setting rather than a per-shell export:
 ocx claude config set --compact-window 272000    # the adopted floor, per 8.2
 ocx claude config set --compact-window default   # restore ocx's 350000 default
 ```
+
+> **CORRECTION, 2026-08-20 — `default` restores 829,800 under opencodex 2.28.0**, not 350000. The
+> commands are unchanged; only what `default` means moved. Read on this host 2026-08-20,
+> `claudeCode.autoCompactWindow` is explicitly 272000, so `default` would RAISE the floor past
+> every window in the selected set rather than restore a comparable one.
 
 That is a persistent gateway-side setting (it writes `claudeCode.autoCompactWindow`), so it
 survives new terminals — preferable to exporting `CLAUDE_CODE_AUTO_COMPACT_WINDOW` per shell.

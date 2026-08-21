@@ -318,8 +318,18 @@ compact base-form route.
 
 Originally grounded in the installed `2.10.2` source, then rechecked against the active
 `2.11.1` package under its mise install root on 2026-08-09 (the docs site is not shipped in
-the npm package). These levers affect token pressure
-independent of `[1m]`.
+the npm package). Re-checked on 2026-08-19 by diffing the published `2.28.0` tarball against
+`2.11.1`, for the `2.11.1 → 2.28.0` pin bump: every mechanism named in this section survives
+under the same names and file paths, and exactly one constant moved —
+`AUTO_COMPACT_WINDOW_DEFAULT`, from `350_000` to `829_800` (§7.2, and it changes the injected-slot
+`[1m]` floor). Read the version attribution on each number below literally. A figure that came from
+the opencodex **source** is current for `2.28.0`. A figure that came from anywhere else is not: the
+live-gateway catalog counts and per-model windows in §7.4 and any response-body behavior are still
+`2.11.1` measurements, because the live gateway on this host was still `2.11.1` when the diff was
+read, and the elided bundle's char/token size in §7.1 is a Claude Code artifact size measured on
+2026-08-09 rather than a gateway constant at all. The `2.28.0` qualification canary is what
+re-measures the gateway half; until it runs, do not restate one as a `2.28.0` observation. These
+levers affect token pressure independent of `[1m]`.
 
 ### 7.1 `blockedSkills` elision — automatic ~136k saving on routed models
 
@@ -351,9 +361,10 @@ independent of `[1m]`.
 ### 7.2 `autoContext` / `autoCompactWindow` — the real per-model floor
 
 - `src/claude/context-windows.ts` owns the mechanism:
-  `AUTO_COMPACT_WINDOW_DEFAULT = 350_000`, `AUTO_CONTEXT_FLOOR = 200_000`,
-  `ONE_MILLION = 1_000_000`, accepted range `100_000–1_000_000` verified against the
-  Claude Code 2.1.207 binary.
+  `AUTO_COMPACT_WINDOW_DEFAULT = 829_800` in `2.28.0` — it was `350_000` through `2.11.1`, and
+  this is the one constant the version diff moved — plus `AUTO_CONTEXT_FLOOR = 200_000`,
+  `ONE_MILLION = 1_000_000`, and the accepted range `100_000–1_000_000` (unchanged, verified
+  against the Claude Code 2.1.207 binary).
 - `resolveAutoContext(claudeCode, envOverride) → {enabled, compactWindow}`.
   Disabled when `claudeCode.autoContext === false` **or** when legacy
   `maxContextTokens` is set — both `MAX_CONTEXT_TOKENS` and `DISABLE_COMPACT` then
@@ -364,6 +375,14 @@ independent of `[1m]`.
   is the safety property: marking a model whose real window is **below** the compact
   window would put the compaction safety net **behind** the real API limit
   (mid-session 400s).
+- **What the raised default changes.** The predicate is the same; its second branch now demands
+  far more. With `autoContext` on and no explicit compact window, an injected slot is marked only
+  at `window >= 829_800`, where `2.11.1` marked from `350_000`. A 372k sol/terra/luna route was
+  marked under the old default and is **not** marked under the new one. So a sub-1M `[1m]` mark is
+  now an explicit floor decision — either the host sets `--compact-window` at or below the route's
+  real window on purpose, or that route stops being marked — and a workflow that assumed the
+  marking would appear on its own gets an unmarked slot with no error. The `window >= 1M` branch is
+  untouched: a genuinely 1M model still marks regardless of the default.
 - `effectiveModelEnv()` injects `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and the tier
   slots `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_OPUS/SONNET/FABLE/HAIKU_MODEL` with
   `withOneMillionMarker()` applied. The persistent write surface is
@@ -377,14 +396,19 @@ independent of `[1m]`.
   if `shouldMarkOneMillion(authoritativeWindow, AUTO_CONTEXT_OFF)` — i.e. **without**
   the main-session auto-context pairing. A 372k route is **not** marked there unless
   its window is genuinely ≥1M (the #854 defect guard).
-- **Alive today:** this operator's live config is untouched — `ocx claude config
-  status` shows `autoContext: true`, `autoCompactWindow: null` (default 350k),
-  provider blocks have `modelContextWindows` absent, no `claudeCode` block. The
-  adopted floor in `docs/research/2026-08-07-context-window-accommodation.md` §8 is
-  **272000** (smallest real window in the selected set); it will be applied via
-  `ocx claude config set --compact-window 272000` as a gateway-side persistent
-  setting, not a per-shell export. Do **not** describe `[1m]` as the per-model
-  floor — the floor is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` via `min(believed window, env)`.
+- **Alive on this host, re-read 2026-08-20** (`ocx config show --json`, read-only, 2.28.0 CLI
+  against the same config file): the adopted floor from
+  `docs/research/2026-08-07-context-window-accommodation.md` §8 **has been applied**.
+  `claudeCode.autoCompactWindow` is explicitly `272000` — the smallest real window in the selected
+  set — so this host's pairing floor is 272000 and **not** the raised 829_800 default, and an
+  explicit setting is what keeps a 372k route markable. `claudeCode` also carries `smallFastModel`
+  and `authModeMigratedAt`; `claudeCode.autoContext` is absent, i.e. default-on. Two providers are
+  configured (`openai`, the default, and `muse`), and the `muse` block **does** carry a
+  `modelContextWindows` map. An earlier revision of this bullet said the live config was untouched
+  with `autoCompactWindow: null` and no `claudeCode` block; that was true on 2026-08-09 and is
+  false now, which is why the read is dated and re-runnable rather than asserted. Do **not**
+  describe `[1m]` as the per-model floor — the floor is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` via
+  `min(believed window, env)`.
 
 ### 7.3 Reasoning effort — `ultra` is not a context lever
 
@@ -405,6 +429,14 @@ independent of `[1m]`.
   and `ocx claude config status` carry the real per-model map (`contextWindow`:
   sol/terra/luna 372k, 5.5 272k, 5.4 1M, 5.3-codex-spark 100k, mini/muse absent).
   The calibration table — not discovery — is the source of truth.
+- **Version attribution.** Those entry counts and per-model numbers are `2.11.1` live-catalog
+  measurements from 2026-08-09; the `2.28.0` canary re-measures them, and the catalog also has five
+  more registry providers available to add (`chutes`, `featherless`, `nous`, `novita`,
+  `xiaomi-mimo`), so expect the counts to move. What the `2.28.0` source re-verified is the RULE
+  that produces them: the Anthropic-shaped list still emits `claude-ocx-*` ids through the same
+  codec, and an entry carries the `[1m]` mark and a non-null window only when its **authoritative**
+  window is `>= 1e6`. So the shape is current and the counts are dated. A `null` window is the
+  rule's ordinary output, not a defect, and catalog discovery is still not a window source.
 
 ## 8. Checklist for Workflow authors
 
@@ -429,7 +461,10 @@ Before dispatching a `Workflow()`:
       `RuntimeAssignment` records `requested_context_form: "[1m]"` alongside a
       valid `requested_effort`.
 - [ ] The session floor is still 272000 unless the session is genuinely
-      single-model on a larger window and the raise is documented.
+      single-model on a larger window and the raise is documented. That floor is an
+      EXPLICIT `claudeCode.autoCompactWindow`, not the default — opencodex `2.28.0`
+      defaults to 829_800, which would put the compaction net far behind a 372k route
+      and drop its injected-slot `[1m]` mark (§7.2).
 - [ ] Output budgets on shared-pool (`muse`) sessions are set explicitly
       (above ~600 + expected output, well below 1048576).
 
@@ -445,6 +480,17 @@ Before synthesising across prior stage outputs:
 1. **Classify** the failure: is the prompt too long because it carries a
    corpus, because it carries prior transcripts, or because the output schema
    itself is huge? The fix differs.
+   - An **HTTP 413** carrying the error type `input_admission_refused` (new in 2.28.0; a live
+     2.11.1 gateway never emits it) is its own class, not a transport fault: opencodex estimates
+     the inbound token count and refuses **locally**, before any provider request, when the
+     estimate exceeds the route's ceiling × 2.5. Such an attempt carries no upstream evidence —
+     no provider request was dispatched, and the attribution log records the refusal itself, not
+     a serve. Other 413s exist (local buffer/body limits, and Anthropic's own `request_too_large`
+     upstream on the passthrough route), so match the error type, never the bare status. Treat the
+     preflight class as "this prompt does not fit this route" and go to step 2 or 3; a retry
+     against the same route and prompt refuses identically. `rightsize.py: identity_evidence` classifies it under that name so a 413 is never
+     read as a provider or model fault, and a 413 mixed with any other non-200 stays the generic
+     `transport-status` rather than being renamed after the 413.
 2. **Re-brief** to remove the corpus from the prompt (section 6.1) and re-run
    the single stage with `resumeFromRunId` — unchanged prefixes replay from
    cache.

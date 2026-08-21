@@ -473,6 +473,56 @@ class IdentityTests(unittest.TestCase):
         ]
         self.assertEqual(RIGHTSIZE.identity_evidence(route(), records)["failure"], "ambiguous-attribution")
 
+    def test_a_413_is_the_gateways_own_input_admission_refusal_not_a_transport_status(self) -> None:
+        # opencodex answers 413 from its own input-admission preflight (estimated inbound tokens
+        # over the route ceiling * 2.5) BEFORE any provider request exists, so the attempt carries
+        # no provider evidence at all. It must not be reported as the same thing as an upstream
+        # 5xx: the remedy is a smaller prompt or a larger window, not a retry.
+        def record(status: object, request_id: str = "request-413") -> dict[str, object]:
+            return {
+                "requestId": request_id,
+                "requestedModel": "gpt-5.6-luna",
+                "resolvedModel": "gpt-5.6-luna",
+                "provider": "openai",
+                "status": status,
+                "inboundProtocol": "messages",
+                "conversationId": "conversation-413",
+                "routeDecision": {
+                    "routeKind": "native",
+                    "selected": {"provider": "openai", "model": "gpt-5.6-luna"},
+                },
+            }
+
+        # POSITIVE CONTROL: the same record shape at 200 verifies, so a failure below is the
+        # status classification and not a broken fixture.
+        self.assertTrue(RIGHTSIZE.identity_evidence(route(), [record(200)])["verified"])
+
+        refused = RIGHTSIZE.identity_evidence(route(), [record(413)])
+        self.assertFalse(refused["verified"])
+        self.assertEqual(refused["failure"], "input_admission_refused")
+        self.assertEqual(refused["observed_statuses"], [413])
+
+        # An upstream failure keeps the generic name.
+        self.assertEqual(
+            RIGHTSIZE.identity_evidence(route(), [record(500)])["failure"], "transport-status"
+        )
+        # And a 413 sitting beside a 500 must NOT be renamed after the 413, which would hide the
+        # 500 behind an admission verdict.
+        mixed = RIGHTSIZE.identity_evidence(
+            route(), [record(413, "request-a"), record(500, "request-b")]
+        )
+        self.assertEqual(mixed["failure"], "transport-status")
+        # A supplied-but-unusable status is distinct from an admission refusal: neither the string
+        # "413" nor an absent field is the gateway's 413.
+        self.assertEqual(
+            RIGHTSIZE.identity_evidence(route(), [record("413")])["failure"], "transport-status"
+        )
+        missing = record(200)
+        del missing["status"]
+        self.assertEqual(
+            RIGHTSIZE.identity_evidence(route(), [missing])["failure"], "transport-status"
+        )
+
 
 class MetricsAndRenderTests(unittest.TestCase):
     def test_zero_success_cost_per_accepted_is_unavailable(self) -> None:
