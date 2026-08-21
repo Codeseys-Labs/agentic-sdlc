@@ -47,8 +47,9 @@ content.
 
 Exit codes follow Implementation Decision 9: 0 valid, 1 internal, 2 grammar or schema,
 3 clean refusal before any effect. Custody refusals are clean refusals and return 3;
-malformed bytes and schema violations return 2. `activation-planner.py` maps refusals to
-1 instead, a mapping that predates the decision.
+malformed bytes and schema violations return 2. `activation-planner.py` used to map its
+refusals to 1 instead, a mapping that predated the decision; `agentic-sdlc-3d9a` closed it,
+so that engine now makes the same split this reader does and no raise site in it may choose 1.
 
 There is no `scripts/` compatibility shim yet, because nothing invokes this as
 `scripts/repository_contract.py`. Add one when a mise task or dispatcher needs it.

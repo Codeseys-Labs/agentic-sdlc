@@ -137,7 +137,7 @@ for that surface by construction, not that it went unprobed.
 | 35 | `scripts/bump-version.sh`, `scripts/install-skill-bundle.sh`, `scripts/validate-bundle.sh` | every probe exited 1 from `mise ERROR error parsing config file` before reaching the wrapper's own logic | | | | NOT-MEASURED (mise-gated; this survey may not invoke mise) |
 | 36 | `scripts/run_all_hosts.py` | aggregate of two mise-gated host legs; `status` exited 1 from the WSL leg's mise failure | | | | NOT-MEASURED (mise-gated) |
 | 37 | **`skills/agentic-sdlc/tools/seeds-launcher.mjs`** | **2 for `--help`** | 2 | 2 | **no 3, no 4; the Seeds child's own exit is passed through** | **NONCONFORMING** (SP-1) |
-| 38 | **`skills/agentic-sdlc/tools/activation-planner.py`** | 0 | 2 | **1 (`status` traceback; `plan`/`apply` emit `status:refused, effect:none, exit_code:1`)** | 3, 4 exist but 86 certain + 2 indeterminate of 315 raise sites land on 1 | **NONCONFORMING** (SP-2) |
+| 38 | **`skills/agentic-sdlc/tools/activation-planner.py`** | 0 | 2 | **1 (`status` traceback; `plan`/`apply` emit `status:refused, effect:none, exit_code:1`)** | 3, 4 exist but 86 certain + 2 indeterminate of 315 raise sites land on 1 | **NONCONFORMING** (SP-2), closed by `agentic-sdlc-3d9a` |
 | 39 | **`scripts/provision_mermaid_linux.py`** | **`--help` PROVISIONED: 358 MiB browser + `node_modules`, exit 0** | **none — argv ignored** | none | none | **NONCONFORMING** (SP-3) |
 | 40 | **`scripts/secrets_scan.py`** | **`--help` and `--zzz-not-a-flag` each ran the whole scan, exit 0** | **none — argv ignored** | 2 (config missing) | none | **NONCONFORMING** (SP-3) |
 | 41 | **`scripts/check-agentic-sdlc-prereqs.sh`** | 0 only when nothing is missing | **none — argv ignored, so `--help` runs the check** | none | **1 for a completed check that names a MISSING prerequisite** | **NONCONFORMING** (SP-4) |
@@ -251,6 +251,12 @@ target resolution so every `OSError` becomes an `ActivationError` before the cho
 tests both directions: re-adding `= 1` to the signature must fail a test that asserts no
 `effect: none` record ever exits 1; and a positive control must show the same assertion still passes
 an honest `effect_unknown` record at 4, so it is not just banning the number 1.
+
+REMEDIATION (2026-08-21, `agentic-sdlc-3d9a`): the fix shape above landed — `ActivationError.__init__`
+dropped its `code` default, every construction site states its own class, and the AST census now also
+pins the one forwarding site's (`_exact`) default to a non-1 constant — while the measured exits
+recorded earlier in this section stay the dated record of the defect this closed, not a claim still
+true of the module.
 
 ### SP-3 — `secrets_scan.py` and `provision_mermaid_linux.py` ignore argv entirely, so `--help` performs the operation
 

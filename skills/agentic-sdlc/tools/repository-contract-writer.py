@@ -126,9 +126,10 @@ created. A post-`mkdir` stop is still NOT rolled back: `rmdir` resolves by NAME 
 directory another actor may be able to write, and a failed rollback would turn a known
 partial effect into an unknown one, so the created directory is reported as the effect it is.
 
-`activation-planner.py` maps custody refusals to 1 instead; that mapping predates the
-decision, and the reader (`repository-contract.py`) is the contract this module follows. Its
-code 4 spelling is the one this module does follow.
+`activation-planner.py` mapped custody refusals to 1 until `agentic-sdlc-3d9a`; that mapping
+predated the decision, and the reader (`repository-contract.py`) is the contract this module
+follows. That engine now returns 3 for a custody refusal and 2 for an unusable supplied input,
+so the two agree. Its code 4 spelling is the one this module already followed.
 """
 from __future__ import annotations
 

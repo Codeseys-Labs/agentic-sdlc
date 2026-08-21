@@ -456,7 +456,7 @@ class ActivationTransactionTests(unittest.TestCase):
                 self.assertEqual(inspect_code, 0, inspect)
                 self.assertEqual(inspect["status"], "inactive")
                 replay, replay_code = ap.recover_rollback_command(target, recovery_path)
-                self.assertEqual(replay_code, 1, replay)
+                self.assertEqual(replay_code, 3, replay)
                 self.assertEqual(replay["status"], "refused")
 
     def test_hostile_git_environment_cannot_redirect_product_observation(self) -> None:
@@ -516,13 +516,13 @@ class ActivationTransactionTests(unittest.TestCase):
     def test_grant_replay_and_expiry_are_refused(self) -> None:
         plan = self.plan()
         result, code = self.apply(plan, expired=True)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 2)
         self.assertEqual(result["status"], "refused")
         grant = self.grant(plan)
         result, code = ap.apply_command(self.plan_file, self.manifest, grant)
         self.assertEqual(code, 0)
         result, code = ap.apply_command(self.plan_file, self.manifest, grant)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 3)
         self.assertEqual(result["status"], "refused")
 
     def test_strict_json_and_substitution_rejected_before_anchor(self) -> None:
@@ -535,7 +535,7 @@ class ActivationTransactionTests(unittest.TestCase):
         changed["outputs"][0]["sections"][0]["body"] = "changed"
         self.manifest.write_bytes(ap.canonical_bytes(changed))
         result, code = self.apply(plan)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 3)
         self.assertFalse(any(self.target.glob(".agentic-sdlc.intent.*")))
 
     def test_primary_clean_index_and_unsafe_paths_refused(self) -> None:
@@ -547,12 +547,12 @@ class ActivationTransactionTests(unittest.TestCase):
         bad_manifest = Path(self.tmp.name) / "bad-parent.json"
         bad_manifest.write_bytes(ap.canonical_bytes(manifest("outside/x.md")))
         result, code = ap.plan_command(self.target, bad_manifest, "outside/x.md")
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 3)
         self.assertIn(result["status"], {"refused", "unsupported"})
         (self.target / "outside").unlink()
         (self.target / "untracked").write_text("no\n")
         result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 3)
         self.assertEqual(result["status"], "refused")
 
     def test_replace_uses_cas_and_prestate_substitution_is_stale(self) -> None:
@@ -563,7 +563,7 @@ class ActivationTransactionTests(unittest.TestCase):
         plan = self.plan()
         output.write_text("changed outside transaction\n")
         result, code = self.apply(plan)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 3)
         self.assertEqual(result["status"], "stale")
         self.assertEqual(output.read_text(), "changed outside transaction\n")
 
@@ -713,7 +713,7 @@ class ActivationTransactionTests(unittest.TestCase):
             target.mkdir()
             init_repo(target)
             result, code = ap.plan_command(target, self.manifest, "AGENTS.md")
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "unsupported")
 
     def test_malformed_rollback_witness_is_effect_unknown_not_terminal(self) -> None:
@@ -1675,7 +1675,7 @@ class ActivationTransactionTests(unittest.TestCase):
         self.manifest.write_bytes(ap.canonical_bytes(changed))
         second, second_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
 
-        self.assertEqual(second_code, 1, second)
+        self.assertEqual(second_code, 3, second)
         self.assertEqual(second["status"], "unsupported")
         self.assertEqual(len(list((plane_transactions(self.target)).iterdir())), 1)
         final_status, final_status_code = ap.status_command(self.target)
@@ -1985,7 +1985,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
 
     def test_symlinked_manifest_is_refused(self) -> None:
@@ -1994,7 +1994,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
 
     def test_manifest_directory_is_refused(self) -> None:
@@ -2002,7 +2002,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
 
     def test_umask_002_clone_shape_is_admitted(self) -> None:
@@ -2020,7 +2020,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
 
     def test_other_writable_manifest_is_refused(self) -> None:
@@ -2028,7 +2028,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
 
     def test_hardlinked_manifest_is_refused(self) -> None:
@@ -2040,7 +2040,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn(f"unsafe {ap.REPO_MANIFEST_NAME}", result["reasons"])
 
@@ -2051,7 +2051,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe private state root", result["reasons"])
 
@@ -2069,7 +2069,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn(f"unsafe {ap.REPO_MANIFEST_NAME}", result["reasons"])
 
@@ -2086,7 +2086,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
 
     def test_dirty_tracked_manifest_stays_visible_to_git(self) -> None:
@@ -2096,7 +2096,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "refused")
         self.assertIn("Git worktree is not clean", result["reasons"])
 
@@ -2107,7 +2107,7 @@ class TrackedRepositoryManifestTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertIn(result["status"], {"foreign-state", "refused"})
 
 
@@ -2219,7 +2219,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unknown private state path", result["reasons"])
 
@@ -2235,7 +2235,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unknown private state path", result["reasons"])
 
@@ -2296,7 +2296,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize", result["reasons"])
 
@@ -2307,7 +2307,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize", result["reasons"])
 
@@ -2316,7 +2316,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize", result["reasons"])
 
@@ -2325,7 +2325,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize artifact", result["reasons"])
 
@@ -2337,7 +2337,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize artifact", result["reasons"])
 
@@ -2349,7 +2349,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize artifact", result["reasons"])
 
@@ -2365,7 +2365,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize artifact", result["reasons"])
 
@@ -2376,7 +2376,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize artifact", result["reasons"])
 
@@ -2392,7 +2392,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._status()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe rightsize artifact", result["reasons"])
 
@@ -2404,7 +2404,7 @@ class RightsizeArtifactDirectoryTests(unittest.TestCase):
 
         result, code = self._plan()
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "refused")
         self.assertIn("Git worktree is not clean", result["reasons"])
 
@@ -3745,7 +3745,7 @@ class EffectLedgerDerivationTests(unittest.TestCase):
 
     This class exists because targeted review does not find this defect class. Six instances of
     it have landed in this project across five surfaces, twice as the fix for the previous one,
-    and every raise site is a fresh chance to reintroduce it: 312 `ActivationError` raises are
+    and every raise site is a fresh chance to reintroduce it: 315 `ActivationError` raises are
     reachable from `apply_command` and the recover verbs. Reviewing them one at a time is what
     failed. So instead of one case per raise site, these cases pin the two halves of the
     derivation that make every raise site safe at once:
@@ -4233,7 +4233,7 @@ class EffectLedgerDerivationTests(unittest.TestCase):
         """The structural half of the fix, pinned structurally because no input can reach it.
 
         `_result`'s `effect` parameter used to default to `"none"`, and that default is what let
-        one `except` clause answer for 312 raise sites. Restoring it changes no current behaviour
+        one `except` clause answer for 315 raise sites. Restoring it changes no current behaviour
         -- every call site passes the argument -- so there is no distinguishing INPUT and no
         ordinary test can hold the line. What the default actually costs is paid by the NEXT
         result added: without it, omitting the effect is a `TypeError` at the call, and with it
@@ -4301,7 +4301,7 @@ class EffectLedgerDerivationTests(unittest.TestCase):
 
         result, code = self._apply(target)
 
-        self.assertEqual(code, 1, result)
+        self.assertEqual(code, 3, result)
         self.assertEqual(result["status"], "foreign-state")
         self.assertIn("unsafe state plane home", result["reasons"])
         self.assertEqual(result["effect"], "none")

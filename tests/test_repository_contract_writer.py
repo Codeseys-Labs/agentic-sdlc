@@ -1301,8 +1301,9 @@ class CommandLineTests(WriterBase):
         self.assertEqual(read["status"], "valid", read)
 
     def test_cli_refusal_exit_code_is_three_not_one(self) -> None:
-        """Implementation Decision 9. `activation-planner.py` maps refusals to 1; the
-        reader is the contract this writer follows."""
+        """Implementation Decision 9. The reader is the contract this writer follows, and since
+        `agentic-sdlc-3d9a` `activation-planner.py` follows it too rather than reporting its own
+        refusals at 1."""
         self.cli(*argv_for(self.target))
 
         completed = self.cli(*argv_for(self.target))
