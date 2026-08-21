@@ -30,7 +30,13 @@ tolerates one. Each negative case then asserts the named field appears in a reas
 was sealed, because a gate that refuses while still publishing a bindable report is the failure mode
 that matters. A CHECK failure is the other shape -- `assert_blocked` -- where the inputs were
 admitted, the report IS sealed, and its disposition is `blocked` with the blocker named in its own
-check group.
+check group. The OPTIONAL activation terminal state is admitted in both shapes and its cases are in
+`ActivationChainHeadTests`: an unreadable document seals nothing, while a well-formed one whose state
+admits no write or whose agreed head is null or stale is the admission's answer and reaches a sealed
+blocked report. Its own control is the flag's ABSENCE -- every other case in this module runs without
+it, so those cases are the standing proof that opt-in evidence stayed opt-in -- and the document it is
+re-anchored from is one the REAL `activation-result.py derive` printed, so a producer that renames a
+field fails here instead of diverging silently from the closed key set the gate re-expresses.
 
 A mutation that tests a SHAPE check is RESEALED and a mutation that tests the DIGEST check is not,
 which is not a convenience: `_sealed_input` stops at the first failure in the order schema, keys,
@@ -113,6 +119,24 @@ PLAN_SCHEMA = "agentic-sdlc/wave-plan@1"
 SNAPSHOT_SCHEMA = "agentic-sdlc/planning-snapshot@1"
 MISSION_SCHEMA = "agentic-sdlc/mission-contract@1"
 SUBMISSIONS_SCHEMA = "agentic-sdlc/workstream-submissions@1"
+ACTIVATION_STATE_SCHEMA = "agentic-sdlc/activation-terminal-state@1"
+ACTIVATION_TOOL = TOOLS / "activation-result.py"
+
+#: The optional input position's own group slug, and the producer's closed state vocabulary. The two
+#: ready states are the ones that admit a write -- `remediation-ready` admits named hygiene waves, and
+#: those are writes -- so both must be anchored on a head that is still current.
+ACTIVATION_SLUG = "activation-result"
+STATE_WRITE_READY = "write-ready"
+STATE_REMEDIATION_READY = "remediation-ready"
+STATE_REFUSED = "refused"
+#: Re-expressed from `activation-result.py` so a hand-built control reads like a real one. The gate
+#: reads neither field; they are here so a document this module writes is not self-contradicting.
+STATE_CONSEQUENCE = {
+    STATE_WRITE_READY: "normal waves may write",
+    STATE_REMEDIATION_READY: (
+        "only named hygiene waves may write; this result never claims the repository gate passes"
+    ),
+}
 
 ADMITTED = "admitted"
 VERIFIED = "verified"
@@ -168,9 +192,12 @@ DEFERRED_NAMES = (
     "policy-and-adr-consistency:recursive-spawn-generations",
     "route-constraints-and-qualification",
 )
-#: The five INPUT positions, in result order. `compiled-snapshot` is one of them: the compile-time
-#: snapshot is optional, but a supplied one that is inadmissible seals nothing, exactly like the rest.
+#: The five ALWAYS-REPORTED input positions, in result order. `compiled-snapshot` is one of them: the
+#: compile-time snapshot is optional, but a supplied one that is inadmissible seals nothing, exactly
+#: like the rest. `activation-result` is deliberately NOT one of them -- it is reported only when a
+#: document was supplied for it, which is what tells "supplied and admitted" from "never supplied".
 INPUT_SLUGS = ("wave-plan", "planning-snapshot", "compiled-snapshot", "mission-contract", "output-path")
+OPTIONAL_INPUT_SLUGS = (ACTIVATION_SLUG,)
 
 #: Every instant the fixtures use, so the ordering the freshness check depends on is readable in one
 #: place. The plan is compiled at 04:00, and only a snapshot stated strictly after that is fresh.
@@ -375,6 +402,53 @@ def _capture(repository: Path, scratch: Path, name: str, at: str) -> None:
     FIXTURES[f"{name}_digest"] = result["digest"]
 
 
+def _activation_terminal_state(scratch: Path) -> None:
+    """Run the REAL `activation-result.py derive` with NO artifacts and keep what it printed.
+
+    Every one of that tool's operands is optional and every absence is a named reason, so a bare
+    `derive` is a genuine, producer-written `activation-terminal-state@1` -- state `refused`, anchor
+    null -- obtained without building an entire activation chain. It serves three purposes here: it is
+    the case where a real refused document reaches the gate, it is the null-anchor shape's own
+    provenance, and its key sets are what `terminal_state` builds every other case from, so a producer
+    that adds or renames a field fails a test in this module instead of quietly diverging from the
+    closed set the gate re-expresses.
+    """
+    done = run([sys.executable, "-B", str(ACTIVATION_TOOL), "derive"], cwd=scratch)
+    if done.returncode != EXIT_OK:
+        raise AssertionError(f"activation-result.py derive failed: exit {done.returncode} {done.stderr!r}")
+    document = json.loads(done.stdout.decode("utf-8"))
+    if document["state"] != STATE_REFUSED or document["evidence"]["head_commit"] is not None:
+        raise AssertionError(f"a bare derive must be refused with no anchor, found {document['state']!r}")
+    target = scratch / "activation-refused.json"
+    target.write_bytes(canonical(document))
+    FIXTURES["terminal_refused"] = document
+    FIXTURES["terminal_refused_path"] = target
+
+
+def terminal_state(head: dict[str, Any] | None, *, state: str = STATE_WRITE_READY) -> dict[str, Any]:
+    """One `activation-terminal-state@1` in the REAL producer's shape, anchored on `head`.
+
+    Both key sets come from the document the real producer printed, so this is a re-anchoring of a real
+    shape rather than a guess at one; only the fields a READY chain would carry differently are
+    replaced. `head` is the snapshot head to agree with, or None for the null anchor -- which is what
+    that producer records when its own operands never agreed on one head.
+    """
+    produced = FIXTURES["terminal_refused"]
+    document = dict(produced)
+    document["evidence"] = {key: None for key in produced["evidence"]}
+    if head is not None:
+        document["evidence"]["head_commit"] = head["commit_sha"]
+        document["evidence"]["head_tree"] = head["tree_sha"]
+    document["state"] = state
+    document["consequence"] = STATE_CONSEQUENCE[state]
+    document["classification"] = "brownfield"
+    document["gate_outcome"] = "passed" if state == STATE_WRITE_READY else "failed"
+    document["gate_passes"] = state == STATE_WRITE_READY
+    document["reasons"] = []
+    document["target"] = str(FIXTURES["repository"])
+    return document
+
+
 def setUpModule() -> None:
     """Build every fixture ONCE by running the real tools against one really-mutated repository.
 
@@ -398,6 +472,9 @@ def setUpModule() -> None:
     mission.write_bytes(canonical(result["contract"]))
     FIXTURES["mission"] = mission
     FIXTURES["mission_digest"] = result["digest"]
+
+    # Needs no git and no repository: a bare derive names every absence and prints one document.
+    _activation_terminal_state(scratch)
 
     if shutil.which("git") is None:
         return
@@ -519,6 +596,7 @@ class ToolCase(unittest.TestCase):
         "occupied": "occupied",
         "artifact": "artifact",
         "moved": "moved",
+        "activation_refused": "terminal_refused_path",
     }
 
     @classmethod
@@ -563,12 +641,18 @@ class ToolCase(unittest.TestCase):
         cwd: Path | None = None,
         fresh: str = "snapshot.json",
         compiled: str | None = "compiled.json",
+        activation: str | None = None,
     ) -> Any:
         """The whole admissible invocation, with the compile-time snapshot supplied by DEFAULT.
 
         Supplied by default because it is what the admitting path needs: without it physical target
         identity is undecidable and the disposition is `blocked`, which is its own named case below
         rather than the baseline every other case would then have to work around.
+
+        `activation` is NOT supplied by default, and that is the mirror image of the same reasoning:
+        the optional terminal state is opt-in evidence, so the baseline every other case in this module
+        runs against is the invocation without it -- which is exactly what makes those 141 cases the
+        regression control proving the flag's absence changed nothing.
         """
         argv = [
             "admit",
@@ -579,6 +663,8 @@ class ToolCase(unittest.TestCase):
         ]
         if compiled is not None:
             argv += ["--compiled-snapshot", compiled]
+        if activation is not None:
+            argv += ["--activation-result", activation]
         if out is not None:
             argv += ["--out", out]
         return self.invoke(*argv, *extra_argv, cwd=cwd)
@@ -666,7 +752,7 @@ class ToolCase(unittest.TestCase):
         # No CURRENT-STATE check may have noted anything: they run only over admitted inputs, so a
         # refusal here means none of them was reached, and one that spoke anyway read an unread field.
         spoke = {entry["slug"] for entry in result["checks"] if entry["reasons"]}
-        self.assertEqual(spoke - set(INPUT_SLUGS), set())
+        self.assertEqual(spoke - set(INPUT_SLUGS) - set(OPTIONAL_INPUT_SLUGS), set())
 
 
 class AdmittedInputSetTests(ToolCase):
@@ -1106,6 +1192,306 @@ class SnapshotFreshnessTests(ToolCase):
         # facts and a caller that fixes only the timestamp must still be refused.
         self.assertEqual(len(blockers), 2, blockers)
         self.assertIn("is not strictly later", " ".join(blockers))
+
+
+class ActivationChainHeadTests(ToolCase):
+    """The 187b anchor: the head the ACTIVATION CHAIN agreed on, against the head observed now.
+
+    `activation-result.py`'s `assess_freshness` proves its operands describe ONE tree and says in its
+    own residual that it cannot prove that tree is the CURRENT one. This class is that proof's other
+    half, and every case here starts from the same admitted baseline the rest of the module uses, with
+    `--activation-result` as the ONLY difference -- so a refusal is attributable to the flag and the 141
+    cases that never pass it are the control proving its absence changed nothing.
+
+    The two heads compared are REAL: the anchor a passing case agrees with is the `fresh` capture's own
+    head, and the stale one is the `moved` capture's, taken from a second real commit. The two
+    single-field cases are the ones that keep the comparison honest in both halves -- a commit that
+    matches while the tree does not, and a tree that matches while the commit does not -- because a
+    comparison of only one of them would pass one of those and this gate would then admit a wave onto a
+    tree the activation chain never saw.
+    """
+
+    def anchored(self, name: str, head: dict[str, Any] | None, **kwargs: Any) -> Any:
+        """Write one terminal state and admit with it. No reseal: this document carries no digest."""
+        self.write(name, terminal_state(head, **kwargs))
+        return self.admit(activation=f"{name}.json")
+
+    # ---- the flag itself ---------------------------------------------------------------------------
+
+    def test_the_optional_group_is_reported_only_when_a_document_was_supplied(self) -> None:
+        """Supplied-but-admitted and never-supplied are DIFFERENT facts, and the result says which.
+
+        The absent half is this seed's whole compatibility promise, so it is asserted here rather than
+        left implicit in the other cases; the supplied half is its POSITIVE CONTROL, because a group
+        that could never appear would make the absence assertion vacuous.
+        """
+        code, result, _ = self.admit()
+        self.assertEqual(code, EXIT_OK)
+        self.assert_admitted(result)
+        named = [entry["slug"] for entry in result["checks"]]
+        self.assertEqual(named, [*INPUT_SLUGS, *RAN_SLUGS])
+        self.assertNotIn(ACTIVATION_SLUG, named)
+
+        code, result, _ = self.anchored("activation", self.read("snapshot")["head"])
+        self.assertEqual(code, EXIT_OK)
+        self.assert_admitted(result)
+        groups = {entry["slug"]: entry for entry in result["checks"]}
+        self.assertIn(ACTIVATION_SLUG, groups)
+        self.assertTrue(groups[ACTIVATION_SLUG]["met"])
+        self.assertEqual(groups[ACTIVATION_SLUG]["reasons"], [])
+        # Reported in the input positions' own region of the result, never among the sealed report's
+        # checks: the report's key set is fixed and an input position is not one of its checks.
+        self.assertEqual(
+            [entry["slug"] for entry in result["checks"]],
+            ["wave-plan", "planning-snapshot", "compiled-snapshot", "mission-contract", ACTIVATION_SLUG,
+             "output-path", *RAN_SLUGS],
+        )
+        self.assertEqual([entry["slug"] for entry in result["report"]["checks"]], list(RAN_SLUGS))
+
+    def test_an_agreeing_chain_is_admitted_in_both_states_that_admit_a_write(self) -> None:
+        """The POSITIVE CONTROL of every case below, for both ready states.
+
+        `remediation-ready` is included on purpose: it admits named hygiene waves, and a hygiene wave
+        writes, so a stale anchor is exactly as dangerous there as under `write-ready`.
+        """
+        head = self.read("snapshot")["head"]
+        for state in (STATE_WRITE_READY, STATE_REMEDIATION_READY):
+            with self.subTest(state=state):
+                self.setUp()
+                code, result, _ = self.anchored("activation", head, state=state)
+                self.assertEqual(code, EXIT_OK)
+                self.assert_admitted(result)
+
+    # ---- the head comparison ----------------------------------------------------------------------
+
+    def test_a_chain_agreed_on_a_head_that_moved_refuses_and_names_both_values(self) -> None:
+        """THE SEED'S CASE: a write-ready chain from an earlier tree, handed to a wave running now."""
+        stale, observed = self.read("moved")["head"], self.read("snapshot")["head"]
+        self.assertNotEqual(stale["commit_sha"], observed["commit_sha"])
+        self.assertNotEqual(stale["tree_sha"], observed["tree_sha"])
+        code, result, _ = self.anchored("activation", stale)
+        self.assertEqual(code, EXIT_OK)
+        # The exact ATTRIBUTION, not merely the four values' presence somewhere in the blockers:
+        # `check_activation_head_freshness` (`wave-plan-admission.py`) renders `evidence.{key}` from
+        # `agreed` -- the value the activation CHAIN agreed on, i.e. the STALE one -- and `head.{field}`
+        # from `observed[field]` -- the value the fresh planning snapshot just OBSERVED. Built from that
+        # producer's own template, so a raise site that renders the stale value under `head.commit_sha`
+        # (or the observed one under `evidence.head_commit`) breaks this assertion; a plain membership
+        # check of all four values would not notice the swap, because every value is still present.
+        commit_pairing = (
+            f"evidence.head_commit {stale['commit_sha']!r} and the fresh planning "
+            f"snapshot observed head.commit_sha {observed['commit_sha']!r}"
+        )
+        tree_pairing = (
+            f"evidence.head_tree {stale['tree_sha']!r} and the fresh planning "
+            f"snapshot observed head.tree_sha {observed['tree_sha']!r}"
+        )
+        report = self.assert_only_blocked_check(
+            result,
+            "snapshot-freshness",
+            commit_pairing,
+            tree_pairing,
+            "was derived against a head that is gone",
+        )
+        blockers = report["checks"][0]["blockers"]
+        # TWO independent reasons, one per compared field, each carrying its own exact pairing.
+        self.assertEqual(len(blockers), 2, blockers)
+        self.assertIn(commit_pairing, " ".join(blockers))
+        self.assertIn(tree_pairing, " ".join(blockers))
+        # The report is still content-minimized: a blocker names object names, never a plan field.
+        self.assertEqual(
+            sorted(report),
+            [
+                "admitted_at", "checks", "deferred_dimensions", "digest", "disposition", "inputs",
+                "mission_id", "observed", "plan_revision", "schema",
+            ],
+        )
+
+    def test_a_tree_that_moved_alone_refuses_even_though_the_commit_matches(self) -> None:
+        """The TREE half, isolated: a comparison of `head_commit` alone would admit this.
+
+        The commit is the observed one and only the tree differs -- a real object name, taken from the
+        `moved` capture -- so the case cannot pass by accident and it dies the moment the tree stops
+        being compared.
+        """
+        observed, moved = self.read("snapshot")["head"], self.read("moved")["head"]
+        code, result, _ = self.anchored(
+            "activation", {"commit_sha": observed["commit_sha"], "tree_sha": moved["tree_sha"]}
+        )
+        self.assertEqual(code, EXIT_OK)
+        report = self.assert_only_blocked_check(
+            result, "snapshot-freshness", "evidence.head_tree", moved["tree_sha"], observed["tree_sha"]
+        )
+        blockers = report["checks"][0]["blockers"]
+        # EXACTLY one blocker: the commit agreed, so naming it too would report a fault that is not one.
+        self.assertEqual(len(blockers), 1, blockers)
+        self.assertNotIn("evidence.head_commit", blockers[0])
+
+    def test_a_commit_that_moved_alone_refuses_even_though_the_tree_matches(self) -> None:
+        """The COMMIT half, isolated: the same tree under a different history is a different state."""
+        observed, moved = self.read("snapshot")["head"], self.read("moved")["head"]
+        code, result, _ = self.anchored(
+            "activation", {"commit_sha": moved["commit_sha"], "tree_sha": observed["tree_sha"]}
+        )
+        self.assertEqual(code, EXIT_OK)
+        report = self.assert_only_blocked_check(
+            result, "snapshot-freshness", "evidence.head_commit", moved["commit_sha"], observed["commit_sha"]
+        )
+        blockers = report["checks"][0]["blockers"]
+        self.assertEqual(len(blockers), 1, blockers)
+        self.assertNotIn("evidence.head_tree", blockers[0])
+
+    def test_a_null_anchor_refuses_by_its_own_name_rather_than_comparing_null(self) -> None:
+        """A null anchor is the producer's record that its operands never agreed on ONE head.
+
+        Refused with its own reason, not as a head that "moved" to null: the fix for the first is to
+        find out why the chain disagreed, and the fix for a moved head is to regenerate one artifact.
+        The reason text is asserted for exactly that -- a comparison that fell through to the
+        disagreement branch would print `None` as a head and pass a laxer assertion.
+        """
+        code, result, _ = self.anchored("activation", None)
+        self.assertEqual(code, EXIT_OK)
+        report = self.assert_only_blocked_check(
+            result,
+            "snapshot-freshness",
+            "evidence.head_commit is null",
+            "never agreed on one repository head",
+        )
+        blockers = report["checks"][0]["blockers"]
+        # ONE reason per null field: both halves of the anchor are missing, and a consumer reading one
+        # of them would not learn that the other is absent too.
+        self.assertEqual(len(blockers), 2, blockers)
+        self.assertIn("evidence.head_tree is null", " ".join(blockers))
+        self.assertNotIn("was derived against a head that is gone", " ".join(blockers))
+
+    def test_the_real_producers_refused_document_authorizes_no_write_at_all(self) -> None:
+        """A REAL `activation-result.py derive`, refused, reaching this gate: state before anchor.
+
+        The document is the producer's own bytes, so this case cannot drift into checking a shape this
+        module invented. Its anchor is null too, and the state refusal is what is reported: a chain that
+        authorizes no write has no head worth comparing, and two reasons for one fact would be worse
+        than one.
+        """
+        produced = self.read("activation_refused")
+        self.assertEqual(produced["state"], STATE_REFUSED)
+        self.assertIsNone(produced["evidence"]["head_commit"])
+        code, result, _ = self.admit(activation="activation_refused.json")
+        self.assertEqual(code, EXIT_OK)
+        report = self.assert_only_blocked_check(
+            result,
+            "snapshot-freshness",
+            "is 'refused' rather than one of",
+            "authorizes no wave write at all",
+        )
+        blockers = report["checks"][0]["blockers"]
+        self.assertEqual(len(blockers), 1, blockers)
+        self.assertNotIn("null", blockers[0])
+
+    def test_the_hand_built_control_carries_the_real_producers_own_key_set(self) -> None:
+        """The drift control: every case above is a re-anchoring of the producer's real shape.
+
+        Without this, a producer that added a field would leave this module's controls behind and the
+        gate's closed key set could refuse a genuine document while every test here still passed.
+        """
+        produced = self.read("activation_refused")
+        built = terminal_state(self.read("snapshot")["head"])
+        self.assertEqual(sorted(built), sorted(produced))
+        self.assertEqual(sorted(built["evidence"]), sorted(produced["evidence"]))
+        self.assertEqual(sorted(built["recovery"]), sorted(produced["recovery"]))
+        self.assertEqual(built["schema"], ACTIVATION_STATE_SCHEMA)
+
+    # ---- the input position -----------------------------------------------------------------------
+
+    def test_a_document_of_another_kind_is_an_inadmissible_input(self) -> None:
+        document = put(terminal_state(self.read("snapshot")["head"]), "schema", "agentic-sdlc/not-that-kind@1")
+        self.write("activation", document)
+        code, result, _ = self.admit(activation="activation.json")
+        self.assertEqual(code, EXIT_OK)
+        self.assert_refused_input(
+            result, ACTIVATION_SLUG, "not-that-kind@1", "not the document kind this input position consumes"
+        )
+
+    def test_an_unrecognised_or_missing_top_level_key_is_refused_rather_than_ignored(self) -> None:
+        head = self.read("snapshot")["head"]
+        for label, document, fragment in (
+            ("extra", {**terminal_state(head), "surprise": 1}, "unexpected ['surprise']"),
+            ("missing", drop(terminal_state(head), "target"), "missing ['target']"),
+        ):
+            with self.subTest(case=label):
+                self.setUp()
+                self.write("activation", document)
+                code, result, _ = self.admit(activation="activation.json")
+                self.assertEqual(code, EXIT_OK)
+                self.assert_refused_input(result, ACTIVATION_SLUG, fragment, "closed key set")
+
+    def test_a_state_outside_the_producers_closed_vocabulary_is_an_inadmissible_input(self) -> None:
+        """A fourth word is a document this gate cannot read; `refused` is one it reads and refuses.
+
+        The two halves are asserted together because that is the distinction: an unreadable state seals
+        nothing at all, while the producer's own third state reaches a sealed, blocked report.
+        """
+        document = put(terminal_state(self.read("snapshot")["head"]), "state", "probably-fine")
+        self.write("activation", document)
+        code, result, _ = self.admit(activation="activation.json")
+        self.assertEqual(code, EXIT_OK)
+        self.assert_refused_input(result, ACTIVATION_SLUG, "'probably-fine'", "closed vocabulary")
+        # POSITIVE CONTROL for the "seals nothing" half above: a state INSIDE the vocabulary that still
+        # admits no write does seal a report, so the refusal above is about readability and not about
+        # the state being unwelcome.
+        self.setUp()
+        code, result, _ = self.admit(activation="activation_refused.json")
+        self.assertEqual(code, EXIT_OK)
+        self.assert_only_blocked_check(result, "snapshot-freshness", "authorizes no wave write at all")
+
+    def test_an_absent_anchor_key_is_not_the_same_fact_as_a_null_one(self) -> None:
+        """SUPPLIED-BUT-MISSING versus RECORDED-AS-NULL: different reasons, different consequences.
+
+        An absent `evidence.head_commit` is a document written before the anchor existed -- unreadable,
+        so nothing is sealed -- while a null one is a producer recording that no anchor was derived,
+        which is an answer and reaches a sealed blocked report. The second half is the positive control
+        for the first: both are the same field, and only the absence is an inadmissible input.
+        """
+        document = drop(terminal_state(self.read("snapshot")["head"]), "evidence.head_commit")
+        self.write("activation", document)
+        code, result, _ = self.admit(activation="activation.json")
+        self.assertEqual(code, EXIT_OK)
+        self.assert_refused_input(
+            result, ACTIVATION_SLUG, "has no evidence.head_commit", "cannot be defaulted"
+        )
+        self.setUp()
+        code, result, _ = self.anchored("activation", None)
+        self.assertEqual(code, EXIT_OK)
+        self.assert_only_blocked_check(result, "snapshot-freshness", "evidence.head_commit is null")
+
+    def test_an_anchor_that_is_not_a_git_object_name_is_refused(self) -> None:
+        head = self.read("snapshot")["head"]
+        for label, value in (
+            ("prose", "the head we had"),
+            ("uppercase", head["commit_sha"].upper()),
+            ("truncated", head["commit_sha"][:39]),
+            ("boolean", True),
+        ):
+            with self.subTest(case=label):
+                self.setUp()
+                self.write("activation", put(terminal_state(head), "evidence.head_tree", value))
+                code, result, _ = self.admit(activation="activation.json")
+                self.assertEqual(code, EXIT_OK)
+                self.assert_refused_input(
+                    result, ACTIVATION_SLUG, "evidence.head_tree", "lowercase hexadecimal git object name"
+                )
+
+    def test_an_evidence_block_that_is_not_an_object_is_refused(self) -> None:
+        self.write("activation", put(terminal_state(self.read("snapshot")["head"]), "evidence", []))
+        code, result, _ = self.admit(activation="activation.json")
+        self.assertEqual(code, EXIT_OK)
+        self.assert_refused_input(result, ACTIVATION_SLUG, "evidence is not a JSON object")
+
+    def test_a_supplied_file_that_cannot_be_read_is_exit_two_and_names_the_position(self) -> None:
+        """An unusable file is a question that could not be asked, exactly as in every other position."""
+        code, result, stderr = self.admit(activation="not-here.json")
+        self.assertEqual(code, EXIT_INPUT)
+        self.assertIsNone(result)
+        self.assertIn("activation terminal state", stderr)
 
 
 class TargetIdentityTests(ToolCase):

@@ -104,7 +104,14 @@ RESIDUALS, STATED EXACTLY.
     disagree, or whose stamp is absent, null, or malformed, is refused by name. What is still NOT
     proven, and is not provable by a module that reads paths and touches no repository, is that the
     agreed head is the CURRENT head; comparing a recorded head against a live one is plan
-    admission's job, exactly as `planning-snapshot.py` records for its own seal. The anchor is head
+    admission's job, exactly as `planning-snapshot.py` records for its own seal. That comparison is
+    now SHIPPED at that surface rather than merely delegated to it: `agentic-sdlc-187b` added
+    `wave-plan-admission.py admit --activation-result`, which reads THIS document's
+    `evidence.head_commit`/`head_tree`, requires a `state` that admits a write, and refuses -- naming
+    both values -- when either half disagrees with the head the fresh planning snapshot captured
+    beside it. The gap therefore closes where wave writes are authorized, not here: this module's own
+    answer is unchanged, the flag there is opt-in, and a consumer that composes this state without
+    passing it to that gate still holds a head nobody proved current. The anchor is head
     identity and not time because this host's clock legitimately steps backwards
     (agentic-sdlc-184b), so recorded wall time cannot order two artifacts, while head identity is
     deterministic.
@@ -625,7 +632,9 @@ def assess_freshness(
     WHAT THIS DOES AND DOES NOT PROVE. It proves the operands were derived against the SAME tree.
     It does not prove that tree is the CURRENT one -- this module reads paths and touches no
     repository, so "still current" is unanswerable here and is the plan-admission check's job, in
-    exactly the split `planning-snapshot.py` records for its own seal. What it closes is the gap
+    exactly the split `planning-snapshot.py` records for its own seal. That check exists:
+    `wave-plan-admission.py admit --activation-result` compares the anchor recorded below against the
+    head a fresh planning snapshot observed (agentic-sdlc-187b). What THIS function closes is the gap
     where three artifacts from two different trees composed into one verdict.
 
     FAIL CLOSED, FOUR WAYS, EACH NAMED. An operand whose stamp is absent predates the stamp and is

@@ -37,8 +37,18 @@ dimensions are decidable from the sealed documents it reads and run as checks; t
 other five, plus six partial refinements of checks that do run, are named in the
 report's own `deferred_dimensions` list rather than reported as met.
 
+Optionally it also answers whether the ACTIVATION CHAIN that proved the repository's
+contract surface was derived against the head that is current now: pass
+`activation-result.py`'s terminal-state document as `--activation-result`, and its
+`evidence.head_commit`/`head_tree` must equal the head the fresh snapshot observed while
+its `state` must admit a write, so a `write-ready` chain agreed on one head cannot be
+handed to a wave running on another (`agentic-sdlc-187b`). The flag is opt-in evidence:
+omitted, admission is exactly what it is without it, and an admitted report does not
+record whether a chain was compared — the result document's checks do.
+
 What it cannot answer: it observes no repository itself (freshness of the fresh
-snapshot is the caller's claim, not something this tool verifies independently), calls
+snapshot is the caller's claim, not something this tool verifies independently, and the
+terminal state it may be handed carries no digest to re-derive either), calls
 no model, resolves no runtime route, and reads no environment variable. `admitted` is
 not `approved`: no dispatch, write, or other outward effect follows from an admission
 report by itself.

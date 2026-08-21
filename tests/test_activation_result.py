@@ -1787,6 +1787,17 @@ class ResultContractTests(DerivationCase):
         # What is still open has to stay stated: an offline reader cannot prove the agreed head is
         # the CURRENT head, and the residual must keep saying so rather than overclaiming the fix.
         self.assertIn("is that the agreed head is the CURRENT head", squeezed)
+        # agentic-sdlc-187b then SHIPPED that comparison at the surface that authorizes wave writes,
+        # so the residual must NAME it instead of delegating to an unnamed "plan admission's job": an
+        # unnamed delegation reads as work nobody did. It must also keep saying the flag is opt-in,
+        # because a consumer that never passes this document to that gate still holds an unproven head.
+        self.assertIn("agentic-sdlc-187b", squeezed)
+        self.assertIn("wave-plan-admission.py admit --activation-result", squeezed)
+        self.assertIn("opt-in", squeezed)
+        # And the named flag has to EXIST. A prose pointer at a surface that does not accept it is the
+        # same rot as an unnamed delegation, one step harder to notice.
+        admission = TOOL.parent / "wave-plan-admission.py"
+        self.assertIn('"--activation-result"', admission.read_text(encoding="utf-8"))
         # POSITIVE CONTROL for the two absence assertions above: the same squeezed docstring really
         # is the text being searched, so an empty answer is evidence rather than a broken read.
         self.assertIn("RESIDUALS, STATED EXACTLY", squeezed)

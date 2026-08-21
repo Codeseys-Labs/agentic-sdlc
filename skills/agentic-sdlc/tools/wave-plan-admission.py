@@ -32,8 +32,9 @@ head or time linkage that a read-only composer could check".
 
 TWO COMMANDS, ONE DIGEST.
 
-    admit    reads the SEALED plan, the SEALED fresh snapshot, the SEALED mission contract, and
+    admit    reads the SEALED plan, the SEALED fresh snapshot, the SEALED mission contract,
              OPTIONALLY the SEALED compile-time snapshot the plan's `inputs.snapshot_digest` names,
+             and OPTIONALLY the UNSEALED activation terminal state `activation-result.py` derived,
              admits each one, and seals ONE `wave-plan-admission@1` report carrying the disposition.
     verify   reads a SEALED report, re-derives its digest from its own content, and refuses when the
              two disagree. `--expect-digest` is the binding a later approval receipt uses.
@@ -69,6 +70,22 @@ is not freshness: the fresh snapshot's `stated_at` must be STRICTLY later than t
 `inputs.snapshot_digest` must also DIFFER from the fresh snapshot's digest -- a document that is the
 compile-time snapshot is not an observation of now, and admitting it would make the whole comparison
 a tautology.
+
+THE ACTIVATION CHAIN'S AGREED HEAD IS COMPARED TOO, WHEN THE CALLER SUPPLIES IT. `activation-result.py`
+binds the activation plan, the apply result, and the gate receipt to ONE repository head, so a chain
+assembled from two trees cannot compose into `write-ready`; its own residual then states exactly what
+that leaves open -- "what is still NOT proven ... is that the agreed head is the CURRENT head" --
+because that module reads paths and touches no repository. `--activation-result` closes it HERE, where
+a fresh observation is already an input: the terminal state's `evidence.head_commit`/`head_tree` must
+equal the head the fresh snapshot observed, and a disagreement refuses by name with BOTH values, so a
+write-ready chain agreed on head A cannot be handed to a wave running on head B (`agentic-sdlc-187b`).
+Its `state` must be `write-ready` or `remediation-ready` -- `remediation-ready` included, because it
+admits named hygiene waves and those are writes -- and a null anchor refuses rather than compares,
+because null is that producer's own record that its operands never agreed on one head. The flag is
+OPT-IN EVIDENCE AND NOT A NEW OPERAND: omit it and admission is byte-for-byte what it was before this
+revision, because making it mandatory would refuse every existing caller instead of catching a stale
+chain. Its refusals land in `snapshot-freshness`, which is where the same question already lives, so
+no new check slug claims a dimension issue 16 does not enumerate.
 
 THE COMPILE-TIME SNAPSHOT IS OPTIONAL, AND ITS ABSENCE IS A BLOCKER RATHER THAN A PASS. Physical
 target identity -- same repository path, same `git_dir` device, same `git_dir` inode -- is a
@@ -157,6 +174,13 @@ RESIDUALS, STATED EXACTLY.
     recorded against what the plan carried, and records what it said -- not that it was captured at
     this instant. A caller that re-supplies an old snapshot as `--fresh-snapshot` is caught only
     where the instants or the digest give it away.
+  * THE ACTIVATION TERMINAL STATE IS OPT-IN AND UNSEALED. Without `--activation-result` this gate
+    compares no activation chain at all, and an ADMITTED report cannot say whether one was compared:
+    the report's key set is fixed, so the record of that lives in the result document's checks, where
+    the `activation-result` group appears only when the flag was supplied. With it, the document
+    carries no digest to re-derive -- `activation-result.py` seals nothing -- so its content is the
+    caller's claim in exactly the way the fresh snapshot's freshness is, and what is proven is that
+    the head it NAMES agrees with the head the fresh snapshot RECORDED.
   * PHYSICAL IDENTITY IS TWO RECORDED OBSERVATIONS, not a probe. Path, device, and inode are
     compared between two snapshot documents; this module stats nothing, so a device/inode pair the
     kernel reused after the compile-time capture compares equal, exactly as the snapshot tool's own
@@ -193,6 +217,11 @@ RESULT_SCHEMA = "agentic-sdlc/wave-plan-admission-result@1"
 PLAN_SCHEMA = "agentic-sdlc/wave-plan@1"
 SNAPSHOT_SCHEMA = "agentic-sdlc/planning-snapshot@1"
 MISSION_SCHEMA = "agentic-sdlc/mission-contract@1"
+#: The OPTIONAL input kind, and the ONE this gate cannot admit by re-derived digest:
+#: `activation-result.py` seals nothing, so its terminal-state document carries no `digest` key at all.
+#: Its trust model is therefore the fresh snapshot's -- a caller-supplied claim, admitted for its
+#: declared kind and closed shape -- and that is recorded as a residual rather than implied away.
+ACTIVATION_STATE_SCHEMA = "agentic-sdlc/activation-terminal-state@1"
 
 VERDICT_ADMITTED = "admitted"
 VERDICT_VERIFIED = "verified"
@@ -476,6 +505,39 @@ MISSION_REQUIRED = (
     "stated_at",
     "stop_conditions",
 )
+#: --- the OPTIONAL activation terminal state (`agentic-sdlc-187b`) --------------------------------
+#: `activation-result.py` composes the activation chain into ONE terminal state and binds every
+#: operand to one repository head, but it reads paths and touches no repository, so its own residual
+#: says what it cannot prove: that the head its operands agreed on is the CURRENT one. This input
+#: position is where that comparison becomes possible, because the fresh planning snapshot beside it
+#: is an observation of now. Its closed top-level key set, which carries no `digest`.
+ACTIVATION_STATE_KEYS = (
+    "classification",
+    "command",
+    "consequence",
+    "evidence",
+    "exit_code",
+    "gate_outcome",
+    "gate_passes",
+    "reasons",
+    "recovery",
+    "schema",
+    "state",
+    "target",
+)
+#: Its closed state vocabulary, which is ADR-0022 decision 7's own three words, and the two of them
+#: that admit any wave write at all. `remediation-ready` is one of the two deliberately: it admits
+#: named hygiene waves, which are writes, so its agreed head has to be current for the same reason.
+ACTIVATION_STATES = ("refused", "remediation-ready", "write-ready")
+ACTIVATION_READY_STATES = ("remediation-ready", "write-ready")
+#: The two evidence keys carrying that agreed head, each NULLABLE by its producer's own contract: the
+#: anchor is populated only when every supplied operand stamped the same head, and stays null
+#: otherwise. Null is therefore an honest record of "no anchor was derived", never a head.
+ACTIVATION_HEAD_KEYS = ("head_commit", "head_tree")
+#: Which observed head field each one is compared against. BOTH halves are compared: a commit that
+#: matches while the tree does not is not the same state, and a tree that matches while the commit
+#: does not is a different history over identical content.
+ACTIVATION_HEAD_FIELD = {"head_commit": "commit_sha", "head_tree": "tree_sha"}
 
 #: --- the nested vocabularies THIS gate reads out of its inputs -----------------------------------
 #: Re-expressed for the same reason the sealed key sets are: a sibling is consumed as documents.
@@ -507,12 +569,18 @@ DEMAND_CAPABILITY = {
 #: The node fields this gate reads. A node carries more; those are the compiler's business.
 NODE_READ_KEYS = ("authority_class", "capability_demands", "node_id", "worktree_custody")
 
+#: The OPTIONAL input position, kept in its own name because it is the one group whose PRESENCE in a
+#: result is evidence: it is reported when `--activation-result` was supplied and omitted when it was
+#: not, so a consumer can tell "supplied and admitted" from "never supplied" without guessing.
+ACTIVATION_SLUG = "activation-result"
+
 #: Every check group, in report order.
 CHECKS: tuple[str, ...] = (
     "wave-plan",
     "planning-snapshot",
     "compiled-snapshot",
     "mission-contract",
+    ACTIVATION_SLUG,
     "output-path",
     *ADMITTED_CHECK_ORDER,
     GROUP_SLUG,
@@ -520,9 +588,12 @@ CHECKS: tuple[str, ...] = (
     "admission-report-shape",
     "digest",
 )
-#: `admit`'s groups: four input positions, the destination, and the six current-state checks. The
-#: reserved group slug is NOT among them: this revision names each check it runs, so reporting the
-#: group as well would give the same evidence two records.
+#: `admit`'s ALWAYS-reported groups: four input positions, the destination, and the six current-state
+#: checks. The reserved group slug is NOT among them: this revision names each check it runs, so
+#: reporting the group as well would give the same evidence two records. `activation-result` is not
+#: among them either, and for a different reason: reporting an optional position as met when nobody
+#: supplied a document would claim an admission of nothing, so it joins the order only when the flag
+#: is given (see `derive_command`).
 ADMIT_CHECKS = (
     "wave-plan",
     "planning-snapshot",
@@ -531,9 +602,18 @@ ADMIT_CHECKS = (
     "output-path",
     *ADMITTED_CHECK_ORDER,
 )
-#: The five whose failure means NO report is sealed. A current-state check is deliberately not one of
-#: them: a blocker there is the admission's ANSWER, and an answer gets sealed.
-INPUT_SLUGS = ("wave-plan", "planning-snapshot", "compiled-snapshot", "mission-contract", "output-path")
+#: Every position whose failure means NO report is sealed, the optional one included: a supplied
+#: document this gate cannot read is an unusable input in exactly the way a supplied compile-time
+#: snapshot is. A current-state check is deliberately not one of them: a blocker there is the
+#: admission's ANSWER, and an answer gets sealed.
+INPUT_SLUGS = (
+    "wave-plan",
+    "planning-snapshot",
+    "compiled-snapshot",
+    "mission-contract",
+    ACTIVATION_SLUG,
+    "output-path",
+)
 #: `verify` re-observes nothing and writes nothing, so it reports neither an input position nor a
 #: destination: claiming those as "met" would claim a check that never ran.
 VERIFY_CHECKS = ("closed-key-set", "admission-report-shape", "digest")
@@ -563,6 +643,15 @@ RESIDUALS = (
     "refuses some waves that would in fact have been disjoint",
     "an input's closed key set is re-expressed here rather than imported, so a sibling that adds a "
     "field is refused by this gate until this constant is updated in the same change",
+    "--activation-result is OPT-IN and UNSEALED. When it is not supplied this gate compares no "
+    "activation chain at all and admission is exactly what it was without the flag; when it is, the "
+    "terminal-state document carries no digest to re-derive, so it is admitted for its declared kind "
+    "and closed shape and its content is the caller's claim, exactly as the fresh snapshot's "
+    "freshness is",
+    "the sealed report's key set is FIXED, so an ADMITTED report does not record whether an "
+    "activation terminal state was compared; the result document's checks do -- the activation-result "
+    "group appears only when the flag was supplied -- and a blocked report names the disagreement it "
+    "found",
     "admitted is NOT approved: issue 16 requires an operation-specific human receipt bound to the "
     "exact revision and digest, and this module grants no authority, reserves no route, creates no "
     "worktree, mutates no queue, and authorizes no dispatch, write, or outward effect",
@@ -1353,6 +1442,69 @@ def check_mission_ladder(assessment: Assessment, mission: dict[str, Any]) -> tup
     return list(admitted), ceiling
 
 
+def check_activation_state(assessment: Assessment, document: dict[str, Any]) -> dict[str, Any] | None:
+    """Admit the OPTIONAL activation terminal state for its SHAPE, and nothing beyond that here.
+
+    The same boundary every other input position keeps: what the comparison reads is validated in the
+    position the document arrived in, so `check_activation_head` can compare two values without a "was
+    this field readable" branch. The split between this function and that one is deliberate and is not
+    cosmetic:
+
+      * A document that is not an `activation-terminal-state@1` at all, whose top-level key set this
+        revision does not recognise, or whose consumed fields cannot be read, is an INADMISSIBLE
+        INPUT: the question could not be asked of it, so no report is sealed.
+      * A well-formed document whose STATE authorizes no write, or whose anchor is null, or whose
+        anchor disagrees with the observed head, is the admission's ANSWER: the report is sealed and
+        carries the blocker by name.
+
+    There is no digest half, because there is no digest: this producer publishes an unsealed result
+    document. `state` is admitted against its producer's closed three-word vocabulary rather than
+    against the two ready ones, for the same reason -- a fourth word is a document this gate cannot
+    read, while `refused` is a document it reads and refuses.
+    """
+    slug, what = ACTIVATION_SLUG, "the supplied activation terminal state"
+    declared = document.get("schema")
+    if declared != ACTIVATION_STATE_SCHEMA:
+        assessment.note(
+            slug,
+            f"{what} declares schema {declared!r} rather than {ACTIVATION_STATE_SCHEMA!r}, so it is "
+            "not the document kind this input position consumes",
+        )
+        return None
+    found = tuple(sorted(document))
+    if found != ACTIVATION_STATE_KEYS:
+        missing = [name for name in ACTIVATION_STATE_KEYS if name not in document]
+        extra = [name for name in found if name not in ACTIVATION_STATE_KEYS]
+        assessment.note(
+            slug,
+            f"{what} is not the closed key set {list(ACTIVATION_STATE_KEYS)}: missing {missing}, "
+            f"unexpected {extra}; an unrecognised field is a meaning this gate cannot honour, so it "
+            "is refused rather than ignored",
+        )
+        return None
+    readable = _member(assessment, slug, document.get("state"), ACTIVATION_STATES, f"{what}'s state") is not None
+    evidence = document.get("evidence")
+    if not isinstance(evidence, dict):
+        assessment.note(slug, f"{what}'s evidence is not a JSON object (found {evidence!r})")
+        return None
+    for key in ACTIVATION_HEAD_KEYS:
+        # ABSENT and NULL are two different facts and only the first is unusable: an absent key is a
+        # document written before the anchor existed, which this gate cannot read at all, while null
+        # is its producer recording that no anchor was derived -- a value, and a named refusal below.
+        if key not in evidence:
+            assessment.note(
+                slug,
+                f"{what} has no evidence.{key}, and this gate consumes it, so its absence cannot be "
+                "defaulted; re-derive the terminal state with a build that records the head anchor",
+            )
+            readable = False
+        elif evidence[key] is not None and _object_name(
+            assessment, slug, evidence[key], f"{what}'s evidence.{key}"
+        ) is None:
+            readable = False
+    return document if readable else None
+
+
 # ---- input admission -----------------------------------------------------------------------------
 
 
@@ -1490,11 +1642,23 @@ def admit_inputs(args: argparse.Namespace, assessment: Assessment) -> dict[str, 
         _identifier(assessment, "mission-contract", mission, "mission_id", "the mission contract's mission_id")
         ladder = check_mission_ladder(assessment, mission)
 
+    # OPTIONAL, and its absence is NOT a blocker anywhere: this is opt-in evidence about the
+    # activation chain that proved the repository's contract surface, so a caller holding no terminal
+    # state gets exactly the admission this gate gave before the flag existed (agentic-sdlc-187b).
+    # `None` here therefore means one of two things -- not supplied, or supplied and inadmissible --
+    # and the two are told apart by the `activation-result` group, which is silent only in the first.
+    activation: dict[str, Any] | None = None
+    if args.activation_result is not None:
+        activation = check_activation_state(
+            assessment, load_document(args.activation_result, "activation terminal state")
+        )
+
     # The destination is checked against the snapshot ONLY when the snapshot was admitted: containment
     # measured against a document this run refused would be containment against an unread field.
     admitted_snapshot = snapshot if snapshot_digest is not None and fresh_readable else None
     out = check_output_path(assessment, "--out", args.out, admitted_snapshot)
     return {
+        "activation": activation,
         "compiled": compiled,
         "compiled_digest": compiled_digest,
         "digests": {
@@ -1559,6 +1723,63 @@ def check_snapshot_freshness(
             f"{snapshot_digest}), so comparing the plan's carried head against it proves nothing; a "
             "fresh capture is a second observation, not the first one supplied twice",
         )
+
+
+def check_activation_head(
+    assessment: Assessment, snapshot: dict[str, Any], activation: dict[str, Any]
+) -> None:
+    """THE 187B ANCHOR: the head the ACTIVATION CHAIN agreed on, against the head observed now.
+
+    `activation-result.py`'s `assess_freshness` binds the activation plan, the apply result, and the
+    gate receipt to ONE repository head, so a chain assembled from two trees cannot compose into
+    write-ready. Its own residual states exactly what that leaves open: "what is still NOT proven ...
+    is that the agreed head is the CURRENT head", because that module reads paths and touches no
+    repository. THIS is the surface that can close it, because the fresh planning snapshot beside it is
+    an observation of now -- so a write-ready chain agreed on head A can no longer be handed to a wave
+    running on head B (`agentic-sdlc-187b`).
+
+    Noted against `snapshot-freshness` rather than a slug of its own, because it is the same question
+    that check already asks -- is the state this plan would run against the state its evidence
+    describes -- and a new slug would claim a dimension issue 16 does not enumerate.
+
+    THE OBSERVED HEAD NEEDS NO UNKNOWNS CONSULTATION, unlike the custody and prior-effect checks
+    beside it. `planning-snapshot.py`'s named-unknown vocabulary has no entry for `head.commit_sha` or
+    `head.tree_sha`: both are non-nullable in a sealed snapshot and `head.branch` is the only nullable
+    part of that object, so there is no honest "looked and could not see it" record for the two fields
+    compared here. The ANCHOR side has the equivalent record and it IS consulted: a null
+    `evidence.head_commit`/`head_tree` is the producer saying its own operands never agreed on one
+    head, and that refuses by name instead of comparing null against an object name.
+    """
+    slug = "snapshot-freshness"
+    state = activation["state"]
+    if state not in ACTIVATION_READY_STATES:
+        # Checked FIRST and returning: a chain that authorizes no write has no agreed head worth
+        # comparing, and printing a head disagreement beside it would name two faults for one fact.
+        assessment.note(
+            slug,
+            f"the supplied activation terminal state is {state!r} rather than one of "
+            f"{list(ACTIVATION_READY_STATES)}, so the activation chain authorizes no wave write at "
+            "all and the head it names is not a head any wave may write against",
+        )
+        return
+    evidence, observed = activation["evidence"], snapshot["head"]
+    for key in ACTIVATION_HEAD_KEYS:
+        agreed, field = evidence[key], ACTIVATION_HEAD_FIELD[key]
+        if agreed is None:
+            assessment.note(
+                slug,
+                f"the supplied activation terminal state records {state!r} while its evidence.{key} is "
+                "null, so its own operands never agreed on one repository head and there is nothing "
+                f"to compare against the fresh planning snapshot's head.{field}",
+            )
+        elif agreed != observed[field]:
+            assessment.note(
+                slug,
+                f"the activation chain agreed on evidence.{key} {agreed!r} and the fresh planning "
+                f"snapshot observed head.{field} {observed[field]!r}: the activation that proved this "
+                "repository's contract surface was derived against a head that is gone, so a "
+                "write-ready chain would be handed to a wave running on a different tree",
+            )
 
 
 def check_target_identity(
@@ -1860,6 +2081,11 @@ def run_admission_checks(args: argparse.Namespace, admitted: dict[str, Any], ass
     plan, snapshot, mission = admitted["plan"], admitted["snapshot"], admitted["mission"]
     digests = admitted["digests"]
     check_snapshot_freshness(assessment, args.at, plan, snapshot, digests["snapshot_digest"])
+    if admitted["activation"] is not None:
+        # OPT-IN, and noted against `snapshot-freshness` beside the comparison above: a caller that
+        # supplied no terminal state gets that check's own scope unchanged, and one that supplied it
+        # gets the activation chain's agreed head compared against the same observation.
+        check_activation_head(assessment, snapshot, admitted["activation"])
     check_target_identity(assessment, plan, snapshot, admitted["compiled"], admitted["compiled_digest"])
     check_custody_availability(assessment, admitted["nodes"], snapshot)
     check_policy_and_bounds(
@@ -1948,7 +2174,15 @@ def derive_command(args: argparse.Namespace) -> tuple[dict[str, Any], Path | Non
     which is kept OUT of the result until the write has actually happened.
     """
     command = args.command
-    assessment = Assessment(CHECKS_BY_COMMAND[command])
+    order = CHECKS_BY_COMMAND[command]
+    if getattr(args, "activation_result", None) is not None:
+        # The optional position is reported ONLY when a document was supplied for it. Reported, it
+        # says the supplied terminal state was admitted; omitted, it says none was supplied. A group
+        # that was always present would report "met" over a comparison nobody asked for, which is the
+        # vacuous pass this module refuses everywhere else. Read by ATTRIBUTE, so `verify` -- which
+        # takes no such option -- inherits the absence rather than needing a command-name branch.
+        order = order + (ACTIVATION_SLUG,)
+    assessment = Assessment(order)
     report: dict[str, Any] | None = None
     digest: str | None = None
     inputs_admitted: bool | None = None
@@ -2200,8 +2434,9 @@ def main(argv: list[str] | None = None) -> int:
         "admit",
         description=(
             "Admit the SEALED wave plan, the SEALED fresh planning snapshot the caller captured at "
-            "admission time, the SEALED mission contract, and optionally the SEALED compile-time "
-            "snapshot the plan binds, then seal one content-minimized "
+            "admission time, the SEALED mission contract, optionally the SEALED compile-time "
+            "snapshot the plan binds, and optionally the activation terminal state whose agreed head "
+            "is then compared against the observed one, then seal one content-minimized "
             "admission report. An inadmissible input seals nothing and writes nothing; an admissible "
             "input set always seals a report carrying the disposition and every blocker. An admitted "
             "report is evidence: `admitted` is not `approved`, and no dispatch, write, or outward "
@@ -2240,6 +2475,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     admit.add_argument("--mission", required=True, help=f"the SEALED {MISSION_SCHEMA} document the plan serves")
+    admit.add_argument(
+        "--activation-result",
+        dest="activation_result",
+        default=None,
+        help=(
+            f"OPTIONAL: the {ACTIVATION_STATE_SCHEMA} document activation-result.py derived. Supplied, "
+            "its evidence.head_commit/head_tree must equal the head the fresh snapshot observed and "
+            "its state must admit a write, so a write-ready chain agreed on one head cannot be handed "
+            "to a wave running on another; omitted, admission is exactly what it is without it"
+        ),
+    )
     admit.add_argument(
         "--active-artifacts",
         dest="active_artifacts",
