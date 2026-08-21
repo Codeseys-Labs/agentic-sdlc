@@ -15,6 +15,21 @@ ROOT = Path(__file__).parents[1]
 INSTALLER = ROOT / "scripts" / "install_skill_bundle.py"
 OBSERVER = ROOT / "skills" / "agentic-sdlc" / "tools" / "offline-inspect.py"
 GIT = Path(subprocess.check_output(["sh", "-c", "command -v git"], text=True).strip()) if os.name != "nt" else None
+
+# The observer's exit classes, RE-EXPRESSED from product-spec Implementation Decision 9 rather than
+# imported from the module under test, so a table the observer quietly renumbers fails here instead
+# of agreeing with itself.
+#: Reserved by Decision 9; 3 and 4 are unreachable for an effect-free command but stay reserved.
+RESERVED_EXIT_BLOCK = (0, 1, 2, 3, 4)
+#: Every item was adoptable, mergeable, or skippable.
+EXIT_READY = 0
+#: An unexpected internal failure. A DERIVED verdict may never land here.
+EXIT_INTERNAL = 1
+#: The target or the command line is unusable, so no inspection happened.
+EXIT_INPUT = 2
+#: The inspection RAN and named a refusal (agentic-sdlc-4253). Nonzero so a shell caller still sees a
+#: signal, and outside the reserved block so it cannot be confused with a crash or a bad argument.
+EXIT_NOT_READY = 5
 MARKER_START = "<!-- agentic-sdlc:start -->"
 MARKER_END = "<!-- agentic-sdlc:end -->"
 CANONICAL_AGENTS_BODY = """## intent
@@ -133,7 +148,7 @@ class OfflineObserverRegressionTests(unittest.TestCase):
             result = observe(OBSERVER, target, target)
             plan = json.loads(result.stdout)
 
-            self.assertEqual(result.returncode, 1, result.stderr.decode("utf-8", "replace"))
+            self.assertEqual(result.returncode, EXIT_NOT_READY, result.stderr.decode("utf-8", "replace"))
             self.assertEqual(
                 item(plan, "git-baseline"),
                 {"id": "git-baseline", "action": "refuse", "reason": "invalid-git-metadata"},
@@ -151,7 +166,7 @@ class OfflineObserverRegressionTests(unittest.TestCase):
             result = observe(OBSERVER, target, target)
             plan = json.loads(result.stdout)
 
-            self.assertEqual(result.returncode, 1, result.stderr.decode("utf-8", "replace"))
+            self.assertEqual(result.returncode, EXIT_NOT_READY, result.stderr.decode("utf-8", "replace"))
             self.assertEqual(
                 item(plan, "git-baseline"),
                 {"id": "git-baseline", "action": "refuse", "reason": "invalid-git-metadata"},
@@ -169,7 +184,7 @@ class OfflineObserverRegressionTests(unittest.TestCase):
             result = observe(OBSERVER, target, target)
             plan = json.loads(result.stdout)
 
-            self.assertEqual(result.returncode, 1, result.stderr.decode("utf-8", "replace"))
+            self.assertEqual(result.returncode, EXIT_NOT_READY, result.stderr.decode("utf-8", "replace"))
             self.assertEqual(
                 item(plan, "git-baseline"),
                 {"id": "git-baseline", "action": "refuse", "reason": "invalid-git-metadata"},
@@ -398,8 +413,8 @@ class OfflineObserverReleaseCandidateTests(unittest.TestCase):
             self.assertEqual(green_first.stderr, green_second.stderr)
             self.assertEqual(brown_first.stdout, brown_second.stdout)
             self.assertEqual(brown_first.stderr, brown_second.stderr)
-            self.assertEqual(green_first.returncode, 0, green_first.stderr.decode("utf-8", "replace"))
-            self.assertEqual(brown_first.returncode, 1, brown_first.stderr.decode("utf-8", "replace"))
+            self.assertEqual(green_first.returncode, EXIT_READY, green_first.stderr.decode("utf-8", "replace"))
+            self.assertEqual(brown_first.returncode, EXIT_NOT_READY, brown_first.stderr.decode("utf-8", "replace"))
             self.assertEqual(green_first.stderr, b"")
             self.assertEqual(brown_first.stderr, b"")
 
@@ -460,6 +475,93 @@ class OfflineObserverReleaseCandidateTests(unittest.TestCase):
                 self.assertFalse(path_present(managed_path), str(managed_path))
             for path, content in foreign.items():
                 self.assertEqual(path.read_bytes(), content, str(path))
+
+
+@unittest.skipIf(GIT is None, "Git is required for observer regression fixtures")
+class OfflineObserverExitClassTests(unittest.TestCase):
+    """The observer's exit classes must be DISTINGUISHABLE, not merely individually asserted.
+
+    Seed agentic-sdlc-4253. Before this, a derived `NOT_READY` verdict and an unexpected internal
+    failure both exited 1, so a caller reading only `$?` could not tell "I inspected the target and
+    it is not ready" from "I crashed". Each check below pairs its claim with a POSITIVE CONTROL run
+    through the same comparison, so none of them can pass by the comparison being vacuous.
+    """
+
+    def test_not_ready_verdict_is_outside_the_reserved_block(self) -> None:
+        # Binds this module's re-expressed constants to each other only; a production renumber is
+        # caught by the exit-value tests above, which drive the tool and read $? directly.
+        self.assertNotIn(EXIT_NOT_READY, RESERVED_EXIT_BLOCK)
+        # Positive control for that claim: the codes the observer DOES take from the reserved block
+        # are found there by the same membership test, so `assertNotIn` is not vacuously true.
+        for reserved in (EXIT_READY, EXIT_INTERNAL, EXIT_INPUT):
+            self.assertIn(reserved, RESERVED_EXIT_BLOCK)
+
+    def test_three_reachable_classes_are_three_distinct_codes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="offline-observer-classes-") as temporary:
+            root = Path(temporary)
+
+            ready = root / "ready"
+            ready.mkdir()
+            (ready / "AGENTS.md").write_text(marked_content(CANONICAL_AGENTS_BODY), encoding="utf-8")
+            (ready / "CLAUDE.md").write_text(
+                marked_content(CANONICAL_CLAUDE_BODY, preamble="@AGENTS.md\n"), encoding="utf-8"
+            )
+
+            not_ready = root / "not-ready"
+            not_ready.mkdir()
+            (not_ready / ".git").write_text("gitdir: /definitely/missing\n", encoding="utf-8")
+
+            absent = root / "absent"
+
+            observed = {
+                "ready": observe(OBSERVER, ready, root),
+                "not-ready": observe(OBSERVER, not_ready, root),
+                "absent": observe(OBSERVER, absent, root),
+            }
+            codes = {name: result.returncode for name, result in observed.items()}
+
+            self.assertEqual(
+                codes,
+                {"ready": EXIT_READY, "not-ready": EXIT_NOT_READY, "absent": EXIT_INPUT},
+                {name: result.stderr.decode("utf-8", "replace") for name, result in observed.items()},
+            )
+            # The three codes must be three, not one repeated: this is the property the seed found
+            # broken, and it fails if any future edit collapses two classes onto one code.
+            self.assertEqual(len(set(codes.values())), 3, codes)
+            # A DERIVED verdict may never occupy the unexpected-internal-failure code.
+            self.assertNotIn(EXIT_INTERNAL, set(codes.values()))
+            # Positive control: the verdicts themselves still differ, so the exit codes are reporting
+            # two genuinely different inspections rather than one duplicated run.
+            self.assertEqual(
+                json.loads(observed["ready"].stdout)["preview_readiness"],
+                {"state": "READY", "reason": "no_refusals"},
+            )
+            self.assertEqual(
+                json.loads(observed["not-ready"].stdout)["preview_readiness"],
+                {"state": "NOT_READY", "reason": "git-baseline/invalid-git-metadata"},
+            )
+            # An input error emits NO document at all, which is what separates 2 from 5: 5 always
+            # carries the one result document, and the control above shows this check can see one.
+            self.assertEqual(observed["absent"].stdout, b"")
+            self.assertNotEqual(observed["not-ready"].stdout, b"")
+
+    def test_a_not_ready_verdict_still_writes_nothing_to_the_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="offline-observer-inert-") as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.mkdir()
+            (target / ".git").write_text("gitdir: /definitely/missing\n", encoding="utf-8")
+
+            before = snapshot_tree(target, include_atime=True)
+            result = observe(OBSERVER, target, root)
+            after = snapshot_tree(target, include_atime=True)
+
+            self.assertEqual(result.returncode, EXIT_NOT_READY, result.stderr.decode("utf-8", "replace"))
+            self.assertEqual(after, before)
+            # Positive control for the "nothing moved" comparison: the same comparison DOES see a
+            # change when one is made, so the equality above is not vacuous.
+            (target / "sentinel").write_text("x", encoding="utf-8")
+            self.assertNotEqual(snapshot_tree(target, include_atime=True), before)
 
 
 if __name__ == "__main__":
