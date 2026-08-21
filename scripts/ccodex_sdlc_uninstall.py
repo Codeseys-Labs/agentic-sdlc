@@ -1,0 +1,1106 @@
+#!/usr/bin/env python3
+"""``ccodex sdlc uninstall``: receipt-directed retirement of one distribution activation.
+
+WHAT THIS MODULE IS
+-------------------
+``scripts/ccodex_sdlc.py`` owns the closed grammar of the three mutating lifecycle verbs.  It loads
+this file by absolute non-symlink path and enters ``main([])``; the integer this returns is the exit
+class, and a raise after import reads as exit 4 there because the module was already entered.  So
+every refusal here is a NAMED return, never an exception escaping to the caller.
+
+THE ONE SOURCE OF TRUTH
+-----------------------
+The ACTIVE ``distribution-activation@1`` receipt is the only statement of what this plane owns.  It
+is validated through the sibling-loaded ``distribution_activation_receipt.py`` before a single path
+is stat'ed, and its entry inventory is the ONLY candidate set for removal.  There is no wildcard, no
+``--all``, no purge, and no directory listing: a file this plane never recorded is not a candidate,
+and an absent or unsealed receipt is a named refusal rather than a guess reconstructed from
+directory contents.
+
+OWNERSHIP IS PROVED BEFORE EVERY DELETION
+-----------------------------------------
+An entry is removed only when it exists, is not a symlink surprise, is reached without traversing a
+symlinked parent inside the plane, and its CURRENT content digest equals the digest the inventory
+recorded -- under the one reused digest definition in ``install_skill_bundle.digest``.  Modified,
+foreign, retargeted, unreadable, unprovable, and absent entries are PRESERVED and NAMED.  Detection
+authorizes nothing: an entry outside the inventory is never removed, adopted, repaired, or reported
+as owned, and the collection directories themselves are never removed even when the last inventory
+child leaves one empty.
+
+WHAT IS NEVER TOUCHED
+---------------------
+Credentials, the Claude login, user settings, plugins, external skill libraries, repositories, Seeds
+queues, and ADRs.  None of them can be a candidate, because the candidate set is the receipt's own
+inventory and nothing else.  The sealed acquisition receipt and the retired activation receipt are
+READ and never written, moved, or re-sealed: their bytes before and after this operation are
+identical.
+
+DELIBERATE RESIDUALS
+--------------------
+  * A validated receipt is a well-formed statement, not a true one.  This module re-proves every
+    digest on disk rather than trusting the inventory, but it cannot prove that the plane's entries
+    were ever what the receipt says they were.
+  * The digest and identity re-proofs narrow a window; they are not a boundary against a same-UID
+    racer mutating a destination between the proof and the rename.
+  * A completed retirement is EVIDENCE.  It authorizes no push, publication, PR mutation, merge,
+    deployment, or any other outward effect.
+  * ``terminal_phase`` comes from the receipt family's closed matrix, not from this module's opinion:
+    a partial retirement terminates ``unknown`` because ``activated-partial`` is not an uninstall
+    phase there.
+
+ANCESTOR RELATION, RECORDED DEVIATION
+-------------------------------------
+The ticket text asks for a ``supersedes`` ancestor to the receipt this retires.  The shipped receipt
+family REFUSES that: ``check_ancestors`` admits ``supersedes`` only for ``operation: update`` and
+names an install or an uninstall that claimed it as retiring "a record it did not replace", with a
+test pinning the rule.  A receipt sealed with ``supersedes`` here would therefore fail its own
+family's validation, which is a worse outcome than a differently-typed link.  This module records
+the retired receipt as the single required ``derived-from`` ancestor with
+``expected_kind: distribution-activation``, which is literally true -- every payload fact in the
+terminal receipt is drawn from the receipt it retires -- and the test suite proves the emitted
+document validates through the family's own checker.
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import os
+import platform
+import re
+import stat
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Callable
+
+#: Exit classes.  The dispatcher admits 0-4 and treats anything else as an unknown effect.
+EXIT_RETIRED = 0
+#: Effects happened exactly as planned, but the plane is not fully retired: at least one inventory
+#: entry was preserved or already absent.  This is the reused convention of the installer's own
+#: ``_uninstall``, which returns 1 for a partial pass that named its conflicts.
+EXIT_ATTENTION = 1
+#: A clean refusal BEFORE any effect.  Nothing moved.
+EXIT_REFUSED = 3
+#: Something moved and the outcome cannot be proved.  No absence of effect may be claimed.
+EXIT_UNKNOWN = 4
+
+JOURNAL_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-journal@1"
+PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-plan@1"
+
+#: The host plane this verb retires.  Closed and single-valued, matching the dispatcher's own
+#: ``LIFECYCLE_HOSTS``: a wildcard host binds nothing.
+HOST = "claude"
+#: Claude's configured root is the selected home plus ``.claude``.
+HOST_COLLECTION = ".claude"
+
+SUPPORTED_PLATFORM = "Linux"
+
+#: Every character class is written out.  ``\\d`` and ``\\w`` admit Unicode, so an identity spelled
+#: with the Arabic-Indic ``٩`` would read as the same token while comparing unequal to it.
+_TOKEN = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z")
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+_INSTANT = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
+
+#: The operations whose receipt describes a LIVE activation this verb can retire.  A receipt whose
+#: own operation is ``uninstall`` already records a retirement, and retiring it again would remove
+#: entries a second time on the strength of a record that says they are gone.
+RETIRABLE_OPERATIONS = ("install", "update")
+#: The terminal phases of a live activation.  ``not-activated`` moved nothing, so there is nothing to
+#: retire, and ``unknown`` means the activation's own effect was never established -- removing on the
+#: strength of it would turn an unknown into a deletion.
+RETIRABLE_PHASES = ("activated", "activated-partial")
+
+#: The closed classification vocabulary.  Exactly one applies to each inventory entry, and each maps
+#: to one receipt prestate.  ``owned-exact`` is the ONLY removable class.
+CLASSES = (
+    "owned-exact",
+    "absent",
+    "modified-content",
+    "foreign-symlink",
+    "foreign-type",
+    "foreign-unreadable",
+    "retargeted-parent",
+    "unprovable-inventory",
+    "ambiguous-name",
+)
+CLASS_PRESTATE = {
+    "owned-exact": "owned",
+    "absent": "absent",
+    "modified-content": "modified",
+    "foreign-symlink": "foreign",
+    "foreign-type": "foreign",
+    "foreign-unreadable": "foreign",
+    "retargeted-parent": "foreign",
+    "unprovable-inventory": "foreign",
+    "ambiguous-name": "foreign",
+}
+CLASS_REASON = {
+    "owned-exact": "the current content digest equals the digest the inventory recorded",
+    "absent": "the inventory records this entry as owned and nothing is there",
+    "modified-content": "the current content digest differs from the digest the inventory recorded",
+    "foreign-symlink": (
+        "a link stands where the inventory recorded activated content; this plane is copy-activated, "
+        "and removing a link whose target may lie outside the plane is not a removal this receipt "
+        "authorizes"
+    ),
+    "foreign-type": "the object at this path is not a file, directory, or link this plane can prove",
+    "foreign-unreadable": "the current content could not be digested, so ownership cannot be proved",
+    "retargeted-parent": (
+        "a parent inside the plane is a link, so a deletion here could take effect outside the plane"
+    ),
+    "unprovable-inventory": (
+        "the inventory records no content digest for this entry, so there is nothing to prove "
+        "unchanged ownership against"
+    ),
+    "ambiguous-name": "the recorded entry name does not resolve to one path inside the plane",
+}
+
+
+class Refusal(Exception):
+    """A named decline BEFORE any effect (exit 3)."""
+
+
+class UnknownEffect(Exception):
+    """Something already moved, so no absence of effect can be claimed (exit 4)."""
+
+
+@dataclass(frozen=True)
+class Config:
+    """Every location this verb reads or writes, injectable, with grounded defaults.
+
+    ``default_config`` derives the defaults from the same sources the shipped scripts use, so a test
+    can relocate every path without a single environment variable and without touching the operator's
+    real plane.
+    """
+
+    scripts_dir: Path
+    home: Path
+    state_root: Path
+    activation_root: Path
+    host: str = HOST
+    platform_system: str = SUPPORTED_PLATFORM
+    stated_at: str | None = None
+    emitting_plane: str = "ccodex-sdlc-uninstall"
+    checkpoint: Callable[[str, dict[str, Any]], None] | None = None
+
+    @property
+    def plane_root(self) -> Path:
+        return self.home / HOST_COLLECTION
+
+    @property
+    def active_receipt_path(self) -> Path:
+        return self.activation_root / "active-receipt.json"
+
+    @property
+    def receipts_dir(self) -> Path:
+        return self.activation_root / "receipts"
+
+    @property
+    def journals_dir(self) -> Path:
+        return self.activation_root / "journals"
+
+
+def absolute(path: Path) -> Path:
+    """Make a path absolute without resolving links, junctions, or 8.3 spelling."""
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+
+
+def default_config(bundle: ModuleType) -> Config:
+    """Defaults grounded in the shipped scripts, not in new invention.
+
+    ``state_root`` is the installer's own ``state_directory()`` -- ``XDG_STATE_HOME`` on Unix,
+    ``LOCALAPPDATA`` on Windows -- and the activation root sits beside the acquisition root the
+    bundle validator already pins as ``$XDG_STATE_HOME/agentic-sdlc/acquisition``.
+    """
+    state_root = bundle.state_directory()
+    return Config(
+        scripts_dir=Path(__file__).resolve().parent,
+        home=absolute(Path.home()),
+        state_root=state_root,
+        activation_root=state_root / "agentic-sdlc" / "activation",
+        platform_system=platform.system(),
+    )
+
+
+# ---- sibling loading -----------------------------------------------------------------------------
+
+
+def load_sibling(scripts_dir: Path, stem: str) -> ModuleType:
+    """Load one named sibling by absolute file path, never through ambient ``sys.path``.
+
+    The same admission the dispatcher applies to this file: an exact physical sibling, never a
+    symlink.  The read-only guard is deliberately NOT installed here -- it exists to block the very
+    effects this module owns -- so it is detected instead, in ``refuse_read_only_guard``.
+    """
+    candidate = scripts_dir / f"{stem}.py"
+    if candidate.is_symlink() or not candidate.is_file():
+        raise Refusal(f"ccodex sdlc uninstall cannot load its adapter {str(candidate)!r}: it is absent or a link")
+    name = f"_ccodex_sdlc_uninstall_{stem}"
+    spec = importlib.util.spec_from_file_location(name, candidate)
+    if spec is None or spec.loader is None:
+        raise Refusal(f"ccodex sdlc uninstall cannot load its adapter {str(candidate)!r}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - an adapter that cannot import is a pre-effect refusal
+        raise Refusal(f"ccodex sdlc uninstall adapter {str(candidate)!r} failed to import: {exc!r}") from exc
+    return module
+
+
+def refuse_read_only_guard() -> None:
+    """Refuse cleanly if this process already installed the reader's read-only guard.
+
+    ``ccodex_sdlc_readonly.install`` patches ``builtins.open``, ``os``, ``shutil``, ``Path``, and
+    ``fcntl`` process-globally, and ``block_lifecycle_mutators`` pins the very names this module
+    reuses (``write_state``, ``persist_state``, ``installer_lock``).  The shipped dispatcher hands off
+    BEFORE it builds any read-only projection, so the guard is never installed on this path; if some
+    other caller changes that, a lifecycle mutation must fail as a named refusal before any effect
+    rather than as a ``ReadOnlyViolation`` traceback the dispatcher would have to classify as an
+    unknown effect.
+    """
+    guard = sys.modules.get("_ccodex_sdlc_readonly_guard")
+    if guard is not None and getattr(guard, "_INSTALLED", False):
+        raise Refusal(
+            "ccodex sdlc uninstall refuses: this process already installed the read-only guard, whose "
+            "stdlib mutation blocks would fail this operation partway through"
+        )
+
+
+# ---- receipt admission ---------------------------------------------------------------------------
+
+
+def read_receipt_document(dar: ModuleType, path: Path, label: str) -> dict[str, Any]:
+    """Read one receipt document, distinguishing not-supplied from supplied-and-unusable.
+
+    The symlink check is this module's own addition on top of the family's reader: the family answers
+    "is what I would read a regular file", which is the right question for a supplied argument, while
+    a lifecycle plane resolves a FIXED path and a link there is a redirection nobody recorded.
+    """
+    try:
+        item = path.lstat()
+    except FileNotFoundError as exc:
+        raise Refusal(
+            f"ccodex sdlc uninstall found no active {label} at {str(path)!r}; the receipt is the only "
+            "statement of what this plane owns, and there is nothing to reconstruct it from"
+        ) from exc
+    except OSError as exc:
+        raise Refusal(f"ccodex sdlc uninstall cannot inspect the active {label} {str(path)!r}: {exc}") from exc
+    if stat.S_ISLNK(item.st_mode):
+        raise Refusal(
+            f"the active {label} {str(path)!r} is a link; a lifecycle plane resolves a fixed path, and "
+            "a redirection there is state nobody recorded"
+        )
+    if not stat.S_ISREG(item.st_mode):
+        raise Refusal(f"the active {label} {str(path)!r} is not a regular file, so it cannot be read")
+    try:
+        return dar.load_document(str(path), label)
+    except dar.InputError as exc:
+        raise Refusal(f"the active {label} {str(path)!r} is unusable: {dar.escape_display(str(exc))}") from exc
+
+
+def admit_active_receipt(dar: ModuleType, document: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Validate the active receipt through the family's own checker, then admit it for retirement.
+
+    A refused or partly-refused seal is a NAMED refusal: this module never removes anything on the
+    strength of a document its own family will not validate.  The reasons are escaped before they
+    reach a line, because a receipt's ``detail`` is free text observed in the field.
+    """
+    result = dar.derive("validate", document, f"the active receipt {path}")
+    if result["verdict"] != dar.VERDICT_VALIDATED:
+        reasons = "; ".join(dar.escape_display(reason) for reason in result["reasons"][:4])
+        raise Refusal(
+            f"the active receipt {str(path)!r} does not validate as {dar.BODY_SCHEMA}, so it cannot "
+            f"authorize a removal: {reasons}"
+        )
+    receipt = result["receipt"]
+    if not isinstance(receipt, dict):
+        raise Refusal(f"the active receipt {str(path)!r} validated without reporting a document")
+    return receipt
+
+
+def admit_retirable(dar: ModuleType, receipt: dict[str, Any], config: Config, path: Path) -> dict[str, Any]:
+    """Admit only a validated receipt that describes a LIVE activation of THIS host plane."""
+    body = receipt["body"]
+    operation = body["operation"]
+    if operation not in RETIRABLE_OPERATIONS:
+        raise Refusal(
+            f"the active receipt {str(path)!r} records operation {operation!r}; only "
+            f"{list(RETIRABLE_OPERATIONS)} describe a live activation, and retiring a retirement "
+            "would delete a second time on the strength of a record that says the entries are gone"
+        )
+    if body["host"] != config.host:
+        raise Refusal(
+            f"the active receipt {str(path)!r} records host {dar.escape_display(str(body['host']))!r}, "
+            f"not {config.host!r}; a receipt names the one host plane it observed"
+        )
+    phase = body["terminal_phase"]
+    if phase not in RETIRABLE_PHASES:
+        raise Refusal(
+            f"the active receipt {str(path)!r} terminates {phase!r}; only {list(RETIRABLE_PHASES)} "
+            "describe a plane with activated entries, and removing on the strength of an unestablished "
+            "effect would turn an unknown into a deletion"
+        )
+    if not isinstance(body.get("entries"), list) or not body["entries"]:
+        raise Refusal(
+            f"the active receipt {str(path)!r} carries no entry inventory, and the inventory is the "
+            "only candidate set a removal may draw from"
+        )
+    return body
+
+
+# ---- classification: ownership is proved, never assumed -------------------------------------------
+
+
+def resolve_destination(config: Config, entry_name: Any) -> Path | None:
+    """Resolve one inventory entry name to one path INSIDE the plane, or refuse to resolve it.
+
+    The family already refuses ``..`` in an entry name.  This is the second, independent check, on the
+    resolved path rather than on the spelling, because a receipt is evidence and never authorization:
+    the value that decides where a deletion lands is re-derived here.
+    """
+    if not isinstance(entry_name, str) or not entry_name:
+        return None
+    if entry_name.startswith("/") or entry_name.startswith("\\") or ".." in Path(entry_name).parts:
+        return None
+    candidate = Path(os.path.normpath(str(config.plane_root / entry_name)))
+    root = Path(os.path.normpath(str(config.plane_root)))
+    if candidate == root or root not in candidate.parents:
+        return None
+    return candidate
+
+
+def parent_is_retargeted(config: Config, destination: Path) -> bool:
+    """Is any directory between the plane root and this entry a link?
+
+    A deletion reached through a link takes effect wherever the link points, which is outside what
+    this receipt describes.  ``lstat`` on each component, never ``resolve``, so the question asked is
+    "is this component a link" and not "where does it end up".
+    """
+    root = Path(os.path.normpath(str(config.plane_root)))
+    current = destination.parent
+    while True:
+        try:
+            if stat.S_ISLNK(current.lstat().st_mode):
+                return True
+        except OSError:
+            return False
+        if current == root or current == current.parent:
+            return False
+        current = current.parent
+
+
+def classify_entry(
+    bundle: ModuleType, config: Config, entry: dict[str, Any]
+) -> tuple[str, Path | None, str | None]:
+    """Return ``(class, destination, current_digest)`` for one inventory entry.
+
+    The recorded digest is consulted first, because an inventory row whose ``content_sha256`` is null
+    -- a supplied-but-missing digest the receipt declared as an unknown -- can never be proved
+    unchanged, and reading a null as "no proof needed" is exactly the defect that would delete an
+    entry nobody digested.
+    """
+    name = entry.get("entry_name")
+    destination = resolve_destination(config, name)
+    if destination is None:
+        return "ambiguous-name", None, None
+
+    recorded = entry.get("content_sha256")
+    recorded_ok = isinstance(recorded, str) and bool(_HEX64.match(recorded))
+
+    if not bundle.path_present(destination):
+        return "absent", destination, None
+    if parent_is_retargeted(config, destination):
+        return "retargeted-parent", destination, None
+    if destination.is_symlink() or bundle.is_junction(destination):
+        # Digested for the record: ``digest`` hashes the link's own target bytes and never follows it.
+        return "foreign-symlink", destination, safe_digest(bundle, destination)
+    if not destination.is_file() and not destination.is_dir():
+        return "foreign-type", destination, None
+    current = safe_digest(bundle, destination)
+    if current is None:
+        return "foreign-unreadable", destination, None
+    if not recorded_ok:
+        return "unprovable-inventory", destination, current
+    if current != recorded:
+        return "modified-content", destination, current
+    return "owned-exact", destination, current
+
+
+def safe_digest(bundle: ModuleType, path: Path) -> str | None:
+    """The one reused digest definition, with an unreadable object reported as an honest unknown."""
+    try:
+        return bundle.digest(path)
+    except (OSError, bundle.InstallerError, ValueError):
+        return None
+
+
+# ---- the plan ------------------------------------------------------------------------------------
+
+
+def build_plan(config: Config, body: dict[str, Any], observations: list[dict[str, Any]]) -> dict[str, Any]:
+    """The closed, canonical statement of what this run intends, derived before any effect.
+
+    Both lists are built ABOVE the returned literal.  Written the other way, Python would evaluate the
+    ``remove`` key's comprehension and the ``preserve`` key's comprehension into a new dict in source
+    order -- which happens to work here -- but the plan is what the receipt's ``plan_sha256`` binds,
+    and a plan assembled from a value read before the walk that produced it is the same
+    evaluation-order defect that drops data.
+    """
+    remove: list[dict[str, Any]] = []
+    preserve: list[dict[str, Any]] = []
+    for item in observations:
+        if item["class"] == "owned-exact":
+            remove.append(
+                {
+                    "destination": str(item["destination"]),
+                    "entry_name": item["entry_name"],
+                    "expected_sha256": item["current_sha256"],
+                }
+            )
+        else:
+            preserve.append({"entry_name": item["entry_name"], "reason_code": item["class"]})
+    remove.sort(key=lambda row: (row["entry_name"], row["destination"]))
+    preserve.sort(key=lambda row: (row["entry_name"], row["reason_code"]))
+    plan = {
+        "activation_scope": body["activation_scope"],
+        "candidate_id": body["candidate_id"],
+        "host": body["host"],
+        "plane_root": str(config.plane_root),
+        "preserve": preserve,
+        "remove": remove,
+        "resolved_version": body["resolved_version"],
+        "retired_receipt_id": None,
+        "schema_version": PLAN_SCHEMA,
+    }
+    return plan
+
+
+def digest_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+# ---- the journal ---------------------------------------------------------------------------------
+
+
+class Journal:
+    """The durable removal journal: what is intended, what moved, and what is outstanding.
+
+    Every transition is written through the installer's own ``write_state`` -- atomic replace plus a
+    parent-directory fsync -- so a process that dies between two lines leaves a record naming the
+    quarantine container and the destination it came from, never a clean-looking half-state.
+    """
+
+    def __init__(self, bundle: ModuleType, path: Path, document: dict[str, Any]) -> None:
+        self._bundle = bundle
+        self.path = path
+        self.document = document
+
+    def write(self, phase: str, *, before_any_effect: bool = False) -> None:
+        """Record one durable transition.
+
+        A journal this run cannot write BEFORE anything moved is a clean refusal: there is no effect
+        to have lost track of.  After the first quarantine the same failure is an unknown effect,
+        because the record of what moved is exactly what is now missing.
+        """
+        self.document["phase"] = phase
+        try:
+            self._bundle.write_state(self.path, self.document, False)
+        except (OSError, self._bundle.InstallerError) as exc:
+            message = f"the removal journal {str(self.path)!r} could not be written: {exc}"
+            raise (Refusal(message) if before_any_effect else UnknownEffect(message)) from exc
+
+    def digest(self) -> str | None:
+        try:
+            return digest_bytes(self.path.read_bytes())
+        except OSError:
+            return None
+
+
+# ---- the removal walk ----------------------------------------------------------------------------
+
+
+def checkpoint(config: Config, point: str, detail: dict[str, Any]) -> None:
+    """One test seam for interruption, called at each named transition. No production effect."""
+    if config.checkpoint is not None:
+        config.checkpoint(point, detail)
+
+
+def remove_one(
+    bundle: ModuleType,
+    config: Config,
+    journal: Journal,
+    row: dict[str, Any],
+    outcome: dict[str, bool],
+    *,
+    nothing_moved_yet: bool,
+) -> None:
+    """Quarantine one proved-owned entry, then delete the quarantined copy. Reused primitives only.
+
+    The shape is the installer's own ``transactional_delete``: reserve a private container beside the
+    destination, record the armed transaction durably, atomically rename the destination into the
+    container with a no-replace rename, record the quarantine, then remove the quarantined payload and
+    the now-empty container.  A failure BEFORE the rename moved nothing and is reported as attention;
+    a failure AFTER it is an unknown effect, because the entry has left the plane and this module will
+    not claim where it ended up.
+
+    ``outcome`` is filled rather than returned, because the caller needs to know whether this entry
+    left the plane even on the paths that raise -- and an exception carries no return value.  EVERY
+    statement that can fail after the container is reserved lives inside the try: a checkpoint or a
+    journal write left outside it would escape the classification this function exists to make.
+    """
+    destination = Path(row["destination"])
+    expected = row["expected_sha256"]
+
+    # Re-prove immediately before the move. This narrows the window; it is not a boundary against a
+    # same-UID racer.
+    current = safe_digest(bundle, destination)
+    if destination.is_symlink() or bundle.is_junction(destination) or current != expected:
+        raise Refusal(
+            f"the entry {dar_escape(row['entry_name'])} changed between its ownership proof and its "
+            "removal, so it was preserved untouched"
+        )
+
+    try:
+        artifact = bundle.reserve_private_artifact(destination, "backup")
+    except Exception as exc:  # noqa: BLE001 - nothing moved, so this entry is preserved and named
+        raise Refusal(
+            f"no private quarantine could be reserved beside {dar_escape(row['entry_name'])}, so it was "
+            f"preserved untouched: {exc!r}"
+        ) from exc
+    journal.document["pending"] = {
+        "container": str(artifact.container),
+        "destination": str(destination),
+        "entry_name": row["entry_name"],
+        "expected_sha256": expected,
+        "identity": artifact.identity,
+        "payload": str(artifact.payload),
+    }
+
+    moved = False
+    try:
+        journal.write("armed", before_any_effect=nothing_moved_yet)
+        checkpoint(config, "after-armed", dict(journal.document["pending"]))
+        if safe_digest(bundle, destination) != expected:
+            raise Refusal(
+                f"the entry {dar_escape(row['entry_name'])} changed after its transaction was armed, "
+                "so it was preserved untouched"
+            )
+        bundle.rename_absent(destination, artifact.payload)
+        moved = True
+        outcome["moved"] = True
+        journal.write("quarantined")
+        checkpoint(config, "after-quarantined", dict(journal.document["pending"]))
+        if safe_digest(bundle, artifact.payload) != expected:
+            raise UnknownEffect(
+                f"the quarantined copy of {dar_escape(row['entry_name'])} no longer matches its proved "
+                f"digest, so the effect of this removal is unknown: {str(artifact.container)!r}"
+            )
+        bundle.remove_path(artifact.payload)
+        artifact.container.rmdir()
+        bundle.fsync_directory(artifact.container.parent)
+    except Refusal:
+        if moved:
+            raise UnknownEffect(
+                f"the entry {dar_escape(row['entry_name'])} was already quarantined when the removal "
+                f"stopped, so its effect is unknown: {str(artifact.container)!r}"
+            ) from None
+        cleanup_unused_container(bundle, artifact)
+        journal.document["pending"] = None
+        journal.write("planned", before_any_effect=nothing_moved_yet)
+        raise
+    except UnknownEffect:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - a Ctrl-C between the rename and the delete is the
+        # exact case that must not report an absence of effect, and KeyboardInterrupt is not an
+        # `Exception`, so catching only that class would let the honest classification be skipped.
+        if moved:
+            raise UnknownEffect(
+                f"the removal of {dar_escape(row['entry_name'])} failed after it was quarantined, so "
+                f"its effect is unknown: {str(artifact.container)!r} ({exc!r})"
+            ) from exc
+        cleanup_unused_container(bundle, artifact)
+        journal.document["pending"] = None
+        journal.write("planned", before_any_effect=nothing_moved_yet)
+        if not isinstance(exc, Exception):
+            # An interrupt is a decision to stop, not one entry's defect: it stops the whole walk.
+            raise
+        raise Refusal(
+            f"the entry {dar_escape(row['entry_name'])} could not be quarantined, so it was preserved "
+            f"untouched: {exc!r}"
+        ) from exc
+
+    journal.document["pending"] = None
+    journal.document["completed"].append(
+        {"destination": str(destination), "entry_name": row["entry_name"], "expected_sha256": expected}
+    )
+    outcome["settled"] = True
+    try:
+        journal.write("settled")
+        checkpoint(config, "after-settled", {"entry_name": row["entry_name"]})
+    except UnknownEffect:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - the entry is gone; an unrecorded removal is unknown
+        raise UnknownEffect(
+            f"the entry {dar_escape(row['entry_name'])} was removed but its settlement could not be "
+            f"recorded, so the state of this retirement is unknown: {exc!r}"
+        ) from exc
+
+
+def cleanup_unused_container(bundle: ModuleType, artifact: Any) -> None:
+    """Remove an empty quarantine container this run created and never used."""
+    try:
+        if bundle.path_present(artifact.payload):
+            return
+        artifact.container.rmdir()
+        bundle.fsync_directory(artifact.container.parent)
+    except OSError:
+        return
+
+
+#: Bound at run time to the receipt family's own escaper, so a rendered line can never carry a
+#: control character out of an artifact or a filesystem name.
+_ESCAPE: Callable[[str], str] | None = None
+
+
+def dar_escape(value: Any) -> str:
+    text = value if isinstance(value, str) else repr(value)
+    if _ESCAPE is None:
+        return "".join(character if 0x20 <= ord(character) != 0x7F else "?" for character in text)
+    return _ESCAPE(text)
+
+
+# ---- the terminal receipt ------------------------------------------------------------------------
+
+
+def terminal_receipt_id(retired_id: str) -> str:
+    candidate = f"uninstall-{retired_id}"
+    if not _TOKEN.match(candidate):
+        raise Refusal(
+            f"the retired receipt id {dar_escape(retired_id)!r} does not compose a lowercase token, so "
+            "this retirement cannot be named"
+        )
+    return candidate
+
+
+def resolved_instant(config: Config) -> str:
+    """The instant this receipt states, injectable and never inferred from an artifact.
+
+    This project's WSL2 host steps ``CLOCK_REALTIME`` backwards, so the value is a STATEMENT of when
+    the operation ran and never evidence of ordering.  A caller may supply it exactly.
+    """
+    if config.stated_at is not None:
+        if not _INSTANT.match(config.stated_at):
+            raise Refusal(
+                f"the supplied stated_at {dar_escape(config.stated_at)!r} is not a YYYY-MM-DDTHH:MM:SSZ "
+                "instant"
+            )
+        return config.stated_at
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def build_receipt(
+    dar: ModuleType,
+    config: Config,
+    body: dict[str, Any],
+    retired_id: str,
+    observations: list[dict[str, Any]],
+    removed: set[str],
+    plan_sha256: str,
+    journal_sha256: str | None,
+    effect_state: str,
+    terminal_phase: str,
+) -> dict[str, Any]:
+    """Assemble the one unsealed terminal observation. Every list is built ABOVE the literal.
+
+    A dict literal that read ``entries`` before the loop that fills it would seal a receipt whose
+    inventory is empty and whose own checks would then pass, because the check reads the list that
+    lost the records.
+    """
+    entries: list[dict[str, Any]] = []
+    for item in observations:
+        name = item["entry_name"]
+        if name in removed:
+            # ``removed`` leaves nothing to digest, and the family refuses a digest beside it.
+            entries.append(
+                {
+                    "content_sha256": None,
+                    "disposition": "removed",
+                    "entry_name": name,
+                    "prestate": "owned",
+                }
+            )
+            continue
+        prestate = CLASS_PRESTATE[item["class"]]
+        content = item["current_sha256"] if dar.content_bearing(prestate, "preserved") else None
+        entries.append(
+            {
+                "content_sha256": content,
+                "disposition": "preserved",
+                "entry_name": name,
+                "prestate": prestate,
+            }
+        )
+    entries.sort(key=lambda row: str(row["entry_name"]))
+    observation = {
+        "activation_scope": body["activation_scope"],
+        "archive_sha256": body["archive_sha256"],
+        "candidate_id": body["candidate_id"],
+        "effect_state": effect_state,
+        "entries": entries,
+        "host": body["host"],
+        "journal_sha256": journal_sha256,
+        "operation": "uninstall",
+        "plan_sha256": plan_sha256,
+        "public_channel": None,
+        "record_sha256": dar.UNSEALED,
+        "release_claim": "none",
+        # An uninstall requests no version. Null is the statement "no version was requested", which is
+        # not the "unknown" a null digest means.
+        "requested_version": None,
+        "resolved_version": body["resolved_version"],
+        "schema_version": dar.BODY_SCHEMA,
+        "terminal_phase": terminal_phase,
+        "unknowns": [],
+        "version_source": body["version_source"],
+    }
+    return {
+        "ancestors": [
+            {
+                "expected_kind": dar.RECEIPT_KIND,
+                "receipt_id": retired_id,
+                "relation": "derived-from",
+            }
+        ],
+        "body": observation,
+        "content_digest": dar.UNSEALED,
+        "emitting_plane": config.emitting_plane,
+        "receipt_id": terminal_receipt_id(retired_id),
+        "receipt_kind": dar.RECEIPT_KIND,
+        "schema": dar.ENVELOPE_SCHEMA,
+        "stated_at": resolved_instant(config),
+    }
+
+
+def seal_receipt(dar: ModuleType, unsealed: dict[str, Any]) -> dict[str, Any]:
+    result = dar.derive("seal", unsealed, "this retirement's observation")
+    if result["verdict"] != dar.VERDICT_SEALED or not isinstance(result["receipt"], dict):
+        reasons = "; ".join(dar.escape_display(reason) for reason in result["reasons"][:4])
+        raise UnknownEffect(
+            f"this retirement's terminal receipt could not be sealed, so the operation ends without "
+            f"the record it owes: {reasons}"
+        )
+    return result["receipt"]
+
+
+def write_terminal_receipt(bundle: ModuleType, dar: ModuleType, path: Path, receipt: dict[str, Any]) -> None:
+    """Write the terminal receipt create-only and durably. An existing path is never replaced."""
+    raw = dar.canonical_bytes(receipt)
+    bundle.durable_mkdir(path.parent)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(descriptor, raw)
+        bundle.flush_descriptor(descriptor, full=True)
+    finally:
+        os.close(descriptor)
+    bundle.fsync_directory(path.parent)
+
+
+# ---- the report ----------------------------------------------------------------------------------
+
+
+def render_report(
+    state: str,
+    retired_id: str,
+    body: dict[str, Any],
+    observations: list[dict[str, Any]],
+    removed: set[str],
+    outstanding: set[str],
+    receipt_path: Path | None,
+    journal_path: Path,
+    effect_state: str,
+    terminal_phase: str,
+    attention: list[str],
+) -> list[str]:
+    """One offline report: removed, preserved, attention. Every artifact-derived value is escaped."""
+    lines = [
+        f"ccodex sdlc uninstall: {state}",
+        f"retired activation: {dar_escape(retired_id)} (host {dar_escape(body['host'])},"
+        f" scope {dar_escape(body['activation_scope'])}, resolved {dar_escape(body['resolved_version'])})",
+    ]
+    for item in sorted(observations, key=lambda row: str(row["entry_name"])):
+        name = dar_escape(item["entry_name"])
+        if item["entry_name"] in outstanding:
+            lines.append(
+                f"removed with an outstanding quarantine: {name} (the destination left the plane and "
+                "the journal names the container that still holds it)"
+            )
+        elif item["entry_name"] in removed:
+            lines.append(f"removed: {name}")
+        elif item["class"] == "absent":
+            lines.append(f"absent: {name} ({CLASS_REASON['absent']})")
+        else:
+            lines.append(f"preserved: {name} ({item['class']}: {CLASS_REASON[item['class']]})")
+    for note in attention:
+        lines.append(f"attention: {note}")
+    for record in body.get("unknowns", []):
+        if isinstance(record, dict):
+            # `detail` is free text observed in the field, so it reaches this line ESCAPED: a bare
+            # newline would forge a second line of this command's own output, a carriage return would
+            # overwrite the line already printed, and an escape sequence would rewrite the terminal.
+            lines.append(
+                f"inherited unknown: {dar_escape(record.get('observation'))}"
+                f" about {dar_escape(record.get('subject'))}"
+                f" ({dar_escape(record.get('detail'))})"
+            )
+    lines.append(f"journal: {journal_path}")
+    lines.append(
+        f"terminal receipt: {receipt_path if receipt_path is not None else 'not written'}"
+        f" (operation uninstall, effect {effect_state}, terminal {terminal_phase})"
+    )
+    lines.append(
+        "a completed retirement is evidence: it authorizes no push, publication, PR mutation, merge, "
+        "deployment, or any other outward effect"
+    )
+    return lines
+
+
+# ---- the run -------------------------------------------------------------------------------------
+
+
+def classify_all(bundle: ModuleType, config: Config, body: dict[str, Any]) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for entry in body["entries"]:
+        if not isinstance(entry, dict):
+            raise Refusal("the active receipt's inventory carries a row that is not an entry record")
+        classification, destination, current = classify_entry(bundle, config, entry)
+        observations.append(
+            {
+                "class": classification,
+                "current_sha256": current,
+                "destination": destination,
+                "entry_name": entry.get("entry_name"),
+            }
+        )
+    return observations
+
+
+def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, bool]) -> tuple[int, list[str]]:
+    """Admit, plan, remove, then record. Returns the exit class and the report lines.
+
+    ``ledger['moved']`` is set the instant the first destination leaves the plane, so a caller that
+    catches an interrupt escaping this function can classify it honestly instead of guessing.
+    """
+    if config.platform_system != SUPPORTED_PLATFORM:
+        raise Refusal(
+            f"ccodex sdlc uninstall is certified on {SUPPORTED_PLATFORM} only and refuses on "
+            f"{dar_escape(config.platform_system)}; the candidate plane it retires is Linux x64 only"
+        )
+
+    receipt_document = read_receipt_document(dar, config.active_receipt_path, "distribution-activation receipt")
+    validated = admit_active_receipt(dar, receipt_document, config.active_receipt_path)
+    body = admit_retirable(dar, validated, config, config.active_receipt_path)
+    retired_id = validated["receipt_id"]
+    if not isinstance(retired_id, str) or not _TOKEN.match(retired_id):
+        raise Refusal("the active receipt carries no lowercase-token receipt_id to retire")
+
+    receipt_id = terminal_receipt_id(retired_id)
+    receipt_path = config.receipts_dir / f"{receipt_id}.json"
+    journal_path = config.journals_dir / f"{receipt_id}.json"
+    if bundle.path_present(receipt_path):
+        raise Refusal(
+            f"this activation already carries the terminal receipt {str(receipt_path)!r}; a second "
+            "retirement of one activation is refused rather than repeated, and an outstanding unknown "
+            "effect is an operator decision"
+        )
+
+    observations = classify_all(bundle, config, body)
+    plan = build_plan(config, body, observations)
+    plan["retired_receipt_id"] = retired_id
+    plan_sha256 = digest_bytes(dar.canonical_bytes(plan))
+
+    journal = Journal(
+        bundle,
+        journal_path,
+        {
+            "attention": [],
+            "completed": [],
+            "host": config.host,
+            "pending": None,
+            "phase": "planned",
+            "plan": plan,
+            "plan_sha256": plan_sha256,
+            "plane_root": str(config.plane_root),
+            "receipt_id": receipt_id,
+            "retired_receipt_id": retired_id,
+            "schema_version": JOURNAL_SCHEMA,
+        },
+    )
+
+    removed: set[str] = set()
+    outstanding: set[str] = set()
+    attention: list[str] = []
+    unknown: str | None = None
+    with bundle.installer_lock(bundle_config(bundle, config)):
+        journal.write("planned", before_any_effect=True)
+        for row in plan["remove"]:
+            outcome: dict[str, bool] = {"moved": False, "settled": False}
+            try:
+                remove_one(bundle, config, journal, row, outcome, nothing_moved_yet=not ledger["moved"])
+                removed.add(row["entry_name"])
+            except Refusal as exc:
+                attention.append(str(exc))
+                journal.document["attention"].append({"entry_name": row["entry_name"], "reason": str(exc)})
+            except UnknownEffect as exc:
+                unknown = str(exc)
+                journal.document["attention"].append({"entry_name": row["entry_name"], "reason": str(exc)})
+                if outcome["moved"]:
+                    # The destination LEFT the plane. Reporting it as preserved would be a false
+                    # statement about the plane; the doubt belongs in the effect state, which is
+                    # `unknown`, and in the journal's outstanding quarantine.
+                    removed.add(row["entry_name"])
+                    outstanding.add(row["entry_name"])
+                break
+            finally:
+                if outcome["moved"]:
+                    ledger["moved"] = True
+        journal.write(
+            "unknown" if unknown is not None else "settled",
+            before_any_effect=not ledger["moved"] and unknown is None,
+        )
+
+    journal_sha256 = journal.digest()
+    if unknown is not None:
+        effect_state, terminal_phase, exit_class, state = "unknown", "unknown", EXIT_UNKNOWN, "unknown"
+        attention.append(unknown)
+    elif len(removed) == len(observations):
+        effect_state, terminal_phase, exit_class, state = "complete", "retired", EXIT_RETIRED, "retired"
+    elif not removed:
+        # Nothing moved. The honest negative of this family: no effect, and the plane is not retired.
+        effect_state, terminal_phase, exit_class, state = "none", "not-activated", EXIT_ATTENTION, "not-retired"
+    else:
+        # ``partial`` admits only ``unknown`` for an uninstall in the family's matrix.
+        effect_state, terminal_phase, exit_class, state = "partial", "unknown", EXIT_ATTENTION, "partly-retired"
+
+    # An inherited or fresh null digest is NAMED as an unknown by the family's producer, and the family
+    # refuses `complete` beside any unknown -- correctly, because an effect whose own observations could
+    # not all be made is not complete.  Consulting the RECORDED unknowns here rather than only the
+    # removal count is what keeps this module from sealing a document its own family would refuse.
+    if effect_state == "complete":
+        for label, value in (("archive-digest", body["archive_sha256"]), ("journal-digest", journal_sha256)):
+            if value is None:
+                effect_state, terminal_phase, exit_class, state = "partial", "unknown", EXIT_ATTENTION, "partly-retired"
+                attention.append(
+                    f"every inventory entry was removed, but this retirement records {label} as unknown, "
+                    "so its effect is partial rather than complete"
+                )
+
+    written: Path | None = None
+    try:
+        unsealed = build_receipt(
+            dar,
+            config,
+            body,
+            retired_id,
+            observations,
+            removed,
+            plan_sha256,
+            journal_sha256,
+            effect_state,
+            terminal_phase,
+        )
+        write_terminal_receipt(bundle, dar, receipt_path, seal_receipt(dar, unsealed))
+        written = receipt_path
+    except (UnknownEffect, Refusal, OSError) as exc:
+        attention.append(f"the terminal receipt could not be recorded: {dar_escape(str(exc))}")
+        if removed or unknown is not None:
+            exit_class, state = EXIT_UNKNOWN, "unknown"
+
+    return exit_class, render_report(
+        state,
+        retired_id,
+        body,
+        observations,
+        removed,
+        outstanding,
+        written,
+        journal_path,
+        effect_state,
+        terminal_phase,
+        attention,
+    )
+
+
+def bundle_config(bundle: ModuleType, config: Config) -> Any:
+    """The installer Config this module borrows for ONE purpose: the shared lifecycle lock.
+
+    Both this plane and ``bundle:install`` write into the same Claude collections, so they must
+    serialize on the same lock file rather than on two private ones.
+    """
+    return bundle.Config(
+        config.scripts_dir.parent,
+        config.home,
+        config.home / ".codex",
+        "auto",
+        False,
+        config.host,
+        config.state_root,
+    )
+
+
+def main(argv: list[str]) -> int:
+    """The dispatcher's entry point. Returns an admitted exit class 0-4 and never raises."""
+    global _ESCAPE
+    try:
+        if argv:
+            raise Refusal(f"ccodex sdlc uninstall accepts no arguments: {argv[0]!r}")
+        refuse_read_only_guard()
+        scripts_dir = Path(__file__).resolve().parent
+        dar = load_sibling(scripts_dir, "distribution_activation_receipt")
+        bundle = load_sibling(scripts_dir, "install_skill_bundle")
+        _ESCAPE = dar.escape_display
+        config = default_config(bundle)
+    except Refusal as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    except Exception as exc:  # noqa: BLE001 - nothing has been touched yet, so this is a clean refusal
+        print(f"error: ccodex sdlc uninstall refused before any effect: {exc!r}", file=sys.stderr)
+        return EXIT_REFUSED
+    return execute(bundle, dar, config)
+
+
+def execute(bundle: ModuleType, dar: ModuleType, config: Config) -> int:
+    """Run one retirement with the adapters and configuration already resolved.
+
+    Every escape route is classified by ONE fact -- did anything leave the plane -- rather than by the
+    exception's type, because a ``KeyboardInterrupt`` before the first rename and one after it are
+    different outcomes that the same class would otherwise report identically.
+    """
+    global _ESCAPE
+    _ESCAPE = dar.escape_display
+    ledger: dict[str, bool] = {"moved": False}
+    try:
+        exit_class, lines = run(bundle, dar, config, ledger)
+    except Refusal as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN if ledger["moved"] else EXIT_REFUSED
+    except UnknownEffect as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - includes the interrupt this walk must survive honestly
+        print(
+            f"error: ccodex sdlc uninstall stopped and "
+            f"{'cannot prove what it moved' if ledger['moved'] else 'moved nothing'}: {exc!r}",
+            file=sys.stderr,
+        )
+        return EXIT_UNKNOWN if ledger["moved"] else EXIT_REFUSED
+    sys.stdout.write("\n".join(lines) + "\n")
+    return exit_class
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
