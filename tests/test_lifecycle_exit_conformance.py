@@ -2150,9 +2150,8 @@ SCHEMA_FIXTURES = ROOT / "tests" / "fixtures" / "lifecycle-ownership-schemas"
 class OldSchemaReadTest(Conformance):
     """v1, v2, and v3 ownership documents are READ, each by its own reader, and never retrofitted.
 
-    Slice 3's exit artifact names "old-schema readers" (spec:585-589).  What the shipped code actually
-    provides is TWO readers with a deliberate split, and this section pins the split rather than
-    assuming one reader handles all three:
+    Slice 3's exit artifact names "the two old-schema readers" (spec:586-591, agentic-sdlc-642f).
+    This section pins the shipped split in CODE rather than trusting the spec sentence alone:
 
     * ``normalize_document_to_v3`` admits v2 and v3 and normalizes IN MEMORY.  The disk bytes are
       never rewritten by a read.

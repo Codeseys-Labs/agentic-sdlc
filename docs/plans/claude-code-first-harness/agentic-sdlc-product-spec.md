@@ -258,9 +258,10 @@ installed through their own front doors.
     or creates a second mission root.
 22. **Dynamic Workflow boundary.** One approved wave is one Claude Code Dynamic Workflow DAG. A
     mission spans waves. Cross-session continuation compiles a new wave from durable artifacts.
-23. **Execution defaults.** Ship defaults of four concurrent nodes, 64 total nodes, and one
-    recursive child generation. Keep every limit configurable, finite, recorded, and bounded by
-    verified host capability. Recursive execution remains separately disabled by default.
+23. **Execution defaults.** Ship defaults of four concurrent nodes, 64 total nodes, and recursion
+    off; the recursive child generation cap is raisable. Keep every limit configurable, finite,
+    recorded, and bounded by verified host capability. Recursive execution remains separately
+    disabled by default.
 24. **Node contract.** Every node declares inputs, output schema, authority, tools, work ownership,
     RuntimeAssignment, stop rule, and RoleSubmission destination.
 25. **Runtime assignment.** Resolve exact provider/model, requested effort and context, transport,
@@ -585,7 +586,8 @@ Every slice carries the fixture classes required by Testing Decision 39.
 ### Slice 3 — Versioned lifecycle
 
 - **Scope:** implement install, update, recover, and uninstall over exact release payloads, with
-  stable/preview side-by-side state, foreign preservation, and old-schema readers.
+  stable/preview side-by-side state, foreign preservation, and the two old-schema readers (an
+  in-memory v2/v3 normalizer, plus an explicit-migration-only v1 reader).
 - **Exit artifact:** effect-aware lifecycle exits that preserve foreign state.
 
 ### Slice 4 — Activation slice

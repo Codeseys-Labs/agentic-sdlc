@@ -723,6 +723,121 @@ class RemediationReadyTests(DerivationCase):
         self.assert_refused(result, "independently-read baseline receipt's own cwd")
         self.assert_refused(result, "does not agree with the target")
 
+    def test_baseline_receipt_with_no_failing_set_at_all_refuses_by_name(self) -> None:
+        """The independently-read baseline receipt itself -- not the candidate's own gate-receipt,
+        which has its own earlier check for this -- carries no `failures` object at all, so there
+        is no failing set for `baseline_failing` to be bound to."""
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        names = ("fixture.Case.test_alpha",)
+        unobserved_baseline = gate_receipt(self.target, outcome="failed", failures_state=None)
+        pieces = self.remediation(
+            **{
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names, baseline_receipt=unobserved_baseline
+                ),
+                "baseline-receipt": unobserved_baseline,
+            }
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "records no failing set")
+
+    def test_baseline_receipt_with_an_unparsed_failing_set_refuses_by_name(self) -> None:
+        """Same shape as above, but the independently-read baseline receipt's own failing set is
+        `unparsed`: identification was attempted against IT and failed, which is not an exact set
+        of names the comparison's arithmetic can be bound to."""
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        names = ("fixture.Case.test_alpha",)
+        unparsed_baseline = gate_receipt(self.target, outcome="failed", failures_state="unparsed")
+        pieces = self.remediation(
+            **{
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names, baseline_receipt=unparsed_baseline
+                ),
+                "baseline-receipt": unparsed_baseline,
+            }
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "is 'unparsed'")
+
+    # ---- baseline ARITHMETIC, not just identity (agentic-sdlc-498b, residual from the de3a
+    # verification's finding D2): the checks above bind the comparison's STAMP to the baseline
+    # receipt it names, but nothing yet bound baseline_failing/newly_failing/non_worsening
+    # THEMSELVES to that receipt's own failing set -- so a hand-written comparison could carry a
+    # genuine stamp (real cwd, real self_digest) while still forging the verdict arithmetic.
+
+    def test_baseline_failing_that_disagrees_with_the_baseline_receipt_refuses_by_name(self) -> None:
+        """`baseline_failing` is forged to omit a test the independently-read baseline receipt
+        genuinely failed with, while the stamp (cwd/self_digest) stays real."""
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        names = ("fixture.Case.test_alpha",)
+        baseline_doc = self.baseline_receipt_doc()  # really failed: test_alpha, test_beta
+        pieces = self.remediation(
+            **{
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names,
+                    baseline_receipt=baseline_doc,
+                    # FORGED: drops "fixture.Case.test_beta", which the real receipt carries.
+                    baseline_failing=("fixture.Case.test_alpha",),
+                    newly_failing=(),
+                )
+            }
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "baseline_failing does not agree")
+        self.assert_refused(result, "fixture.Case.test_beta")
+
+    def test_baseline_comparison_with_forged_newly_failing_no_longer_reaches_remediation_ready(
+        self,
+    ) -> None:
+        """agentic-sdlc-498b (de3a finding D2): a hand-written comparison stamps the REAL baseline
+        cwd and self_digest -- both genuinely bound to the supplied baseline receipt, so every
+        identity check above passes -- while forging baseline_failing/newly_failing/non_worsening
+        to claim no regression. The honest comparison over the identical receipts says WORSENED:
+        the candidate genuinely introduces "fixture.Case.test_delta", which is not in the baseline
+        receipt's own failing set. Binding baseline_failing to that receipt and RECOMPUTING
+        newly_failing from the two bound sets is what a say-so field alone cannot resist.
+        """
+        # POSITIVE CONTROL: the honest positive-control fixture this whole class shares reaches
+        # remediation-ready first, so the refusal below is the forged arithmetic and not some
+        # unrelated fixture breakage.
+        identified, _ = self.derive(self.remediation())
+        self.assertEqual(identified["state"], REMEDIATION_READY)
+        baseline_doc = self.baseline_receipt_doc()  # DEFAULT_BASELINE_FAILING: test_alpha, test_beta
+        names = ("fixture.Case.test_alpha", "fixture.Case.test_delta")  # test_delta is genuinely NEW
+        forged_pieces = self.remediation(
+            **{
+                "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
+                "baseline-comparison": baseline_report(
+                    candidate_failing=names,
+                    baseline_receipt=baseline_doc,
+                    # baseline_failing is left honest (matches baseline_doc); only the verdict
+                    # arithmetic is forged, exactly as agentic-sdlc-de3a's D2 finding described.
+                    newly_failing=(),  # FORGED: the honest set is ("fixture.Case.test_delta",)
+                    non_worsening=True,  # FORGED to match
+                ),
+                "baseline-receipt": baseline_doc,
+            }
+        )
+        forged_result, _ = self.derive(forged_pieces)
+        self.assert_refused(forged_result, "newly_failing does not match")
+        self.assert_refused(forged_result, "fixture.Case.test_delta")
+        # HONEST CONTROL: the identical receipts, compared honestly (the default `baseline_report`
+        # recomputes newly_failing from the sets it is given rather than a caller-chosen override),
+        # are refused for "worsens the baseline" -- the true verdict the forged report above hid.
+        honest_pieces = self.remediation(
+            **{
+                "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
+                "baseline-comparison": baseline_report(candidate_failing=names, baseline_receipt=baseline_doc),
+                "baseline-receipt": baseline_doc,
+            }
+        )
+        honest_result, _ = self.derive(honest_pieces)
+        self.assert_refused(honest_result, "worsens the baseline")
+        self.assert_refused(honest_result, "fixture.Case.test_delta")
+
 
 class GateRefusalTests(DerivationCase):
     def test_unobserved_gate_reaches_neither_ready_state(self) -> None:
@@ -1036,7 +1151,15 @@ class ExhaustiveMatrixTests(DerivationCase):
                                         self.target, outcome=outcome, names=names, failures_state=failures_state
                                     ),
                                     "baseline-comparison": baseline_report(
-                                        candidate_failing=names, baseline_receipt=baseline_doc
+                                        candidate_failing=names,
+                                        # Bound to what `baseline_doc` itself actually carries
+                                        # (agentic-sdlc-498b): `assess_gate` now recomputes
+                                        # newly_failing from the independently-read baseline
+                                        # receipt's own failing set rather than trusting this
+                                        # field, so a mismatched default here would refuse every
+                                        # `with_baseline` case instead of reaching a ready state.
+                                        baseline_failing=names or DEFAULT_BASELINE_FAILING,
+                                        baseline_receipt=baseline_doc,
                                     )
                                     if with_baseline
                                     else None,
@@ -1262,7 +1385,9 @@ class ResultContractTests(DerivationCase):
             self.evidence(
                 **{
                     "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
-                    "baseline-comparison": baseline_report(candidate_failing=names, baseline_receipt=baseline_doc),
+                    "baseline-comparison": baseline_report(
+                        candidate_failing=names, baseline_failing=names, baseline_receipt=baseline_doc
+                    ),
                     "baseline-receipt": baseline_doc,
                 }
             )

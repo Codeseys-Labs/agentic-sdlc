@@ -66,12 +66,12 @@ permissions and remaining budgets. Recursive investigation, diagnosis, research,
 conditional execution may continue only inside that envelope; anything else becomes a Seed.
 
 Execution limits are configurable policy, not immutable constants. Agentic SDLC ships defaults of
-four concurrent nodes, 64 total nodes per wave, and one recursive child generation. Users may set
-a global execution profile, and repositories may narrow or explicitly override it. Each wave
-records its effective limits before approval. `ccodex` applies the same policy and may lower it for
-provider, quota, or transport constraints. No configuration may exceed capabilities verified for
-the active Claude Code version, and unbounded execution is invalid. Recursive execution remains
-separately default-off even when numeric limits are raised.
+four concurrent nodes, 64 total nodes per wave, and recursion off; the recursive child generation
+cap is raisable. Users may set a global execution profile, and repositories may narrow or
+explicitly override it. Each wave records its effective limits before approval. `ccodex` applies
+the same policy and may lower it for provider, quota, or transport constraints. No configuration
+may exceed capabilities verified for the active Claude Code version, and unbounded execution is
+invalid. Recursive execution remains separately default-off even when numeric limits are raised.
 
 ### Retry, planning, and approval
 

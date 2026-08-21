@@ -297,9 +297,15 @@ def load_document_state(document: dict[str, Any] | None, path: Path) -> dict[str
 
 
 def load_state(path: Path) -> dict[str, Any]:
-    """Read v2 or v3 installer state, normalized to v3 in memory for reads. Persisting an
-    upgraded v2 document to disk requires install --migrate-state; otherwise disk bytes are
-    left untouched. Structural and authority validation follows before use."""
+    """Read v2 or v3 installer state, normalized to v3 in memory for reads. This function alone
+    never writes: disk bytes are left untouched by the read itself. But the normalized v3 shape it
+    returns is what every mutating lifecycle verb (install, update, and uninstall through
+    `load_config_state`, and recovery through `load_state` directly) goes on to persist the next
+    time it calls `persist_state` -- an ordinary verb over on-disk v2 state upgrades that document
+    to v3 as a side effect of its own write, with no `--migrate-state` required.
+    `install --migrate-state` is the EXPLICIT path for upgrading a v2 document with no other
+    pending change; it is not the only path that persists v3.
+    Structural and authority validation follows before use."""
     return load_document_state(read_state_document(path), path)
 
 

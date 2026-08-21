@@ -575,7 +575,8 @@ Decision owner: [repository truth reconciliation](issues/13-reconcile-repository
 2. **Read-only `ccodex sdlc`** — package the operator CLI and current ownership/recovery substrate;
    ship inspect, status, doctor, and dry-run before mutation.
 3. **Versioned lifecycle** — implement install/update/recover/uninstall over exact release payloads,
-   stable/preview side-by-side state, foreign preservation, and old-schema readers.
+   stable/preview side-by-side state, foreign preservation, and the two old-schema readers (an
+   in-memory v2/v3 normalizer, plus an explicit-migration-only v1 reader).
 4. **Activation slice** — compose one full greenfield and one brownfield assessed plan, tracked
    repository manifest, local receipt, and write-ready/remediation-ready/refused result.
 5. **Native-Claude Core wave** — ship the smallest owned Dynamic Workflow that proves planning,

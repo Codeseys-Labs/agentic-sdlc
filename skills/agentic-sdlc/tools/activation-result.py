@@ -636,10 +636,50 @@ def assess_gate(
             f"({assessment.target!r})"
         )
         return
-    if baseline.get("newly_failing") or not non_worsening:
+    # Identity alone (the two checks above) is not arithmetic. A hand-written comparison can stamp
+    # a REAL baseline_cwd/baseline_self_digest -- both genuinely bound to the supplied baseline
+    # receipt -- while still forging baseline_failing/newly_failing/non_worsening to claim no
+    # regression (agentic-sdlc-de3a finding D2, adjudicated as agentic-sdlc-498b). The candidate
+    # side already has this property: `failures["names"]` is the receipt's OWN failing set, checked
+    # against `baseline.get("candidate_failing")` above. The baseline side gets the same binding
+    # here, and `newly_failing` is RECOMPUTED from the two bound sets rather than trusted from the
+    # comparison document, so a say-so field can no longer carry the verdict.
+    baseline_receipt_failures = baseline_receipt.get("failures")
+    if baseline_receipt_failures is None:
+        assessment.refuse(
+            "the independently-read baseline receipt records no failing set, so the baseline "
+            "comparison's baseline_failing cannot be bound to it"
+        )
+        return
+    if baseline_receipt_failures.get("state") != FAILURES_IDENTIFIED:
+        assessment.refuse(
+            "the independently-read baseline receipt's failing set is "
+            f"{baseline_receipt_failures.get('state')!r}: identification was attempted and failed, "
+            "so the baseline comparison's arithmetic cannot be bound to it"
+        )
+        return
+    receipt_baseline_failing = sorted(baseline_receipt_failures["names"])
+    stamped_baseline_failing = sorted(baseline.get("baseline_failing") or [])
+    if stamped_baseline_failing != receipt_baseline_failing:
+        assessment.refuse(
+            "the baseline comparison's baseline_failing does not agree with the independently-read "
+            "baseline receipt's own failing set, so its arithmetic cannot be trusted: "
+            + ", ".join(sorted(set(stamped_baseline_failing) ^ set(receipt_baseline_failing)) or ["(unnamed)"])
+        )
+        return
+    recomputed_newly_failing = sorted(set(failures["names"]) - set(receipt_baseline_failing))
+    stamped_newly_failing = sorted(baseline.get("newly_failing") or [])
+    if stamped_newly_failing != recomputed_newly_failing:
+        assessment.refuse(
+            "the baseline comparison's newly_failing does not match the set recomputed from the "
+            "candidate receipt's and the independently-read baseline receipt's own failing sets: "
+            + ", ".join(sorted(set(stamped_newly_failing) ^ set(recomputed_newly_failing)) or ["(unnamed)"])
+        )
+        return
+    if recomputed_newly_failing or not non_worsening:
         assessment.refuse(
             "the candidate worsens the baseline, newly failing: "
-            + ", ".join(str(item) for item in baseline.get("newly_failing") or ["(unnamed)"])
+            + ", ".join(recomputed_newly_failing or ["(unnamed)"])
         )
 
 
