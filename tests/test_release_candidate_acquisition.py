@@ -104,6 +104,7 @@ def record_bytes(record: dict[str, object]) -> bytes:
 
 def valid_operation_journal(
     phases: tuple[str, ...] = ("opened", "pinned", "staged"),
+    timestamps: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     effects = [
         "xdg-data-candidate-publish",
@@ -113,14 +114,20 @@ def valid_operation_journal(
         "xdg-state-receipt",
         "xdg-state-writer-lock",
     ]
-    timestamps = (
-        "2026-08-16T12:00:00Z",
-        "2026-08-16T12:00:01Z",
-        "2026-08-16T12:00:02Z",
-        "2026-08-16T12:00:03Z",
-        "2026-08-16T12:00:04Z",
-        "2026-08-16T12:00:05Z",
-    )
+    # Supplying `timestamps` rebuilds the hash chain around them, so a clock-shaped fixture carries
+    # no collateral seal or predecessor error and a validation result can be asserted EXACTLY. Checked
+    # with `is None` rather than `timestamps or (...)`: an explicitly supplied but EMPTY tuple is a
+    # real, distinct fixture request (zero phases means zero timestamps too), and `or` would silently
+    # replace it with the six-entry default instead of honoring the caller's empty tuple.
+    if timestamps is None:
+        timestamps = (
+            "2026-08-16T12:00:00Z",
+            "2026-08-16T12:00:01Z",
+            "2026-08-16T12:00:02Z",
+            "2026-08-16T12:00:03Z",
+            "2026-08-16T12:00:04Z",
+            "2026-08-16T12:00:05Z",
+        )
     entries: list[dict[str, object]] = []
     for sequence, phase in enumerate(phases):
         predecessor = (
@@ -569,7 +576,10 @@ class AcquisitionOperationJournalTests(unittest.TestCase):
                 "phase_prefix": list(self.phases),
                 "predecessor_digest": "sha256-of-exact-canonical-preceding-entry-bytes",
                 "sequence": "zero-based-contiguous",
-                "timestamp_order": "strict-utc-nondecreasing",
+                # A literal, deliberately: the validator derives the same string from its tolerance
+                # constant, so this is the third side of the triangle that makes a silent retune
+                # impossible -- policy bytes, validator constant, and this expectation must agree.
+                "timestamp_order": "utc-nondecreasing-within-2.0s-backward-clock-tolerance",
             },
         )
 
@@ -680,11 +690,14 @@ class AcquisitionOperationJournalTests(unittest.TestCase):
                 "entry 1 allowed_effects must equal journal allowed_effects",
             ),
             (
+                # Four seconds below entry 0, i.e. past the bounded clock-step tolerance that
+                # test_a_bounded_backwards_clock_step_is_tolerated_and_a_larger_one_is_not pins
+                # from both sides. A one-second regression is deliberately NOT a defect here.
                 "nonmonotonic-time",
                 lambda j: j["entries"][1].__setitem__(
-                    "recorded_at", "2026-08-16T11:59:59Z"
+                    "recorded_at", "2026-08-16T11:59:56Z"
                 ),
-                "entry 1 recorded_at is earlier than preceding entry",
+                "entry 1 recorded_at regresses more than 2.0s below the preceding entries",
             ),
             (
                 "illegal-transition",
@@ -696,6 +709,95 @@ class AcquisitionOperationJournalTests(unittest.TestCase):
             with self.subTest(label=label):
                 errors = self._validate(self._changed(change))
                 self.assertTrue(any(message in error for error in errors), errors)
+
+    def test_a_bounded_backwards_clock_step_is_tolerated_and_a_larger_one_is_not(self) -> None:
+        """agentic-sdlc-184b: `recorded_at` is CLOCK_REALTIME, and a real clock steps backwards.
+
+        The measured steps on the WSL2 development host were 0.22-0.53s. Entries are recorded
+        whole-second, so a sub-second step is invisible unless two appends straddle a second
+        boundary; when they do, a 0.5s step is exactly the ONE-SECOND regression pinned below. Two
+        seconds is the documented bound (also asserted directly, at the resolution the steps were
+        measured at, in test_the_backwards_clock_tolerance_is_the_documented_measured_bound).
+        """
+        tolerated = {
+            "same-second": ("2026-08-16T12:00:00Z",) * 3,
+            "one-second-step": (
+                "2026-08-16T12:00:01Z",
+                "2026-08-16T12:00:00Z",
+                "2026-08-16T12:00:02Z",
+            ),
+            "two-second-step-is-the-inclusive-bound": (
+                "2026-08-16T12:00:03Z",
+                "2026-08-16T12:00:01Z",
+                "2026-08-16T12:00:04Z",
+            ),
+            "slide-totalling-the-bound": (
+                "2026-08-16T12:00:02Z",
+                "2026-08-16T12:00:01Z",
+                "2026-08-16T12:00:00Z",
+            ),
+        }
+        for label, timestamps in tolerated.items():
+            with self.subTest(tolerated=label):
+                journal = valid_operation_journal(self.phases[:3], timestamps)
+                # Exactly no errors, not merely no ordering error: the fixture rebuilds the seal and
+                # the predecessor chain around these timestamps, so anything here is a real defect.
+                self.assertEqual(self._validate(journal), [])
+
+        refused = {
+            "three-second-step": (
+                (
+                    "2026-08-16T12:00:03Z",
+                    "2026-08-16T12:00:00Z",
+                    "2026-08-16T12:00:04Z",
+                ),
+                1,
+            ),
+            "slide-past-the-bound-one-tolerated-second-at-a-time": (
+                (
+                    "2026-08-16T12:00:03Z",
+                    "2026-08-16T12:00:02Z",
+                    "2026-08-16T12:00:01Z",
+                    "2026-08-16T12:00:00Z",
+                ),
+                3,
+            ),
+        }
+        for label, (timestamps, index) in refused.items():
+            with self.subTest(refused=label):
+                journal = valid_operation_journal(self.phases[: len(timestamps)], timestamps)
+                self.assertEqual(
+                    self._validate(journal),
+                    [
+                        "release-candidate acquisition operation_journal record "
+                        f"entry {index} recorded_at regresses more than 2.0s "
+                        "below the preceding entries"
+                    ],
+                )
+
+    def test_the_backwards_clock_tolerance_is_the_documented_measured_bound(self) -> None:
+        # The whole-second record format cannot express the measured 0.22-0.53s steps, so the
+        # tolerance is pinned here at the resolution it was measured at, in both directions.
+        self.assertEqual(validator.ACQUISITION_RECORDED_AT_BACKWARD_TOLERANCE_SECONDS, 2.0)
+        prior = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
+        for seconds in (0.0, 0.22, 0.53, 0.5, 1.0, 2.0):
+            with self.subTest(tolerated_seconds=seconds):
+                self.assertFalse(
+                    validator._acquisition_recorded_at_regresses(
+                        prior, prior - timedelta(seconds=seconds)
+                    )
+                )
+        for seconds in (2.001, 3.0, 60.0):
+            with self.subTest(refused_seconds=seconds):
+                self.assertTrue(
+                    validator._acquisition_recorded_at_regresses(
+                        prior, prior - timedelta(seconds=seconds)
+                    )
+                )
+        # Forwards is never a regression, whatever the gap.
+        self.assertFalse(
+            validator._acquisition_recorded_at_regresses(prior, prior + timedelta(hours=1))
+        )
 
     def test_journal_record_is_closed_versioned_canonical_and_bounded(self) -> None:
         cases = (

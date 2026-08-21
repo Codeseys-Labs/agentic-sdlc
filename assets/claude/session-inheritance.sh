@@ -511,9 +511,14 @@ inherit_session_state() {
 #                             trio) with inert preferences (accessibility, compaction, bash
 #                             limits). Only an enumeration is honest here, so an unrecognized
 #                             new CLAUDE_* variable is dropped rather than guessed at.
-#   unprefixed             -> DENY BY NAME. `DISABLE_*`/`DO_NOT_TRACK`/`BASH_*` are already
-#                             untouched by any scrub and stay that way; only the named hazards
-#                             below are removed.
+#   unprefixed             -> DENY BY NAME, plus one CLOSED CREDENTIAL-NAME GRAMMAR. The named
+#                             hazards below are removed, and so is any name whose whole final word
+#                             is one of the ten credential endings in
+#                             CLAUDE_CREDENTIAL_NAME_ENDINGS (ADR-0010 Amendment A.2): a
+#                             credential does not become inert by being spelled outside a
+#                             namespace this policy enumerates. Still a NAME policy and never a
+#                             value scanner. `DISABLE_*`/`DO_NOT_TRACK`/`BASH_*` are already
+#                             untouched by any scrub and stay that way.
 #
 # Doc references for the classification:
 #   code.claude.com/docs/en/env-vars.md       (the variable inventory and set-to-activate rule)
@@ -607,6 +612,79 @@ CLAUDE_DENIED_ENV_VARS=(
   API_TIMEOUT_MS
 )
 
+# Unprefixed CREDENTIAL-SHAPED NAMES, denied by a closed grammar (ADR-0010 Amendment A.2).
+#
+# THE DEFECT THIS CLOSES, measured against the shipped launcher rather than reasoned about: with
+# only the three enumerated hazards above, an exported `MODEL_API_KEY` reached the child VERBATIM,
+# beside the `ANTHROPIC_AUTH_TOKEN` that carried the SAME value and that the prefix sweep did
+# remove. `MODEL_API_KEY` is not hypothetical here -- it is this launcher's own documented
+# credential input -- so the boundary was closed for the namespaced spelling of a secret and open
+# for the unnamespaced one.
+#
+# STILL A NAME POLICY. That is Amendment A's load-bearing constraint and this grammar does not
+# relax it: no value is read, scanned, matched, or classified anywhere below. A value scanner is
+# the wrong instrument in both directions -- it misses a low-entropy secret and deletes a
+# high-entropy preference -- so what is denied is a NAME whose final word declares that its value
+# space is a credential.
+#
+# CLOSED, and closed deliberately: exactly the ten endings below, each an exact upper-case word,
+# matched only as the WHOLE final word of the name (`(^|_)WORD$`). So `MODEL_API_KEY`,
+# `MODEL_APIKEY`, and a bare `API_KEY` all go, while `MODEL_API_TIMEOUT`, `MODEL_API_KEYS`, and
+# `MONKEY` all stay: a name that merely CONTAINS a credential word is not swept, because
+# `*KEY*`-style containment is how a deny grammar starts eating the operator's inert preferences.
+# `credential_shaped_env_name_ere` refuses a non-word entry -- a glob, a digit, an alternation, a
+# leading or trailing underscore -- rather than expanding it, so this list cannot quietly widen
+# into a pattern rule, exactly as the allowlist cannot quietly widen into a prefix rule.
+#
+# WHY THE ALLOWLIST NEEDS NO EXCEPTION HERE, and why that is tested rather than asserted: every
+# ending below is already refused from the allowlist by `assert_env_allowlist_is_admissible`'s
+# credential-shape patterns (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*CREDENTIAL*`, `*PASSWORD*`), so no
+# ADMISSIBLE allowlist entry can match this grammar -- the two halves are structurally incapable
+# of disagreeing. The capture-then-restore is independent belt: it captures before every sweep and
+# restores after, so an allowlisted preference survives whatever the sweeps do.
+# `tests/test_muse_claude.py` proves both halves per ending instead of trusting this paragraph.
+#
+# WHAT THIS DOES NOT CLOSE, stated plainly because a name policy cannot: a secret the operator
+# stores under a name this grammar does not describe -- `MY_THING`, `DEPLOY_PW`, or any allowlisted
+# preference -- still crosses as that variable's value. That limit is documented, not solved.
+CLAUDE_CREDENTIAL_NAME_ENDINGS=(
+  API_KEY       # the measured reproduction: an exported MODEL_API_KEY reached the child verbatim
+  APIKEY        # the same name unpunctuated, which a `*_KEY`-shaped rule does not reach
+  AUTH_TOKEN    # a bearer/session token: the shape ANTHROPIC_AUTH_TOKEN wears inside its namespace
+  ACCESS_TOKEN  # an OAuth access token
+  TOKEN         # the bare word: GITHUB_TOKEN and CI_JOB_TOKEN reached the child verbatim under the
+                # nine-ending grammar, because neither ends in AUTH_TOKEN or ACCESS_TOKEN
+  SECRET        # a whole-word SECRET names its own value space
+  SECRET_KEY    # the two-word form, which `(^|_)SECRET$` alone does not reach
+  PASSWORD      # a password, however scoped
+  CREDENTIALS   # a credential bundle, e.g. a serialized service-account document
+  PRIVATE_KEY   # asymmetric private key material
+)
+
+# ONE grammar, TWO consumers: the sweep in `scrub_and_restore_claude_env` and the classification in
+# `report_env_policy` both read this ERE. A second hand-maintained copy of the word list is how a
+# status route ends up promising that a variable survives a scrub that removes it.
+#
+# It REFUSES -- nonzero, with no output -- rather than degrading. A missing, empty, or non-word list
+# would either sweep nothing or expand into a pattern, and both are silent failures in the dangerous
+# direction; callers turn the refusal into a named REFUSED line and stop before anything is unset.
+credential_shaped_env_name_ere() {
+  declare -p CLAUDE_CREDENTIAL_NAME_ENDINGS >/dev/null 2>&1 || return 1
+  [ "${#CLAUDE_CREDENTIAL_NAME_ENDINGS[@]}" -gt 0 ] || return 1
+  local ending
+  for ending in "${CLAUDE_CREDENTIAL_NAME_ENDINGS[@]}"; do
+    # An exact upper-case word with no leading or trailing underscore. This is what forbids a glob,
+    # an alternation, an anchor, or a digit from entering the grammar as though it were a word.
+    case "$ending" in
+      ""|*[!A-Z_]*|_*|*_) return 1 ;;
+    esac
+  done
+  # `|`-joined by IFS, which is why every entry above must already be a bare word: the join is the
+  # only place a stray metacharacter could become alternation the reviewer never wrote.
+  local IFS='|'
+  printf '(^|_)(%s)$\n' "${CLAUDE_CREDENTIAL_NAME_ENDINGS[*]}"
+}
+
 # The allowlist's own admission check, run before every scrub rather than trusted to review.
 # Allow-by-name fails by allowing too much, and the two shapes that do it are a name whose value
 # space can carry a credential/destination/identity/model pin, and a PATTERN that quietly becomes
@@ -682,6 +760,16 @@ scrub_and_restore_claude_env() {
       return 1
     }
   assert_env_allowlist_is_admissible "${allowed[@]}" || return 1
+  # Resolve the credential-name grammar into a LOCAL before any sweep, for the same reason the two
+  # lists above are copied to locals: the array is CLAUDE_*-named, so the prefix sweep below would
+  # unset the very grammar the credential sweep still needs. Refusing here also keeps the guarantee
+  # that a refusal happens before anything is unset.
+  local credential_ere
+  credential_ere="$(credential_shaped_env_name_ere)" \
+    || {
+      printf 'REFUSED: the unprefixed credential-name grammar is missing, empty, or is not a closed list of exact upper-case words; nothing was scrubbed and no plane was prepared\n' >&2
+      return 1
+    }
   local -a kept_names=() kept_values=()
   local name value index=0
   # Capture the allowlisted values first; the sweep below cannot distinguish them.
@@ -705,6 +793,15 @@ scrub_and_restore_claude_env() {
     unset "$name" || true
   done
   for name in "${denied[@]}"; do
+    unset "$name" || true
+  done
+  # Unprefixed credential-shaped NAMES (Amendment A.2). Placed after the enumerated hazards and
+  # before the restore, which is what makes it harmless to the allow half: an allowlisted value was
+  # captured above and is re-exported below, and no admissible allowlist entry can match this
+  # grammar in the first place. It is also why this launcher's own `MODEL_API_KEY` input can be
+  # swept safely -- `resolve_credential` already copied that value into a lowercase shell variable
+  # before `prepare_child_environment` runs, and the route slot is exported after the scrub.
+  for name in $(compgen -v | grep -E "$credential_ere" || true); do
     unset "$name" || true
   done
   # Restore the operator's inert preferences. Exported, not merely set, so the child receives
@@ -737,19 +834,43 @@ report_env_policy() {
       printf '  (the environment policy lists are not defined; nothing was classified)\n' >&2
       return 1
     }
+  local credential_ere
+  credential_ere="$(credential_shaped_env_name_ere)" \
+    || {
+      printf '  (the unprefixed credential-name grammar is not a closed word list; nothing was classified)\n' >&2
+      return 1
+    }
   local -a denied=("${CLAUDE_DENIED_ENV_VARS[@]}")
   # One padded string, so an exact-name membership test is a single `case` rather than a nested
   # loop. Padded on BOTH sides and matched with its spaces attached: an unpadded search would let
   # CLAUDE_CODE_ACCESSIBILITY_EXTRA match CLAUDE_CODE_ACCESSIBILITY and report a denied name as
   # inherited, which is a false statement in the dangerous direction.
   local allowed=" ${CLAUDE_INHERITED_ENV_VARS[*]} "
-  for name in $(compgen -v | grep -E '^(ANTHROPIC|CLAUDE|AWS)' || true) "${denied[@]}"; do
+  # ONE `compgen` pass over both the prefix rules and the credential grammar, rather than two
+  # pipelines: a name that satisfies both (`ANTHROPIC_API_KEY` does; `AWS_SECRET_ACCESS_KEY` does
+  # NOT, since ACCESS_KEY is not one of the ten endings) must be reported ONCE, and a name reported
+  # twice is its own false statement about the shell.
+  for name in $(compgen -v | grep -E "^(ANTHROPIC|CLAUDE|AWS)|$credential_ere" || true) "${denied[@]}"; do
     # This helper's own configuration is CLAUDE_*-named, so it shows up in the prefix sweep of
     # the very process doing the sweeping. It is launcher state, not operator environment, and
     # reporting it as "a denied variable you set" would be a false statement about the shell.
-    case "$name" in CLAUDE_INHERITED_ENV_VARS|CLAUDE_DENIED_ENV_VARS|CLAUDE_INHERITED_SETTINGS_KEYS|CLAUDE_SHARED_SESSION_ENTRIES) continue ;; esac
+    case "$name" in CLAUDE_INHERITED_ENV_VARS|CLAUDE_DENIED_ENV_VARS|CLAUDE_CREDENTIAL_NAME_ENDINGS|CLAUDE_INHERITED_SETTINGS_KEYS|CLAUDE_SHARED_SESSION_ENTRIES) continue ;; esac
     [ -n "${!name:-}" ] || continue
     shown=1
+    # The unprefixed credential class is classified from the SAME ERE the sweep uses, never from a
+    # mirrored set of globs that could drift from it, and matched with bash's own `=~` rather than a
+    # `grep` pipeline (under `pipefail`, a `grep -q` that exits on the first match can report the
+    # writer's SIGPIPE as the pipeline's status, which would silently flip this classification).
+    # Prefixed names fall through to their own more specific lines below, so this speaks only for
+    # the class the prefix rules do not cover.
+    case "$name" in
+      ANTHROPIC_*|CLAUDE_*|AWS_*) ;;
+      *)
+        if [[ $name =~ $credential_ere ]]; then
+          printf '  %-46s DENIED (credential-shaped unprefixed name; value never printed)\n' "$name"
+          continue
+        fi ;;
+    esac
     case "$name" in
       AWS_*|*_TOKEN|*_API_KEY|*_KEY|*_SECRET|*CLIENT_CERT*|*PASSPHRASE*)
         printf '  %-46s DENIED (credential class; value never printed)\n' "$name" ;;
@@ -769,5 +890,6 @@ report_env_policy() {
         ;;
     esac
   done
-  [ "$shown" -eq 1 ] || printf '  (no ANTHROPIC_*/CLAUDE_*/AWS_* variable is set in this environment)\n'
+  [ "$shown" -eq 1 ] \
+    || printf '  (no ANTHROPIC_*/CLAUDE_*/AWS_* or credential-shaped variable is set in this environment)\n'
 }

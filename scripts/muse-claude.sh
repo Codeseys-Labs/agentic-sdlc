@@ -255,7 +255,10 @@ subscription_shaped_env() {
 #
 # Nothing this route relied on moves: the shared helper performs the SAME prefix sweep, denies the
 # SAME three unprefixed names (NODE_TLS_REJECT_UNAUTHORIZED, FALLBACK_FOR_ALL_PRIMARY_MODELS,
-# API_TIMEOUT_MS), and applies the SAME capture-then-restore of CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+# API_TIMEOUT_MS) plus every unprefixed CREDENTIAL-SHAPED name (Amendment A.2, the closed
+# CLAUDE_CREDENTIAL_NAME_ENDINGS grammar -- which includes this launcher's own MODEL_API_KEY input,
+# safely, because `resolve_credential` runs BEFORE `prepare_child_environment` and the route slot is
+# exported after the scrub), and applies the SAME capture-then-restore of CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
 # with the opinionated 85 default (ADR-0012). What it adds is the enumerated allow half plus that
 # list's own admission check. One definition, in assets/claude/session-inheritance.sh, so the
 # boundary cannot drift between this route and a future plane.

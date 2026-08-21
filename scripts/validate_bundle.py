@@ -228,7 +228,7 @@ RELEASE_CANDIDATE_ACQUISITION_POLICY_RELATIVE_PATH = (
 )
 RELEASE_CANDIDATE_ACQUISITION_POLICY_SCHEMA = "release-candidate-acquisition-policy/v1"
 RELEASE_CANDIDATE_ACQUISITION_POLICY_SHA256 = (
-    "69804a1d476363ad2caea5ddf49ad042efc030d8a86c00de68fe4006e55e0f1c"
+    "4a8b379ff7724653082d380a5fd627241e26c07347e34c48b1dffb688952743a"
 )
 CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v1.json"
 CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA = "ccodex-sdlc-read-report-policy/v1"
@@ -1431,6 +1431,35 @@ def _release_candidate_policy_path(value: object) -> bool:
     return all(part not in {"", ".", ".."} for part in parts) and not any(character in value for character in "*?[]")
 
 
+# How far a recorded_at chain may step BACKWARDS before it is a defect rather than a clock.
+#
+# `recorded_at` is CLOCK_REALTIME evidence and stays that way: an operator reads it against other
+# logs and against wall time, and it has to survive the reboot the receipt outlives, which a
+# monotonic counter does not. The cost of that choice is that a real host's realtime clock steps
+# backwards. MEASURED on the WSL2 host this repository is developed on (agentic-sdlc-184b): a
+# 100-second CLOCK_REALTIME monitor observed four backwards steps of 0.22-0.53 seconds, from the
+# guest's own time synchronization. Entries are recorded whole-second, so a sub-second step is
+# invisible unless two appends straddle a second boundary -- and then it surfaces as a one-second
+# regression, which reddened this ordering check intermittently (one observed failure, then zero in
+# 60 repeats and 14 suite runs) on a check that is otherwise deterministic.
+#
+# 2.0 seconds is roughly four times the largest measured step, and absorbs two consecutive steps
+# plus whole-second truncation, while still refusing every regression big enough to mean a
+# backdated, rewritten, or forged chain rather than a clock correction. It is a tolerance, not a
+# window: the comparison below carries the high-water mark forward, so a chain that slides backwards
+# one tolerated second at a time still refuses once the TOTAL regression passes this bound.
+#
+# Deliberately NOT widened alongside it: the grant validity comparison (`issued_at`/`expires_at`
+# against a supplied `now_utc`) keeps exact ordering, because that one bounds AUTHORITY in time and
+# any tolerance there lengthens the window in which a grant can be used.
+ACQUISITION_RECORDED_AT_BACKWARD_TOLERANCE_SECONDS = 2.0
+
+
+def _acquisition_recorded_at_regresses(prior: datetime, current: datetime) -> bool:
+    """Whether `current` sits far enough below `prior` to be a defect rather than a clock step."""
+    return (prior - current).total_seconds() > ACQUISITION_RECORDED_AT_BACKWARD_TOLERANCE_SECONDS
+
+
 def _acquisition_utc_timestamp(value: object, label: str, errors: list[str]) -> datetime | None:
     if not isinstance(value, str) or not re.fullmatch(
         r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value
@@ -1783,10 +1812,22 @@ def _validate_acquisition_operation_journal(
         timestamp = _acquisition_utc_timestamp(
             entry.get("recorded_at"), f"entry {index} recorded_at", timestamp_errors
         )
-        if timestamp is not None and prior_time is not None and timestamp < prior_time:
-            errors.append(f"{label} entry {index} recorded_at is earlier than preceding entry")
+        # A bounded backwards step is tolerated because the recording clock really does step back
+        # (see ACQUISITION_RECORDED_AT_BACKWARD_TOLERANCE_SECONDS for the measurement); a larger
+        # regression is still refused. The comparison is against the HIGH-WATER mark rather than the
+        # immediate predecessor, so the tolerance bounds the total regression across the chain
+        # instead of being re-granted at every entry.
+        if (
+            timestamp is not None
+            and prior_time is not None
+            and _acquisition_recorded_at_regresses(prior_time, timestamp)
+        ):
+            errors.append(
+                f"{label} entry {index} recorded_at regresses more than "
+                f"{ACQUISITION_RECORDED_AT_BACKWARD_TOLERANCE_SECONDS}s below the preceding entries"
+            )
         if timestamp is not None:
-            prior_time = timestamp
+            prior_time = timestamp if prior_time is None else max(prior_time, timestamp)
         prior_entry = entry
 
 
@@ -2188,7 +2229,15 @@ def _expected_acquisition_record_contract() -> dict[str, object]:
             "phase_prefix": [*phases, "installed-unselected"],
             "predecessor_digest": "sha256-of-exact-canonical-preceding-entry-bytes",
             "sequence": "zero-based-contiguous",
-            "timestamp_order": "strict-utc-nondecreasing",
+            # Built from the tolerance constant rather than typed as a literal, so retuning the
+            # tolerance cannot leave the shipped policy asserting a bound the validator no longer
+            # enforces: the retune fails this equality first, and the policy has to be re-agreed
+            # (and re-digested) deliberately. It said "strict-utc-nondecreasing" until
+            # agentic-sdlc-184b, and a real clock made that claim false rather than strict.
+            "timestamp_order": (
+                "utc-nondecreasing-within-"
+                f"{ACQUISITION_RECORDED_AT_BACKWARD_TOLERANCE_SECONDS}s-backward-clock-tolerance"
+            ),
         },
         "no_extra_fields": True,
         "schemas": schemas,
