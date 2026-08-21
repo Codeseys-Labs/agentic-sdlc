@@ -168,7 +168,7 @@ elif "rev-parse" in args and "--show-toplevel" in args:
     key = "toplevel"
 elif "rev-parse" in args and "--git-common-dir" in args:
     key = "common_dir"
-elif "rev-parse" in args and "HEAD^{tree}" in args:
+elif "rev-parse" in args and any(arg.endswith("^{tree}") for arg in args):
     key = "tree"
 elif "rev-parse" in args and "HEAD" in args:
     key = "head"
@@ -435,6 +435,30 @@ class HeadAnchorTests(_SnapshotTestCase):
         self.assertGreater(
             last_head, max(status_calls), "the head was re-read before the rest of the observation, not after"
         )
+
+    def test_the_tree_is_derived_from_the_read_commit_not_a_second_head_read(self) -> None:
+        """The atomicity fix: `rev-parse HEAD^{tree}` would read HEAD a second time, and an ABBA move
+        between the commit read and that second read could seal a commit/tree pair never observed
+        together. Deriving the tree from the COMMIT SHA this same call already read removes the
+        second HEAD read entirely -- there is only one `HEAD` literal per `observe_head` call left to
+        move, and the tree query always names the exact commit whose tree is being asked for."""
+        self.sealed()
+        tree_calls = [
+            call["args"]
+            for call in self.calls()
+            if "rev-parse" in call["args"] and any(arg.endswith("^{tree}") for arg in call["args"])
+        ]
+        self.assertEqual(len(tree_calls), 2, f"the tree was not derived exactly twice: {tree_calls}")
+        for args in tree_calls:
+            self.assertNotIn(
+                "HEAD^{tree}", args,
+                "the tree was derived from a second independent HEAD read rather than the commit "
+                "this same observation already read",
+            )
+            self.assertIn(
+                f"{COMMIT_A}^{{tree}}", args,
+                "the tree derivation did not name the exact commit this observation read",
+            )
 
     def test_capture_validates_the_body_it_built_with_the_schema_verify_uses(self) -> None:
         control = self.capture()
@@ -719,6 +743,38 @@ class WorktreeCustodyTests(_SnapshotTestCase):
         refused = self.verify(self.reseal({**sealed, "worktrees": [entry]}))
         self.assertEqual(refused["verdict"], REFUSED, "a relative custody path was verified")
         self.assertIn("absolute", " ".join(refused["reasons"]), "the refusal did not say why the path is unusable")
+
+    def test_verify_refuses_an_empty_worktrees_list(self) -> None:
+        """`git worktree list` always reports at least the observed worktree itself, so `capture`
+        can never produce an empty list; `verify` must refuse a hand-crafted one rather than admit a
+        shape that is otherwise a well-formed empty JSON list."""
+        sealed = self.sealed()
+        control = self.verify(sealed)
+        self.assertEqual(control["verdict"], VERIFIED, control["reasons"])
+        refused = self.verify(self.reseal({**sealed, "worktrees": []}))
+        self.assertEqual(refused["verdict"], REFUSED, "an empty worktrees list was verified")
+        self.assertIn("worktrees", " ".join(refused["reasons"]), "the refusal did not name worktrees")
+
+    def test_verify_refuses_a_nul_or_newline_bearing_branch_string(self) -> None:
+        """No `git check-ref-format`-legal ref name carries a control character, so a NUL or a
+        newline in a recorded branch is a shape `capture` could never have observed -- for either
+        `head.branch` or a `worktrees[].branch`."""
+        sealed = self.sealed()
+        control = self.verify(sealed)
+        self.assertEqual(control["verdict"], VERIFIED, control["reasons"])
+        for label, branch in (("newline", "feature/one\ntwo"), ("nul", "feature/one\x00two")):
+            with self.subTest(field="head.branch", shape=label):
+                mutated = self.reseal({**sealed, "head": {**sealed["head"], "branch": branch}})
+                refused = self.verify(mutated)
+                self.assertEqual(refused["verdict"], REFUSED, f"a {label}-bearing head.branch was verified")
+                self.assertIn("branch", " ".join(refused["reasons"]), "the refusal did not name branch")
+            with self.subTest(field="worktrees[].branch", shape=label):
+                entry = {**sealed["worktrees"][0], "branch": branch}
+                refused = self.verify(self.reseal({**sealed, "worktrees": [entry]}))
+                self.assertEqual(
+                    refused["verdict"], REFUSED, f"a {label}-bearing worktrees branch was verified"
+                )
+                self.assertIn("branch", " ".join(refused["reasons"]), "the refusal did not name branch")
 
 
 class QueueStateTests(_SnapshotTestCase):

@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -2328,6 +2329,82 @@ class MalformedInputTests(WaveCase):
         args["--critic-findings"] = str(self.write_findings([self.seed_worthy_finding(evidence=[])]))
         done = self.derive_failure(args)
         self.assertIn(b"carries no evidence", done.stderr)
+
+    def test_a_hundred_thousand_deep_conductor_record_is_classified_not_a_crash(self) -> None:
+        """The seed's own scenario: `json`'s C scanner overflows its OWN C stack once per nesting
+        level, independent of `sys.setrecursionlimit`. The positive control proves THIS
+        interpreter's build actually raises `RecursionError` on a bare `json.loads` at this depth --
+        asserting a classified refusal at a depth that never trips the underlying bug (as the
+        pre-existing weaker check elsewhere in this family used depth 2000, which never reaches the
+        failure at all) would prove nothing.
+        """
+        depth = 100_000
+        text = '{"a":' * depth + "1" + "}" * depth
+        try:
+            json.loads(text)
+        except RecursionError:
+            pass
+        else:
+            self.skipTest("this interpreter's build did not raise RecursionError at 100,000 levels")
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)  # positive control
+        nested = self.work / "conductor-nested.json"
+        nested.write_text(text, encoding="utf-8")
+        args["--conductor-record"] = str(nested)
+        done = self.derive_failure(args)
+        self.assertIn(b"nests too deeply", done.stderr)
+        self.assertNotIn(b"Traceback", done.stderr)
+
+    def test_a_non_finite_number_in_a_field_this_module_never_reads_is_refused(self) -> None:
+        """This module imposes no closed key set on the critic-findings, review, artifact-manifest,
+        or conductor-record schemas -- `wave-submission.py` seals those four and this module never
+        reads the seal -- so an extra top-level field none of `assess_critic` ever looks at is a
+        genuinely IGNORED field. Before the document-wide walk, a non-finite `1e400` there was
+        admitted completely silently: nothing ever touched the value to notice."""
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)  # positive control
+        raw = Path(args["--critic-findings"]).read_text(encoding="utf-8").rstrip()
+        self.assertTrue(raw.endswith("}"), "the fixture is not a JSON object")
+        injected = raw[:-1] + ', "extra_metric": 1e400}\n'
+        nonfinite = self.work / "findings-nonfinite.json"
+        nonfinite.write_text(injected, encoding="utf-8")
+        args["--critic-findings"] = str(nonfinite)
+        done = self.derive_failure(args)
+        self.assertIn(b"non-finite number", done.stderr)
+
+    def test_a_non_finite_number_inside_an_array_element_is_refused_too(self) -> None:
+        """The walk's list arm, isolated: both prior injections sit at a dict-value position, so a
+        walk that never descended into arrays would still pass them while `[1e400]` slid through."""
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)  # positive control
+        raw = Path(args["--critic-findings"]).read_text(encoding="utf-8").rstrip()
+        self.assertTrue(raw.endswith("}"), "the fixture is not a JSON object")
+        injected = raw[:-1] + ', "extra_metrics": [1, 1e400]}\n'
+        nonfinite = self.work / "findings-nonfinite-array.json"
+        nonfinite.write_text(injected, encoding="utf-8")
+        args["--critic-findings"] = str(nonfinite)
+        done = self.derive_failure(args)
+        self.assertIn(b"non-finite number", done.stderr)
+        self.assertNotIn(b"Traceback", done.stderr)
+
+    def test_a_non_finite_number_in_a_published_field_no_longer_crashes_to_exit_one(self) -> None:
+        """`assess_gate` publishes `baseline.get("toolchain_drifted")` into `assessment.gate`
+        UNCHECKED and UNCONDITIONALLY, and `assessment.gate` is embedded verbatim in the result
+        document under `"gate"`. Before the document-wide walk, a non-finite `1e400` there survived
+        every check this module runs and only failed once the result document tried to serialize
+        itself with `allow_nan=False` -- an uncaught `ValueError` (exit 1), not a classified input
+        error (exit 2). The walk in `load_artifact` now catches it before any of that runs."""
+        args = self.remediation_args()
+        self.assertEqual(self.derive(args)["state"], REMEDIATION_PROGRESS)  # positive control
+        raw = Path(args["--baseline-comparison"]).read_text(encoding="utf-8")
+        injected, count = re.subn(r'"toolchain_drifted"\s*:\s*(?:true|false)', '"toolchain_drifted": 1e400', raw)
+        self.assertEqual(count, 1, "the fixture does not carry exactly one toolchain_drifted field")
+        nonfinite = self.work / "baseline-nonfinite.json"
+        nonfinite.write_text(injected, encoding="utf-8")
+        args["--baseline-comparison"] = str(nonfinite)
+        done = self.derive_failure(args)
+        self.assertIn(b"non-finite number", done.stderr)
+        self.assertNotIn(b"Traceback", done.stderr)
 
 
 class ForgedProjectionTests(WaveCase):

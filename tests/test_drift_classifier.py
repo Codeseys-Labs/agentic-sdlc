@@ -57,8 +57,12 @@ is absent; the classes that hand-seal their own documents run everywhere.
 
 from __future__ import annotations
 
+import argparse
 import ast
+import contextlib
 import hashlib
+import io
+import importlib.util
 import json
 import os
 import shutil
@@ -202,6 +206,21 @@ def seal(body: dict[str, Any]) -> dict[str, Any]:
 def fake_digest(label: str) -> str:
     """A well-formed sha256 that stands for a document this test does not need to build."""
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+
+def _load_module() -> Any:
+    """White-box import of the tool, for the two properties this file's black-box style cannot reach:
+    `write_document`'s own O_EXCL create (every CLI-level occupied-`--out` case is intercepted by the
+    earlier `check_output_path` pre-flight refusal first) and `classify`'s self-readback of its own
+    synthesized candidate (every CLI-level valid input synthesizes a candidate that already satisfies
+    `check_classification`, so nothing black-box can prove the readback would catch one that did not).
+    The hyphenated filename makes a plain `import` statement impossible.
+    """
+    spec = importlib.util.spec_from_file_location("_agentic_sdlc_drift_classifier_whitebox", TOOL)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---- the plan fixture, built once per run by the real siblings ------------------------------------
@@ -881,6 +900,23 @@ class VerifyCrossCheckTests(VerifyCase):
         )
         self.refuses(body, "is not one of")
 
+    def test_an_assessment_that_is_not_the_closed_key_set_is_refused(self) -> None:
+        """The PER-ASSESSMENT closed-key-set check, distinct from the classification's own top-level
+        closed key set (`DigestRoundTripTests.test_an_added_key_is_outside_the_closed_set`): one
+        assessment ENTRY missing a key or carrying an unrecognised one must itself be refused, not
+        merely tolerated as an oddly-shaped but readable entry."""
+        control = self.verify(classification_body())
+        self.assertEqual(control["verdict"], VERIFIED, control)
+        entry = classification_body()["assessments"][0]
+        for label, mutated_entry in (
+            ("missing a key", {key: value for key, value in entry.items() if key != "observation"}),
+            ("an unrecognised key", {**entry, "confidence": "high"}),
+        ):
+            with self.subTest(shape=label):
+                self.refuses(
+                    classification_body(assessments=[mutated_entry]), "is not a JSON object of exactly"
+                )
+
     def test_an_assessment_with_no_grounds_is_refused(self) -> None:
         body = classification_body(assessments=[{**classification_body()["assessments"][0], "grounds": []}])
         self.refuses(body, "an outcome with no ground is an assertion")
@@ -1039,6 +1075,114 @@ class ClassifyRoundTripTests(PlanCase):
         )
 
 
+class ClassifySelfReadbackTests(unittest.TestCase):
+    """`classify` reads its OWN synthesized candidate back through `check_classification` and
+    `check_digest` before sealing it (module docstring: "A synthesis bug then becomes a refusal rather
+    than a sealed document `verify` would later reject"). Nothing else in this file proves that is an
+    ACTIVE property rather than aspirational prose: every other `classify` test hands it a valid input,
+    which the real derivation never gets wrong, so the self-readback never has anything to catch. This
+    class imports the module directly and corrupts a synthesized candidate the way a synthesis bug
+    would, so the self-readback either catches it -- proving it runs -- or this test fails.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if "plan" not in FIXTURES:
+            raise unittest.SkipTest(NO_GIT)
+        cls.module = _load_module()
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="drift-classifier-readback-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, ignore_errors=True)
+
+    def test_a_corrupted_synthesis_is_caught_before_sealing_not_after(self) -> None:
+        module = self.module
+        observation = self.work / "observed.json"
+        observation.write_bytes(canonical(seal(observed_body([change("authority", "ws-cartography")]))))
+        args = argparse.Namespace(
+            command="classify", plan=str(FIXTURES["plan"]), observed=str(observation), at=AT, out=None,
+        )
+
+        # The CONTROL: the real, uncorrupted derivation classifies cleanly.
+        control_result, _ = module.derive_command(args)
+        self.assertEqual(control_result["verdict"], module.VERDICT_CLASSIFIED, control_result["reasons"])
+
+        real_synthesize = module.synthesize_classification
+
+        def corrupted(**kwargs: Any) -> dict[str, Any]:
+            """Stand in for a synthesis bug: agree with everything real EXCEPT the fold, so the
+            candidate is self-consistent (its own digest re-derives) but wrong in exactly the way
+            `check_classification`'s cross-check #1 exists to catch."""
+            candidate = dict(real_synthesize(**kwargs))
+            candidate["overall_outcome"] = COMPATIBLE
+            body = {key: value for key, value in candidate.items() if key != module.DIGEST_KEY}
+            candidate[module.DIGEST_KEY] = module.document_digest(body)
+            return candidate
+
+        module.synthesize_classification = corrupted
+        try:
+            corrupted_result, _ = module.derive_command(args)
+        finally:
+            module.synthesize_classification = real_synthesize
+
+        self.assertEqual(
+            corrupted_result["verdict"], module.VERDICT_REFUSED,
+            "a corrupted synthesis was sealed and published rather than caught by the self-readback",
+        )
+        self.assertIsNone(
+            corrupted_result["classification"], "a refused self-readback still published a document"
+        )
+        self.assertTrue(
+            any("the maximum severity among" in reason for reason in corrupted_result["reasons"]),
+            corrupted_result["reasons"],
+        )
+
+
+class WriteDocumentTests(unittest.TestCase):
+    """`write_document`'s own O_EXCL create, isolated from `check_output_path`'s earlier pre-flight
+    refusal. `OutputPathTests.test_an_occupied_out_is_refused_and_never_replaced` below proves the CLI
+    refuses an occupied `--out` before anything is derived; it can never reach `write_document` with a
+    target that already exists, because that pre-flight check always intercepts first. Calling
+    `write_document` directly is coverage for the real O_EXCL race the module docstring says the write
+    is safe against: a genuine concurrent racer is not reproduced here, but the exclusive-create
+    behaviour itself -- refuse rather than clobber when the target exists at open() time -- is
+    exercised and proven correct.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = _load_module()
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="drift-classifier-write-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, ignore_errors=True)
+
+    def test_write_document_refuses_a_target_that_already_exists(self) -> None:
+        """The racer's file -- created between `check_output_path`'s pre-flight and this open() --
+        must survive untouched."""
+        module = self.module
+        target = self.work / "classification.json"
+        target.write_bytes(b"a racer's document\n")
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            state = module.write_document(target, classification_body())
+        self.assertEqual(state, module.WRITE_NOTHING, "an occupied target was written through anyway")
+        self.assertEqual(target.read_bytes(), b"a racer's document\n", "the racer's file was clobbered")
+        self.assertIn("cannot create the --out path", captured.getvalue())
+        self.assertIn("nothing was", captured.getvalue())
+
+    def test_write_document_creates_a_fresh_target(self) -> None:
+        """The positive control: a target that does NOT exist really is written, and with the exact
+        canonical bytes -- so the refusal above is about the occupied path, not a write that never
+        works at all."""
+        module = self.module
+        target = self.work / "classification.json"
+        body = classification_body()
+        state = module.write_document(target, body)
+        self.assertEqual(state, module.WRITE_DONE)
+        self.assertEqual(target.read_bytes(), canonical(body))
+
+
 class OutputPathTests(PlanCase):
     """`--out` is exclusive, and a refusal writes nothing at all."""
 
@@ -1184,8 +1328,11 @@ class UnusableInputTests(ToolCase):
 class AmbientDisciplineTests(unittest.TestCase):
     """The tool reads no clock, no environment, and no subprocess. Asserted over the AST, not by grep.
 
-    A substring search cannot do this job: the tool's own docstring contains the words `os.environ` in
-    the sentence promising it does not appear.
+    A substring search cannot do this job: the tool's own docstring contains the substring `environ`
+    -- inside the ordinary word "environment", in the very sentence promising there is no environment
+    read -- so a plain text search for that string would false-positive on the docstring disclaiming
+    it. The AST walk below looks for an actual `.environ`/`.getenv`/`.get_exec_path` ATTRIBUTE access,
+    which "environment" in prose is not.
     """
 
     FORBIDDEN_MODULES = ("time", "datetime", "subprocess", "socket", "urllib", "random", "shutil")

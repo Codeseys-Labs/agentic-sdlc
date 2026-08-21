@@ -622,6 +622,12 @@ RECEIPT_CONSEQUENCE = {
 _TIME = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*\Z")
+#: An id is quoted back verbatim into refusals, receipts, and approvals: an unbounded one is a
+#: resource-abuse surface, because a 50MB `envelope_id` seals a 100MB result document nobody asked
+#: for. 256 is generous over every id this family actually mints (a schema name, a wave/plan slug, a
+#: transition id) while refusing the pathological case at the same named check that already bounds
+#: the character set.
+MAX_IDENTIFIER_LENGTH = 256
 
 
 class InputError(Exception):
@@ -798,7 +804,7 @@ def _text(assessment: Assessment, slug: str, container: dict[str, Any], key: str
 
 
 def _identifier(assessment: Assessment, slug: str, container: dict[str, Any], key: str, what: str) -> str | None:
-    """An id quoted back into refusals, receipts, and approvals, so its characters are bounded."""
+    """An id quoted back into refusals, receipts, and approvals, so its characters AND length are bounded."""
     value = _text(assessment, slug, container, key, what)
     if value is None:
         return None
@@ -807,6 +813,15 @@ def _identifier(assessment: Assessment, slug: str, container: dict[str, Any], ke
             slug,
             f"{what} {value!r} is not an identifier of unreserved characters (letters, digits, and "
             "then any of . _ -), so it cannot be quoted back unambiguously",
+        )
+        return None
+    if len(value) > MAX_IDENTIFIER_LENGTH:
+        assessment.note(
+            slug,
+            f"{what} is {len(value)} characters, over the {MAX_IDENTIFIER_LENGTH}-character bound "
+            "every identifier in this family is held to: it is quoted back verbatim into refusals, "
+            "receipts, and approvals, so an unbounded one is a resource-abuse surface rather than a "
+            "name",
         )
         return None
     return value
@@ -1573,6 +1588,7 @@ def assess_envelope(document: dict[str, Any]) -> tuple[Assessment, dict[str, Any
         "egress": egress,
         "envelope_id": envelope_id,
         "retry": retry,
+        "stated_at": stated_at,
         "stops": stops,
         "tools": tools,
         "window": window,
@@ -1663,13 +1679,16 @@ def check_envelope_binding(
 
 
 def check_transition_identity(
-    assessment: Assessment, transition: dict[str, Any], at: str
+    assessment: Assessment, transition: dict[str, Any], at: str, envelope_stated_at: str | None
 ) -> None:
-    """The proposal's own id and instant, and the one ordering `--at` makes checkable.
+    """The proposal's own id and instant, and the two orderings `--at` and the envelope make checkable.
 
     A proposal stated AFTER the moment it is admitted is refused: the admission would be recording a
     decision about a document that did not yet exist, and the receipt would bind an instant earlier
-    than the proposal it names.
+    than the proposal it names. A proposal stated BEFORE the envelope it is bound against even existed
+    is the same mistake read from the other document: both instants are supplied and both are in the
+    two documents this check already has open, so leaving that ordering unchecked would admit a
+    transition that claims to predate its own envelope.
     """
     slug = "transition-identity"
     _identifier(assessment, slug, transition, "transition_id", "the transition's transition_id")
@@ -1684,6 +1703,15 @@ def check_transition_identity(
             "cannot be admitted before it was made, so the pair of instants is refused rather than "
             "reordered",
         )
+    if envelope_stated_at is not None and stated is not None:
+        envelope_stated = _parse_instant(envelope_stated_at)
+        if envelope_stated is not None and stated < envelope_stated:
+            assessment.note(
+                slug,
+                f"the transition is stated at {stated_at}, before the envelope's own stated_at "
+                f"{envelope_stated_at}: a proposal cannot be about an envelope that did not yet "
+                "exist, so the pair of instants is refused rather than reordered",
+            )
 
 
 def check_admission_window(assessment: Assessment, at: str, window: dict[str, str] | None) -> None:
@@ -2016,7 +2044,7 @@ def derive_transition_command(args: argparse.Namespace) -> tuple[dict[str, Any],
     fold_envelope_reasons(assessment, inner)
     derived_envelope = document_digest(envelope)
     check_envelope_binding(assessment, transition, derived_envelope, facts["envelope_id"])
-    check_transition_identity(assessment, transition, at)
+    check_transition_identity(assessment, transition, at, facts["stated_at"])
     check_admission_window(assessment, at, facts["window"])
     kind = check_transition_kind(assessment, transition, facts["changes"])
     check_claimed_authority(assessment, transition, facts["admitted"])

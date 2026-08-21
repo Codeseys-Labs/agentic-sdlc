@@ -346,6 +346,10 @@ def load_document(path: str, label: str) -> dict[str, Any]:
     for a supplied path may be never, so a directory mistake would exit 2 promptly while a FIFO
     mistake hung forever. `Path.stat()` follows a symlink to its target, which is the question this
     asks -- "is what I would read a regular file" -- rather than "is the path itself one".
+
+    `RecursionError` is classified here too: `json`'s scanner recurses once per nesting level, so a
+    deeply nested supplied document is unusable input rather than an internal failure of this module
+    -- the same reason `_reject_nonfinite_values` below is written iteratively rather than recursively.
     """
     candidate = Path(path)
     try:
@@ -360,6 +364,8 @@ def load_document(path: str, label: str) -> dict[str, Any]:
         raise InputError(f"cannot read the {label} {path}: {exc}") from exc
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_reject_nonfinite)
+    except RecursionError as exc:
+        raise InputError(f"the {label} {path} nests too deeply to be parsed, so it cannot be read") from exc
     except (UnicodeDecodeError, ValueError) as exc:
         raise InputError(f"the {label} {path} is not JSON: {exc}") from exc
     if not isinstance(value, dict):

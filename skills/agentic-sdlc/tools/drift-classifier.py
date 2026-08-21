@@ -55,10 +55,13 @@ in both directions so neither can be sealed disagreeing with the other. An empty
 does not hold is still `hard-stop`: zero observations about an unknown plan is not "no drift".
 
 `compatible` IS REPRESENTABLE AND UNREACHABLE FROM THIS TABLE, and that is a stated limit rather than
-an oversight. Every one of the sixteen kinds names a plan-bound dimension by construction, so none is
-"unrelated"; and "explicitly tolerated" (:74) needs a tolerance declaration that no artifact in this
-chain carries yet. `RESIDUALS` says so, so closing that gap has to change the residual in the same
-change.
+an oversight, for TWO independent reasons. Every one of the sixteen kinds names a plan-bound dimension
+by construction, so none is "unrelated"; and "explicitly tolerated" (:74) needs a tolerance declaration
+that no artifact in this chain carries yet. Separately, the compiler's own PlanDiff marks a prose-only
+node change `semantic: false`, but `observed-drift@1`'s three-field change entry drops that flag
+entirely, so a prose-only `changed-node` reaches this table exactly like a semantic one and lands on
+its REPLAN row rather than `compatible` -- an over-escalation that fails closed rather than a wrong
+`compatible`. `RESIDUALS` says so, so closing either gap has to change the residual in the same change.
 
 TWO DOCUMENTS IN, ONE OUT, AND NO IMPORTS BETWEEN TOOLS.
 
@@ -311,18 +314,36 @@ VERIFY_CHECKS = ("drift-classification", "digest")
 INPUT_SLUGS = ("wave-plan", "observed-drift")
 
 RESIDUALS = (
-    "`compatible` is representable in this schema and unreachable from this table. Every one of the "
-    "sixteen kinds names a plan-bound dimension by construction, so no kind is issue 16:74's "
-    '"unrelated"; and "explicitly tolerated" needs a tolerance declaration that no artifact in this '
-    "planning chain carries yet. Adding one is a schema change, and it has to change this residual",
-    "the kind vocabulary cannot split two pairs issue 16 classifies differently. `custody-boundary` is "
-    'the plan\'s DECLARED boundary (:97 "custody", replan) and not :104\'s observed "foreign or '
+    "`compatible` is representable in this schema and unreachable from this table, for TWO independent "
+    "reasons. Every one of the sixteen kinds names a plan-bound dimension by construction, so no kind "
+    'is issue 16:74\'s "unrelated"; and "explicitly tolerated" needs a tolerance declaration that no '
+    "artifact in this planning chain carries yet. Separately, the compiler's own PlanDiff marks a "
+    "prose-only node change `semantic: false`, but `observed-drift@1`'s three-field change entry drops "
+    "that flag entirely, so a genuinely prose-only `changed-node` reaches this table exactly like a "
+    "semantic one and lands on its REPLAN row rather than `compatible`; this fails closed -- it never "
+    "wrongly reports `compatible` -- but it over-escalates rather than reading the compiler's own "
+    "distinction. Adding a tolerance declaration or carrying the semantic flag is a schema change, and "
+    "either has to change this residual",
+    "the kind vocabulary cannot split three pairs issue 16 classifies differently. `custody-boundary` "
+    'is the plan\'s DECLARED boundary (:97 "custody", replan) and not :104\'s observed "foreign or '
     'ambiguous ownership" (hard-stop); `egress` is the plan\'s DECLARED egress (:98 "egress", replan) '
-    'and not :105\'s observed "new destructive or outward effect" (hard-stop). An observer who sees the '
-    "hard-stop half of either pair cannot say so through this vocabulary and must stop out of band",
+    'and not :105\'s observed "new destructive or outward effect" (hard-stop); `stop-rule` is the '
+    "plan's DECLARED stop-rule set (:77, replan, this table's own grounding) and not :104's \"credential "
+    'or security-boundary change" (hard-stop) -- removing or narrowing a rule that guards exactly that '
+    "boundary is itself the change :104 names. An observer who sees the hard-stop half of any of the "
+    "three pairs cannot say so through this vocabulary and must stop out of band",
     "`authority` is classified hard-stop in both directions. :105 names \"authority expansion\", and a "
     "narrowing is not an expansion, but the kind carries no direction, so the safety rule at :79 "
     "resolves the ambiguity upward rather than admitting a narrowing as benign",
+    "the two ambiguities just stated are resolved in OPPOSITE directions, and that asymmetry is itself "
+    "worth stating on its own: `authority`'s direction ambiguity resolves UPWARD to hard-stop for both "
+    "directions, matching :79's rule that ambiguous classification is hard-stop; the three declared-vs-"
+    "observed pairs above instead resolve DOWNWARD to their table row's severity (replan-required, "
+    "never hard-stop); that downward resolution is this tool's own stipulation about which reading of "
+    "the kind name the vocabulary encodes, not an ambiguous classification :79 governs, so it is "
+    "disclosed here rather than licensed by :79. Each stipulation individually matches the compiler's "
+    "own vocabulary and is disclosed above; only the asymmetry between the two policies was previously "
+    "undocumented",
     "a subject is admitted if the plan names it ANYWHERE -- as a node, an edge, a custody path, or the "
     "mission. That a `custody-boundary` change names a node id rather than a path, or an `added-edge` "
     "names a node rather than an edge, is not checked: the plan names both spellings and no row of the "

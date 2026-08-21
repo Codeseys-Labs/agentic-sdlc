@@ -1092,6 +1092,36 @@ class TestInstantCharacterClass(EnvelopeCase):
                 )
 
 
+class TestIdentifierLengthBound(EnvelopeCase):
+    """An id is quoted back verbatim into refusals and receipts: unbounded is a resource-abuse
+    surface -- a multi-megabyte id would seal a document of the same order -- so every identifier
+    field shares one 256-character bound in `_identifier`."""
+
+    MAX_IDENTIFIER_LENGTH = 256
+
+    def test_an_identifier_at_the_bound_is_defined(self) -> None:
+        """The positive control: the bound is inclusive, so exactly 256 characters still defines."""
+        self.assert_defined(envelope_body(envelope_id="a" * self.MAX_IDENTIFIER_LENGTH))
+
+    def test_an_identifier_one_over_the_bound_is_refused(self) -> None:
+        self.assert_refused(
+            envelope_body(envelope_id="a" * (self.MAX_IDENTIFIER_LENGTH + 1)),
+            group="identity-and-instant",
+            fragments=(f"{self.MAX_IDENTIFIER_LENGTH}-character bound", "envelope_id"),
+        )
+
+    def test_a_grossly_oversized_identifier_is_refused_and_not_echoed_back(self) -> None:
+        """The seed's own scenario: a multi-megabyte envelope_id must not seal a same-order result
+        document. The refusal names the length and the bound, never the oversized value itself."""
+        oversized = "a" * (1024 * 1024)
+        result = self.assert_refused(
+            envelope_body(envelope_id=oversized),
+            group="identity-and-instant",
+            fragments=(f"{self.MAX_IDENTIFIER_LENGTH}-character bound",),
+        )
+        self.assertNotIn(oversized, json.dumps(result), "the oversized id was echoed back verbatim")
+
+
 class TestCheckpoints(EnvelopeCase):
     """One entry per kind, ascending, covering the four every transition must recheck."""
 
@@ -1951,11 +1981,40 @@ class TestTransitionIdentity(TransitionCase):
         transition["stated_at"] = AT
         self.assert_admitted(envelope, transition)
 
+    def test_a_proposal_stated_before_the_envelopes_own_stated_at_is_refused(self) -> None:
+        """Both instants are supplied and both are already open in the two documents this check
+        reads: a proposal that claims to predate the envelope it is bound against is refused the
+        same way a proposal stated after its own admission is."""
+        envelope, transition = self.pair()
+        transition["stated_at"] = "2026-08-19T12:00:00Z"
+        self.assertLess(transition["stated_at"], STATED_AT, "the fixture does not actually precede it")
+        self.assert_transition_refused(
+            envelope,
+            transition,
+            group="transition-identity",
+            fragments=("before the envelope's own stated_at", STATED_AT),
+        )
+
+    def test_a_proposal_stated_at_exactly_the_envelopes_stated_at_is_admitted(self) -> None:
+        """The positive control for the ordering above: equal is not before."""
+        envelope, transition = self.pair()
+        transition["stated_at"] = STATED_AT
+        self.assert_admitted(envelope, transition)
+
     def test_the_transition_id_refuses_a_non_identifier(self) -> None:
         envelope, transition = self.pair()
         transition["transition_id"] = "transition slice 6"
         self.assert_transition_refused(
             envelope, transition, group="transition-identity", fragments=("unreserved characters",)
+        )
+
+    def test_the_transition_id_refuses_an_oversized_identifier(self) -> None:
+        """The same 256-character bound `_identifier` enforces for `envelope_id` also covers
+        `transition_id`: one shared helper, one shared bound, checked at this second call site."""
+        envelope, transition = self.pair()
+        transition["transition_id"] = "t" * 257
+        self.assert_transition_refused(
+            envelope, transition, group="transition-identity", fragments=("256-character bound",)
         )
 
     def test_the_stated_at_refuses_a_non_ascii_digit_instant(self) -> None:

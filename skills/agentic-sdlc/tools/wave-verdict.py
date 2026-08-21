@@ -195,6 +195,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import stat
 import sys
@@ -391,6 +392,29 @@ def _reject_nonfinite(token: str) -> Any:
     raise InputError(f"a supplied artifact carries the non-finite JSON constant {token}")
 
 
+def _reject_nonfinite_values(document: Any, label: str, path: str) -> None:
+    """A post-parse walk, because a huge literal like `1e400` is a float `json` never hands to
+    `parse_constant`: it is an ordinary number token that `float()` overflows to `inf`, which
+    `canonical_bytes` would then refuse with `allow_nan=False` at EMIT time -- an internal failure
+    long after this artifact was admitted -- rather than a named input error at READ time. Every
+    field is walked, not only the ones this module happens to read, because a non-finite number in a
+    field this module ignores today is still a non-finite number no digest here can cover if a later
+    version starts reading it. The walk is ITERATIVE because a deeply nested artifact would otherwise
+    exhaust the interpreter's stack, which is a crash rather than a classified exit.
+    """
+    stack: list[Any] = [document]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, float) and not math.isfinite(value):
+            raise InputError(
+                f"the {label} artifact {path} carries a non-finite number, which no digest can cover"
+            )
+        if isinstance(value, dict):
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+
+
 def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Refuse a duplicate JSON key instead of silently keeping the last one.
 
@@ -414,6 +438,9 @@ def load_artifact(path: str, label: str) -> dict[str, Any]:
     while a FIFO mistake hung forever. `Path.stat()` follows a symlink to its target, which is the
     question this asks -- "is what I would read a regular file" -- rather than "is the path itself
     one".
+
+    `RecursionError` is classified here too: `json`'s scanner recurses once per nesting level, so a
+    deeply nested supplied artifact is unusable input rather than an internal failure of this module.
     """
     candidate = Path(path)
     try:
@@ -428,10 +455,13 @@ def load_artifact(path: str, label: str) -> dict[str, Any]:
         raise InputError(f"cannot read the {label} artifact {path}: {exc}") from exc
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_reject_nonfinite)
+    except RecursionError as exc:
+        raise InputError(f"the {label} artifact {path} nests too deeply to be parsed, so it cannot be read") from exc
     except (UnicodeDecodeError, ValueError) as exc:
         raise InputError(f"the {label} artifact {path} is not JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise InputError(f"the {label} artifact {path} is not a JSON object")
+    _reject_nonfinite_values(value, label, path)
     return value
 
 

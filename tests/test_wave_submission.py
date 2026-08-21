@@ -1056,13 +1056,42 @@ class MalformedInputTests(SubmissionCase):
         self.assertIn(b"non-finite number", self.path_failure(str(overflowed)))
 
     def test_a_deeply_nested_document_is_refused_and_not_a_crash(self) -> None:
-        """The non-finite walk is iterative, so depth costs a named refusal and never the stack."""
+        """The non-finite walk is iterative, so depth costs a named refusal and never the stack.
+
+        Depth 2000 is comfortably below where `json`'s own C scanner overflows its stack (that
+        threshold is per-host and per-build, not a fixed count), so this case alone never reaches
+        the failure the next test targets; it stays here as the cheap moderate-depth regression
+        check, not as proof against the seed's own 100,000-level scenario.
+        """
         nested = self.work / "nested.json"
         depth = 2000
         nested.write_text("{\"a\":" * depth + "1" + "}" * depth, encoding="utf-8")
         done = self.run_tool("define", "--kind", KIND_REVIEW, "--submission", str(nested))
         self.assertIn(done.returncode, (EXIT_OK, EXIT_INPUT), done.stderr.decode("utf-8", "replace"))
         self.assertNotIn(b"RecursionError", done.stderr)
+
+    def test_a_hundred_thousand_deep_document_is_classified_not_a_crash(self) -> None:
+        """The seed's own scenario: `json`'s C scanner recurses once per nesting level independent of
+        `sys.setrecursionlimit`, and overflows its OWN C stack at a depth this interpreter's build
+        accommodates. The positive control proves THIS build actually raises `RecursionError` on a
+        bare `json.loads` at this depth -- the moderate-depth case above never reaches that failure
+        at all, which is exactly how it survived an earlier review.
+        """
+        depth = 100_000
+        text = "{\"a\":" * depth + "1" + "}" * depth
+        try:
+            json.loads(text)
+        except RecursionError:
+            pass
+        else:
+            self.skipTest("this interpreter's build did not raise RecursionError at 100,000 levels")
+        nested = self.work / "nested-deep.json"
+        nested.write_text(text, encoding="utf-8")
+        done = self.run_tool("define", "--kind", KIND_REVIEW, "--submission", str(nested))
+        self.assertEqual(done.returncode, EXIT_INPUT, done.stderr.decode("utf-8", "replace"))
+        self.assertEqual(done.stdout, b"", "an unusable document still produced a result document")
+        self.assertIn(b"nests too deeply", done.stderr)
+        self.assertNotIn(b"Traceback", done.stderr)
 
 
 class CanonicalFormTests(SubmissionCase):

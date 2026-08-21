@@ -311,6 +311,10 @@ RESIDUALS = (
 )
 
 _TIME = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
+#: `git check-ref-format` refuses any ASCII control character (0x00-0x1F, 0x7F) anywhere in a ref
+#: name, so a branch string carrying one -- a NUL, a newline -- is a shape `capture` can never
+#: produce: no repository's `HEAD` or `worktree list` output could have named such a branch.
+_CONTROL_CHAR = re.compile(r"[\x00-\x1f\x7f]")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 #: A git object name is 40 hexadecimal characters under SHA-1 and 64 under SHA-256; both are admitted
 #: because a repository's object format is the repository's choice, not this tool's.
@@ -618,6 +622,22 @@ def _closed_list(
     return entries
 
 
+def _check_branch_shape(assessment: Assessment, slug: str, branch: Any, what: str) -> None:
+    """A non-null branch is a non-empty string with no ASCII control character in it.
+
+    Split from the caller's own null-vs-string check so the two mistakes are named separately: a
+    non-string/empty value is one refusal, and a syntactically well-typed string a git ref name
+    could never actually be is another -- `capture` cannot produce either, but for different reasons.
+    """
+    if isinstance(branch, str) and branch and _CONTROL_CHAR.search(branch):
+        assessment.note(
+            slug,
+            f"{what} is {branch!r}, which carries an ASCII control character (a NUL or a newline, "
+            "among others); `git check-ref-format` refuses one anywhere in a ref name, so no "
+            "capture could ever have observed this as a branch",
+        )
+
+
 def _strictly_ascending(
     assessment: Assessment, slug: str, entries: list[dict[str, Any]], key: str, what: str
 ) -> None:
@@ -700,6 +720,8 @@ def check_head(assessment: Assessment, document: dict[str, Any]) -> None:
             f"the planning snapshot's head.branch is {branch!r}, which is neither a non-empty branch "
             "name nor null; a detached head has no branch to record, and null is how that is said",
         )
+    else:
+        _check_branch_shape(assessment, slug, branch, "the planning snapshot's head.branch")
 
 
 def check_dirty_state(assessment: Assessment, document: dict[str, Any]) -> None:
@@ -720,6 +742,12 @@ def check_worktrees(assessment: Assessment, document: dict[str, Any]) -> None:
     )
     if entries is None:
         return
+    if not entries:
+        assessment.note(
+            slug,
+            "the planning snapshot's worktrees is empty; `git worktree list` always reports at "
+            "least the observed worktree itself, so no capture could ever have observed this shape",
+        )
     for index, entry in enumerate(entries):
         what = f"the planning snapshot's worktrees at position {index}"
         _absolute_path(assessment, slug, entry, "path", f"{what} path")
@@ -732,6 +760,8 @@ def check_worktrees(assessment: Assessment, document: dict[str, Any]) -> None:
                 slug,
                 f"{what} branch is {branch!r}, which is neither a non-empty branch name nor null",
             )
+        else:
+            _check_branch_shape(assessment, slug, branch, f"{what} branch")
     _strictly_ascending(assessment, slug, entries, "path", "the planning snapshot's worktrees")
 
 
@@ -1080,9 +1110,16 @@ def probe_version(binary: str, args: tuple[str, ...], position: int) -> str | No
 
 
 def observe_head(repository: Repository) -> dict[str, Any]:
-    """The anchor. `capture` runs this twice and refuses if the two disagree."""
+    """The anchor. `capture` runs this twice and refuses if the two disagree.
+
+    The tree comes from ONE `rev-parse <commit>^{tree}` derivation against the commit this same
+    call just read, not from a second independent `rev-parse HEAD^{tree}`. A commit object's tree
+    is immutable once the commit exists, so asking git for THIS COMMIT's tree cannot itself race a
+    HEAD move: there is only the one HEAD read left in this function, not two, so an ABBA move
+    between two HEAD reads can no longer seal a commit/tree pair that was never observed together.
+    """
     commit = repository.line("rev-parse", "HEAD")
-    tree = repository.line("rev-parse", "HEAD^{tree}")
+    tree = repository.line("rev-parse", f"{commit}^{{tree}}")
     code, raw = repository.run("symbolic-ref", "--quiet", "--short", "HEAD", allow_nonzero=True)
     branch = decode(raw, "git symbolic-ref HEAD").strip("\n") if code == 0 else None
     return {"branch": branch or None, "commit_sha": commit, "tree_sha": tree}
