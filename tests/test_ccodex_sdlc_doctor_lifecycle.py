@@ -68,20 +68,25 @@ BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@1"
 ENVELOPE_SCHEMA = "agentic-sdlc/receipt-envelope@1"
 RECEIPT_KIND = "distribution-activation"
 ACQUISITION_SCHEMA = "release-candidate-acquisition-receipt/v1"
-# The four reader usage lines and the reader forms, pinned as literals: this ticket touches the
-# projection and must leave the f894 grammar surface byte-for-byte alone.
+# The five reader usage lines and the reader forms, pinned as literals: this ticket touches the
+# projection and must leave the f894 grammar surface byte-for-byte alone. The fifth line and the
+# `--apply` form are `recover`'s one mutating spelling (agentic-sdlc-baaa); the four read lines above
+# it are unchanged, because the dry-run assessment stays byte-for-byte what it already was.
 READER_USAGE_LINES = (
     "usage: ccodex sdlc inspect [--json]",
     "       ccodex sdlc status [--json]",
     "       ccodex sdlc doctor [--json]",
     "       ccodex sdlc recover --dry-run [--json]",
+    "       ccodex sdlc recover --apply <plan-sha256>",
 )
+PLAN_DIGEST = "5" * 64
 READER_FORMS = (
     (("inspect",), ("inspect", False, False, None)),
     (("status",), ("status", False, False, None)),
     (("doctor",), ("doctor", False, False, None)),
     (("doctor", "--json"), ("doctor", False, True, None)),
     (("recover", "--dry-run"), ("recover", True, False, None)),
+    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST)),
     (("install", "--host", "claude"), ("install", False, False, "claude")),
     (("update",), ("update", False, False, None)),
     (("uninstall",), ("uninstall", False, False, None)),
@@ -956,12 +961,17 @@ EXPECTED_USAGE = (
     "       ccodex sdlc status [--json]\n"
     "       ccodex sdlc doctor [--json]\n"
     "       ccodex sdlc recover --dry-run [--json]\n"
+    "       ccodex sdlc recover --apply <plan-sha256>\n"
     "       ccodex sdlc install --host claude\n"
     "       ccodex sdlc update\n"
     "       ccodex sdlc uninstall\n\n"
-    "inspect, status, doctor, and recover read checkout-development ownership and recovery\n"
-    "evidence without installing, updating, uninstalling, following, or changing state.\n"
-    "`recover` is proposal-only and requires the literal --dry-run safeguard.\n\n"
+    "inspect, status, doctor, and recover --dry-run read checkout-development ownership and\n"
+    "recovery evidence without installing, updating, uninstalling, following, or changing state.\n"
+    "`recover --dry-run` is proposal-only, requires the literal --dry-run safeguard, and renders\n"
+    "the sha256 of the exact plan it derived. `recover --apply <plan-sha256>` is the one mutating\n"
+    "recover form: the approval IS the digest, so it re-derives that plan from verified journal\n"
+    "and receipt state and refuses by name when the re-derived digest differs, when the evidence\n"
+    "does not verify, or when there is nothing to recover.\n\n"
     "install, update, and uninstall are the mutating lifecycle verbs. This reader performs no\n"
     "lifecycle mutation itself: it parses the closed grammar above and hands an admitted vector\n"
     "to one named per-verb module, refusing by name before any effect when that module is not\n"

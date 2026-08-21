@@ -65,14 +65,19 @@ MUTATING_MODULES = {
 # loader's absence path. Absent-module refusals stay covered forever through the shadow checkout,
 # which plants its own modules and can therefore withhold one.
 ABSENT_MODULES: tuple[str, ...] = ()
-# The four reader usage lines, pinned as literals rather than derived from the function under test.
-# A refactor that reflows them is a change to a shipped grammar surface and must fail here.
+# The five reader usage lines, pinned as literals rather than derived from the function under test.
+# A refactor that reflows them is a change to a shipped grammar surface and must fail here. The
+# fifth line is `recover`'s one mutating form (agentic-sdlc-baaa): the four read forms above it are
+# unchanged, because the dry-run assessment stays byte-for-byte what it already was.
 READER_USAGE_LINES = (
     "usage: ccodex sdlc inspect [--json]",
     "       ccodex sdlc status [--json]",
     "       ccodex sdlc doctor [--json]",
     "       ccodex sdlc recover --dry-run [--json]",
+    "       ccodex sdlc recover --apply <plan-sha256>",
 )
+#: One approved plan digest, spelled the only way the grammar admits it: 64 lowercase hex.
+PLAN_DIGEST = "5" * 64
 READER_FORMS = (
     (("inspect",), ("inspect", False, False, None)),
     (("inspect", "--json"), ("inspect", False, True, None)),
@@ -82,6 +87,30 @@ READER_FORMS = (
     (("doctor", "--json"), ("doctor", False, True, None)),
     (("recover", "--dry-run"), ("recover", True, False, None)),
     (("recover", "--dry-run", "--json"), ("recover", True, True, None)),
+    # The mutating form: never a dry run, never a report, and it carries the approved digest in the
+    # same fourth slot that `install` uses for its explicit host.
+    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST)),
+)
+#: Every recover spelling that is a grammar error, so exit 2 is proven per spelling and not once.
+# `\d` would admit the Arabic-Indic digit, which is why an explicitly non-ASCII digest is pinned
+# here: it must be REFUSED, not read as the same value.
+REFUSED_RECOVER_FORMS = (
+    ("recover",),
+    ("recover", "--json"),
+    ("recover", "--apply"),
+    ("recover", "--apply", ""),
+    ("recover", "--apply", "5" * 63),
+    ("recover", "--apply", "5" * 65),
+    ("recover", "--apply", "5" * 63 + "g"),
+    ("recover", "--apply", ("5" * 63).upper() + "A"),
+    ("recover", "--apply", "٩" * 64),
+    ("recover", "--apply", "5" * 63 + "\n"),
+    ("recover", "--apply", PLAN_DIGEST, "--json"),
+    ("recover", "--apply", PLAN_DIGEST, PLAN_DIGEST),
+    ("recover", f"--apply={PLAN_DIGEST}",),
+    ("recover", "--dry-run", "--apply", PLAN_DIGEST),
+    ("recover", "--apply", PLAN_DIGEST, "--dry-run"),
+    ("recover", "--json", "--apply", PLAN_DIGEST),
 )
 
 
@@ -438,14 +467,24 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             ("inspect", "--dry-run"),
             ("status", "--host", "claude"),
             ("doctor", "--json", "--json"),
-            ("recover",),
-            ("recover", "--json"),
             ("recover", "--json", "--dry-run"),
             ("recover", "--dry-run", "--dry-run"),
+            *REFUSED_RECOVER_FORMS,
         ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(reader.UsageError):
                     reader.parse_command(list(invalid))
+        # Positive control for the whole matrix above: the one admitted mutating spelling parses,
+        # so those refusals are the grammar's verdicts and not `parse_command` refusing everything.
+        self.assertEqual(
+            reader.parse_command(["recover", "--apply", PLAN_DIGEST]),
+            ("recover", False, False, PLAN_DIGEST),
+        )
+        # A digest is not a host and a host is not a digest: the shared fourth slot never lets one
+        # verb's argument reach the other's module.
+        self.assertEqual(reader.parse_command(["install", "--host", "claude"])[3], "claude")
+        with self.assertRaises(reader.UsageError):
+            reader.parse_command(["install", "--host", PLAN_DIGEST])
 
     def test_installed_dispatcher_forwards_the_closed_grammar_and_writes_no_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

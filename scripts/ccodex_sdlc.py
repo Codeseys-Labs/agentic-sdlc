@@ -52,6 +52,19 @@ LIFECYCLE_VERBS = {
 }
 # `install` requires an explicit host. There is no default and no wildcard.
 LIFECYCLE_HOSTS = ("claude",)
+# `recover` keeps its reader form AND gains exactly one mutating form (Decision 91: recovery stays
+# inside this closed namespace rather than becoming a fifth verb).  THE APPROVAL IS THE DIGEST:
+# `recover --dry-run` derives a digest-bound plan and renders that digest, and `recover --apply
+# <plan-sha256>` approves that one exact plan.  The mutating form dispatches to its own per-verb
+# module by absolute path exactly as the three lifecycle verbs do; it is deliberately NOT a member of
+# LIFECYCLE_VERBS, because `recover` is still a reader verb whose default form reads.
+RECOVER_APPLY_FLAG = "--apply"
+RECOVER_MODULE = "ccodex_sdlc_recover"
+LIFECYCLE_MODULES = {**LIFECYCLE_VERBS, "recover": RECOVER_MODULE}
+# Re-expressed from that module so a drifted plan shape is DECLINED by name rather than silently
+# digested as though nothing changed; `load_recovery_planner` compares this against the module's own
+# constant and declines the whole digest dimension when they disagree.
+RECOVERY_PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-recovery-plan@1"
 
 # ---- host-level lifecycle readiness ----------------------------------------------------------
 # The host-level half of pre-effect readiness is READ here and nowhere else (agentic-sdlc-9857,
@@ -350,6 +363,32 @@ def parse_lifecycle_host(verb: str, rest: list[str]) -> str | None:
     return host
 
 
+def parse_recover_apply(rest: list[str]) -> str:
+    """Resolve the plan digest of ``recover --apply``, or refuse the spelling as a grammar error.
+
+    Not-supplied, supplied-without-a-value, and supplied-with-an-unusable-value are three distinct
+    refusals: collapsing them hides which half of the invocation was wrong.  The digest is tested by
+    membership in an explicit lowercase hex alphabet, never by a regex digit class -- ``\\d`` admits
+    the Arabic-Indic ``٩``, so a digest spelled in it would read as the same value while comparing
+    unequal to every plan this command could derive.
+    """
+    if len(rest) == 1:
+        raise UsageError(
+            f"ccodex sdlc recover {RECOVER_APPLY_FLAG} was supplied without the plan digest it approves"
+        )
+    if len(rest) > 2:
+        raise UsageError(
+            f"ccodex sdlc recover {RECOVER_APPLY_FLAG} accepts exactly one plan digest: {rest[2]!r}"
+        )
+    digest = rest[1]
+    if len(digest) != 64 or any(character not in _HEX_CHARACTERS for character in digest):
+        raise UsageError(
+            f"ccodex sdlc recover {RECOVER_APPLY_FLAG} requires the 64-character lowercase"
+            f" hexadecimal digest of one derived plan: {digest!r}"
+        )
+    return digest
+
+
 def parse_command(argv: list[str]) -> tuple[str, bool, bool, str | None]:
     if argv in (["-h"], ["--help"], ["help"]):
         raise UsageError("help")
@@ -369,7 +408,20 @@ def parse_command(argv: list[str]) -> tuple[str, bool, bool, str | None]:
             return verb, True, False, None
         if rest == ["--dry-run", "--json"]:
             return verb, True, True, None
-        raise UsageError("ccodex sdlc recover requires exactly --dry-run, optionally followed by --json")
+        # The fourth element carries the ONE argument an admitted vector forwards to a per-verb
+        # module: the install host for `install`, and the approved plan digest here.  A dry run
+        # forwards nothing and therefore carries None, which is what keeps the two forms distinct.
+        if rest and rest[0] == RECOVER_APPLY_FLAG:
+            return verb, False, False, parse_recover_apply(rest)
+        if rest and rest[0].startswith(f"{RECOVER_APPLY_FLAG}="):
+            raise UsageError(
+                "ccodex sdlc recover spells its approval as two arguments:"
+                f" {RECOVER_APPLY_FLAG} <plan-sha256>"
+            )
+        raise UsageError(
+            "ccodex sdlc recover requires exactly --dry-run, optionally followed by --json, or"
+            f" {RECOVER_APPLY_FLAG} <plan-sha256>"
+        )
     if rest == []:
         return verb, False, False, None
     if rest == ["--json"]:
@@ -383,12 +435,17 @@ def usage() -> str:
         "       ccodex sdlc status [--json]\n"
         "       ccodex sdlc doctor [--json]\n"
         "       ccodex sdlc recover --dry-run [--json]\n"
+        "       ccodex sdlc recover --apply <plan-sha256>\n"
         "       ccodex sdlc install --host claude\n"
         "       ccodex sdlc update\n"
         "       ccodex sdlc uninstall\n\n"
-        "inspect, status, doctor, and recover read checkout-development ownership and recovery\n"
-        "evidence without installing, updating, uninstalling, following, or changing state.\n"
-        "`recover` is proposal-only and requires the literal --dry-run safeguard.\n\n"
+        "inspect, status, doctor, and recover --dry-run read checkout-development ownership and\n"
+        "recovery evidence without installing, updating, uninstalling, following, or changing state.\n"
+        "`recover --dry-run` is proposal-only, requires the literal --dry-run safeguard, and renders\n"
+        "the sha256 of the exact plan it derived. `recover --apply <plan-sha256>` is the one mutating\n"
+        "recover form: the approval IS the digest, so it re-derives that plan from verified journal\n"
+        "and receipt state and refuses by name when the re-derived digest differs, when the evidence\n"
+        "does not verify, or when there is nothing to recover.\n\n"
         "install, update, and uninstall are the mutating lifecycle verbs. This reader performs no\n"
         "lifecycle mutation itself: it parses the closed grammar above and hands an admitted vector\n"
         "to one named per-verb module, refusing by name before any effect when that module is not\n"
@@ -450,10 +507,10 @@ def load_guard(script_path: Path) -> ModuleType:
 
 
 def lifecycle_module_path(verb: str) -> Path:
-    return Path(__file__).with_name(f"{LIFECYCLE_VERBS[verb]}.py")
+    return Path(__file__).with_name(f"{LIFECYCLE_MODULES[verb]}.py")
 
 
-def load_lifecycle_module(verb: str) -> ModuleType:
+def load_lifecycle_module(verb: str, label: str | None = None) -> ModuleType:
     """Load one named per-verb lifecycle module by absolute file path.
 
     Same admission shape as ``load_guard`` here and ``load_sibling`` in the read-only guard: an
@@ -465,45 +522,53 @@ def load_lifecycle_module(verb: str) -> ModuleType:
     ran nothing, so it is a clean refusal (exit 3).  Once foreign top-level code has executed, no
     absence of effect can be claimed, so a failure there is an admitted unknown effect (exit 4).
     """
+    named = label or verb
     path = lifecycle_module_path(verb)
     if path.is_symlink() or not path.is_file():
         raise LifecycleRefusal(
-            f"ccodex sdlc {verb} is unavailable in this distribution: {str(path)!r} is absent"
+            f"ccodex sdlc {named} is unavailable in this distribution: {str(path)!r} is absent"
         )
     spec = importlib.util.spec_from_file_location(f"_ccodex_sdlc_lifecycle_{verb}", path)
     if spec is None or spec.loader is None:
-        raise LifecycleRefusal(f"ccodex sdlc {verb} module cannot be loaded: {str(path)!r}")
+        raise LifecycleRefusal(f"ccodex sdlc {named} module cannot be loaded: {str(path)!r}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 - any import-time failure leaves the effect unknown
         raise LifecycleUnknownEffect(
-            f"ccodex sdlc {verb} module failed while loading, so its effect is unknown: {exc!r}"
+            f"ccodex sdlc {named} module failed while loading, so its effect is unknown: {exc!r}"
         ) from exc
     return module
 
 
-def dispatch_lifecycle(verb: str, host: str | None, candidate_mode: bool) -> int:
+def dispatch_lifecycle(
+    verb: str, forwarded: list[str], candidate_mode: bool, *, label: str | None = None
+) -> int:
     """Refuse, or hand one admitted mutating vector to its per-verb module. Never mutate here.
+
+    ``forwarded`` is the exact argv the module receives, and ``label`` is how the vector is NAMED in
+    a refusal -- ``recover --apply`` rather than the bare verb, because ``recover`` alone is also a
+    reader form and a refusal that named it would describe the wrong invocation.
 
     ``SystemExit`` from the module is deliberately NOT caught: that status is the module's own
     decision about its own effect, and re-classifying it here would overwrite the only authority
     that observed the effect.
     """
+    named = label or verb
     try:
         if candidate_mode:
             # Defence in depth. The candidate dispatcher's closed allowlist refuses this vector
             # first; the reader refuses it again so a direct invocation cannot bypass that.
             raise LifecycleRefusal(
-                f"candidate ccodex sdlc admits only read-only inspection; {verb} is a mutating lifecycle verb"
+                f"candidate ccodex sdlc admits only read-only inspection; {named} is a mutating lifecycle verb"
             )
         admitted, _runtime, reason = runtime_admission()
         if not admitted:
             raise LifecycleRefusal(
-                f"ccodex sdlc {verb} requires its bound isolated Python 3.12.11: {reason or 'runtime admission refused'}"
+                f"ccodex sdlc {named} requires its bound isolated Python 3.12.11: {reason or 'runtime admission refused'}"
             )
-        module = load_lifecycle_module(verb)
+        module = load_lifecycle_module(verb, named)
     except LifecycleRefusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 3
@@ -513,23 +578,22 @@ def dispatch_lifecycle(verb: str, host: str | None, candidate_mode: bool) -> int
     entry = getattr(module, "main", None)
     if not callable(entry):
         print(
-            f"error: ccodex sdlc {verb} module exposes no callable main(argv), and its top-level code"
+            f"error: ccodex sdlc {named} module exposes no callable main(argv), and its top-level code"
             f" already ran, so its effect is unknown: {str(lifecycle_module_path(verb))!r}",
             file=sys.stderr,
         )
         return 4
-    forwarded = ["--host", host] if host is not None else []
     try:
-        result = entry(forwarded)
+        result = entry(list(forwarded))
     except Exception as exc:  # noqa: BLE001 - the module was entered; the effect is unknown
         print(
-            f"error: ccodex sdlc {verb} failed inside its module, so its effect is unknown: {exc!r}",
+            f"error: ccodex sdlc {named} failed inside its module, so its effect is unknown: {exc!r}",
             file=sys.stderr,
         )
         return 4
     if isinstance(result, bool) or not isinstance(result, int) or not 0 <= result <= 4:
         print(
-            f"error: ccodex sdlc {verb} returned no admitted exit class ({result!r}),"
+            f"error: ccodex sdlc {named} returned no admitted exit class ({result!r}),"
             " so its effect is unknown",
             file=sys.stderr,
         )
@@ -1196,11 +1260,16 @@ def load_read_only_adapters() -> tuple[ModuleType, ModuleType, ModuleType]:
     return guard, operator_tools, bundle
 
 
-def observe_projections(
-    root: Path, adapters: tuple[ModuleType, ModuleType, ModuleType] | None = None
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    _guard, operator_tools, bundle = adapters if adapters is not None else load_read_only_adapters()
+def recovery_configs(
+    root: Path, operator_tools: ModuleType, bundle: ModuleType
+) -> tuple[Any, Any, Path]:
+    """Resolve the two substrate configurations and this host's activation receipts plane, once.
 
+    ONE construction site, because the ownership projections and the recovery plan must describe the
+    same selection: a plan derived against a differently-configured home would carry a digest that
+    the mutating form could never re-derive.  Only ``dry_run`` differs on the mutating side, and it
+    participates in no classification.
+    """
     home = operator_tools.absolute(Path.home())
     state_root = operator_tools.state_root_for(home)
     bin_dir = operator_tools.default_bin_dir(home)
@@ -1208,9 +1277,82 @@ def observe_projections(
     codex_home_value = os.environ.get("CODEX_HOME")
     codex_home = Path(codex_home_value) if codex_home_value and codex_home_value.strip() else home / ".codex"
     bundle_config = bundle.Config(root, home, codex_home, "auto", True, "all", state_root)
+    plane = state_root / STATE_PLANE_DIRECTORY
+    return operator_config, bundle_config, plane.joinpath(*ACTIVATION_PLANE)
+
+
+def observe_projections(
+    root: Path, adapters: tuple[ModuleType, ModuleType, ModuleType] | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    _guard, operator_tools, bundle = adapters if adapters is not None else load_read_only_adapters()
+
+    operator_config, bundle_config, _receipts = recovery_configs(root, operator_tools, bundle)
     return (
         sorted_projection(operator_tools.readonly_projection(operator_config)),
         sorted_projection(bundle.readonly_projection(bundle_config)),
+    )
+
+
+def load_recovery_planner(
+    script_path: Path, guard: ModuleType
+) -> tuple[ModuleType | None, str | None]:
+    """Load the recovery plan's own derivation, or name why no digest can be rendered.
+
+    Same posture as ``load_activation_validator``: an OPTIONAL sibling, refused rather than searched
+    for, and a distribution that ships this reader without it is not broken -- it simply cannot state
+    a plan digest, which is recorded as unavailable WITH a reason rather than invented.  Deriving is
+    pure observation, which is what makes it safe to call while the read-only guard is installed; the
+    module's mutating entry point is never touched here.
+    """
+    path = script_path.with_name(f"{RECOVER_MODULE}.py")
+    if path.is_symlink() or not path.is_file():
+        return None, "the recovery plan derivation is absent from this distribution"
+    try:
+        module = guard.load_sibling(script_path, RECOVER_MODULE)
+    except Exception as exc:  # noqa: BLE001 - an unloadable planner is unknown, never a raise
+        return None, f"the recovery plan derivation could not be loaded ({exc})"
+    for name in ("PLAN_SCHEMA", "derive_plan"):
+        if not hasattr(module, name):
+            return None, f"the recovery plan derivation exposes no {name}"
+    if getattr(module, "PLAN_SCHEMA", None) != RECOVERY_PLAN_SCHEMA:
+        return None, "the recovery plan derivation names another plan schema"
+    if not callable(module.derive_plan):
+        return None, "the recovery plan derivation exposes no callable derive_plan"
+    return module, None
+
+
+def recovery_plan_line(root: Path, adapters: tuple[ModuleType, ModuleType, ModuleType]) -> str:
+    """Render the ONE line that carries the approval token of this exact assessment.
+
+    It is written to stderr rather than into the report, and that is deliberate twice over: the v1
+    report document is byte-pinned by a policy this surface has no authority to widen, and
+    ``recover --dry-run`` must stay byte-for-byte the read-only assessment it already is on stdout in
+    BOTH its human and its canonical JSON form.  The digest is an approval token, not report data.
+    """
+    guard, operator_tools, bundle = adapters
+    planner, reason = load_recovery_planner(Path(__file__), guard)
+    if planner is None:
+        return f"recovery plan: unavailable ({bounded_message(reason or 'no reason was stated')})\n"
+    try:
+        operator_config, bundle_config, receipts = recovery_configs(root, operator_tools, bundle)
+        plan, digest = planner.derive_plan(
+            operator_tools=operator_tools,
+            operator_config=operator_config,
+            bundle=bundle,
+            bundle_config=bundle_config,
+            activation_receipts=receipts,
+        )
+    except Exception as exc:  # noqa: BLE001 - a plan that cannot be derived states no digest
+        return f"recovery plan: unavailable ({bounded_message(str(exc) or repr(exc))})\n"
+    if not isinstance(digest, str) or len(digest) != 64 or any(
+        character not in _HEX_CHARACTERS for character in digest
+    ):
+        return "recovery plan: unavailable (the derivation returned no admissible plan digest)\n"
+    if not plan["items"]:
+        return "recovery plan: nothing to recover, so no plan digest is offered\n"
+    return (
+        f"recovery plan sha256 {digest}: approve exactly this plan with"
+        f" `ccodex sdlc recover {RECOVER_APPLY_FLAG} {digest}`\n"
     )
 
 
@@ -1435,7 +1577,9 @@ def main(argv: list[str] | None = None) -> int:
     if candidate_mode:
         selected = selected[1:]
     try:
-        command, dry_run, json_output, host = parse_command(selected)
+        # The fourth element is the ONE argument an admitted mutating vector forwards: the install
+        # host, or the plan digest `recover --apply` approves.
+        command, dry_run, json_output, forwarded_value = parse_command(selected)
     except UsageError as exc:
         if str(exc) == "help":
             sys.stdout.write(usage())
@@ -1447,7 +1591,21 @@ def main(argv: list[str] | None = None) -> int:
         # Handed off before any report policy, release contract, or projection is read: a mutating
         # verb neither renders nor depends on the read report, and refusing early keeps the refusal
         # attributable to the missing module rather than to unrelated reader state.
-        return dispatch_lifecycle(command, host, candidate_mode)
+        return dispatch_lifecycle(
+            command,
+            ["--host", forwarded_value] if forwarded_value is not None else [],
+            candidate_mode,
+            label=command,
+        )
+    if command == "recover" and forwarded_value is not None:
+        # The one mutating recover form, handed off on the same early path and for the same reason.
+        # The dry-run form never reaches here, so it still acquires no writer authority.
+        return dispatch_lifecycle(
+            "recover",
+            [RECOVER_APPLY_FLAG, forwarded_value],
+            candidate_mode,
+            label=f"recover {RECOVER_APPLY_FLAG}",
+        )
 
     root = Path(__file__).parent.parent
     try:
@@ -1507,6 +1665,10 @@ def main(argv: list[str] | None = None) -> int:
             exit_class="ok",
         )
         emit(report, json_output)
+        if command == "recover":
+            # After the assessment, never instead of it: the operator sees what the plan covers and
+            # then the digest that approves exactly that plan.
+            sys.stderr.write(recovery_plan_line(root, adapters))
         return 0
     except (ReportInvariantError, OSError, ValueError) as exc:
         if candidate_mode:

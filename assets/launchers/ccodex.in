@@ -35,10 +35,11 @@ set -euo pipefail
 # root override, tool binding, or gateway code can run.
 candidate_readonly_profile=@CANDIDATE_READONLY_PROFILE@
 if [ "$candidate_readonly_profile" = true ]; then
-  # This allowlist is closed by construction, so the three mutating lifecycle verbs -- `sdlc install
-  # --host claude`, `sdlc update`, `sdlc uninstall` -- are refused here without being named: adding
-  # a verb to the grammar below never widens what a candidate projection admits. The reader refuses
-  # them a second time if it is invoked directly with the candidate flag.
+  # This allowlist is closed by construction, so every mutating form -- `sdlc install --host claude`,
+  # `sdlc update`, `sdlc uninstall`, and `sdlc recover --apply <plan-sha256>` -- is refused here
+  # without being named: adding a verb or a form to the grammar below never widens what a candidate
+  # projection admits. The reader refuses them a second time if it is invoked directly with the
+  # candidate flag.
   case "$#:$*" in
     "2:sdlc inspect"|"3:sdlc inspect --json"|\
     "2:sdlc status"|"3:sdlc status --json"|\
@@ -115,11 +116,17 @@ Installed-bundle lifecycle:
 Checkout-development evidence (read-only, no gateway or lifecycle effects):
   sdlc <inspect|status|doctor> [--json]
   sdlc recover --dry-run [--json]
+                              Proposal-only. Renders the sha256 of the exact plan it derived.
 
 Checkout-development lifecycle (mutating verbs; each is admitted or refused by its own module):
   sdlc install --host claude   Explicit host, no default and no wildcard.
   sdlc update
   sdlc uninstall
+  sdlc recover --apply <plan-sha256>
+                              The approval IS the digest: it re-derives the plan from verified
+                              journal and receipt state and refuses by name when the re-derived
+                              digest differs, the evidence does not verify, or nothing is
+                              recoverable. Preserved state is named, never overwritten.
 
   version                     Report this command's resolved repository root and dependencies.
 
