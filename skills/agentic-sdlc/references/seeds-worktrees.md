@@ -9,10 +9,10 @@ stdlib tool `tools/seeds-launcher.mjs`; first run its explicit bootstrap mode fr
 distribution checkout:
 
 ```text
-<exact-node-22.22.3-root>/bin/node tools/seeds-launcher.mjs bootstrap --distribution <exact-clean-git-root>
+<exact-node-22.23.2-root>/bin/node tools/seeds-launcher.mjs bootstrap --distribution <exact-clean-git-root>
 ```
 
-The launcher itself must be executing as Node `22.22.3`. The distribution must be an exact clean Git
+The launcher itself must be executing as Node `22.23.2`. The distribution must be an exact clean Git
 root: its argument must equal `git rev-parse --show-toplevel`, and `HEAD`, index, tracked
 working tree, untracked files, and ignored files must resolve to one exact clean commit tree; nested paths and any live-tree addition or edit
 fail before acquisition. Bootstrap alone runs `mise --locked install` with the root's reviewed
@@ -20,7 +20,7 @@ fail before acquisition. Bootstrap alone runs `mise --locked install` with the r
 data/cache, and two distinct empty npmrc files; pins the official npm registry and npm backend;
 disables hooks/config environment; and ignores ambient HOME, npmrc/registry variables, and mise
 config/data/cache variables. It then consumes exact roots returned by `mise --no-config where` for
-Node `22.22.3`, Bun `1.3.10`, and `npm:@os-eco/seeds-cli@0.5.15`. It validates the version, platform
+Node `22.23.2`, Bun `1.4.0`, and `npm:@os-eco/seeds-cli@0.5.15`. It validates the version, platform
 layout, package name/version, separator-contained `sd` bin entry, and package controls. The released
 package's string `engines.bun` compatibility requirement is benign; Bun config, TypeScript config,
 macro, preload, and other actual execution-control forms remain forbidden. It creates a trusted
@@ -45,7 +45,7 @@ The maintained prerequisite wrapper exposes the same boundaries as three front d
 Node before starting the installed launcher and preserves its immediate exit status.
 
 `inspect` never installs, calls mise, acquires from a network, discovers ambient tools, repairs a
-receipt, or reads target package controls. The process must itself be exact Node `22.22.3`; it
+receipt, or reads target package controls. The process must itself be exact Node `22.23.2`; it
 validates only the active receipt and current hashes, then permits precisely `--version`, `prime`,
 `ready [--format json]`, and `blocked [--format json]`. Other forms fail before Bun. Exact Node uses `shell:false` solely as
 an argv-safe wrapper for the exact absolute Bun executable and exact entry, with target as cwd.

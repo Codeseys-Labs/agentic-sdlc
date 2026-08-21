@@ -62,19 +62,19 @@ REQUIRED_TASKS = {
     "setup",
 }
 MIN_MISE_VERSION = "2026.4.27"
-UV_VERSION = "0.11.17"
+UV_VERSION = "0.12.5"
 PYTHON_VERSION = "3.12.11"
 LEFTHOOK_VERSION = "2.1.10"
-NODE_VERSION = "22.22.3"
-BUN_VERSION = "1.3.10"
+NODE_VERSION = "22.23.2"
+BUN_VERSION = "1.4.0"
 SEEDS_VERSION = "0.5.15"
 SEEDS_TOOL = "npm:@os-eco/seeds-cli"
 # Convenience tier. Pinned for identical resolution across hosts; no gate depends on them.
 RIPGREP_VERSION = "15.2.0"
 FD_VERSION = "10.4.2"
 JQ_VERSION = "1.8.2"
-GH_VERSION = "2.97.0"
-BETTERLEAKS_VERSION = "1.7.3"
+GH_VERSION = "2.98.0"
+BETTERLEAKS_VERSION = "1.8.1"
 BETTERLEAKS_TOOL = "github:betterleaks/betterleaks"
 # The renderer's mmdc version. It is pinned by package-lock.json digest below, NOT by a mise
 # [tools] entry: that entry was removed 2026-08-07 (docs/adr/0002 amendment) because puppeteer's
@@ -84,9 +84,9 @@ MERMAID_VERSION = "11.16.0"
 # Installed by default per docs/adr/0005. The packaging pin is convenience tier like the two
 # npm pins above; the boundary that matters is usage-level and lives in the launcher script,
 # not here (docs/adr/0003: non-Anthropic routing only, never subscription OAuth).
-OPENCODEX_VERSION = "2.11.1"
+OPENCODEX_VERSION = "2.28.0"
 OPENCODEX_TOOL = "npm:@bitkyc08/opencodex"
-# node 22.22.3 bundles npm 10.9.8, so the M0b renderer's npm identity is pinned as its own
+# node 22.23.2 bundles npm 10.9.8, so the M0b renderer's npm identity is pinned as its own
 # tool. scripts/provision_mermaid_linux.py resolves exactly this version through `mise where`
 # to install the renderer's node_modules. Provisioning is an explicit operator step and no
 # gate leaf invokes it, so this pin never becomes a bootstrap prerequisite.
@@ -95,8 +95,8 @@ MERMAID_NPM_TOOL = "npm"
 MERMAID_NPM_BACKEND = "npm:npm"
 # The renderer supply chain is pinned by exact digest, not by version range: the lock bytes and
 # the policy bytes are both hashed, so a dependency edit or a policy loosening fails the gate.
-MERMAID_PACKAGE_LOCK_SHA256 = "939c3abe521d3e2075cf757f2761fa1d3103daf270be778eae159b45e6e3bb88"
-MERMAID_POLICY_SHA256 = "ee669a8ee36c085713071e91cb1b2b38c75f28dec9a0cfbbc1cd86559ca6ecce"
+MERMAID_PACKAGE_LOCK_SHA256 = "45d2b754f3b9ad65dd9b88aab2803912db32315eacf71cbd7635d28b088a892e"
+MERMAID_POLICY_SHA256 = "ebb2b9d60e06236233e548ccaad6d201097851f0581889f34028c813e9dd850c"
 MERMAID_POLICY_SCHEMA = "mermaid-renderer-linux/v1"
 MERMAID_PACKAGE_PINS = {
     "@mermaid-js/mermaid-cli": MERMAID_VERSION,
@@ -173,7 +173,7 @@ EXPECTED_LOCK_BACKENDS = {
     OPENCODEX_TOOL: OPENCODEX_TOOL,
     MERMAID_NPM_TOOL: MERMAID_NPM_BACKEND,
 }
-MISE_LOCK_SHA256 = "3a4d510446bdbf1456ef29d976a03f0d096f58fc524b7bb4a823930e085ab9db"
+MISE_LOCK_SHA256 = "31ed02eb15e425253e90b3f3b4d117f0b5c3876fa9351e27b6b6375fd47d5b1c"
 TASK_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
     "bundle:install": "--script scripts/install_skill_bundle.py install",
@@ -379,11 +379,11 @@ RELEASE_CLAIM_CATEGORIES = frozenset(
     }
 )
 PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
-RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "2ca7f36c728d324ab60f2b99d4b3fb03f064180496c0731aa33447a7dee4ba72"
+RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "675c8799587b9b7151fd7f98f3424e5e9783986d2db9dc5488bb2a1a704b7794"
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 - Research Director is Seeds-read-only.
 - Use only the exact accepted Seeds inspection contract:
-  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
+  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.23.2 bun@1.4.0 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
 - Inspect `Seeds(<target>, prime)`, `Seeds(<target>, ready --format json)`, and `Seeds(<target>, blocked --format json)` before substantive orchestration when Seeds is available.
 - Do not create, claim, update, close, sync, or disposition Seeds.
 - For work that outlives the session, emit exactly one typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.
@@ -458,7 +458,7 @@ SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
-RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "e490284af11143c71a9a07d0e5778594c3ba99bd648220dec3268b4d5491e0b8"
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "22c165551389b844fc46b8fcae2e7cd750254181ad2096b6884b0ee8f25b801c"
 SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256 = {
     "agents/claude/sdlc-reviewer.md": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
     "agents/codex/sdlc-reviewer.toml": "816f52d896821f4d5964e0d9fc8dd412b01e27800733613ace496eeec61dd003",

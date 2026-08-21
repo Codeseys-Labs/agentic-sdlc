@@ -18,8 +18,8 @@ ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "check-agentic-sdlc-prereqs.sh"
 BASH = None if os.name == "nt" else shutil.which("bash")
 EXACT_RUNTIMES = [
-    "node@22.22.3",
-    "bun@1.3.10",
+    "node@22.23.2",
+    "bun@1.4.0",
     "npm:@os-eco/seeds-cli@0.5.15",
 ]
 SHIPPED_TEXT_SUFFIXES = frozenset({".json", ".md", ".mjs", ".ps1", ".py", ".sh", ".toml", ".yaml", ".yml"})
@@ -575,7 +575,7 @@ class ExactRuntimeWrapperTests(unittest.TestCase):
             self.bin / "mise",
             f"#!{sys.executable}\n"
             "import sys\n"
-            f"print({str(self.node_root)!r}) if sys.argv[1:] == ['--no-config', 'where', 'node@22.22.3'] else sys.exit(2)\n",
+            f"print({str(self.node_root)!r}) if sys.argv[1:] == ['--no-config', 'where', 'node@22.23.2'] else sys.exit(2)\n",
         )
         self._write_executable(self.bin / "git", "#!/bin/sh\nexit 0\n")
 
@@ -683,7 +683,7 @@ class PreflightCapabilityTests(unittest.TestCase):
         self.bin_dir = self.temp / "ambient-bin"
         self.bin_dir.mkdir()
         self.exact_root = self.temp / "mise installs" / "npm-os-eco-seeds-cli" / "0.5.15"
-        self.exact_bun_root = self.temp / "mise installs" / "bun" / "1.3.10"
+        self.exact_bun_root = self.temp / "mise installs" / "bun" / "1.4.0"
         (self.exact_bun_root).mkdir(parents=True)
         (self.exact_root / "bin").mkdir(parents=True)
         self.target = self.temp / "target repo with spaces ;$&[]"
@@ -810,7 +810,7 @@ class PreflightCapabilityTests(unittest.TestCase):
                 if "where" in argv:
                     if mode == "windows-paths" and argv[-1].startswith("npm:"):
                         print(r"C:\\Mise\\Installs\\Seeds")
-                    elif argv[-1] == "bun@1.3.10":
+                    elif argv[-1] == "bun@1.4.0":
                         print({str(self.exact_bun_root)!r})
                     else:
                         print(root)
@@ -1378,7 +1378,7 @@ class SeedsDocumentationContractTests(unittest.TestCase):
                         "command /opt/seeds/bin/sd claim",
                         "exec ./tools/sd update",
                         "env MODE=test ./tools/sd close",
-                        "mise exec node@22.22.3 -- sd sync",
+                        "mise exec node@22.23.2 -- sd sync",
                         "& sd.exe create",
                         r"& 'C:\\Seeds\\sd.cmd' claim",
                         "Start-Process sd.exe -ArgumentList update",

@@ -823,7 +823,7 @@ await agent(calibrationExample, { model: 'gpt-5.6-terra[1m]', effort: 'ultra' })
                 self.assertIn("Seeds(<target>, ready --format json)", text)
                 self.assertIn("Seeds(<target>, blocked --format json)", text)
                 self.assertIn("MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec", text)
-                self.assertIn("node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>", text)
+                self.assertIn("node@22.23.2 bun@1.4.0 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>", text)
                 self.assertIn("Do not create, claim, update, close, sync, or disposition Seeds", text)
                 self.assertIn("exactly one typed `SeedProposal {", text)
                 for forbidden in (

@@ -60,10 +60,10 @@ foreach ($argument in $decodedArgs) {
     $taskArgs.Add([string]$argument)
 }
 
-$nodeRoot = & $mise.Source '--no-config' 'where' 'node@22.22.3'
+$nodeRoot = & $mise.Source '--no-config' 'where' 'node@22.23.2'
 $nodeStatus = $LASTEXITCODE
 if ($nodeStatus -ne 0 -or -not $nodeRoot) {
-    throw 'The exact Node 22.22.3 root could not be resolved by mise --no-config where.'
+    throw 'The exact Node 22.23.2 root could not be resolved by mise --no-config where.'
 }
 $node = Join-Path $nodeRoot.Trim() 'node.exe'
 if (-not (Test-Path -LiteralPath $node -PathType Leaf)) {

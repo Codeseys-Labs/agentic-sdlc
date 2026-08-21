@@ -404,12 +404,12 @@ mutation, merge, deployment, credential, or other outward effect.
 
 The flagship skill ships the portable Node-stdlib `tools/seeds-launcher.mjs`. From an exact clean
 Git distribution root, run its explicit `bootstrap --distribution <distribution-root>` mode under
-Node `22.22.3`. Both bootstrap and inspect reject any other executing Node. Bootstrap rejects
+Node `22.23.2`. Both bootstrap and inspect reject any other executing Node. Bootstrap rejects
 nested, staged, dirty, untracked, or ignored distribution content, then alone runs reviewed
 `mise --locked install`. That install isolates HOME, mise config/data/cache, hooks, npmrc, and
 registry selection from ambient values. Only the reviewed root `mise.toml`/adjacent lock, the
 fixed official npm registry, npm backend, and private empty configs select acquisition. It
-resolves exact config-free Node `22.22.3`, Bun `1.3.10`, and Seeds `npm:@os-eco/seeds-cli@0.5.15`
+resolves exact config-free Node `22.23.2`, Bun `1.4.0`, and Seeds `npm:@os-eco/seeds-cli@0.5.15`
 roots. It accepts the released package's benign string `engines.bun` compatibility metadata
 while rejecting actual config/macro/preload controls. It atomically publishes an exact Git
 commit/tree and tool-hash receipt. The Seeds lock proves the exact version and npm backend, not
@@ -426,7 +426,7 @@ Bootstrap the repository and inspect the available lifecycle tasks:
 
 ```bash
 mise -C <distribution-root> tasks
-<exact-node-22.22.3-root>/bin/node <installed-flagship>/tools/seeds-launcher.mjs bootstrap --distribution <exact-clean-git-root>
+<exact-node-22.23.2-root>/bin/node <installed-flagship>/tools/seeds-launcher.mjs bootstrap --distribution <exact-clean-git-root>
 ```
 
 After explicit bootstrap, read-only Seeds operations use `inspect --target <target>` against only

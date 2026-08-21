@@ -13,11 +13,11 @@ github.github_attestations = false
 
 [tools]
 # mise is the only managed-tool bootstrap. Runtime readiness is checked separately.
-uv = "0.11.17"
+uv = "0.12.5"
 lefthook = "2.1.10"
-node = "22.22.3"
-bun = "1.3.10"
-# Pinned separately from node because node 22.22.3 bundles npm 10.9.8. The M0b Mermaid
+node = "22.23.2"
+bun = "1.4.0"
+# Pinned separately from node because node 22.23.2 bundles npm 10.9.8. The M0b Mermaid
 # provisioner resolves this exact npm through `mise where` and installs the renderer's
 # node_modules with it, so the npm identity is part of that supply chain, not a bootstrap
 # prerequisite: nothing in `mise run check` invokes it.
@@ -32,7 +32,7 @@ npm = { version = "10.8.1", depends = ["node"] }
 ripgrep = "15.2.0"
 fd = "10.4.2"
 jq = "1.8.2"
-gh = "2.97.0"
+gh = "2.98.0"
 
 [tools."npm:@os-eco/seeds-cli"]
 version = "0.5.15"
@@ -42,7 +42,7 @@ depends = ["node"]
 # checksums and verifies GitHub artifact attestations on install; ubi: is deprecated in
 # mise 2027.1.0 and would lock version+backend only.
 [tools."github:betterleaks/betterleaks"]
-version = "1.7.3"
+version = "1.8.1"
 
 # `npm:@mermaid-js/mermaid-cli` is deliberately NOT pinned here (docs/adr/0002, 2026-08-07
 # amendment). It was, and it was redundant AND actively harmful. Redundant: the renderer
@@ -67,7 +67,7 @@ version = "1.7.3"
 # adds no system-package prerequisite. Postinstall alone is not the defect; needing a tool
 # mise did not install is (docs/adr/0002, 2026-08-07 amendment).
 [tools."npm:@bitkyc08/opencodex"]
-version = "2.11.1"
+version = "2.28.0"
 depends = ["node"]
 
 [tasks.validate]

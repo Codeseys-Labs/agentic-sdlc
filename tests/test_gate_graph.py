@@ -27,8 +27,8 @@ SECRETS_RUN_WINDOWS = "uv.exe run --python 3.12.11 --script scripts/secrets_scan
 
 class GateGraphTests(unittest.TestCase):
     TOOLCHAIN_MUTATIONS = (
-        ("mise.toml", 'node = "22.22.3"', 'node = "22.22.2"', "mise.toml tools must equal"),
-        ("mise.toml", 'bun = "1.3.10"', 'bun = "1.3.9"', "mise.toml tools must equal"),
+        ("mise.toml", 'node = "22.23.2"', 'node = "22.23.1"', "mise.toml tools must equal"),
+        ("mise.toml", 'bun = "1.4.0"', 'bun = "1.3.9"', "mise.toml tools must equal"),
         # The renderer's npm identity is pinned separately from node, which bundles 10.9.8.
         # Drift here silently changes how the M0b node_modules tree is built.
         ("mise.toml", 'npm = { version = "10.8.1", depends = ["node"] }', 'npm = { version = "10.8.0", depends = ["node"] }', "mise.toml tools must equal"),
@@ -43,9 +43,9 @@ class GateGraphTests(unittest.TestCase):
         ("mise.toml", 'ripgrep = "15.2.0"', 'ripgrep = "14.1.1"', "mise.toml tools must equal"),
         ("mise.toml", 'fd = "10.4.2"', 'fd = "10.4.1"', "mise.toml tools must equal"),
         ("mise.toml", 'jq = "1.8.2"', 'jq = "1.8.1"', "mise.toml tools must equal"),
-        ("mise.toml", 'gh = "2.97.0"', 'gh = "2.96.0"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "1.7.3"', 'version = "1.7.2"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "2.11.1"', 'version = "2.10.2"', "mise.toml tools must equal"),
+        ("mise.toml", 'gh = "2.98.0"', 'gh = "2.96.0"', "mise.toml tools must equal"),
+        ("mise.toml", 'version = "1.8.1"', 'version = "1.7.2"', "mise.toml tools must equal"),
+        ("mise.toml", 'version = "2.28.0"', 'version = "2.10.2"', "mise.toml tools must equal"),
         # Re-adding the mermaid pin must fail. It was removed 2026-08-07 (docs/adr/0002
         # amendment): puppeteer's postinstall needs a zip archiver mise does not install, so
         # `mise --locked install` exited 1 on a slim image and took the other 12 tools with it.
@@ -76,7 +76,7 @@ class GateGraphTests(unittest.TestCase):
 
     LOCKED_TOOLCHAIN = {
         "uv": {
-            "version": "0.11.17",
+            "version": "0.12.5",
             "backend": "aqua:astral-sh/uv",
             "platforms": {
                 "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
@@ -94,7 +94,7 @@ class GateGraphTests(unittest.TestCase):
             },
         },
         "node": {
-            "version": "22.22.3",
+            "version": "22.23.2",
             "backend": "core:node",
             "platforms": {
                 "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
@@ -103,7 +103,7 @@ class GateGraphTests(unittest.TestCase):
             },
         },
         "bun": {
-            "version": "1.3.10",
+            "version": "1.4.0",
             "backend": "core:bun",
             "platforms": {
                 "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
@@ -141,7 +141,7 @@ class GateGraphTests(unittest.TestCase):
             },
         },
         "gh": {
-            "version": "2.97.0",
+            "version": "2.98.0",
             "backend": "aqua:cli/cli",
             "platforms": {
                 "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
@@ -150,7 +150,7 @@ class GateGraphTests(unittest.TestCase):
             },
         },
         "github:betterleaks/betterleaks": {
-            "version": "1.7.3",
+            "version": "1.8.1",
             "backend": "github:betterleaks/betterleaks",
             "platforms": {
                 "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-baseline",
@@ -163,7 +163,7 @@ class GateGraphTests(unittest.TestCase):
         "npm": {"version": "10.8.1", "backend": "npm:npm"},
         "npm:@os-eco/seeds-cli": {"version": "0.5.15", "backend": "npm:@os-eco/seeds-cli"},
         "npm:@bitkyc08/opencodex": {
-            "version": "2.11.1",
+            "version": "2.28.0",
             "backend": "npm:@bitkyc08/opencodex",
         },
     }
@@ -313,8 +313,8 @@ class GateGraphTests(unittest.TestCase):
 
     def test_unexpected_non_seeds_tool_entry_field_fails(self) -> None:
         self.assert_lock_mutation_fails(
-            b'[[tools.node]]\nversion = "22.22.3"',
-            b'[[tools.node]]\nversion = "22.22.3"\nunexpected = "not generated"',
+            b'[[tools.node]]\nversion = "22.23.2"',
+            b'[[tools.node]]\nversion = "22.23.2"\nunexpected = "not generated"',
         )
 
     def test_current_gate_graph_is_valid(self) -> None:
@@ -420,8 +420,8 @@ class GateGraphTests(unittest.TestCase):
 
     def test_toolchain_lock_mutations_fail(self) -> None:
         mutations = (
-            (b'[[tools.node]]\nversion = "22.22.3"', b'[[tools.node]]\nversion = "22.22.2"'),
-            (b'[[tools.bun]]\nversion = "1.3.10"', b'[[tools.bun]]\nversion = "1.3.9"'),
+            (b'[[tools.node]]\nversion = "22.23.2"', b'[[tools.node]]\nversion = "22.23.1"'),
+            (b'[[tools.bun]]\nversion = "1.4.0"', b'[[tools.bun]]\nversion = "1.3.9"'),
             (
                 b'[[tools."npm:@os-eco/seeds-cli"]]\nversion = "0.5.15"',
                 b'[[tools."npm:@os-eco/seeds-cli"]]\nversion = "0.5.14"',

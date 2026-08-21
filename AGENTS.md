@@ -186,12 +186,12 @@ task includes cannot serve this repository: they clone into a cache anyway, pars
 the task-file schema, carry no `[tools]`, and run tasks in the caller's directory.
 
 To acquire Seeds from an exact clean Git distribution root, run the installed flagship
-`tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.22.3.
+`tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.23.2.
 Bootstrap and inspect both reject any other executing Node. Bootstrap rejects nested, staged,
 dirty, untracked, or ignored distribution content, then explicitly invokes reviewed
 `mise --locked install` with isolated HOME, mise config/data/cache, hooks, npmrc files, and fixed
 official registry/npm backend. Ambient npm/mise config cannot select acquisition. It resolves only
-config-free exact roots, validates Node 22.22.3, Bun 1.3.10, and the
+config-free exact roots, validates Node 22.23.2, Bun 1.4.0, and the
 `npm:@os-eco/seeds-cli@0.5.15` package/bin/layout; the released package's string `engines.bun` is
 benign while actual config/macro/preload controls remain forbidden. It then atomically records the
 exact Git commit/tree, tool hashes, and a prior receipt for rollback. Inspect is separate and never

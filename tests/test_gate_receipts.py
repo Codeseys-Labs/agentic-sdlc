@@ -71,7 +71,7 @@ class GateReceiptTests(unittest.TestCase):
         # The receipt's toolchain_digest matches the canonical lock it was built from...
         self.assertTrue(gate_receipt.verify_toolchain_binding(self.receipt, self.lock_bytes))
         # ...and a drifted lock (a single flipped byte) is flagged as a mismatch.
-        drifted = self.lock_bytes.replace(b'version = "22.22.3"', b'version = "22.22.2"', 1)
+        drifted = self.lock_bytes.replace(b'version = "22.23.2"', b'version = "22.23.1"', 1)
         self.assertNotEqual(drifted, self.lock_bytes)
         self.assertFalse(gate_receipt.verify_toolchain_binding(self.receipt, drifted))
 

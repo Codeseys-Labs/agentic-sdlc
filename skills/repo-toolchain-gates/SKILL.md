@@ -308,6 +308,9 @@ report clean. The documentation-shaped keyword is allowlisted upstream, so the m
 canary is exactly the one that proves nothing. File extension and base32-vs-full-alphanumeric tails
 made no difference. **Always confirm the fixture fails before trusting any green case**, and pair a
 neutering probe with it — a scan that cannot be shown to fail is not evidence.
+**Pin update (2026-08-19): the mise pin is now betterleaks 1.8.1**, adding the `generic-password`
+and `generic-credential-uri` detectors; re-run the fixture-failure confirmation above against the
+new pin rather than assuming the 1.7.3 measurement still holds unchanged.
 Reuse the existing helpers (`copied_repo`, `run_validator`, `assert_lock_mutation_fails`,
 `isolated_mise_env`) — do not fork a parallel harness.
 

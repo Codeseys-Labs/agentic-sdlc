@@ -49,8 +49,8 @@ RUNTIME_FIELDS = (
 ONE_MILLION_CONTEXT_SEMANTICS = "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance."
 VALIDATION_ONLY_SEMANTICS = "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
 SEEDS_READ_ONLY_SEMANTICS = "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor."
-RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "2ca7f36c728d324ab60f2b99d4b3fb03f064180496c0731aa33447a7dee4ba72"
-RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "e490284af11143c71a9a07d0e5778594c3ba99bd648220dec3268b4d5491e0b8"
+RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "675c8799587b9b7151fd7f98f3424e5e9783986d2db9dc5488bb2a1a704b7794"
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "22c165551389b844fc46b8fcae2e7cd750254181ad2096b6884b0ee8f25b801c"
 SOURCE_PINNED_REVIEWER_INSTRUCTIONS_SHA256 = {
     "adversarial_reviewer": "72c99c20fb4c96df000a0bd4cf3e06a665fba444fd2d3bd292e542805cd111fe",
     "replication_reviewer": "81e0c077a3a88e6ba21f74cee539120266a323f2f5362b7783a3089e272335de",
@@ -232,7 +232,7 @@ RUNTIME_MODEL_ASSIGNMENT_NO_COPIED_READBACK = "Prompt echoes and copied requeste
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 - Research Director is Seeds-read-only.
 - Use only the exact accepted Seeds inspection contract:
-  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
+  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.23.2 bun@1.4.0 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
 - Inspect `Seeds(<target>, prime)`, `Seeds(<target>, ready --format json)`, and `Seeds(<target>, blocked --format json)` before substantive orchestration when Seeds is available.
 - Do not create, claim, update, close, sync, or disposition Seeds.
 - For work that outlives the session, emit exactly one typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.

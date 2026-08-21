@@ -36,14 +36,14 @@ baseline, Seeds, pinned gates, trust, and shared AGENTS.md guidance. If the targ
 Seeds queue, route to `/sdlc-init` and stop; Frame and Wave never improvise activation.
 Mise is the only bootstrap prerequisite. From a reviewed distribution checkout, run the installed
 flagship tool `seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node
-`22.22.3`. Bootstrap requires an exact clean Git distribution root. It rejects any nested checkout
+`22.23.2`. Bootstrap requires an exact clean Git distribution root. It rejects any nested checkout
 path. It also rejects a distribution whose tracked, staged, untracked, or ignored content differs
 from the exact `HEAD` tree. Bootstrap alone runs the reviewed `mise --locked install`. That install
 uses only the root `mise.toml`/adjacent lock, a fresh private mise data/cache/home, the fixed
 official npm registry, distinct empty npmrc files, and a disabled hooks/config environment. Ambient
 HOME, npmrc/registry, and mise config/data/cache cannot select acquisition. Bootstrap then resolves
 exact config-free roots and atomically publishes an active tuple receipt. It verifies the executing
-Node and the recorded Node are exactly `22.22.3`, and Bun is exactly `1.3.10`, and the package/bin
+Node and the recorded Node are exactly `22.23.2`, and Bun is exactly `1.4.0`, and the package/bin
 layout matches exact `@os-eco/seeds-cli@0.5.15`. It permits only the real package's benign string
 `engines.bun` compatibility declaration; it rejects actual Bun/config/TypeScript/macro/preload
 controls. It records a trusted empty Bun configuration, the exact Git root/commit/tree plus
@@ -55,7 +55,7 @@ and a lock do not authenticate a tarball or its transitive dependencies.
 
 After an explicit successful bootstrap, `Seeds(<target>, <args...>)` is implemented by
 `seeds-launcher.mjs inspect --target <target> <args...>` under the exact recorded and currently
-executing Node `22.22.3`.
+executing Node `22.23.2`.
 `inspect` never installs, invokes mise, or networks. It never discovers replacement tooling,
 repairs state, or accepts ambient provenance. It loads and validates only the active receipt and
 the recorded current hashes. It accepts only `--version`, `prime`, `ready [--format json]`, and

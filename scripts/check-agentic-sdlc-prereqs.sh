@@ -6,8 +6,8 @@
 set -euo pipefail
 
 AGENTIC_SDLC_SEEDS_VERSION=0.5.15
-AGENTIC_SDLC_NODE_TOOL=node@22.22.3
-AGENTIC_SDLC_BUN_TOOL=bun@1.3.10
+AGENTIC_SDLC_NODE_TOOL=node@22.23.2
+AGENTIC_SDLC_BUN_TOOL=bun@1.4.0
 AGENTIC_SDLC_SEEDS_TOOL="npm:@os-eco/seeds-cli@${AGENTIC_SDLC_SEEDS_VERSION}"
 AGENTIC_SDLC_LAUNCHER="${AGENTIC_SDLC_LAUNCHER:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../skills/agentic-sdlc/tools" && pwd -P)/seeds-launcher.mjs}"
 

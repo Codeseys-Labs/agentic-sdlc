@@ -24,14 +24,14 @@ HOSTILE_NODE = next(
             Path("/usr/bin/node"),
         )
         if candidate.is_file()
-        and subprocess.run([candidate, "--version"], text=True, capture_output=True, check=False).stdout.strip().removeprefix("v") != "22.22.3"
+        and subprocess.run([candidate, "--version"], text=True, capture_output=True, check=False).stdout.strip().removeprefix("v") != "22.23.2"
     ),
     None,
 )
 EXACT_NODE = Path(
     os.environ.get(
         "AGENTIC_SDLC_TEST_NODE",
-        str(Path.home() / ".local" / "share" / "mise" / "installs" / "node" / "22.22.3" / ("node.exe" if os.name == "nt" else "bin/node")),
+        str(Path.home() / ".local" / "share" / "mise" / "installs" / "node" / "22.23.2" / ("node.exe" if os.name == "nt" else "bin/node")),
     )
 )
 NODE = str(EXACT_NODE) if EXACT_NODE.is_file() else HOST_NODE
@@ -56,7 +56,7 @@ class LauncherFixture:
         self.distribution = self.root / "reviewed distribution"
         self.distribution.mkdir()
         (self.distribution / ".gitignore").write_text("IGNORED\n", encoding="utf-8")
-        (self.distribution / "mise.toml").write_text("[tools]\nnode = '22.22.3'\n", encoding="utf-8")
+        (self.distribution / "mise.toml").write_text("[tools]\nnode = '22.23.2'\n", encoding="utf-8")
         (self.distribution / "mise.lock").write_text("locked fixture\n", encoding="utf-8")
         self._run(["git", "init", "-q"], cwd=self.distribution)
         self._run(["git", "config", "user.email", "fixture@example.invalid"], cwd=self.distribution)
@@ -75,8 +75,8 @@ class LauncherFixture:
         # A stand-in queue writer the record fixtures install to model exact and divergent
         # queue effects; absent, the fake Bun keeps its original inspect behavior.
         self.queue_writer = self.root / "queue-writer"
-        self.node_root = self.root / "installs" / "node" / "22.22.3"
-        self.bun_root = self.root / "installs" / "bun" / "1.3.10"
+        self.node_root = self.root / "installs" / "node" / "22.23.2"
+        self.bun_root = self.root / "installs" / "bun" / "1.4.0"
         self.seeds_root = self.root / "installs" / "npm-os-eco-seeds-cli" / "0.5.15"
         self._make_tool_layout()
         git = shutil.which("git.exe" if os.name == "nt" else "git")
@@ -120,7 +120,7 @@ class LauncherFixture:
         self._write_executable(
             self.bun_root / "bin" / "bun",
             "#!/bin/sh\n"
-            "if [ \"${1:-}\" = --version ]; then printf '1.3.10\\n'; exit 0; fi\n"
+            "if [ \"${1:-}\" = --version ]; then printf '1.4.0\\n'; exit 0; fi\n"
             f"printf '%s\\n' \"$*\" >> {self._quote(str(self.bun_log))}\n"
             "case \" $* \" in *\" --no-macros \"*) ;; *) exit 98 ;; esac\n"
             "case \" $* \" in *\" --tsconfig-override=\"*) ;; *) exit 97 ;; esac\n"
@@ -146,8 +146,8 @@ class LauncherFixture:
             f"if [ -f \"${{HOME-}}/ambient-mise-config-used\" ] || [ -f \"${{NPM_CONFIG_USERCONFIG-}}\" ] && grep -q hostile \"${{NPM_CONFIG_USERCONFIG-}}\"; then printf ambient >> {self._quote(str(self.mise_config_listing))}; fi\n"
             "if [ \"${1:-}\" = --no-config ] && [ \"${2:-}\" = where ]; then\n"
             "  case \"${3:-}\" in\n"
-            f"    node@22.22.3) printf '%s\\n' {self._quote(str(self.node_root))} ;;\n"
-            f"    bun@1.3.10) printf '%s\\n' {self._quote(str(self.bun_root))} ;;\n"
+            f"    node@22.23.2) printf '%s\\n' {self._quote(str(self.node_root))} ;;\n"
+            f"    bun@1.4.0) printf '%s\\n' {self._quote(str(self.bun_root))} ;;\n"
             f"    npm:@os-eco/seeds-cli@0.5.15) printf '%s\\n' {self._quote(str(self.seeds_root))} ;;\n"
             "    *) exit 2 ;;\n"
             "  esac\n"
@@ -221,14 +221,14 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         calls = self.calls.read_text(encoding="utf-8").splitlines()
         self.assertEqual(calls[0], "--locked install")
         self.assertEqual(calls[1:], [
-            "--no-config where node@22.22.3",
-            "--no-config where bun@1.3.10",
+            "--no-config where node@22.23.2",
+            "--no-config where bun@1.4.0",
             "--no-config where npm:@os-eco/seeds-cli@0.5.15",
         ])
         active = self.active_receipt_path()
         receipt = json.loads(active.read_text(encoding="utf-8"))
-        self.assertEqual(receipt["tuple"]["node"]["version"], "22.22.3")
-        self.assertEqual(receipt["tuple"]["bun"]["version"], "1.3.10")
+        self.assertEqual(receipt["tuple"]["node"]["version"], "22.23.2")
+        self.assertEqual(receipt["tuple"]["bun"]["version"], "1.4.0")
         self.assertEqual(receipt["tuple"]["seeds"]["package"], "@os-eco/seeds-cli")
         self.assertEqual(receipt["tuple"]["seeds"]["bin"], "sd")
         self.assertIn("distribution", receipt["hashes"])
@@ -320,7 +320,7 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self.assertIn("ignored", ignored.stderr)
         self.assertFalse(self.active_receipt_path().exists())
 
-    @unittest.skipIf(HOSTILE_NODE is None, "a non-22.22.3 Node is required for interpreter rejection fixture")
+    @unittest.skipIf(HOSTILE_NODE is None, "a non-22.23.2 Node is required for interpreter rejection fixture")
     def test_bootstrap_and_inspect_reject_launcher_process_running_under_wrong_node(self) -> None:
         result = subprocess.run(
             [HOSTILE_NODE, str(LAUNCHER), "bootstrap", "--distribution", str(self.distribution)],
@@ -558,7 +558,7 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self.assertIn("mise --no-config where", posix)
         self.assertIn("cleanup", posix)
         self.assertIn("child_status=$?", posix)
-        self.assertIn("'--no-config' 'where' 'node@22.22.3'", windows)
+        self.assertIn("'--no-config' 'where' 'node@22.23.2'", windows)
         self.assertIn("finally", windows)
         self.assertIn("$childStatus = $LASTEXITCODE", windows)
 
@@ -1465,21 +1465,21 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
         self.assertIsNotNone(mise, "native Windows mise is required")
         self.assertIsNotNone(git, "native Windows Git is required")
         node_root = subprocess.run(
-            [mise, "--no-config", "where", "node@22.22.3"],
+            [mise, "--no-config", "where", "node@22.23.2"],
             text=True,
             capture_output=True,
             check=True,
         ).stdout.strip()
         bun_root = subprocess.run(
-            [mise, "--no-config", "where", "bun@1.3.10"],
+            [mise, "--no-config", "where", "bun@1.4.0"],
             text=True,
             capture_output=True,
             check=True,
         ).stdout.strip()
         exact_node = Path(node_root) / "node.exe"
         exact_bun = Path(bun_root) / "bin" / "bun.exe"
-        self.assertTrue(exact_node.is_file(), "exact Node 22.22.3 must be installed for the native fixture")
-        self.assertTrue(exact_bun.is_file(), "exact Bun 1.3.10 must be installed for the native fixture")
+        self.assertTrue(exact_node.is_file(), "exact Node 22.23.2 must be installed for the native fixture")
+        self.assertTrue(exact_bun.is_file(), "exact Bun 1.4.0 must be installed for the native fixture")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             distribution = root / "reviewed distribution"

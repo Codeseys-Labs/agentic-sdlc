@@ -41,8 +41,8 @@ import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep 
 import { fileURLToPath } from 'node:url';
 
 const SCHEMA = 2;
-const NODE_VERSION = '22.22.3';
-const BUN_VERSION = '1.3.10';
+const NODE_VERSION = '22.23.2';
+const BUN_VERSION = '1.4.0';
 const SEEDS_VERSION = '0.5.15';
 const SEEDS_TOOL = `npm:@os-eco/seeds-cli@${SEEDS_VERSION}`;
 const SEEDS_PACKAGE = '@os-eco/seeds-cli';
