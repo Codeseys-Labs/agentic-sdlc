@@ -94,9 +94,11 @@ one.** Nothing here opens a file for output, spawns a process, touches the netwo
 it reads the paths it is given and prints one document. So a derived `refused` is a result (0) and
 not a clean refusal (3), and 4 is unreachable rather than merely unused. Exit 2 is reserved for a
 supplied file that cannot be read as ONE JSON object -- unreadable, not a regular file, not JSON,
-not an object, a repeated key, a non-finite constant -- because that is the QUESTION being unusable
-rather than the answer being "refused". 1 additionally covers a stdout that cannot receive the one
-result document, because a contract sealed and not delivered is not a success.
+not an object, a repeated key, a non-finite constant, a number that OVERFLOWS to a non-finite float
+(`1e400` is ordinary JSON number syntax and never reaches `parse_constant`) -- because that is the
+QUESTION being unusable rather than the answer being "refused". 1 additionally covers a stdout that
+cannot receive the one result document, because a contract sealed and not delivered is not a
+success.
 
 RESIDUALS, STATED EXACTLY.
 
@@ -117,6 +119,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import stat
 import sys
@@ -260,6 +263,26 @@ def _reject_nonfinite(token: str) -> Any:
     raise InputError(f"a supplied document carries the non-finite JSON constant {token}")
 
 
+def _finite_number(token: str) -> float:
+    """The OTHER way a non-finite float gets in: an ordinary JSON number that overflows.
+
+    `parse_constant` fires only for the three literal tokens `NaN`, `Infinity`, and `-Infinity`.
+    `1e400` is not one of them -- it is valid JSON number syntax that `float()` rounds to `inf` --
+    so it slipped past that hook, reached `canonical_bytes`, and made its `allow_nan=False` raise a
+    `ValueError` no caller of it catches: a traceback at exit 1 from `verify`, or from `define`
+    re-deriving a `--supersedes` predecessor's digest, at ANY nesting depth. The rejection belongs
+    HERE, at the parse hook, for the same reason: it is per number token, so depth and which of the
+    two supplied documents carried it change nothing, and no digest derivation ever sees the value.
+    """
+    value = float(token)
+    if not math.isfinite(value):
+        raise InputError(
+            f"a supplied document carries the non-finite JSON number {token}, which parses to "
+            f"{value}: no honest contract carries one, and no canonical form can encode it"
+        )
+    return value
+
+
 def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Refuse a repeated JSON key instead of silently keeping the last one.
 
@@ -296,7 +319,12 @@ def load_document(path: str, label: str) -> dict[str, Any]:
     except OSError as exc:
         raise InputError(f"cannot read the {label} {path}: {exc}") from exc
     try:
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_reject_nonfinite)
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_pairs,
+            parse_constant=_reject_nonfinite,
+            parse_float=_finite_number,
+        )
     except (UnicodeDecodeError, ValueError) as exc:
         raise InputError(f"the {label} {path} is not JSON: {exc}") from exc
     if not isinstance(value, dict):

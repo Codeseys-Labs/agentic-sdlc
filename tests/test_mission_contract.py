@@ -794,6 +794,57 @@ class MalformedInputTests(ContractCase):
         path = self.store_bytes("nan", b'{"revision": NaN}\n')
         self.assertIn(b"non-finite", self.assert_input_error("define", "--contract", str(path)))
 
+    def overflowed(self, name: str, sealed: dict[str, Any], where: str) -> Path:
+        """One sealed document with `1e400` substituted at the top level or four levels in.
+
+        `1e400` is ORDINARY JSON number syntax -- it is not one of the three literal tokens
+        `parse_constant` sees -- so it parses to `inf` and only the parse hook over numbers can stop
+        it. The nested case is the one a per-document top-level scan would miss.
+        """
+        raw = json.dumps(sealed, indent=2)
+        needle, replacement = (
+            ('"revision": 1', '"revision": 1e400')
+            if where == "top"
+            else (json.dumps(sealed["scope"]["in_scope"][0]), "1e400")
+        )
+        self.assertIn(needle, raw, "the substitution target moved; this fixture proves nothing")
+        broken = raw.replace(needle, replacement, 1)
+        self.assertIn("1e400", broken)
+        return self.store_bytes(name, broken.encode("utf-8"))
+
+    def test_a_json_number_that_overflows_to_a_non_finite_float_is_malformed_input(self) -> None:
+        """agentic-sdlc-2a4b: `1e400` reached the canonical form and raised an uncaught ValueError.
+
+        `allow_nan=False` refuses to encode `inf`, and nothing caught that, so `verify` exited 1 with
+        a traceback -- while the module docstring reserves exit 2 for exactly a non-finite value. The
+        two shapes below are the same defect at two depths.
+        """
+        sealed = self.sealed_control()
+        # POSITIVE CONTROL: the untouched sealed document verifies, so each refusal below is about
+        # the substituted number and not about the fixture or the verb.
+        self.assertEqual(self.verify(sealed, name="control")["verdict"], VERIFIED)
+        for where in ("top", "nested"):
+            with self.subTest(depth=where):
+                path = self.overflowed(f"overflow-{where}", sealed, where)
+                err = self.assert_input_error("verify", "--contract", str(path))
+                self.assertIn(b"non-finite", err)
+                self.assertIn(b"1e400", err)
+
+    def test_a_non_finite_number_in_a_supersedes_predecessor_is_malformed_input(self) -> None:
+        """The same defect reached through `define`, which re-derives the predecessor's digest."""
+        prior = self.sealed_control()
+        follower = contract_body(revision=2, supersedes=prior["digest"], stated_at=T1)
+        contract = str(self.store("rev2", follower))
+        # POSITIVE CONTROL: with the untouched predecessor this exact revision seals at exit 0.
+        clean = self.run_tool("define", "--contract", contract, "--supersedes", str(self.store("prior", prior)))
+        self.assertEqual(clean.returncode, EXIT_OK, clean.stderr.decode("utf-8", "replace"))
+        self.assertEqual(json.loads(clean.stdout)["verdict"], DEFINED)
+        for where in ("top", "nested"):
+            with self.subTest(depth=where):
+                broken = self.overflowed(f"prior-overflow-{where}", prior, where)
+                err = self.assert_input_error("define", "--contract", contract, "--supersedes", str(broken))
+                self.assertIn(b"non-finite", err)
+
     def test_non_utf8_bytes_are_malformed_input(self) -> None:
         path = self.store_bytes("latin", b'{"objective": "caf\xe9"}\n')
         self.assertIn(b"is not JSON", self.assert_input_error("define", "--contract", str(path)))
@@ -845,7 +896,12 @@ class ExitSpaceTests(ContractCase):
         modules, calls = imports_and_calls(TOOL)
         self.assertEqual(
             modules,
-            {"__future__", "argparse", "collections", "hashlib", "json", "pathlib", "re", "stat", "sys", "typing"},
+            # `math` is here for `isfinite`, which is how a number that overflows to an infinity is
+            # refused at the parse hook. It is pure computation: it opens nothing, spawns nothing,
+            # and reads no environment, so the allowlist still admits no module that can cause an
+            # effect -- which is the property this assertion exists to keep.
+            {"__future__", "argparse", "collections", "hashlib", "json", "math", "pathlib", "re", "stat", "sys",
+             "typing"},
             "an effect-free tool imports only the standard parsing and display surface",
         )
         forbidden = {"open", "write_text", "write_bytes", "mkdir", "touch", "unlink", "rmdir", "rename",

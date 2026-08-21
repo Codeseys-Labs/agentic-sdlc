@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "skills" / "agentic-sdlc" / "tools" / "pass-budget.py"
@@ -38,6 +44,21 @@ def run(target: Path, *args: str, fault: str | None = None) -> subprocess.Comple
         text=True,
         env=env,
     )
+
+
+@contextlib.contextmanager
+def constructed_environment(**extra: str) -> Iterator[None]:
+    """The IN-PROCESS mirror of `run`'s `env={}`: a library call sees a CONSTRUCTED environment.
+
+    `charge_pass` reads the fault seam from `os.environ`, and an in-process call inherits whatever
+    the developer exported. With `AGENTIC_SDLC_PASS_BUDGET_FAULT=after-write` in the shell, six of
+    this module's library-call tests died on an injected fault they never asked for -- an ambient
+    variable deciding a verdict, which is exactly what the subprocess half of this suite refuses to
+    permit. `patch.dict(..., clear=True)` builds the environment rather than inheriting it, and
+    RESTORES the real one on the way out, so no test leaves shared state mutated for the next.
+    """
+    with mock.patch.dict(os.environ, dict(extra), clear=True):
+        yield
 
 
 def sha256_of(path: Path) -> str:
@@ -73,10 +94,13 @@ class PassBudgetLibraryTests(unittest.TestCase):
         self.slug = pass_budget.slugify(GOAL)
 
     def charge(self, state: dict, phase: str, attempt_id: str) -> dict:
-        return pass_budget.charge_pass(self.target, state, phase, attempt_id)
+        """Every library charge goes through here, so the constructed environment cannot be forgotten."""
+        with constructed_environment():
+            return pass_budget.charge_pass(self.target, state, phase, attempt_id)
 
     def fresh(self) -> dict:
-        return pass_budget.load_state(self.target, self.slug, GOAL)
+        with constructed_environment():
+            return pass_budget.load_state(self.target, self.slug, GOAL)
 
     def test_phase_cap_refusal_names_the_blocker(self) -> None:
         state = self.fresh()
@@ -134,7 +158,7 @@ class PassBudgetLibraryTests(unittest.TestCase):
         # Count-then-refuse: the refused attempt still incremented and persisted.
         self.assertEqual(result["state"]["passes"]["frame"], pass_budget.PASS_BUDGETS["frame"] + 1)
         self.assertEqual(result["state"]["passes"]["global"], before_global + 1)
-        reloaded = pass_budget.load_state(self.target, self.slug, GOAL)
+        reloaded = self.fresh()
         self.assertEqual(reloaded["passes"]["frame"], pass_budget.PASS_BUDGETS["frame"] + 1)
         self.assertEqual(reloaded["passes"]["global"], before_global + 1)
 
@@ -177,7 +201,7 @@ class PassBudgetLibraryTests(unittest.TestCase):
         self.assertTrue(first["allowed"])
         self.assertEqual(first["state"]["schema"], pass_budget.SCHEMA)
         digest = sha256_of(path)
-        replay = self.charge(pass_budget.load_state(self.target, self.slug, GOAL), "act", "attempt-a")
+        replay = self.charge(self.fresh(), "act", "attempt-a")
         self.assertEqual(replay["reason"], first["reason"])
         self.assertEqual(sha256_of(path), digest)
 
@@ -315,12 +339,12 @@ class PassBudgetEffectTests(unittest.TestCase):
         self.assertFalse(pass_budget.mission_path(other, self.slug).exists())
 
     def test_crash_after_the_durable_write_reports_four_on_an_existing_ledger_too(self) -> None:
-        """The ordinary case: `.sdlc/` already exists, so no directory creation is admitted.
+        """The ordinary case: `.sdlc/` already exists, so nothing but the write can be admitted.
 
-        Written because a mutation that deleted the temp-file admission survived the test above:
-        the directory-creation admission happened to carry it. Once the directory exists, the
-        write's own admission is the only thing standing between a moved ledger and a reported
-        exit 1, so this is the input that distinguishes them.
+        Written when creating `.sdlc/` was still an admitted effect and a mutation that deleted the
+        temp-file admission survived the test above by riding on it. That admission is gone (see
+        `_ensure_ledger_directory`), so both tests now turn on the write's own admission -- and this
+        one keeps the input where it is unmistakably the only candidate.
         """
         first = run(self.target, "charge", "act", "--attempt-id", "attempt-a")
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -377,6 +401,33 @@ class PassBudgetEffectTests(unittest.TestCase):
         self.assertEqual(status.returncode, pass_budget.EXIT_REFUSED, status.stderr)
         self.assertEqual(sha256_of(self.path), digest, "a refused read must not rewrite the ledger")
 
+    def test_a_ledger_whose_bytes_are_not_utf8_is_a_clean_refusal_for_charge_and_status(self) -> None:
+        """agentic-sdlc-94d8: the ledger is DECODED on the read, and a decode error is no OSError.
+
+        `read_text` raises `UnicodeDecodeError` -- a `ValueError` -- so the read handler's `OSError`
+        never saw it and it escaped to the top-level catch-all as `internal: unexpected
+        UnicodeDecodeError` at exit 1, while this module's own docstring promises that a ledger it
+        cannot read is a clean refusal at exit 3.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_bytes(b'\xff\xfe{"schema": "agentic-sdlc/pass-budget-state@2"}\n')
+        digest = sha256_of(self.path)
+        charge = run(self.target, "charge", "act", "--attempt-id", "attempt-a")
+        self.assertEqual(charge.returncode, pass_budget.EXIT_REFUSED, charge.stderr)
+        self.assertIn("cannot read the ledger", charge.stderr)
+        self.assertNotIn("unexpected UnicodeDecodeError", charge.stderr)
+        status = run(self.target, "status")
+        self.assertEqual(status.returncode, pass_budget.EXIT_REFUSED, status.stderr)
+        self.assertIn("cannot read the ledger", status.stderr)
+        self.assertEqual(sha256_of(self.path), digest, "a refused read must not rewrite the ledger")
+        # POSITIVE CONTROL: both verbs at this same path still work once the bytes are UTF-8, so the
+        # two refusals above are about the undecodable ledger and not about the target or the verbs.
+        self.path.unlink()
+        charged = run(self.target, "charge", "act", "--attempt-id", "attempt-a")
+        self.assertEqual(charged.returncode, pass_budget.EXIT_OK, charged.stderr)
+        self.assertIn("pass 1/3 for act", charged.stdout)
+        self.assertEqual(run(self.target, "status").returncode, pass_budget.EXIT_OK)
+
 
 class PassBudgetCLITests(unittest.TestCase):
     def setUp(self) -> None:
@@ -427,6 +478,210 @@ class PassBudgetCLITests(unittest.TestCase):
     def test_an_unknown_fault_point_is_an_input_error(self) -> None:
         completed = run(self.target, "charge", "act", "--attempt-id", "attempt-a", fault="not-a-point")
         self.assertEqual(completed.returncode, pass_budget.EXIT_INPUT, completed.stderr)
+
+
+class AmbientEnvironmentTests(unittest.TestCase):
+    """agentic-sdlc-91d7: an ambient variable must not be able to redden or green this suite."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name)
+        self.slug = pass_budget.slugify(GOAL)
+
+    def library_charge(self, attempt_id: str, **environment: str) -> dict:
+        with constructed_environment(**environment):
+            state = pass_budget.load_state(self.target, self.slug, GOAL)
+            return pass_budget.charge_pass(self.target, state, "act", attempt_id)
+
+    def test_an_exported_fault_variable_cannot_reach_a_library_charge(self) -> None:
+        # Whatever the developer's shell exported is the state this test must survive AND restore,
+        # so it is read rather than assumed: this suite is run both ways deliberately.
+        ambient = os.environ.get(pass_budget.FAULT_ENV)
+        with mock.patch.dict(os.environ, {pass_budget.FAULT_ENV: "after-write"}, clear=False):
+            self.assertTrue(self.library_charge("attempt-a")["allowed"])
+            # POSITIVE CONTROL: the seam still fires when a test ASKS for it through the constructed
+            # environment, so the charge above is the construction working and not a dead seam.
+            with self.assertRaises(pass_budget.BudgetError) as caught:
+                self.library_charge("attempt-b", **{pass_budget.FAULT_ENV: "after-write"})
+            self.assertEqual(caught.exception.code, pass_budget.EXIT_INTERNAL)
+            # ... and the value in scope is RESTORED rather than mutated for whatever runs next.
+            self.assertEqual(os.environ[pass_budget.FAULT_ENV], "after-write")
+        self.assertEqual(os.environ.get(pass_budget.FAULT_ENV), ambient)
+
+
+class PassBudgetConcurrencyTests(unittest.TestCase):
+    """agentic-sdlc-6bef: concurrent charges must be recorded or refused, never told-ok-and-dropped.
+
+    The race here is UNALIGNED on purpose. The rendezvous harness this class used to carry blocked
+    its second child on a file the first wrote only AFTER `main` returned, so the two charges never
+    overlapped in the window that actually loses writes -- it certified a property it did not test.
+    Plain back-to-back spawns do overlap there: measured against the compare-and-swap alone, four
+    charges on one fresh ledger all exited 0, all printed `pass 1/3`, and left ONE recorded, in ten
+    trials out of ten. The re-read costs about 0.1 ms; the write it does not cover costs 3-7 ms.
+    """
+
+    CONCURRENT_CHARGES = 4
+    TRIALS = 5
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name) / "target"
+        self.slug = pass_budget.slugify(GOAL)
+        self.path = pass_budget.mission_path(self.target, self.slug)
+        self.lock = pass_budget.mission_lock_path(self.target, self.slug)
+
+    def spawn(self, target: Path, attempt_id: str) -> subprocess.Popen[str]:
+        """One real CLI charge, started and NOT waited for, with a constructed empty environment."""
+        return subprocess.Popen(
+            [
+                sys.executable, "-B", str(SCRIPT), "charge", "act",
+                "--goal", GOAL, "--target", str(target), "--attempt-id", attempt_id,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={},
+        )
+
+    def ledger(self, path: Path | None = None) -> dict:
+        return json.loads((path or self.path).read_text(encoding="utf-8"))
+
+    def charge_in_process(self, attempt_id: str) -> tuple[int, str]:
+        """Drive `main` here, so the DERIVED exit code and the stderr text are both observable."""
+        stderr, stdout = io.StringIO(), io.StringIO()
+        with constructed_environment(), contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+            code = pass_budget.main(
+                ["charge", "act", "--goal", GOAL, "--target", str(self.target), "--attempt-id", attempt_id]
+            )
+        return code, stderr.getvalue()
+
+    def test_unaligned_concurrent_charges_are_each_recorded_or_refused(self) -> None:
+        """THE INVARIANT: exit-0 count == recorded charges == pass counts, over an unforced race."""
+        for trial in range(self.TRIALS):
+            with self.subTest(trial=trial):
+                room = tempfile.TemporaryDirectory()
+                self.addCleanup(room.cleanup)
+                target = Path(room.name) / "target"  # a FRESH ledger per trial: the measured case
+                path = pass_budget.mission_path(target, self.slug)
+                attempts = sorted(f"attempt-{index}" for index in range(self.CONCURRENT_CHARGES))
+                children = {attempt: self.spawn(target, attempt) for attempt in attempts}
+                outcomes: dict[str, tuple[int, str, str]] = {}
+                for attempt, child in children.items():
+                    out, err = child.communicate(timeout=120)
+                    outcomes[attempt] = (child.returncode, out, err)
+
+                told_ok = sorted(a for a, (code, _, _) in outcomes.items() if code == pass_budget.EXIT_OK)
+                refused = sorted(a for a, (code, _, _) in outcomes.items() if code == pass_budget.EXIT_REFUSED)
+                self.assertEqual(sorted(told_ok + refused), attempts, f"every charge is 0 or 3: {outcomes}")
+                self.assertTrue(told_ok, f"a race in which nothing lands is a livelock, not safety: {outcomes}")
+
+                ledger = self.ledger(path)
+                self.assertEqual(sorted(ledger["charges"]), told_ok, f"told ok but not recorded: {outcomes}")
+                self.assertEqual(ledger["passes"]["act"], len(told_ok), outcomes)
+                self.assertEqual(ledger["passes"]["global"], len(told_ok), outcomes)
+
+                for attempt in refused:
+                    _, out, err = outcomes[attempt]
+                    # The dropped charges printed `pass 1/3` and said nothing on stderr. A refused
+                    # charge claims no pass at all, and names contention or the stale load it saw.
+                    self.assertEqual(out, "", f"{attempt} was refused and must claim no pass: {out!r}")
+                    self.assertTrue(
+                        "changed after this charge loaded it" in err or "holds the mission lock" in err,
+                        f"{attempt} refused without naming why: {err!r}",
+                    )
+                    self.assertNotIn("already happened", err)
+
+    def test_a_held_lock_refuses_the_second_charge_by_name_within_the_deadline(self) -> None:
+        """DETERMINISTIC contention: the wait is bounded, and expiry is a clean refusal naming it.
+
+        The lock directory is created by hand, which is exactly the residue a holder killed with
+        `SIGKILL` leaves behind -- there is no automatic reclaim, so this is the recovery story too.
+        """
+        self.assertEqual(run(self.target, "charge", "act", "--attempt-id", "a-1").returncode, pass_budget.EXIT_OK)
+        digest = sha256_of(self.path)
+        self.lock.mkdir()
+
+        started = time.monotonic()
+        with mock.patch.object(pass_budget, "LOCK_DEADLINE_SECONDS", 0.05):
+            code, err = self.charge_in_process("a-2")
+        waited = time.monotonic() - started
+
+        self.assertEqual(code, pass_budget.EXIT_REFUSED, err)
+        self.assertIn("holds the mission lock", err)
+        self.assertIn("contention", err)
+        self.assertIn(str(self.lock), err, "the refusal must name the directory an operator removes")
+        self.assertNotIn("already happened", err)
+        self.assertLess(waited, 3.0, "the wait is bounded by the deadline, not by the holder")
+        self.assertEqual(sha256_of(self.path), digest, "a charge that never took the lock wrote nothing")
+
+        # POSITIVE CONTROL: release the lock and the very same charge lands, so the refusal above is
+        # about the held lock and not about the attempt, the phase, or an exhausted budget.
+        self.lock.rmdir()
+        with mock.patch.object(pass_budget, "LOCK_DEADLINE_SECONDS", 0.05):
+            code, err = self.charge_in_process("a-2")
+        self.assertEqual(code, pass_budget.EXIT_OK, err)
+        self.assertEqual(sorted(self.ledger()["charges"]), ["a-1", "a-2"])
+
+    def test_a_stale_load_is_refused_cleanly_even_when_the_charge_created_the_directory(self) -> None:
+        """The compare-and-swap, kept as the second line -- and the effect floor it must not trip.
+
+        The stale state is manufactured rather than raced for: the ledger it was loaded from is
+        removed underneath it together with `.sdlc/`, so this charge has to re-create that directory
+        before the re-read can refuse. An empty container directory is not a partial ledger, so the
+        derived code stays 3 with nothing admitted -- admitting it made a losing racer print
+        `nothing was written` and `this is a PARTIAL result` in one breath, at exit 4.
+        """
+        self.assertEqual(run(self.target, "charge", "act", "--attempt-id", "a-1").returncode, pass_budget.EXIT_OK)
+        with constructed_environment():
+            stale = pass_budget.load_state(self.target, self.slug, GOAL)
+        self.path.unlink()
+        self.path.parent.rmdir()
+
+        with constructed_environment(), pass_budget._effect_ledger() as effects:
+            with self.assertRaises(pass_budget.BudgetError) as caught:
+                pass_budget.charge_pass(self.target, stale, "act", "a-2")
+            self.assertEqual(caught.exception.code, pass_budget.EXIT_REFUSED)
+            self.assertIn("changed after this charge loaded it", caught.exception.reason)
+            self.assertEqual(effects.admitted, [], "an empty ledger directory is not an admitted effect")
+            self.assertEqual(pass_budget._report_failure(caught.exception)[2], pass_budget.EXIT_REFUSED)
+        self.assertTrue(self.path.parent.is_dir(), "the charge did re-create the directory it refused in")
+        self.assertFalse(self.path.exists(), "and it wrote no ledger there")
+        self.assertFalse(self.lock.exists(), "and it released the lock it refused under")
+
+        # A REFUSAL IS NOT A LOST PASS, and the POSITIVE CONTROL for the mechanism: the same attempt
+        # id, retried over a fresh load, charges exactly once.
+        retry = run(self.target, "charge", "act", "--attempt-id", "a-2")
+        self.assertEqual(retry.returncode, pass_budget.EXIT_OK, retry.stderr)
+        self.assertEqual(sorted(self.ledger()["charges"]), ["a-2"])
+
+    def test_the_lock_directory_never_outlives_the_charge_that_took_it(self) -> None:
+        """Release is in a `finally`, so not even a fault raised inside the lock can orphan it."""
+        self.assertEqual(run(self.target, "charge", "act", "--attempt-id", "a-1").returncode, pass_budget.EXIT_OK)
+        self.assertFalse(self.lock.exists(), "a completed charge released the lock")
+
+        crashed = run(self.target, "charge", "act", "--attempt-id", "a-2", fault="after-write")
+        self.assertEqual(crashed.returncode, pass_budget.EXIT_PARTIAL, crashed.stderr)
+        self.assertFalse(self.lock.exists(), "a charge that died after its write still released the lock")
+
+        # POSITIVE CONTROL: the next charge is not blocked by residue, and it charges on top of what
+        # the crashed charge had already written.
+        third = run(self.target, "charge", "act", "--attempt-id", "a-3")
+        self.assertEqual(third.returncode, pass_budget.EXIT_OK, third.stderr)
+        self.assertIn("pass 3/3 for act", third.stdout)
+
+    def test_two_sequential_charges_are_not_mistaken_for_a_stale_load(self) -> None:
+        """POSITIVE CONTROL for the whole mechanism: ordinary back-to-back charges still both land.
+
+        A lock that never released, or a compare-and-swap that refused everything, would pass every
+        assertion in the tests above.
+        """
+        for index, attempt in enumerate(("attempt-a", "attempt-b"), start=1):
+            completed = run(self.target, "charge", "act", "--attempt-id", attempt)
+            self.assertEqual(completed.returncode, pass_budget.EXIT_OK, completed.stderr)
+            self.assertIn(f"pass {index}/3 for act", completed.stdout)
+        self.assertEqual(sorted(self.ledger()["charges"]), ["attempt-a", "attempt-b"])
 
 
 if __name__ == "__main__":
