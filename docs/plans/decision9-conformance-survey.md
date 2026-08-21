@@ -147,8 +147,8 @@ for that surface by construction, not that it went unprobed.
 | 45 | **`skills/agentic-sdlc/tools/instruction-generator.py`** | 0 | 2 | **1 + traceback for a supplied-but-missing manifest** | — | **NONCONFORMING** (SP-8) |
 | 46 | **`scripts/render_mermaid_linux.py`** | **2 for `--help`, with no diagnostic at all** | 2 (silent) | 1 | 3 = unsupported platform | **NONCONFORMING** (SP-9) — help/grammar closed by `agentic-sdlc-61ce`; input axis still 1 (queued) |
 | 47 | `skills/agentic-sdlc/tools/offline-inspect.py` | 0 | 2 | 2 | **was 1 for a derived NOT_READY** | **FIXED HERE** (worked example) |
-| 48 | **`skills/codex-research-os/scripts/install_research_os.py`** | 0 | 2 | **1 with a raw `FileNotFoundError` traceback for `--target <missing> --dry-run`** (`:1441` `_open_root`, reached via `_apply_locked` `:2783`) | 3 declared | **NONCONFORMING** (SP-10) |
-| 49 | **`skills/model-tier-rightsizing/scripts/receipt_admission.py`** | **none — argv ignored; `main()` (`:871`) reads stdin (`:874`), so `--help` returns `{"status":"invalid"}` at 2** | **2 for `--zzz-not-a-flag`, same path** | 2 | — | **NONCONFORMING** (SP-11) |
+| 48 | `skills/codex-research-os/scripts/install_research_os.py` | 0 | 2 | 2, naming the target, no traceback (**was** 1 with a raw `FileNotFoundError` traceback for `--target <missing> --dry-run`, `:1441` `_open_root` reached via `_apply_locked` `:2783`) | **1** for a completed partial install (skipped-foreign/skipped-modified, `:2904`); no 3 or 4 exists (**was** recorded as "3 declared", disproved by AST census) | **NONCONFORMING** (SP-10) — grammar/input axes closed by `agentic-sdlc-4bf8`; partial-install axis still 1 (queued) |
+| 49 | `skills/model-tier-rightsizing/scripts/receipt_admission.py` | 0, printing usage without reading stdin (**was** none — argv ignored; `main()` (`:871`) read stdin (`:874`) unconditionally, so `--help` returned `{"status":"invalid"}` at 2) | 2, usage on stderr before stdin is read (**was** 2 for `--zzz-not-a-flag`, but only by falling through to the same stdin-read path) | 2 | — | **CONFORMING** — closed by `agentic-sdlc-8bd1` |
 | 50 | `skills/model-tier-rightsizing/scripts/rightsize.py` | 0 | 2 | 2 | 3 declared (`evaluate` digest refusal) | CONFORMING |
 
 The arithmetic closes exactly **as surveyed**. It is the original census and is deliberately not
@@ -539,6 +539,30 @@ shape exactly: wrap the target resolution so the `OSError` becomes the module's 
 asserting a missing target exits 2 with no `Traceback` in stderr dies when the wrap is removed; the
 positive control asserts a present-but-invalid target still takes its existing named path.
 
+REMEDIATION (2026-08-21, `agentic-sdlc-4bf8`): the fix shape above landed exactly as described.
+A new `TargetRootError(ResearchOSError)` names the class; `_open_root`'s `os.open` call (and its
+Windows `os.lstat` sibling) now wraps its `OSError` into that subclass instead of letting it
+escape raw, and `_physical_target`'s pre-existing OSError-to-`ResearchOSError` conversion — used
+by the non-`--dry-run` path one call earlier, through `_state_path`, which shares the identical
+missing-target defect under a different exception's clothing — now raises the same subclass.
+`main` gained one `except TargetRootError` choke point beside a new `EXIT_OK = 0` /
+`EXIT_INPUT = 2` pair. Two mutants were executed: reverting the `_open_root` wrap, and separately
+removing `main`'s catch; each restored the exact pre-fix traceback and killed both new tests in
+`tests/test_research_os_launcher.py`. The present-but-not-a-directory positive control (a regular
+file as `--target`) takes the identical path, proving the wrap is exception-class-based rather
+than string-matched to "missing". This closure could not corroborate the row's "3 declared"
+refusal/partial cell — an AST census of the module found no `return 3` or `SystemExit(3)`
+anywhere; the only literal `3` an AST walk of every `return`/`SystemExit`/`exit` call site turns up
+is an unrelated array-index constant inside `_identity_token_valid`'s stat-identity-token length
+check (`:1296`, `len(parts) == 4` implies index `3`), not an exit code. `main` (`:2903-2904`)
+instead measurably returns **1** for a completed partial install (any action in
+`{"skipped-foreign", "skipped-modified", "skipped-remove-modified"}`), a pre-existing behavior
+this seed's scope never touched. The row is
+corrected accordingly rather than left as a silent residual: its refusal/partial cell now names
+that measured 1 in place of the disproved "3 declared", and its verdict is **NONCONFORMING**
+(this SP), not CONFORMING — grammar and input are closed by this seed, but the unrelated
+partial-install axis stays open and queued.
+
 ### SP-11 — `receipt_admission.py` ignores argv entirely, so no 0-class query exists
 
 Title: *Give the receipt-admission CLI an argument grammar and a help path.*
@@ -551,6 +575,33 @@ the stdin-document path becomes the explicit default action. Mutation tests both
 asserting `--help` exits 0 with usage on stdout and nothing read from stdin dies when the front
 door is removed; the positive control asserts a valid stdin document still admits or refuses
 exactly as today.
+
+REMEDIATION (2026-08-21, `agentic-sdlc-8bd1`): the fix shape above landed exactly as SP-3
+prescribed. An `argparse.ArgumentParser` with no defined arguments is now the first statement of
+`main`, so `--help` exits 0 via argparse's own path (usage on stdout) before stdin is ever
+touched, an unrecognized argument exits 2 via argparse's own path (usage on stderr) before stdin
+is ever touched, and a bare invocation parses to nothing and falls straight through to the
+pre-existing stdin-document action, byte-for-byte unchanged. Every invoker was enumerated first,
+but the census this REMEDIATION originally recorded here missed one real caller — corrected below
+after re-verification (`agentic-sdlc-4bf8`) found it by a plain `grep -rn receipt_admission`
+across the tree: `tests/test_runtime_assignment.py`'s `CrossCheckTests` pipes a document to
+`[sys.executable, "-B", str(RECEIPT_ADMISSION)]` with no extra argv; `tests/test_runtime_contract_validation.py`'s
+`RuntimeContractValidationTests.admit_receipt` helper is a SECOND, separate subprocess-level
+caller — `subprocess.run([sys.executable, str(RECEIPT_ADMISSION)], input=...)` — used at 15 call
+sites across that class's own tests, so `CrossCheckTests` is not "the only" one as first recorded;
+`test_runtime_contract_validation.py` also loads the module in-process via `importlib` (as
+`receipt_admission`) for direct function calls elsewhere in the same file, so it is both an
+in-process caller AND a subprocess-level one, not exclusively the former. `tests/test_model_tier_rightsizing.py`
+loads the module in-process via `importlib` and calls its functions directly, never `main`; and
+`skills/agentic-sdlc/tools/runtime-assignment.py` only cross-references the module in its own
+docstring and is itself explicitly "subprocess-free" (`:1547`). All invokers stayed green
+unmodified, including the two pre-existing byte-identical `CrossCheckTests` invocations and all
+15 pre-existing `admit_receipt` call sites (`tests.test_runtime_contract_validation`'s full 53-test
+module passes unchanged). Two new tests joined the `CrossCheckTests` class; two executed mutants —
+reverting the front door — each restored the pre-fix `{"status":"invalid"}` shape at exit 2 for
+both `--help` and the unknown flag, killing both new tests, while the byte-identical
+stdin-document tests stayed green throughout, showing the mutation's blast radius was exactly the
+front door and nothing upstream of it.
 
 ## Residuals this survey did not close
 

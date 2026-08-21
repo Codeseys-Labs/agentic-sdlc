@@ -13,6 +13,7 @@ import platform
 import re
 import secrets
 import stat
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
@@ -1139,6 +1140,24 @@ class RecoveryConflict(ResearchOSError):
     """An interrupted transaction no longer has one exact safe interpretation."""
 
 
+class TargetRootError(ResearchOSError):
+    """The caller's `--target` does not resolve to a safe, existing directory this process may
+    open: supplied but missing, supplied but not a directory, or supplied but unsafe to follow.
+    """
+
+
+# EXITS, as one derivation point (product-spec Implementation Decision 9). `main`'s only
+# currently-classified refusal is an unusable `--target`; every other `ResearchOSError` this
+# module raises describes a state this survey has not mapped yet and stays an unexpected
+# internal failure (1) until a later change gives it its own class.
+#: `main` completed: the scaffold ran (or a dry run reported what it would do) and no
+#: `TargetRootError` was raised.
+EXIT_OK = 0
+#: A `TargetRootError` was raised: the supplied `--target` could not be opened as a safe
+#: existing directory. Nothing was opened; nothing was written.
+EXIT_INPUT = 2
+
+
 class _LinuxStatxTimestamp(ctypes.Structure):
     _fields_ = [
         ("tv_sec", ctypes.c_int64),
@@ -1405,7 +1424,7 @@ def _physical_target(root: Path) -> str:
     try:
         return os.path.normcase(str(root.resolve(strict=True)))
     except OSError as exc:
-        raise ResearchOSError(f"cannot resolve target root {root}: {exc}") from exc
+        raise TargetRootError(f"cannot resolve target root {root}: {exc}") from exc
 
 
 def _state_root() -> Path:
@@ -1431,17 +1450,23 @@ def _safe_open_flags(*, write: bool = False) -> int:
 
 def _open_root(root: Path) -> int | None:
     if os.name == "nt":
-        metadata = os.lstat(root)
+        try:
+            metadata = os.lstat(root)
+        except OSError as exc:
+            raise TargetRootError(f"cannot open target root {root}: {exc}") from exc
         if not stat.S_ISDIR(metadata.st_mode) or metadata.st_file_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
-            raise ResearchOSError("target root is not a safe directory")
+            raise TargetRootError("target root is not a safe directory")
         return None
     required = ("O_DIRECTORY", "O_NOFOLLOW")
     if any(not hasattr(os, name) for name in required):
-        raise ResearchOSError("safe no-follow directory primitives are unavailable")
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+        raise TargetRootError("safe no-follow directory primitives are unavailable")
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+    except OSError as exc:
+        raise TargetRootError(f"cannot open target root {root}: {exc}") from exc
     try:
         if not stat.S_ISDIR(os.fstat(fd).st_mode):
-            raise ResearchOSError("target root is not a directory")
+            raise TargetRootError("target root is not a directory")
         return fd
     except BaseException:
         os.close(fd)
@@ -2854,7 +2879,11 @@ def main() -> int:
     project_name = args.project_name or root.name
     files = build_files(project_name)
 
-    actions = apply_install(root, files=files, force=args.force, dry_run=args.dry_run)
+    try:
+        actions = apply_install(root, files=files, force=args.force, dry_run=args.dry_run)
+    except TargetRootError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_INPUT
 
     counts: dict[str, int] = {}
     for rel in sorted(actions):

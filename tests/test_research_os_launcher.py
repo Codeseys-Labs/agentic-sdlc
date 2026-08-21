@@ -245,6 +245,42 @@ class ResearchOSLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Research OS setup summary", result.stdout)
 
+    def test_missing_target_refuses_at_exit_2_without_traceback(self) -> None:
+        """SP-10: a supplied-but-missing `--target` is a named input refusal (2), not a crash (1)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "does-not-exist"
+            self.assertFalse(missing.exists())
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--target", str(missing), "--dry-run"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, installer.EXIT_INPUT, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertIn(str(missing), result.stderr)
+
+    def test_present_but_not_a_directory_target_also_refuses_at_exit_2_without_traceback(self) -> None:
+        """Positive control: the same wrap catches a present-but-invalid target (a regular file,
+        not a directory) through its existing named `_open_root` path, not through a string
+        match on "missing" — a present target still hits the module's own refusal, never 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            regular_file = Path(tmp) / "not-a-directory"
+            regular_file.write_text("", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--target", str(regular_file), "--dry-run"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, installer.EXIT_INPUT, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertIn(str(regular_file), result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

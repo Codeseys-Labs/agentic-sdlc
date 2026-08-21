@@ -1415,6 +1415,46 @@ class CrossCheckTests(ToolCase):
         )
         self.assertEqual(json.loads(broken.stdout).get("status"), "invalid")
 
+    @unittest.skipUnless(RECEIPT_ADMISSION.is_file(), "the producer-side validator is not present")
+    def test_help_exits_zero_without_reading_stdin(self) -> None:
+        """SP-11: `--help` is a 0-class query that never touches the stdin-document channel.
+
+        Stdin below carries bytes that cannot parse as JSON. If `--help` fell through to the
+        pre-fix default action (read stdin unconditionally) before returning, it would report
+        `{"errors": [...], "status": "invalid"}` at exit 2 instead of printing usage at exit 0.
+        """
+        done = subprocess.run(
+            [sys.executable, "-B", str(RECEIPT_ADMISSION), "--help"],
+            input=b"not json and would not parse",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+        self.assertIn(b"usage:", done.stdout)
+        self.assertNotIn(b"status", done.stdout)
+        self.assertEqual(done.stderr, b"")
+
+    @unittest.skipUnless(RECEIPT_ADMISSION.is_file(), "the producer-side validator is not present")
+    def test_unknown_flag_exits_two_with_usage_on_stderr(self) -> None:
+        """SP-11: an unrecognized argument is the grammar class (2), with usage on stderr, not
+        the stdin-document error shape (which prints its own JSON error to stdout at the same
+        code)."""
+        done = subprocess.run(
+            [sys.executable, "-B", str(RECEIPT_ADMISSION), "--zzz-not-a-flag"],
+            input=b"",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(done.returncode, 2, done.stderr.decode("utf-8", "replace"))
+        self.assertEqual(done.stdout, b"")
+        self.assertIn(b"usage:", done.stderr)
+        # POSITIVE CONTROL for the byte-identical default action: no arguments at all still
+        # reads stdin and admits a valid document exactly as before this front door existed --
+        # covered by test_the_embedded_assignment_validates_under_the_real_receipt_validator
+        # and test_a_verified_readback_assignment_also_validates_under_the_real_validator above,
+        # both invoked with the identical bare `[sys.executable, "-B", str(RECEIPT_ADMISSION)]`
+        # argv this front door must leave unchanged.
+
 
 class PartitionTests(ToolCase):
     """The verdict selections themselves: one partition, one verdict, never none and never two."""
