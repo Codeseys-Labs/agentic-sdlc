@@ -60,9 +60,13 @@ NEVER MANUFACTURE SUCCESS. Three outcomes, and only three, for every one of the 
 
     absent       no path was supplied, or the supplied path does not exist. Named as absent.
     unreadable   the path exists but could not be read as the document it claims to be -- not a
-                 regular file, not UTF-8, not JSON, not the right schema, a digest that does not
-                 re-derive, or a shape this module does not recognise. Named as unreadable, WITH
-                 the reason, and every other input keeps its own independent outcome.
+                 regular file, not UTF-8, not JSON, nested deeper than `MAX_JSON_DEPTH`, not the
+                 right schema, a digest that does not re-derive, a set its own neighbouring fields
+                 do not derive, or a shape this module does not recognise. Named as unreadable,
+                 WITH the reason, and every other input keeps its own independent outcome. That
+                 independence is why the nesting ceiling exists: `json.loads` recurses once per
+                 level, so without it ONE deeply nested input raised `RecursionError`, was caught as
+                 an internal failure, and took every other input's outcome down with it at exit 1.
     present      the document was read and validated; its own fields are projected VERBATIM in its
                  own vocabulary. This module never upgrades a "failed" into a "passed", never
                  infers a wave completed because its evidence is silent, and never states an
@@ -74,23 +78,40 @@ observability surface over evidence that arrives piecemeal, wave by wave.
 
 TWO VIEWS OF ONE DOCUMENT. The default view is a human BLUF-first read: the single most
 decision-relevant line first (one artifact's own top fact, in the fixed priority order `BLUF_ORDER`
-records -- the seven verdict-carrying kinds widest-consequence first, then the five descriptive ones
-in the family's own chain order -- because that is the order in which each fact subsumes the ones
-after it), then one section per artifact. `--json` emits the identical underlying document as
-canonical JSON (`agentic-sdlc/observability-projection@2`). Both views carry, verbatim, the sentence
-"this view is evidence, not authorization": nothing this module derives may be read as a grant to
-write, push, publish, mutate a PR, merge, or deploy.
+records -- the verdict-carrying kinds widest-consequence first, then the five descriptive ones in the
+family's own chain order -- because that is the order in which each fact subsumes the ones after it),
+then one section per artifact. `--json` emits the identical underlying document as canonical JSON
+(`agentic-sdlc/observability-projection@2`). Both views carry, verbatim, the sentence "this view is
+evidence, not authorization": nothing this module derives may be read as a grant to write, push,
+publish, mutate a PR, merge, or deploy.
+
+TWO VIEWS, ONE FIELD SET. Every field a projector records reaches BOTH views: the human view renders
+each one as `field=value` under its own section, spelled with the SAME name the `--json` document
+uses, so a reader can grep one name in either view. Only a handful are rendered as prose instead --
+an objective, a consequence, and the per-item `reason:`, `blocker:`, and `assessment:` lines -- and
+those are enumerated in this module's tests rather than left to a renderer's discretion. A field that
+is projected into `--json` and dropped from the human view is a defect, not a style choice: a human
+reading the default view would have to know to re-run with `--json` to see, say, that a comparison
+recorded `toolchain_drifted`.
 
 WHY @2 RATHER THAN @1. Adding the eight sealed kinds was not a purely additive change, so keeping
-`@1` would have been a lie in a field a consumer reads. Two facts move for EVERY document, including
+`@1` would have been a lie in a field a consumer reads. ONE fact moves for EVERY document, including
 one produced by a caller who supplied none of the new flags: `artifacts` grows from four keys to
 twelve (each kind's section is always present, carrying `absent` when its flag was not supplied --
 that uniformity is the existing design, and making the new eight conditional instead would have
 created two classes of section and a `_leaf_sections` that counts differently depending on which
-flags were passed), and the BLUF priority order this docstring publishes now has two kinds inserted
-ABOVE `gate`, so the same inputs that produced a gate BLUF under `@1` can produce an admission or
-drift-classification BLUF now. Every `@1` field that survives is unchanged in name, type, and
-meaning: `schema`, `command`, `status`, `exit_code`, `evidence_notice`, `bluf`, and the four original
+flags were passed). That fact alone is a consumer-visible shape change, and it alone justifies the
+bump. A SECOND fact moves only for a caller who supplies one of the new flags: the BLUF priority order
+this docstring publishes has two kinds inserted ABOVE `gate`, so the same gate receipt that headlined
+under `@1` can be headlined over by an admission or drift-classification line now. That one is NOT a
+fact about every document, which is why it is stated second and carries no weight of its own: supply
+none of the new flags and every new rung answers `None`, so adding the eight kinds left `.bluf`
+byte-identical for exactly the inputs `@1` accepted. (The gate rung's own sentence has since changed
+for an unrelated reason -- see the gate-BLUF residual below -- which is a change in DERIVED PROSE.
+`bluf` is one English line assembled per run from whichever artifact won the rung; it is not a stable
+enum, and a consumer matching its exact wording is coupled to prose that moves whenever a rung's
+rationale is corrected.) Every `@1` FIELD that survives is unchanged in name, type, and meaning:
+`schema`, `command`, `status`, `exit_code`, `evidence_notice`, `bluf`, and the four original
 `artifacts` sections field-for-field.
 
 NEVER RE-DERIVE A VERDICT THE ARTIFACT DOES NOT CARRY. Each of the eight is projected in its own
@@ -113,9 +134,10 @@ admitted partial or unknown effect. This module's exit space is 0, 2, and 1 only
 reason `mission-contract.py` and `activation-result.py` give: **a tool that can cause no effect can
 neither refuse before one nor admit one.** Every one of the thirteen inputs is optional, and an absent
 or unreadable one is folded into the exit-0 document rather than raised as a refusal. Exit 2 is
-reserved for the arguments themselves being unusable (an unknown flag, a missing option value);
-exit 1 additionally covers a stdout that cannot receive the one result document, because a
-projection derived and not delivered is not a success.
+reserved for the arguments themselves being unusable (an unknown flag, a missing option value, or one
+artifact flag given twice, which would silently drop a path the caller named); exit 1 additionally
+covers a stdout that cannot receive the one result document, because a projection derived and not
+delivered is not a success.
 
 RESIDUALS, STATED EXACTLY.
 
@@ -126,11 +148,18 @@ RESIDUALS, STATED EXACTLY.
     `output_schema` -- are still not kinds this module knows; they are a later increment once merged,
     and until then a submission is invisible here even though the plan that expects it is not.
   * T3's two schemas -- `receipt-envelope@1` and `receipt-envelope-result@1`, from `receipt-envelope.py`
-    -- are NOT among the eight projected kinds above: the eight come from six tickets (T1, T2, T5
-    twice, T6, T7, T8 twice), and T3 is not one of them. `auto-envelope.py`'s own transition-receipt
-    residual records that its receipt "does not adopt the merged receipt-envelope@1 ancestor form" yet
-    and names folding the two as "T4's extension to make" once it does; until that adoption lands, a
-    caller reading a `receipt-envelope@1` document today gets no section here.
+    -- are NOT among the eight projected kinds above. The eight come from the SIX producer tools named
+    in the flag list at the top of this docstring: `mission-contract.py`, `planning-snapshot.py`,
+    `wave-plan-compiler.py` (a plan AND its diff, in one run), `wave-plan-admission.py`,
+    `drift-classifier.py`, and `auto-envelope.py` (an envelope AND a transition receipt) -- and
+    `receipt-envelope.py` is not one of them. That count is stated as PRODUCERS rather than as slice-6
+    ticket numbers on purpose: the ticket numbering lives in a cartography artifact this repository does
+    not carry, so a ticket count written here could go stale with no test able to notice, while the
+    producer list is checkable against the tree and against `SEALED_READERS` below.
+    `auto-envelope.py`'s own transition-receipt residual records that its receipt "does not adopt the
+    merged receipt-envelope@1 ancestor form" yet and names folding the two as "T4's extension to make"
+    once it does; until that adoption lands, a caller reading a `receipt-envelope@1` document today gets
+    no section here.
   * Only the FIELDS each projector records are projected, not every field the sealed document carries:
     node bodies, per-change evidence and consequence prose, deferred-dimension reasons, per-assessment
     grounds, checkpoint lists, and repository/host detail stay in the artifacts themselves. This is a
@@ -149,7 +178,21 @@ RESIDUALS, STATED EXACTLY.
     against a same-OS-user forger -- the same posture every sibling tool in this family states.
   * `--gate-baseline` is read as an ALREADY-COMPUTED comparison document; this module does not
     itself invoke `gate_baseline.py` or re-implement its subset-comparison algorithm, mirroring
-    `activation-result.py`'s own `--baseline-comparison` precedent exactly.
+    `activation-result.py`'s own `--baseline-comparison` precedent exactly. It DOES check the
+    comparison against itself -- `newly_failing`, `fixed`, `still_failing`, and `non_worsening` are
+    pure arithmetic over the document's own two failing sets -- because a subset claim its own listed
+    names deny is not a fact worth projecting. That is the same posture the gate receipt already has,
+    where `outcome` must derive from `status`, and it is still not a comparison of two receipts.
+  * The gate rung names an UNREADABLE receipt before a PRESENT comparison, and leads a present
+    comparison with the candidate's own recorded outcome. Both corrections are in `_bluf_gate`, which
+    states why: the ladder's own rule is that an unreadable leaf outranks a present one, and
+    `non_worsening` answers "did this change break something NEW", never "did the gate pass".
+  * Each artifact flag may be given at most ONCE (`_OnceOnly`); a repeat is exit 2 rather than
+    argparse's silent last-wins, which would have dropped the first path without a word. `--json`
+    takes no value and stays repeatable.
+  * JSON nesting is bounded by `MAX_JSON_DEPTH` before any parser is entered, so one hostile input
+    is `unreadable` by name instead of a `RecursionError` that ends the whole run at exit 1. The
+    ceiling is a parse bound, not a schema claim: no producer in this family nests anywhere near it.
 """
 from __future__ import annotations
 
@@ -239,6 +282,46 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return seen
 
 
+#: A CEILING on JSON container nesting, checked before any parser is entered. `json.loads` recurses
+#: once per nesting level, so a 2000-level document raised `RecursionError` out of the parser, `main`'s
+#: catch-all classified that as an internal failure, and ONE hostile input took the whole run to exit 1
+#: -- destroying the independent outcome every other input is promised. The ceiling is generous: the
+#: deepest document any producer in this family seals nests about five containers, and the ledger
+#: projection `wave-journal.py` prints is flatter still. It also bounds `_walk_reject_nonfinite`'s own
+#: recursion, which runs only over an already-parsed value that passed this check.
+MAX_JSON_DEPTH = 100
+
+
+def _reject_excessive_nesting(raw: bytes) -> None:
+    """An ITERATIVE depth scan, so nothing recursive is ever entered on bytes deep enough to exhaust
+    the interpreter's stack. It reads BYTES rather than decoded text because every ASCII byte it looks
+    for is unreachable inside a UTF-8 multibyte sequence, and it tracks string state because a brace
+    inside a JSON string is data, not a container. A malformed document may drive the depth negative
+    or leave a string unterminated; that is `json.loads`'s refusal to make, not this scan's."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # a backslash escapes the next byte, including a quote
+                escaped = True
+            elif byte == 0x22:  # the closing quote
+                in_string = False
+            continue
+        if byte == 0x22:  # the opening quote
+            in_string = True
+        elif byte in (0x7B, 0x5B):  # { [
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise InputError(
+                    f"nests JSON containers deeper than the {MAX_JSON_DEPTH}-level ceiling this module reads"
+                )
+        elif byte in (0x7D, 0x5D):  # } ]
+            depth -= 1
+
+
 def _walk_reject_nonfinite(value: Any) -> None:
     """A post-parse walk, because a huge literal like `1e400` overflows to `inf` in `float()`
     WITHOUT ever passing through `parse_constant` -- that hook only sees the exact tokens `NaN` /
@@ -280,6 +363,10 @@ def _read_json_object(path: str, label: str) -> tuple[str, dict[str, Any] | None
     except OSError as read_exc:
         return PRESENCE_UNREADABLE, None, f"cannot read the {label} {path}: {read_exc}"
     try:
+        _reject_excessive_nesting(raw)
+    except InputError as depth_exc:
+        return PRESENCE_UNREADABLE, None, f"the {label} {path} {depth_exc}"
+    try:
         value = json.loads(
             raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_nonfinite
         )
@@ -298,6 +385,10 @@ def _read_json_object(path: str, label: str) -> tuple[str, dict[str, Any] | None
 
 
 def _parse_wave_journal_stdout(data: bytes) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        _reject_excessive_nesting(data)
+    except InputError as depth_exc:
+        return None, f"wave-journal.py project's stdout {depth_exc}"
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -572,6 +663,50 @@ def _validate_gate_baseline_shape(doc: dict[str, Any], path: str) -> str | None:
         return f"the gate baseline comparison {path} carries a non_worsening that is not a boolean"
     if not isinstance(doc.get("toolchain_drifted"), bool):
         return f"the gate baseline comparison {path} carries a toolchain_drifted that is not a boolean"
+    return _gate_baseline_inconsistency(doc, path)
+
+
+#: The three derived sets `gate_baseline.py compare` writes, each as the exact set expression that tool
+#: computes it from -- `sorted(after - before)`, `sorted(before - after)`, `sorted(before & after)` over
+#: its own `baseline_failing`/`candidate_failing`. Named here so the clause below reads as arithmetic
+#: rather than as three copies of the same three lines.
+GATE_BASELINE_DERIVED_SETS = (
+    ("newly_failing", "candidate_failing", "baseline_failing"),
+    ("fixed", "baseline_failing", "candidate_failing"),
+)
+
+
+def _gate_baseline_inconsistency(doc: dict[str, Any], path: str) -> str | None:
+    """The comparison's own CROSS-FIELD consistency, mirroring the two clauses the gate receipt already
+    gets: a document may not be believed about a fact its own neighbouring fields contradict.
+
+    Every clause here is arithmetic `gate_baseline.py compare` performs itself, so a document that fails
+    one is a document that tool did not write. `newly_failing` is `candidate_failing - baseline_failing`
+    sorted, `fixed` is the reverse difference, `still_failing` is the intersection, and `non_worsening`
+    is exactly "`newly_failing` is empty". Comparing the SORTED list rather than a set also catches an
+    unsorted or duplicate-bearing set, which that tool cannot emit either. This is not re-implementing
+    the comparison -- the module still reads the verdict it was given and never computes one over two
+    receipts -- it is refusing to project a subset claim the document's own listed names deny.
+    """
+    baseline_failing = set(doc["baseline_failing"])
+    candidate_failing = set(doc["candidate_failing"])
+    for derived, left, right in GATE_BASELINE_DERIVED_SETS:
+        expected = sorted(set(doc[left]) - set(doc[right]))
+        if doc[derived] != expected:
+            return (
+                f"the gate baseline comparison {path} records a {derived} its own {left} and {right} do "
+                f"not derive"
+            )
+    if doc["still_failing"] != sorted(baseline_failing & candidate_failing):
+        return (
+            f"the gate baseline comparison {path} records a still_failing its own baseline_failing and "
+            "candidate_failing do not derive"
+        )
+    if doc["non_worsening"] != (not doc["newly_failing"]):
+        return (
+            f"the gate baseline comparison {path} records non_worsening {doc['non_worsening']!r} beside "
+            f"{len(doc['newly_failing'])} newly failing test(s), which does not derive it"
+        )
     return None
 
 
@@ -749,9 +884,12 @@ def _detail_mission_contract(section: dict[str, Any]) -> list[str]:
         f"  mission_id={_flat(section['mission_id'])} revision={section['revision']} "
         f"stated_at={_flat(section['stated_at'])}",
         f"  objective: {_flat(section['objective'])}",
-        f"  authority ceiling={_flat(section['authority_ceiling'])} "
-        f"admitted_classes={_flat(section['admitted_authority_classes'])}",
+        f"  authority_ceiling={_flat(section['authority_ceiling'])} "
+        f"admitted_authority_classes={_flat(section['admitted_authority_classes'])}",
         f"  stop_conditions={_flat(section['stop_conditions'])}",
+        f"  in_scope={_flat(section['in_scope'])} non_goals={_flat(section['non_goals'])}",
+        f"  success_criteria={_flat(section['success_criteria'])}",
+        f"  terminal_criteria={_flat(section['terminal_criteria'])}",
         f"  supersedes={_flat(section['supersedes'])}",
     ]
 
@@ -794,9 +932,9 @@ def _detail_planning_snapshot(section: dict[str, Any]) -> list[str]:
         f"commit_sha={_flat(section['commit_sha'])} tree_sha={_flat(section['tree_sha'])}",
         f"  dirty_state staged={dirty['staged']} unstaged={dirty['unstaged']} untracked={dirty['untracked']} "
         f"unmerged={dirty['unmerged']}",
-        f"  worktrees={section['worktree_count']} wave_artifacts={section['wave_artifact_count']} "
-        f"policy_digests={section['policy_digest_count']} queue_state={_flat(section['queue_state'])}",
-        f"  unknowns={_flat(section['unknown_dimensions'])}",
+        f"  worktree_count={section['worktree_count']} wave_artifact_count={section['wave_artifact_count']} "
+        f"policy_digest_count={section['policy_digest_count']} queue_state={_flat(section['queue_state'])}",
+        f"  unknown_dimensions={_flat(section['unknown_dimensions'])}",
     ]
 
 
@@ -835,12 +973,13 @@ def _detail_wave_plan(section: dict[str, Any]) -> list[str]:
     return [
         f"  mission_id={_flat(section['mission_id'])} revision={section['revision']} "
         f"compiled_at={_flat(section['compiled_at'])} supersedes={_flat(section['supersedes'])}",
-        f"  nodes={_flat(section['node_ids'])} edges={section['edge_count']}",
+        f"  node_ids={_flat(section['node_ids'])} edge_count={section['edge_count']}",
         f"  declared_concurrency={section['declared_concurrency']} "
-        f"limits max_concurrent_nodes={section['max_concurrent_nodes']} "
+        f"max_concurrent_nodes={section['max_concurrent_nodes']} "
         f"max_total_nodes={section['max_total_nodes']}",
-        f"  inputs mission_digest={_flat(section['mission_digest'])} "
+        f"  mission_digest={_flat(section['mission_digest'])} "
         f"snapshot_digest={_flat(section['snapshot_digest'])}",
+        f"  head_commit_sha={_flat(section['head_commit_sha'])}",
     ]
 
 
@@ -878,8 +1017,8 @@ def _detail_plan_diff(section: dict[str, Any]) -> list[str]:
     return [
         f"  mission_id={_flat(section['mission_id'])} compiled_at={_flat(section['compiled_at'])}",
         f"  plan_digest={_flat(section['plan_digest'])} prior_plan_digest={_flat(section['prior_plan_digest'])}",
-        f"  changes={section['change_count']} semantic={section['semantic_change_count']} "
-        f"kinds={_flat(section['change_kinds'])}",
+        f"  change_count={section['change_count']} semantic_change_count={section['semantic_change_count']} "
+        f"change_kinds={_flat(section['change_kinds'])}",
         f"  no_delta_reason={_flat(section['no_delta_reason'])}",
     ]
 
@@ -930,10 +1069,11 @@ def _detail_wave_plan_admission(section: dict[str, Any]) -> list[str]:
     lines = [
         f"  disposition={_flat(section['disposition'])} admitted_at={_flat(section['admitted_at'])} "
         f"mission_id={_flat(section['mission_id'])} plan_revision={section['plan_revision']}",
-        f"  checks met={_flat(section['checks_met'])}",
-        f"  checks not met={_flat(section['checks_not_met'])}",
-        f"  observed commit_sha={_flat(section['observed_commit_sha'])} "
-        f"snapshot_stated_at={_flat(section['observed_snapshot_stated_at'])}",
+        f"  checks_met={_flat(section['checks_met'])}",
+        f"  checks_not_met={_flat(section['checks_not_met'])}",
+        f"  plan_digest={_flat(section['plan_digest'])} snapshot_digest={_flat(section['snapshot_digest'])}",
+        f"  observed_commit_sha={_flat(section['observed_commit_sha'])} "
+        f"observed_snapshot_stated_at={_flat(section['observed_snapshot_stated_at'])}",
         f"  deferred_dimensions={_flat(section['deferred_dimensions'])}",
     ]
     lines.extend(f"  blocker: {_flat(blocker)}" for blocker in section["blockers"])
@@ -992,7 +1132,7 @@ def _detail_drift_classification(section: dict[str, Any]) -> list[str]:
         f"  plan_digest={_flat(section['plan_digest'])} plan_revision={section['plan_revision']}",
         f"  observation_id={_flat(section['observation_id'])} observed_at={_flat(section['observed_at'])} "
         f"bound={section['bound']}",
-        f"  binding ground={_flat(section['binding_ground'])} no_drift_reason={_flat(section['no_drift_reason'])}",
+        f"  binding_ground={_flat(section['binding_ground'])} no_drift_reason={_flat(section['no_drift_reason'])}",
     ]
     lines.extend(
         f"  assessment: kind={_flat(entry['kind'])} subject={_flat(entry['subject'])} "
@@ -1056,22 +1196,22 @@ def _bluf_auto_envelope(section: dict[str, Any]) -> str:
 def _detail_auto_envelope(section: dict[str, Any]) -> list[str]:
     return [
         f"  envelope_id={_flat(section['envelope_id'])} stated_at={_flat(section['stated_at'])}",
-        f"  validity_window not_before={_flat(section['not_before'])} not_after={_flat(section['not_after'])}",
-        f"  bound_plan plan_digest={_flat(section['bound_plan_digest'])} "
-        f"plan_revision={section['bound_plan_revision']} "
-        f"snapshot_digest={_flat(section['bound_snapshot_digest'])}",
+        f"  not_before={_flat(section['not_before'])} not_after={_flat(section['not_after'])}",
+        f"  bound_plan_digest={_flat(section['bound_plan_digest'])} "
+        f"bound_plan_revision={section['bound_plan_revision']} "
+        f"bound_snapshot_digest={_flat(section['bound_snapshot_digest'])}",
         f"  allowed_authority_classes={_flat(section['allowed_authority_classes'])}",
         f"  allowed_effect_classes={_flat(section['allowed_effect_classes'])}",
         f"  tool_allowlist={_flat(section['tool_allowlist'])} "
         f"graph_change_allowlist={_flat(section['graph_change_allowlist'])}",
-        f"  egress posture={_flat(section['egress_posture'])} "
-        f"destinations={_flat(section['egress_destinations'])}",
-        f"  concurrency max_concurrent_nodes={section['max_concurrent_nodes']} "
+        f"  egress_posture={_flat(section['egress_posture'])} "
+        f"egress_destinations={_flat(section['egress_destinations'])}",
+        f"  max_concurrent_nodes={section['max_concurrent_nodes']} "
         f"max_recursion_generations={section['max_recursion_generations']}",
-        f"  retry max_attempts_per_node={section['max_attempts_per_node']} "
+        f"  max_attempts_per_node={section['max_attempts_per_node']} "
         f"max_total_retries={section['max_total_retries']}",
         f"  stop_rules={_flat(section['stop_rules'])}",
-        f"  checkpoints requiring a human disposition="
+        f"  checkpoints_requiring_human_disposition="
         f"{_flat(section['checkpoints_requiring_human_disposition'])}",
     ]
 
@@ -1315,16 +1455,29 @@ def _bluf_activation_result(section: dict[str, Any]) -> str | None:
 
 
 def _bluf_gate(section: dict[str, Any]) -> str | None:
+    """The gate rung's own two-leaf order, and the one rule the whole ladder already follows: an
+    UNREADABLE leaf outranks a PRESENT one, because "I could not read this" is the most
+    decision-relevant thing that leaf has to say. The RECEIPT is named first of the two: it is the
+    primary evidence, and a comparison is a document derived from it, so a present comparison beside an
+    unreadable receipt is a comparison whose own candidate this module could not verify.
+
+    A present comparison then leads with the candidate's OWN recorded outcome before the subset
+    verdict, because `non_worsening` answers "did this change break something new", never "did the gate
+    pass": a failed gate whose every failure is pre-existing is honestly non-worsening AND honestly
+    failed, and a BLUF that printed only the second word would read as a pass."""
     receipt, baseline = section["receipt"], section["baseline"]
     if receipt["presence"] == PRESENCE_ABSENT and baseline["presence"] == PRESENCE_ABSENT:
         return None
+    if receipt["presence"] == PRESENCE_UNREADABLE:
+        return f"the gate receipt is unreadable: {_flat(receipt['reason'])}"
     if baseline["presence"] == PRESENCE_UNREADABLE:
         return f"the gate baseline comparison is unreadable: {_flat(baseline['reason'])}"
     if baseline["presence"] == PRESENCE_PRESENT:
         verdict_word = "non-worsening" if baseline["non_worsening"] else "WORSENED"
-        return f"gate {_flat(baseline['gate'])}: {verdict_word} ({len(baseline['newly_failing'])} newly failing)"
-    if receipt["presence"] == PRESENCE_UNREADABLE:
-        return f"the gate receipt is unreadable: {_flat(receipt['reason'])}"
+        return (
+            f"gate {_flat(baseline['gate'])}: candidate outcome {_flat(baseline['candidate_outcome'])}, "
+            f"{verdict_word} against its baseline ({len(baseline['newly_failing'])} newly failing)"
+        )
     return f"gate {_flat(receipt['gate'])}: outcome {_flat(receipt['outcome'])}"
 
 
@@ -1350,24 +1503,66 @@ def _bluf_wave_journal(section: dict[str, Any]) -> str | None:
     return f"wave {_flat(section['wave_id'])}: {len(missing)} required node(s) missing a disposition: {_flat(missing)}"
 
 
+#: The one admission disposition that STOPS this wave. Split out by name rather than written inline,
+#: because it is the whole reason the admission kind occupies two rungs below.
+ADMISSION_STOPPING_DISPOSITIONS = ("blocked",)
+
+
+def _bluf_admission_stop(section: dict[str, Any]) -> str | None:
+    """The admission's HIGH rung: a report this module could not read at all, or one whose own
+    disposition stops this wave. Nothing else claims this rung."""
+    if section["presence"] == PRESENCE_ABSENT:
+        return None
+    reader = SEALED_READERS_BY_KIND["wave_plan_admission"]
+    if section["presence"] == PRESENCE_UNREADABLE:
+        return sealed_bluf(reader, section)
+    if section["disposition"] in ADMISSION_STOPPING_DISPOSITIONS:
+        return reader.headline(section)
+    return None
+
+
+def _bluf_admission_permission(section: dict[str, Any]) -> str | None:
+    """The admission's LOW rung. `admitted` is a permission for THIS wave to start, and the report
+    itself says `admitted` is not `approved`, so it subsumes NEITHER whether the plan the wave is
+    running is still that plan (the drift classification) NOR whether the repository's own gate passed
+    -- it is only reachable here for a present report the high rung did not claim, which the closed
+    two-value vocabulary makes `admitted` and an unrecognised third value makes `unreadable` up
+    there. This rung still outranks a runtime assignment and everything below it, because admitting a
+    whole wave plan is wider than one node's spawn."""
+    if section["presence"] != PRESENCE_PRESENT:
+        return None
+    return SEALED_READERS_BY_KIND["wave_plan_admission"].headline(section)
+
+
 #: Priority order for the single most decision-relevant line: each fact subsumes the ones after it, so
-#: the FIRST kind that has anything to say wins and the rest are read from the per-artifact sections
+#: the FIRST rung that has anything to say wins and the rest are read from the per-artifact sections
 #: below it. An unreadable input is something to say, so it outranks every PRESENT kind below it.
 #:
-#: The seven verdict-carrying kinds come first, widest consequence first: a refused activation means no
-#: wave may write at all; a blocked admission report means THIS wave may not start, which subsumes what
-#: its plan then drifted into; a hard-stop drift classification means the plan the wave is running is no
+#: The verdict-carrying kinds come first, widest consequence first: a refused activation means no wave
+#: may write at all; a blocked admission report means THIS wave may not start, which subsumes what its
+#: plan then drifted into; a hard-stop drift classification means the plan the wave is running is no
 #: longer the plan; the gate is the repository's own pass/fail; a runtime assignment decides one node's
 #: spawn; a transition receipt decides one proposed autonomous step inside a wave; and a missing node
 #: disposition in the journal is the narrowest of them. The five descriptive kinds follow in the
 #: family's own chain order -- MissionContract + PlanningSnapshot -> WavePlan -> PlanDiff ->
 #: AutoEnvelope -- because none of them carries a verdict at all: they say what was intended, observed,
 #: compiled, changed, and bounded, and any of them can still headline when it is all the caller has.
+#:
+#: ONE kind holds TWO rungs, and the subsumption sentence above is exactly why. "A blocked admission
+#: report means this wave may not start" justifies the high rung and says nothing about `admitted`: a
+#: report that PERMITS the wave to start does not subsume a hard-stop drift classification saying the
+#: plan is no longer the plan, nor a failed gate. So the stopping disposition keeps the rung its
+#: consequence earns and the permitting one drops below both, to just above the runtime assignment.
+#: That is not this module ranking one document's verdict against another's: the drift ladder stays
+#: `drift-classifier.py`'s (whichever outcome it wrote is projected verbatim, and no outcome is ranked
+#: against another here), and the only value read is the admission's own closed two-value disposition,
+#: from the report that itself says `admitted` is not `approved`.
 BLUF_ORDER: tuple[tuple[str, Any], ...] = (
     ("activation_result", _bluf_activation_result),
-    _sealed_bluf_row("wave_plan_admission"),
+    ("wave_plan_admission", _bluf_admission_stop),
     _sealed_bluf_row("drift_classification"),
     ("gate", _bluf_gate),
+    ("wave_plan_admission", _bluf_admission_permission),
     ("runtime_assignment", _bluf_runtime_assignment),
     _sealed_bluf_row("transition_receipt"),
     ("wave_journal", _bluf_wave_journal),
@@ -1446,12 +1641,19 @@ def render_human(document: dict[str, Any]) -> str:
             f"  wave_id={_flat(wave_journal['wave_id'])} mode={_flat(wave_journal['mode'])} "
             f"complete={wave_journal['complete']}"
         )
+        lines.append(f"  plan_digest={_flat(wave_journal['plan_digest'])}")
         lines.append(
-            f"  required_nodes_without_disposition={_flat(wave_journal['required_nodes_without_disposition'])}"
+            f"  required_node_count={wave_journal['required_node_count']} "
+            f"required_nodes_without_disposition={_flat(wave_journal['required_nodes_without_disposition'])}"
         )
         lines.append(
-            f"  entry_count={wave_journal['entry_count']} plan_revisions={wave_journal['plan_revision_count']} "
-            f"approvals={wave_journal['approval_count']} retries={wave_journal['retry_count']}"
+            f"  entry_count={_flat(wave_journal['entry_count'])} "
+            f"plan_revision_count={wave_journal['plan_revision_count']} "
+            f"approval_count={wave_journal['approval_count']} retry_count={wave_journal['retry_count']} "
+            f"budget_count={wave_journal['budget_count']}"
+        )
+        lines.append(
+            f"  opened_at={_flat(wave_journal['opened_at'])} last_at={_flat(wave_journal['last_at'])}"
         )
     lines.append("")
 
@@ -1460,6 +1662,14 @@ def render_human(document: dict[str, Any]) -> str:
     lines.append(_presence_line("runtime assignment", runtime_assignment))
     if runtime_assignment["presence"] == PRESENCE_PRESENT:
         lines.append(f"  command={_flat(runtime_assignment['command'])} verdict={_flat(runtime_assignment['verdict'])}")
+        # `may_spawn` and `blocks_wave_completion` are carried through from the report UNVALIDATED --
+        # this module reports whichever value the report wrote -- so both go through `_flat`, which is
+        # a no-op for the bool or null they normally are and an escape for the hostile string they
+        # could be. A bare interpolation here would forge a line out of a report's own field.
+        lines.append(
+            f"  node={_flat(runtime_assignment['node'])} may_spawn={_flat(runtime_assignment['may_spawn'])} "
+            f"blocks_wave_completion={_flat(runtime_assignment['blocks_wave_completion'])}"
+        )
         lines.append(f"  consequence: {_flat(runtime_assignment['consequence'])}")
         for reason in runtime_assignment["reasons"]:
             lines.append(f"  reason: {_flat(reason)}")
@@ -1470,6 +1680,11 @@ def render_human(document: dict[str, Any]) -> str:
     lines.append(_presence_line("activation result", activation_result))
     if activation_result["presence"] == PRESENCE_PRESENT:
         lines.append(f"  state={_flat(activation_result['state'])} target={_flat(activation_result['target'])}")
+        # Both are carried through UNVALIDATED, so both are escaped -- see the runtime-assignment note.
+        lines.append(
+            f"  gate_outcome={_flat(activation_result['gate_outcome'])} "
+            f"gate_passes={_flat(activation_result['gate_passes'])}"
+        )
         lines.append(f"  consequence: {_flat(activation_result['consequence'])}")
         for reason in activation_result["reasons"]:
             lines.append(f"  reason: {_flat(reason)}")
@@ -1481,15 +1696,27 @@ def render_human(document: dict[str, Any]) -> str:
     if gate["receipt"]["presence"] == PRESENCE_PRESENT:
         receipt = gate["receipt"]
         lines.append(
-            f"  gate={_flat(receipt['gate'])} outcome={_flat(receipt['outcome'])} ran={receipt['ran']} "
+            f"  gate={_flat(receipt['gate'])} outcome={_flat(receipt['outcome'])} "
+            f"gate_status={receipt['gate_status']} ran={receipt['ran']}"
+        )
+        lines.append(
+            f"  failing_set_state={_flat(receipt['failing_set_state'])} "
             f"failing_test_count={receipt['failing_test_count']}"
         )
     lines.append(_presence_line("gate baseline", gate["baseline"]))
     if gate["baseline"]["presence"] == PRESENCE_PRESENT:
         baseline = gate["baseline"]
         lines.append(
-            f"  non_worsening={baseline['non_worsening']} newly_failing={_flat(baseline['newly_failing'])} "
-            f"fixed={_flat(baseline['fixed'])}"
+            f"  gate={_flat(baseline['gate'])} baseline_outcome={_flat(baseline['baseline_outcome'])} "
+            f"candidate_outcome={_flat(baseline['candidate_outcome'])}"
+        )
+        lines.append(
+            f"  non_worsening={baseline['non_worsening']} toolchain_drifted={baseline['toolchain_drifted']}"
+        )
+        lines.append(
+            f"  newly_failing={_flat(baseline['newly_failing'])} fixed={_flat(baseline['fixed'])} "
+            f"still_failing={_flat(baseline['still_failing'])} "
+            f"candidate_failing={_flat(baseline['candidate_failing'])}"
         )
     if gate["cross_check"] is not None:
         lines.append(f"  cross_check same_gate={gate['cross_check']['same_gate']}")
@@ -1574,6 +1801,28 @@ def emit_payload(payload: bytes) -> int:
     return EXIT_OK
 
 
+class _OnceOnly(argparse.Action):
+    """One artifact path flag, at most ONCE.
+
+    argparse's default for a repeated option is silent last-wins: `--gate-receipt a --gate-receipt b`
+    projects `b` and never mentions that `a` was asked for and dropped. For a read-only projection whose
+    whole value is naming exactly which evidence it read, silently reading a different file than the
+    caller listed is worse than refusing, so a repeat is a grammar error (exit 2) that names the flag.
+    The message names the OPTION only, never either path: a path is caller data, and the refusal has to
+    be printable in a log beside a document that deliberately does not echo one.
+
+    `--json` is deliberately NOT once-only: it takes no value, so repeating it drops nothing.
+    """
+
+    def __call__(self, parser: Any, namespace: Any, values: Any, option_string: str | None = None) -> None:
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error(
+                f"{option_string or flag_for(self.dest)} was given more than once; each artifact path may "
+                "be supplied at most once, and a repeat would silently drop the first one"
+            )
+        setattr(namespace, self.dest, values)
+
+
 class _Parser(argparse.ArgumentParser):
     """argparse, taught this module's two stream rules (re-expressed from mission-contract.py)."""
 
@@ -1596,7 +1845,8 @@ class _Parser(argparse.ArgumentParser):
 
 EPILOG = (
     "Exit codes: 0 a projection was derived, an absent or unreadable input included by name; 2 the "
-    "arguments themselves are unusable; 1 an unexpected internal failure, INCLUDING a stdout that "
+    "arguments themselves are unusable, INCLUDING one artifact flag given more than once; 1 an "
+    "unexpected internal failure, among them a stdout that "
     "cannot receive the one result document. Implementation Decision 9's 3 and 4 do not apply: a "
     "command that causes no effect can neither refuse before one nor admit one. This projection is "
     "evidence, not authorization."
@@ -1616,25 +1866,45 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         epilog=EPILOG,
     )
-    parser.add_argument("--wave-journal", dest="wave_journal", default=None, help="path to a wave-journal.py ledger")
+    parser.add_argument(
+        "--wave-journal",
+        dest="wave_journal",
+        default=None,
+        action=_OnceOnly,
+        help="path to a wave-journal.py ledger",
+    )
     parser.add_argument(
         "--runtime-assignment",
         dest="runtime_assignment",
         default=None,
+        action=_OnceOnly,
         help="path to a runtime-assignment.py admit or classify report",
     )
     parser.add_argument(
-        "--activation-result", dest="activation_result", default=None, help="path to an activation-result.py document"
+        "--activation-result",
+        dest="activation_result",
+        default=None,
+        action=_OnceOnly,
+        help="path to an activation-result.py document",
     )
-    parser.add_argument("--gate-receipt", dest="gate_receipt", default=None, help="path to a gate_receipt.py receipt")
+    parser.add_argument(
+        "--gate-receipt",
+        dest="gate_receipt",
+        default=None,
+        action=_OnceOnly,
+        help="path to a gate_receipt.py receipt",
+    )
     parser.add_argument(
         "--gate-baseline",
         dest="gate_baseline",
         default=None,
+        action=_OnceOnly,
         help="path to a gate_baseline.py compare report for the same --gate-receipt",
     )
     for reader in SEALED_READERS:
-        parser.add_argument(flag_for(reader.kind), dest=reader.kind, default=None, help=reader.help)
+        parser.add_argument(
+            flag_for(reader.kind), dest=reader.kind, default=None, action=_OnceOnly, help=reader.help
+        )
     parser.add_argument("--json", dest="json_output", action="store_true", help="emit the machine document instead")
     return parser
 
