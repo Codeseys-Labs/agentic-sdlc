@@ -1699,6 +1699,86 @@ class ConductorRecordTests(WaveCase):
         self.assertIn(b"is not a YYYY-MM-DDTHH:MM:SSZ instant", done.stderr)
 
 
+class WaveJournalDigestAnchorTests(WaveCase):
+    """The optional `--wave-journal-digest`: the SAME external head anchor condition 8 already binds
+    for a conductor record, asserted directly here by whatever process retained it, without first
+    requiring a conductor record to exist at all.
+    """
+
+    def test_a_matching_anchor_does_not_disturb_an_accepted_wave(self) -> None:
+        """POSITIVE CONTROL for the two attacks below: the anchor this suite retained from
+        `build_journal` matches by construction, and supplying it changes nothing."""
+        args = self.accepted_args()
+        args["--wave-journal-digest"] = self.journal_digest
+        document = self.derive(args)
+        self.assertEqual(document["state"], ACCEPTED)
+        # A matching anchor must still leave a trace in evidence, not just an absence of reasons --
+        # otherwise a reader could not tell "matched" apart from "never supplied".
+        self.assertEqual(document["evidence"]["wave_journal_anchor"], self.journal_digest)
+
+    def test_a_rewritten_last_line_fails_the_retained_anchor(self) -> None:
+        """Rewriting the LAST line leaves a self-consistent chain and a projection that re-derives its
+        own digest perfectly -- `read_journal`'s own docstring names this as the one thing its chain
+        cannot catch. The anchor this test retained BEFORE the rewrite is the only value that came
+        from outside the file, and it is what refuses.
+        """
+        args = self.accepted_args()
+        anchor = self.journal_digest
+        lines = self.journal.read_bytes().splitlines(keepends=True)
+        last = json.loads(lines[-1])
+        last["record"]["consumed"] = last["record"]["consumed"] + 1  # still self-consistent, still valid
+        lines[-1] = canonical(last)
+        self.journal.write_bytes(b"".join(lines))
+        rewritten = self.journal_run("project")
+        self.assertNotEqual(rewritten["journal_digest"], anchor)
+        args["--journal-projection"] = str(self.store("projection-rewritten", rewritten))
+        args["--wave-journal-digest"] = anchor
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertIn(f"--wave-journal-digest {anchor} does not match", self.reasons(document))
+        self.assertIn("last line has been rewritten", self.reasons(document))
+
+    def test_a_truncated_tail_fails_the_retained_anchor(self) -> None:
+        """The other attack `read_journal`'s docstring names: removing the LAST line leaves the
+        remaining prefix a perfectly self-consistent chain too, so nothing inside the file objects.
+        """
+        args = self.accepted_args()
+        anchor = self.journal_digest
+        lines = self.journal.read_bytes().splitlines(keepends=True)
+        self.journal.write_bytes(b"".join(lines[:-1]))
+        truncated = self.journal_run("project")
+        self.assertNotEqual(truncated["journal_digest"], anchor)
+        args["--journal-projection"] = str(self.store("projection-truncated", truncated))
+        args["--wave-journal-digest"] = anchor
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertIn(f"--wave-journal-digest {anchor} does not match", self.reasons(document))
+        self.assertIn("tail has been truncated", self.reasons(document))
+
+    def test_a_supplied_anchor_with_no_projection_is_its_own_named_reason(self) -> None:
+        """Supplied-but-nothing-to-compare-against must be distinguishable from BOTH silence (not
+        supplied at all, exercised by every other test in this module) and a match (this class's own
+        positive control): a caller that believes it anchored evidence against nothing has not
+        anchored anything.
+        """
+        args = self.accepted_args()
+        args.pop("--journal-projection")
+        args["--wave-journal-digest"] = self.journal_digest
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertIn("was supplied but no --journal-projection was", self.reasons(document))
+
+    def test_a_malformed_anchor_is_malformed_input(self) -> None:
+        # Separate from a MISMATCHED anchor, exactly as `test_an_anchor_that_is_not_a_sha256_is_
+        # malformed_input` separates it for the conductor record's own embedded anchor: a value that
+        # cannot be a digest at all means the flag was not given the document it claims, which is
+        # exit 2 rather than a reason about the wave.
+        args = self.accepted_args()
+        args["--wave-journal-digest"] = "not-a-digest"
+        done = self.derive_failure(args)
+        self.assertIn(b"--wave-journal-digest 'not-a-digest' is not 64 lowercase hex characters", done.stderr)
+
+
 class EndedStateCase(WaveCase):
     """Shared assertions for Implementation Decision 61's three ended states.
 
@@ -2480,6 +2560,72 @@ class ForgedProjectionTests(WaveCase):
         document = self.derive(args)
         self.assertEqual(document["state"], BLOCKED)
         self.assertIn("was skipped under approval 'approval-absent'", self.reasons(document))
+
+    def test_an_approved_skip_whose_approval_scopes_a_different_node_is_untraceable(self) -> None:
+        """Recorded is not authorized, even in this module's own re-derivation: a pre-change or
+        hand-written journal can still carry an approved-skip whose named approval EXISTS but
+        scopes a DIFFERENT node -- the same gap `wave-journal.py`'s own `_cross_check` now refuses
+        at write time. This module re-derives from whatever projection it is handed rather than
+        trusting the writer ran, so condition 7 must check scope membership itself too.
+        """
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        base_dispositions = json.loads((self.work / "projection.json").read_text(encoding="utf-8"))["dispositions"]
+        out_of_scope = self.forge_projection(
+            [
+                {
+                    "at": T5,
+                    "kind": "approval",
+                    "record": approval_record(approval_id="approval-skip-b", subject="skip implement-b", scope=["implement-b-followup"]),
+                    "schema": "agentic-sdlc/wave-journal@1",
+                },
+                {
+                    "at": T5,
+                    "kind": "node",
+                    "record": node_record("implement-b", "implementer", "approved-skip", T5, approval="approval-skip-b", outputs=[]),
+                    "schema": "agentic-sdlc/wave-journal@1",
+                },
+            ],
+            dispositions={
+                **base_dispositions,
+                "implement-b": {"at": T5, "disposition": "approved-skip", "role": "implementer", "seq": 7},
+            },
+        )
+        args["--journal-projection"] = str(self.store("projection-forged-skip-scope", out_of_scope))
+        args["--conductor-record"] = str(self.write_conductor_record())
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertIn("implement-b", self.reasons(document))
+        self.assertIn("implement-b-followup", self.reasons(document))
+        self.assertFalse(self.condition(document, 7)["met"])
+        # POSITIVE CONTROL: the identical shape, but the approval's scope names implement-b itself,
+        # produces no condition-7 reason at all -- this is about scope membership, not about the
+        # node_id, the disposition, or forging a second entry.
+        in_scope = self.forge_projection(
+            [
+                {
+                    "at": T5,
+                    "kind": "approval",
+                    "record": approval_record(approval_id="approval-skip-b", subject="skip implement-b", scope=["implement-b"]),
+                    "schema": "agentic-sdlc/wave-journal@1",
+                },
+                {
+                    "at": T5,
+                    "kind": "node",
+                    "record": node_record("implement-b", "implementer", "approved-skip", T5, approval="approval-skip-b", outputs=[]),
+                    "schema": "agentic-sdlc/wave-journal@1",
+                },
+            ],
+            dispositions={
+                **base_dispositions,
+                "implement-b": {"at": T5, "disposition": "approved-skip", "role": "implementer", "seq": 7},
+            },
+        )
+        args["--journal-projection"] = str(self.store("projection-forged-skip-in-scope", in_scope))
+        args["--conductor-record"] = str(self.write_conductor_record())
+        document = self.derive(args)
+        self.assertEqual(document["state"], ACCEPTED, self.reasons(document))
+        self.assertTrue(self.condition(document, 7)["met"])
 
     def test_a_forged_projection_that_is_consistent_still_derives_its_state(self) -> None:
         """The control for the forging mechanism itself.

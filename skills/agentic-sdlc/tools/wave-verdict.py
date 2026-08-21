@@ -113,12 +113,17 @@ in two distinct ways:
     canonical form of what it parses to, so re-canonicalising the entries reproduces the file's bytes
     exactly; their digest must equal the published `journal_digest`, and the chain of `prev_digest`
     values must re-derive. A projection whose entries and digest disagree is malformed input.
-  * COMPARED against the conductor's independently retained anchor. Condition 8's conductor record
+  * COMPARED against an independently retained anchor, TWICE OVER. Condition 8's conductor record
     must carry the `journal_digest` the conductor kept from the last `init`/`record-*` result, which
     is the only value that comes from OUTSIDE the file. That comparison is what closes the truncated
     tail: a projection of a journal missing its last three entries re-derives perfectly and still
     fails to match the anchor the conductor holds. Requiring the anchor from the projection itself
-    would have been self-referential and would have proved nothing.
+    would have been self-referential and would have proved nothing. `--wave-journal-digest` binds
+    the SAME anchor a second, simpler way: a caller that retained it directly may assert it without
+    first composing a whole conductor record, and a mismatch is refused as a binding reason rather
+    than folded into condition 8, because the anchor and the projection are each individually
+    well-formed -- what disagrees is which journal the anchor is about, not whether either document
+    is malformed.
 
 FAIL CLOSED, AND NAME THE REASON. Every predicate accumulates named reasons against its own
 condition; then ONE selection runs over ONE partition, so no input can yield two states or none.
@@ -850,6 +855,45 @@ def assess_binding(
             )
 
 
+def assess_wave_journal_anchor(assessment: Assessment, journal: Journal | None, supplied: str | None) -> None:
+    """The optional `--wave-journal-digest`: the SAME external head anchor condition 8 already binds
+    when it arrives embedded in a conductor record, asserted directly here instead.
+
+    `wave-journal.py`'s `read_journal` names `journal_digest` as the one remedy for the one thing its
+    own chain cannot catch: a rewritten LAST line, or the removal of a trailing group of lines, both
+    of which leave a self-consistent chain and a projection that re-derives its own digest perfectly.
+    Condition 8 already checks this anchor when it is carried inside a `--conductor-record`; this flag
+    lets whatever process independently retained the anchor from `wave-journal.py`'s own `init`/
+    `record-*` result assert it directly, without first having to compose a full conductor record.
+
+    Absent is silent: not supplying this flag changes nothing, exactly as every other optional
+    artifact here works. Supplied together with a journal, it is compared; a mismatch is a BINDING
+    reason (not scoped to any one of the eight numbered conditions, the same bucket `assess_binding`
+    uses for wave_id/target agreement) rather than a malformed-input verdict, because the anchor and
+    the journal are each individually well-formed -- what disagrees is which journal the anchor is
+    about. Supplied WITHOUT a journal to compare against is its own distinct named reason: a caller
+    that believes it anchored evidence against nothing has not anchored anything, and that case must
+    never be silently indistinguishable from either "not supplied" or "matched".
+    """
+    assessment.evidence["wave_journal_anchor"] = supplied
+    if supplied is None:
+        return
+    if not _HEX64.match(supplied):
+        raise InputError(f"--wave-journal-digest {supplied!r} is not 64 lowercase hex characters")
+    if journal is None:
+        assessment.binding_reasons.append(
+            f"--wave-journal-digest {supplied} was supplied but no --journal-projection was, so the "
+            "anchor cannot be compared against anything"
+        )
+        return
+    if supplied != journal.journal_digest:
+        assessment.binding_reasons.append(
+            f"--wave-journal-digest {supplied} does not match the supplied journal projection's "
+            f"journal_digest {journal.journal_digest}: the journal's last line has been rewritten, "
+            "its tail has been truncated, or this anchor is about a different read"
+        )
+
+
 def assess_dispositions(assessment: Assessment, journal: Journal | None) -> None:
     """Condition 1, exactly as issue 07 words it, plus the reason its wording leaves open.
 
@@ -1497,6 +1541,23 @@ def assess_traceability(assessment: Assessment, journal: Journal | None) -> None
                 f"node {node['node_id']} was skipped under approval {node['approval']!r}, which this "
                 "journal does not carry",
             )
+            continue
+        # Recorded is not authorized: a pre-change or hand-written journal can still carry an
+        # approved-skip whose approval exists but names a DIFFERENT node, the same gap
+        # `wave-journal.py`'s own `_cross_check` now refuses at write time. This module re-derives
+        # from the journal projection it is handed rather than trusting the writer ran, so it checks
+        # scope membership itself instead of assuming every projection passed through that refusal.
+        approval = journal.approval(node["approval"])
+        scope = approval.get("scope") if approval is not None else None
+        if not isinstance(scope, list) or not all(isinstance(item, str) for item in scope):
+            raise InputError(f"approval {node['approval']} in {journal.path} carries a scope that is not a list of strings")
+        if node["node_id"] not in scope:
+            assessment.note(
+                7,
+                f"node {node['node_id']} was skipped under approval {node['approval']!r}, whose scope "
+                f"{scope!r} does not name it: an approval authorizes only the node(s) its own scope "
+                "lists",
+            )
 
 
 def read_ended_facts(assessment: Assessment, record: dict[str, Any], where: str) -> None:
@@ -1857,6 +1918,7 @@ def derive_command(args: argparse.Namespace) -> dict[str, Any]:
             *[(f"focused gate receipt {path}", document.get("cwd")) for path, document in focused],
         ],
     )
+    assess_wave_journal_anchor(assessment, journal, args.wave_journal_digest)
     assess_dispositions(assessment, journal)
     assess_substitutions(assessment, journal, classifications)
     assess_artifacts(assessment, journal, manifest, args.artifact_manifest)
@@ -2067,6 +2129,17 @@ def main(argv: list[str] | None = None) -> int:
         dest="journal_projection",
         default=None,
         help=f"wave-journal.py project document ({PROJECTION_SCHEMA})",
+    )
+    command.add_argument(
+        "--wave-journal-digest",
+        dest="wave_journal_digest",
+        default=None,
+        help=(
+            "the journal_digest independently retained from wave-journal.py's own init/record-* "
+            "result -- the external head anchor its read_journal docstring names as the remedy for "
+            "a rewritten last line or a truncated tail. Refused when it disagrees with the supplied "
+            "--journal-projection's own re-derived journal_digest; optional, and silent when absent"
+        ),
     )
     command.add_argument(
         "--runtime-classification",

@@ -448,7 +448,11 @@ class RecordSchemaTests(_JournalTestCase):
         self.assertEqual(len(self.lines()), 1)  # nothing was appended
         # POSITIVE CONTROL: all three legal values ARE accepted through the same argument, so the
         # refusal above is about the value and not about the record or the verb.
-        self.append("record-approval", approval_record(), at=T2)
+        # The approval's scope must name the node THIS test skips, "n-skip", rather than the fixture's
+        # own default scope: an approval only authorizes the node(s) it names (see
+        # `test_an_approved_skip_must_be_named_in_its_approvals_scope`), and this test is about legal
+        # disposition VALUES, not about that check, so it supplies a scope that satisfies it.
+        self.append("record-approval", approval_record(scope=["n-skip"]), at=T2)
         accepted = [
             node_record("n-success", "admitted-success"),
             node_record("n-skip", "approved-skip", approval="approval-skip-b", outputs=[], evidence=[]),
@@ -684,6 +688,55 @@ class JournalStateTests(_JournalTestCase):
         _, code = self.append(
             "record-node",
             node_record("implement-b", "approved-skip", approval="approval-skip-b", outputs=[], evidence=[]),
+            at=T2,
+        )
+        self.assertEqual(code, EXIT_OK)
+
+    def test_an_approved_skip_must_be_named_in_its_approvals_scope(self) -> None:
+        """Recorded is not authorized: the approval must actually name THIS node.
+
+        Without this, any recorded approval -- even one scoped to a completely different node --
+        would let an unrelated node claim `approved-skip`, which makes `approved` a fact about
+        proximity in the journal rather than a fact the journal actually derives.
+        """
+        _, code = self.append("record-approval", approval_record(scope=["implement-c"]), at=T2)
+        self.assertEqual(code, EXIT_OK)
+        result, code = self.append(
+            "record-node",
+            node_record("implement-b", "approved-skip", approval="approval-skip-b", outputs=[], evidence=[]),
+            at=T2,
+        )
+        self.assertEqual(code, EXIT_REFUSED)
+        self.assertIn("implement-b", result["reasons"][0])
+        self.assertIn("implement-c", result["reasons"][0])
+        self.assertEqual(len(self.lines()), 2)  # nothing beyond the recorded approval was appended
+        # scope=["implement-c"] alone cannot distinguish exact membership from substring
+        # containment, because "implement-b" is not a substring of "implement-c" either. This case
+        # is the one that does: "implement-b" IS a substring of "implement-b-followup", so a check
+        # weakened to substring containment would wrongly accept this as authorization. It must
+        # refuse too.
+        _, code = self.append(
+            "record-approval",
+            approval_record(approval_id="approval-skip-b-followup", scope=["implement-b-followup"]),
+            at=T2,
+        )
+        self.assertEqual(code, EXIT_OK)
+        result, code = self.append(
+            "record-node",
+            node_record("implement-b", "approved-skip", approval="approval-skip-b-followup", outputs=[], evidence=[]),
+            at=T2,
+        )
+        self.assertEqual(code, EXIT_REFUSED)
+        self.assertIn("implement-b", result["reasons"][0])
+        self.assertIn("implement-b-followup", result["reasons"][0])
+        # POSITIVE CONTROL: the identical record is accepted once an approval scoped to implement-b
+        # ALSO exists in the journal, so this is about scope membership and not about the node_id,
+        # the disposition, or the approval_id shape.
+        _, code = self.append("record-approval", approval_record(approval_id="approval-skip-b2", scope=["implement-b"]), at=T2)
+        self.assertEqual(code, EXIT_OK)
+        _, code = self.append(
+            "record-node",
+            node_record("implement-b", "approved-skip", approval="approval-skip-b2", outputs=[], evidence=[]),
             at=T2,
         )
         self.assertEqual(code, EXIT_OK)
@@ -1143,12 +1196,144 @@ class InterleavedWriterTests(_JournalTestCase):
         self.assertFalse(self.staging().exists())
 
 
+class InterleavedInitTests(_JournalTestCase):
+    """`_publish`'s RENAME_NOREPLACE guard, killed by the same ordering seam without a forked racer.
+
+    Its docstring used to say this guard was the one thing here no test kills, because the only race
+    it defends against is two concurrent `init`s for the SAME journal path, and forking a racer to hit
+    that window would be exactly the timing-dependent test this repository forbids. It is drivable
+    anyway: writer A's `_publish` is wrapped so a real, separately committed writer B's WHOLE `init`
+    runs to completion in PROGRAM ORDER between A's absence pre-check and A's rename, the same
+    generalisation `InterleavedWriterTests` already uses for the append path's own race.
+    """
+
+    def staging(self) -> Path:
+        return self.journal.with_name(self.journal.name + ".next")
+
+    def writer_a(self, interleave: Any, *, header: dict[str, Any] | None = None) -> tuple[dict[str, Any], int]:
+        """Run writer A's `init` here, calling `interleave` at the instant its own publish begins.
+
+        Wrapping `_publish` rather than a lower primitive is what places the seam exactly where the
+        docstring's race window starts: `init_command` calls `_publish` immediately after its `os.stat`
+        pre-check finds the journal absent, and immediately before that call is staging, write, and
+        rename.
+        """
+        module = load_tool_in_process()
+        original, calls = module._publish, []
+
+        def _publish(parent_fd: int, name: str, data: bytes, *, replace: bool, bound: Any) -> None:
+            calls.append(name)
+            interleave()
+            return original(parent_fd, name, data, replace=replace, bound=bound)
+
+        module._publish = _publish
+        out, err = io.StringIO(), io.StringIO()
+        with constructed_control_environment(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = module.main(
+                [
+                    "init",
+                    "--journal",
+                    str(self.journal),
+                    "--at",
+                    T1,
+                    "--record",
+                    json.dumps(header if header is not None else header_record(wave_id="wave-a-loses")),
+                ]
+            )
+        self.assertEqual(len(calls), 1, "writer A never reached the publish this seam stands on")
+        document = json.loads(out.getvalue())
+        self.assertEqual(out.getvalue().encode("utf-8"), canonical(document), "stdout is not canonical")
+        return document, code
+
+    def writer_b(self) -> None:
+        """Writer B's WHOLE `init`, as a separate committed invocation that wins the race."""
+        result = self.init()
+        self.assertEqual(result["__code"], EXIT_OK)
+
+    def test_a_second_committed_init_is_refused_at_exit_4_not_silently_overwritten(self) -> None:
+        self.assertFalse(self.journal.exists(), "writer A must start the race against an absent journal")
+        document, code = self.writer_a(self.writer_b)
+        self.assertEqual(code, EXIT_PARTIAL, "the loser of the race must not silently clobber the winner")
+        self.assertIn(code, DECLARED_EXITS)
+        self.assertEqual(document["status"], "effect-unknown")
+        self.assertEqual(document["effect"], "effect_unknown")
+        # The staging bytes really existed, so this is 4 rather than 3, and the ledger names it.
+        self.assertTrue(document["admitted_effects"], "exit 4 with an empty ledger says nothing")
+        self.assertIn("staging successor", document["admitted_effects"][0])
+        self.assertNotIn("published", " ".join(document["admitted_effects"]))
+        self.assertIn("appeared after this run checked for it", document["reasons"][0])
+        self.assertFalse(self.staging().exists(), "writer A's own abandoned staging file must be removed")
+        # B's journal SURVIVES, which is the whole point: the file on disk is B's opening line, not A's.
+        opened = json.loads(self.journal.read_bytes())
+        self.assertEqual(opened["record"]["wave_id"], "wave-1")  # writer_b()/self.init()'s default
+        self.assertEqual(len(self.lines()), 1)
+
+    def test_the_same_sequence_without_the_interleaved_init_succeeds(self) -> None:
+        """POSITIVE CONTROL: the seam itself refuses nothing -- only the raced file does."""
+        document, code = self.writer_a(lambda: None)
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(document["status"], "initialized")
+        self.assertEqual(document["seq"], 0)
+        self.assertTrue(self.journal.exists())
+        self.assertEqual(json.loads(self.journal.read_bytes())["record"]["wave_id"], "wave-a-loses")
+        self.assertFalse(self.staging().exists())
+
+
+class EffectLedgerNestingTests(_JournalTestCase):
+    """`_effect_ledger`'s own stated rationale, actually driven.
+
+    Its docstring claims restoring rather than clearing "keeps a test that drives two commands in one
+    process from erasing the outer command's admitted effects" -- a claim nothing here exercised
+    before this class: every other in-process test (`InterleavedWriterTests`, `InterleavedInitTests`)
+    calls `module.main` exactly once. This holds an OUTER ledger open by hand, runs a WHOLE nested
+    `init` invocation (which enters and exits its own fresh ledger internally), and proves the outer
+    one survives byte-for-byte and by identity.
+    """
+
+    def test_a_nested_command_does_not_erase_the_outer_ledgers_admitted_effects(self) -> None:
+        module = load_tool_in_process()
+        with module._effect_ledger() as outer:
+            outer.admit("an effect the OUTER context admitted before any nested command ran")
+            out = io.StringIO()
+            with constructed_control_environment(), contextlib.redirect_stdout(out):
+                code = module.main(
+                    ["init", "--journal", str(self.journal), "--at", T0, "--record", json.dumps(header_record())]
+                )
+            # The nested command ran its own complete lifecycle, admitting its OWN effects...
+            self.assertEqual(code, EXIT_OK)
+            nested = json.loads(out.getvalue())
+            self.assertTrue(nested["admitted_effects"])
+            # ...and yet the module-global ledger is once again THIS SAME outer object, not the
+            # nested command's fresh one left behind: it was RESTORED, not merely replaced or cleared.
+            self.assertIs(module._EFFECTS, outer)
+            self.assertEqual(
+                outer.admitted, ["an effect the OUTER context admitted before any nested command ran"]
+            )
+        # POSITIVE CONTROL: a second, independent outer context starts empty and accumulates its own
+        # effect -- proving the assertions above exercise real accumulation, not a vacuously-true
+        # comparison of two ledgers that both happen to be empty.
+        with module._effect_ledger() as outer2:
+            self.assertEqual(outer2.admitted, [])
+            outer2.admit("a second, independent outer context's own effect")
+            self.assertEqual(outer2.admitted, ["a second, independent outer context's own effect"])
+
+
 class NoClockTests(unittest.TestCase):
     """Timestamps are inputs. A clock read inside the tool would make the journal untestable.
 
     Seed agentic-sdlc-184b measured this host stepping CLOCK_REALTIME BACKWARDS by 0.22-0.53s, which
     already broke one monotonicity check elsewhere in this repository. A journal that read its own
     clock would therefore refuse its own honest sequence at random.
+
+    PATTERNS is a per-attribute substring list, and it is only ever as complete as whoever last
+    enumerated the clock module's attributes: it used to be missing `time.time_ns`,
+    `time.perf_counter`, and `os.times`, none of which is a style variant of an already-listed
+    pattern. `NO_TIME_IMPORT` is the STRONGER check that does not need that enumeration kept current:
+    `time` is not imported anywhere in this module at all, so every one of `time.time`,
+    `time.time_ns`, `time.monotonic`, `time.monotonic_ns`, `time.perf_counter`,
+    `time.perf_counter_ns`, and `time.clock_gettime` -- named individually above or not -- is
+    unreachable in one move. `os` stays a PATTERN-only check because `os` genuinely is imported here
+    for non-clock reasons, so "os is never imported" is not a check this module could pass.
     """
 
     PATTERNS = (
@@ -1156,22 +1341,42 @@ class NoClockTests(unittest.TestCase):
         "datetime.utcnow",
         "utcnow(",
         "time.time(",
+        "time.time_ns(",
         "time.monotonic(",
+        "time.perf_counter(",
         "time.clock_gettime",
         "date.today(",
         "fromtimestamp(",
+        "os.times(",
     )
+    NO_TIME_IMPORT = re.compile(r"^\s*(import time\b|from time import)", re.MULTILINE)
 
     def test_the_source_reads_no_clock(self) -> None:
         source = TOOL.read_text(encoding="utf-8")
         hits = [pattern for pattern in self.PATTERNS if pattern in source]
         self.assertEqual(hits, [])
+        self.assertIsNone(
+            self.NO_TIME_IMPORT.search(source),
+            "the time module must never be imported here: every clock-reading attribute it exposes "
+            "becomes reachable in one move, not only the ones PATTERNS happens to name",
+        )
 
     def test_the_clock_detector_actually_detects_a_clock(self) -> None:
         """POSITIVE CONTROL: without this, the assertion above passes on an empty pattern list."""
-        planted = "stamp = datetime.now(UTC).isoformat()\nelapsed = time.time()\n"
+        planted = "stamp = datetime.now(UTC).isoformat()\nelapsed = time.time()\nspent = os.times()\n"
         hits = [pattern for pattern in self.PATTERNS if pattern in planted]
-        self.assertEqual(sorted(hits), ["datetime.now", "time.time("])
+        self.assertEqual(sorted(hits), ["datetime.now", "os.times(", "time.time("])
+
+    def test_the_time_import_detector_actually_detects_an_import(self) -> None:
+        """POSITIVE CONTROL for `NO_TIME_IMPORT`: a bare `import time` catches every one of its
+        clock-reading attributes at once, which is the whole point of asserting on the import
+        rather than enumerating the module's attributes one PATTERNS entry at a time.
+        """
+        planted = "import time\nelapsed = time.perf_counter_ns()\n"
+        self.assertIsNotNone(self.NO_TIME_IMPORT.search(planted))
+        # None of the enumerated PATTERNS would have caught THIS particular attribute on its own --
+        # that gap is exactly why the module-level guard exists.
+        self.assertEqual([pattern for pattern in self.PATTERNS if pattern in planted], [])
 
 
 _ENV_TOUCH = re.compile(r"os\.(?:environ|getenv)\b")
@@ -1446,7 +1651,15 @@ class HostileStdoutTests(_JournalTestCase):
         So on this interpreter the stdout channel's danger is the uncaught exception, not 120: an
         unguarded `_emit` would have reported 1 over a durable append. Both wrong answers are checked
         for below; the assertion here is only that the fixture is hostile at all.
+
+        RE-MEASUREMENT PIN: this is CPython 3.12.11's own broken-pipe/finalization behaviour, not this
+        tool's. A future bump of the pinned interpreter (`mise.toml` / `mise.lock`) can change which of
+        1, 120, or something else a bare hostile write costs an unguarded program, which would silently
+        invalidate the three-way table above without failing any assertion by itself. Re-measure this
+        test's own fixture on the new interpreter before trusting it again.
         """
+        if sys.version_info[:3] != (3, 12, 11):
+            self.skipTest("this fixture's measured exit codes are pinned to CPython 3.12.11; re-measure before trusting it on another interpreter")
         code, err = _run_with_hostile_stdout(
             [sys.executable, "-B", "-c", "print('x' * 100000)"], cwd=self.tmp
         )
@@ -1516,14 +1729,25 @@ class SurfaceTests(_JournalTestCase):
         self.assertIn(".next", self.document(proc)["reasons"][0])
 
     def test_a_symlinked_journal_is_refused_rather_than_followed(self) -> None:
+        """The refusal must be THIS TOOL'S classification, not the kernel's ELOOP strerror in disguise.
+
+        On Linux, `os.strerror(errno.ELOOP)` is "Too many levels of symbolic links", which itself
+        contains the substring "symbolic link" -- so an `assertIn("symbolic link", ...)` here would
+        ALSO pass on the tool's GENERIC `cannot read {label} {name}: {exc}` fallback branch, which
+        stringifies that same OSError, if the errno-specific branch that actually names the symlink
+        were ever removed. Asserting the EXACT message this tool's own `errno in (ELOOP, EMLINK)`
+        branch produces is what makes this test about the tool's classification rather than about
+        a coincidence of English wording in the C library.
+        """
         target = self.tmp / "elsewhere.journal"
         target.write_bytes(b"{}\n")
         link = self.tmp / "link.journal"
         link.symlink_to(target)
         proc = self.run_tool(["project", "--journal", str(link)])
         self.assertEqual(proc.returncode, EXIT_REFUSED)
-        self.assertIn("symbolic link", self.document(proc)["reasons"][0])
-        # POSITIVE CONTROL: the same bytes at a real path are read (and refused on their content).
+        self.assertEqual(self.document(proc)["reasons"][0], f"wave journal is a symbolic link: {link.name}")
+        # POSITIVE CONTROL: the same bytes at a real path are read (and refused on their content),
+        # so the refusal above is about the link and not about the target's own content.
         proc = self.run_tool(["project", "--journal", str(target)])
         self.assertEqual(proc.returncode, EXIT_REFUSED)
         self.assertIn("wave-opened", self.document(proc)["reasons"][0])

@@ -735,6 +735,12 @@ def _unchanged_since_read(parent_fd: int, name: str, bound: dict[str, Any]) -> N
     replace the live file with a chain built from a prefix that is no longer the whole journal. That
     loss is undetectable afterwards (the successor is self-consistent, and `read_journal` cannot see a
     rewritten tail), so it has to be refused here or not at all.
+
+    THE COST IS A SECOND FULL READ PER APPEND, MEASURED AND DEFERRED RATHER THAN CUT: this re-reads
+    the whole live journal a second time on top of the read that built the successor, an O(size)
+    doubling this module accepted as bounded by one wave's append-only growth instead of optimizing
+    away toward a cheaper device/inode/size/mtime-only comparison, which `_read_regular_at` already
+    names as unsafe against a same-second same-size edit.
     """
     _, live = _read_regular_at(parent_fd, name, "wave journal")
     changed = sorted(field for field in bound if live[field] != bound[field])
@@ -845,12 +851,18 @@ def _publish(parent_fd: int, name: str, data: bytes, *, replace: bool, bound: di
     tidier exit code; a mismatch found here is therefore exit 4 over this run's own staged bytes,
     which `_report_failure` derives and `_discard_staging` then describes.
 
-    THAT FLAG IS THE ONE GUARD HERE NO TEST KILLS, and it stays deliberately. Its only distinguishing
-    input is a second creator arriving inside the window between `init`'s `os.stat` pre-check and this
-    rename, and this bundle declares concurrent external mutation of managed paths unsupported; a test
-    that forked a racer to hit that window would be timing-dependent, which is the host-coupled test
-    this repository forbids. What it buys is the difference between the loser of that race silently
-    destroying the winner's journal (flags 0) and refusing at exit 4 with the effect named.
+    THAT FLAG'S GUARD IS KILLED BY A DETERMINISTIC ORDERING SEAM, not by a forked racer. Its only
+    distinguishing input is a second creator arriving inside the window between `init`'s `os.stat`
+    pre-check and this rename, and this bundle declares concurrent external mutation of managed paths
+    unsupported; a test that forked a racer to hit that window would still be timing-dependent, which
+    is the host-coupled test this repository forbids. `tests/test_wave_journal.py`'s
+    `InterleavedInitTests` drives it anyway, the same way `InterleavedWriterTests` drives the append
+    path's own race: it wraps this function itself, so a second, REALLY COMMITTED `init` (a separate
+    subprocess) runs to completion in PROGRAM ORDER between writer A's pre-check and writer A's rename,
+    rather than by timing. What the flag buys is the difference between the loser of that race silently
+    destroying the winner's journal (flags 0) and refusing at exit 4 with the effect named, and the
+    test kills exactly that guard: drop `_RENAME_NOREPLACE` to `0` here and the same sequence silently
+    overwrites the winner's journal instead of refusing.
     """
     staging = name + STAGING_SUFFIX
     admitted_before = len(_EFFECTS.admitted)
@@ -970,7 +982,10 @@ def _cross_check(kind: str, record: dict[str, Any], at: str, entries: list[dict[
     dispositions = {
         entry["record"]["node_id"]: entry for entry in entries[1:] if entry["kind"] == KIND_NODE
     }
-    approvals = {entry["record"]["approval_id"] for entry in entries[1:] if entry["kind"] == KIND_APPROVAL}
+    approval_records = {
+        entry["record"]["approval_id"]: entry["record"] for entry in entries[1:] if entry["kind"] == KIND_APPROVAL
+    }
+    approvals = set(approval_records)
     if kind == KIND_NODE:
         prior = dispositions.get(record["node_id"])
         if prior is not None:
@@ -979,12 +994,27 @@ def _cross_check(kind: str, record: dict[str, Any], at: str, entries: list[dict[
                 f"node {record['node_id']} already reached the {prior['record']['disposition']} disposition at seq {prior['seq']}: a node reaches exactly one disposition",
                 EXIT_REFUSED,
             )
-        if record["disposition"] == "approved-skip" and record["approval"] not in approvals:
-            raise JournalError(
-                "refused",
-                f"node record approval {record['approval']!r} names an approval this journal does not carry: record the approval first, so `approved` is derivable from the journal",
-                EXIT_REFUSED,
-            )
+        if record["disposition"] == "approved-skip":
+            approval = approval_records.get(record["approval"])
+            if approval is None:
+                raise JournalError(
+                    "refused",
+                    f"node record approval {record['approval']!r} names an approval this journal does not carry: record the approval first, so `approved` is derivable from the journal",
+                    EXIT_REFUSED,
+                )
+            # Existence alone is not authorization: this bundle's OWN downstream verdict tool checks a
+            # fan-in approval's scope against the node it authorizes (Condition 5), and a recorded
+            # approval whose scope names a DIFFERENT node is not evidence that THIS node was approved
+            # to skip -- it is a true, recorded, irrelevant fact. Requiring scope membership here is
+            # what makes `approved` derivable rather than merely "some approval exists somewhere".
+            if record["node_id"] not in approval["scope"]:
+                raise JournalError(
+                    "refused",
+                    f"node {record['node_id']}'s approved-skip cites approval {record['approval']!r}, "
+                    f"whose scope {approval['scope']!r} does not name it: an approval authorizes only "
+                    "the node(s) its own scope lists",
+                    EXIT_REFUSED,
+                )
     elif kind == KIND_APPROVAL:
         if record["approval_id"] in approvals:
             raise JournalError("refused", f"approval {record['approval_id']} is already recorded in this journal", EXIT_REFUSED)
@@ -1131,7 +1161,22 @@ def _append(command: str, kind: str, args: argparse.Namespace) -> tuple[dict[str
 
 
 def project_command(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    """Publish the journal's facts. Nothing here is a verdict; see the module docstring."""
+    """Publish the journal's facts. Nothing here is a verdict; see the module docstring.
+
+    THE BOUND IDENTITY IS DISCARDED HERE ON PURPOSE. `read_journal` returns the file's identity
+    alongside its entries, and `_append` carries that identity forward into `_publish`'s `bound`,
+    re-compared immediately before ITS OWN rename. `project` never mutates, so it has no later rename
+    of its own to bind that identity against, and the identity return value below is thrown away (see
+    the `_` in the unpacking).
+
+    That makes the published `journal_digest` describe THE READ this invocation performed, not the
+    file at whatever later instant the caller acts on this projection. Nothing here re-reads the file
+    to confirm it is still that exact state, and nothing stops another writer from appending between
+    this read and the caller's use of the result. A caller that needs the two instants to coincide
+    must re-project immediately before acting, or must be the one holding `journal_digest` as an
+    anchor kept OUTSIDE this file's own read -- which is exactly what `wave-verdict.py`'s conductor
+    record and its `--wave-journal-digest` anchor both bind against.
+    """
     journal = Path(args.journal)
     parent_fd, name = _open_parent(journal)
     try:
