@@ -98,6 +98,24 @@ ACTIVE_TERMINAL_PHASES = ("activated", "activated-partial")
 # `request` is the refused member of that closed set: a requested version is what the caller asked
 # for, never what an adapter read back, so it never becomes an activated version here.
 PROVEN_VERSION_SOURCES = ("adapter-readback", "archive-manifest")
+# THE PLANE'S ONE ACTIVE STATEMENT, and the two facts that keep a healthy history from reading as a
+# defect. `ccodex sdlc install` writes this pointer and `ccodex sdlc update` replaces it, while the
+# receipt the update replaced is RETAINED under its own id -- deliberately, so a kill mid-update
+# leaves a readable prior statement. Both documents therefore coexist on a healthy plane, and a
+# reader that counted every filed receipt as a current activation would report the retention as an
+# ambiguity. Two independent facts resolve it, and neither one is invented here: the pointer names
+# the current receipt, and an update's own `supersedes` ancestor names the receipt it replaced.
+ACTIVE_POINTER_NAME = "active-receipt.json"
+SUPERSEDES_RELATION = "supersedes"
+# The pointer's own opaque locator. It is a fixed name this reader already knows, so it carries no
+# operator content and is spelled out rather than digested.
+ACTIVE_POINTER_LOCATOR = "activation-plane://active-receipt"
+# A receipt id is CORRELATED here, so it is admitted only in a bounded closed shape, exactly as
+# `safe_version` bounds a version. The family's own token rule is lowercase letters, ASCII digits,
+# and interior hyphens; the charset is written out because `\w` and `\d` admit Unicode, and a
+# receipt id spelled in Arabic-Indic digits would read as the same identity while comparing unequal.
+MAX_RECEIPT_ID_CHARS = 128
+_RECEIPT_ID_CHARACTERS = "0123456789abcdefghijklmnopqrstuvwxyz-"
 # One receipt is a few kilobytes. The ceiling means an oversized or truncated file is NAMED as
 # unreadable instead of being read into this process, and the document bound means an unbounded
 # directory cannot turn a bounded read into a scan.
@@ -134,6 +152,24 @@ class LifecycleUnknownEffect(RuntimeError):
 
 class ReportInvariantError(RuntimeError):
     pass
+
+
+class _Unsupplied:
+    """The third state of an injected location: nobody named one at all.
+
+    ``None`` means "a location was named and this reader must treat it as absent"; ``UNSUPPLIED``
+    means "no caller named one, so use the layout's own convention".  Supplied-but-missing and
+    not-supplied are different inputs with different recorded reasons, and collapsing them would let
+    a caller that named nothing read as a caller that named an absence.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return "UNSUPPLIED"
+
+
+UNSUPPLIED = _Unsupplied()
 
 
 def _reject_duplicate(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -674,6 +710,24 @@ def safe_version(value: object) -> str | None:
     return value
 
 
+def safe_receipt_id(value: object) -> str | None:
+    """Admit a receipt id only in the family's own bounded token shape, or state nothing.
+
+    This value is CORRELATED -- the pointer's id against each filed receipt's, and an update's
+    ``supersedes`` ancestor against the receipt it names -- so an inadmissible spelling becomes
+    ``None`` and correlates with nothing rather than becoming a key that silently matches the wrong
+    document.  It is never rendered into a finding: it identifies a document, and the finding names
+    that document by its opaque locator instead.
+    """
+    if not isinstance(value, str) or not value or len(value) > MAX_RECEIPT_ID_CHARS:
+        return None
+    if any(character not in _RECEIPT_ID_CHARACTERS for character in value):
+        return None
+    if value[0] == "-" or value[-1] == "-":
+        return None
+    return value
+
+
 def strict_plane_json(text: str) -> dict[str, Any]:
     """Parse one plane document with the duplicate-key and BOTH non-finite guards applied.
 
@@ -800,6 +854,16 @@ def receipt_observation(
         "candidate_id": None,
         "unknown_subjects": [],
         "interrupted": False,
+        # The identity this receipt claims, and the identities it claims to replace. Both are read
+        # only out of a VALIDATED document, and both stay `None`/empty otherwise: an unvalidated
+        # document's ancestors are unchecked text, and letting one of them retire a neighbour would
+        # hand any writable file the power to hide a real activation from this reader.
+        "receipt_id": None,
+        "supersedes": [],
+        # Whether another receipt on this plane says it replaced this one, and whether this receipt
+        # is the plane's CURRENT statement. Both default to the honest negative.
+        "superseded": False,
+        "active": False,
     }
 
 
@@ -838,10 +902,30 @@ def observe_activation_receipt(
     )
     version_source = body.get("version_source")
     resolved = safe_version(body.get("resolved_version"))
+    # Built into a LOCAL before the literal that reports it: a comprehension inside a dict literal is
+    # evaluated after its sibling keys, and this project has already lost a whole list that way.
+    ancestors = document.get("ancestors")
+    superseded_ids: list[str] = []
+    for reference in ancestors if isinstance(ancestors, list) else []:
+        if not isinstance(reference, dict):
+            continue
+        # `derived-from` names the ACQUISITION this receipt drew its payload from, and only
+        # `supersedes` names an activation receipt this one replaced. The kind is checked too,
+        # because a reference to another family's document never retires a receipt on this plane.
+        if reference.get("relation") != SUPERSEDES_RELATION:
+            continue
+        if reference.get("expected_kind") != EXPECTED_RECEIPT_KIND:
+            continue
+        named = safe_receipt_id(reference.get("receipt_id"))
+        if named is not None and named not in superseded_ids:
+            superseded_ids.append(named)
+    superseded_ids.sort()
     observation.update(
         {
             "seal_valid": True,
             "state": "validated",
+            "receipt_id": safe_receipt_id(document.get("receipt_id")),
+            "supersedes": superseded_ids,
             "operation": body.get("operation") if isinstance(body.get("operation"), str) else None,
             "terminal_phase": body.get("terminal_phase") if isinstance(body.get("terminal_phase"), str) else None,
             "effect_state": body.get("effect_state") if isinstance(body.get("effect_state"), str) else None,
@@ -929,11 +1013,82 @@ def observe_candidate_version(
     return version, None
 
 
+def observe_active_pointer(
+    location: Path | None | _Unsupplied,
+    directory: Path,
+    validator: ModuleType | None,
+    validator_reason: str | None,
+    read_document: Any = read_plane_document,
+) -> dict[str, Any]:
+    """Observe the plane's ONE active statement, or NAME why it states nothing this reader can use.
+
+    ``activation/active-receipt.json`` sits beside the receipts directory, so an unsupplied location
+    is derived from that layout rather than from an environment this reader would have to re-resolve.
+    A caller that names ``None`` has said "treat this plane as having no pointer", which is a
+    different input from naming nothing at all, and the two are recorded as different states.
+
+    Absent is a STATE, not a failure: a plane activated before the pointer existed, and a plane that
+    was never activated, both have no pointer, and neither is a defect this reader invented.  Every
+    other outcome is named -- a symlink is reported instead of followed, an unparsable document is
+    named, and a document whose seal does not validate has nothing read out of it -- and in every one
+    of those cases the pointer disambiguates nothing, so the plane falls back to what the receipts
+    themselves say about each other.
+    """
+    observation: dict[str, Any] = {
+        "state": "absent",
+        "reason": None,
+        "receipt_id": None,
+        "correlation": "not-correlated",
+        # Whether a caller named this location at all. `UNSUPPLIED` means the layout's own convention
+        # was used, and that is a different input from a caller that named one.
+        "location_supplied": not isinstance(location, _Unsupplied),
+    }
+    if location is None:
+        observation["state"] = "unnamed"
+        observation["reason"] = "no active-receipt pointer location was supplied"
+        return observation
+    path = directory.parent / ACTIVE_POINTER_NAME if isinstance(location, _Unsupplied) else location
+    try:
+        item = path.lstat()
+    except FileNotFoundError:
+        observation["reason"] = "absent"
+        return observation
+    except OSError as exc:
+        observation["state"] = "unreadable"
+        observation["reason"] = f"cannot be read ({exc.strerror or exc.__class__.__name__})"
+        return observation
+    if stat.S_ISLNK(item.st_mode):
+        observation["state"] = "unreadable"
+        observation["reason"] = PLANE_SYMLINK_REASON
+        return observation
+    document, reason = read_document(path)
+    if document is None:
+        observation["state"] = "unreadable"
+        observation["reason"] = reason or "cannot be read"
+        return observation
+    if validator is None:
+        observation["state"] = "unassessed"
+        observation["reason"] = validator_reason or "the seal cannot be assessed"
+        return observation
+    assessed = observe_activation_receipt(document, validator, ACTIVE_POINTER_LOCATOR)
+    if assessed["state"] != "validated":
+        observation["state"] = assessed["state"]
+        observation["reason"] = assessed["reason"]
+        return observation
+    observation["state"] = "observed"
+    observation["receipt_id"] = assessed["receipt_id"]
+    if assessed["receipt_id"] is None:
+        observation["reason"] = "states no admissible receipt id, so it correlates with no receipt"
+    return observation
+
+
 def observe_activation(
     directory: Path,
     validator: ModuleType | None,
     validator_reason: str | None,
     read_document: Any = read_plane_document,
+    *,
+    active_pointer: Path | None | _Unsupplied = UNSUPPLIED,
 ) -> dict[str, Any]:
     """Observe the distribution-activation plane: presence, seal validity, versions, transitions."""
     names, listing_reason = list_plane_documents(directory)
@@ -960,7 +1115,45 @@ def observe_activation(
     activated = [
         receipt for receipt in validated if receipt["terminal_phase"] in ACTIVE_TERMINAL_PHASES
     ]
-    versions = sorted({receipt["activated_version"] for receipt in activated if receipt["activated_version"]})
+    pointer = observe_active_pointer(active_pointer, directory, validator, validator_reason, read_document)
+    # WHICH FILED RECEIPTS ARE STILL THIS PLANE'S STATEMENT. An update retains the receipt it
+    # replaced, so a plane with a history holds more than one activation receipt by design. A receipt
+    # another VALIDATED receipt names in a `supersedes` ancestor has been replaced, and the pointer --
+    # when it is readable, sealed, and correlates with exactly one filed receipt -- is the plane's own
+    # statement of which receipt is current and takes precedence over the ancestor walk.
+    replaced: set[str] = set()
+    for receipt in validated:
+        replaced.update(receipt["supersedes"])
+    for receipt in receipts:
+        receipt["superseded"] = receipt["receipt_id"] is not None and receipt["receipt_id"] in replaced
+    current = None
+    if pointer["state"] == "observed" and pointer["receipt_id"] is not None:
+        named = [receipt for receipt in activated if receipt["receipt_id"] == pointer["receipt_id"]]
+        if len(named) == 1:
+            current = named[0]
+            pointer["correlation"] = "matched"
+        elif not named:
+            pointer["correlation"] = "names-no-filed-activation"
+        else:
+            # Two documents claiming one identity is an ambiguity this reader reports rather than
+            # resolves by picking one, which is the same posture the update verb takes on retention.
+            pointer["correlation"] = "names-more-than-one-filed-document"
+    effective = [current] if current is not None else [
+        receipt for receipt in activated if not receipt["superseded"]
+    ]
+    # `active` and `superseded` are independent facts and BOTH can hold at once: an update that filed
+    # its receipt and was killed before replacing the pointer leaves a sealed receipt whose ancestor
+    # names the receipt this plane still points at. The pointer is the plane's OWN statement of what
+    # it owns, so it wins; the other document's claim stays visible in `superseded_activations`
+    # instead of being resolved into a version this plane never activated.
+    for receipt in effective:
+        receipt["active"] = True
+    versions = sorted({receipt["activated_version"] for receipt in effective if receipt["activated_version"]})
+    # Both lists are built into locals BEFORE the literal that reports them, because a comprehension
+    # inside a dict literal is evaluated after its sibling keys.
+    superseded_locators = [receipt["locator"] for receipt in receipts if receipt["superseded"]]
+    active_locators = [receipt["locator"] for receipt in effective]
+    unversioned = [receipt["locator"] for receipt in effective if not receipt["activated_version"]]
     if not receipts and not unreadable:
         state = "absent"
     elif unreadable or any(receipt["state"] == "invalid" for receipt in receipts):
@@ -982,10 +1175,13 @@ def observe_activation(
         "activated_versions": versions,
         # An activated receipt whose version has no proven source states no activated version, and
         # the difference between "not supplied" and "supplied unusable" is kept.
-        "unversioned_activations": [
-            receipt["locator"] for receipt in activated if not receipt["activated_version"]
-        ],
+        "unversioned_activations": unversioned,
         "interrupted": [receipt["locator"] for receipt in receipts if receipt["interrupted"]],
+        "active_pointer": pointer,
+        # The plane's current statement and its retained history, kept as separate lists so no
+        # consumer has to re-derive either one from a count.
+        "active_activations": active_locators,
+        "superseded_activations": superseded_locators,
     }
 
 
@@ -1091,10 +1287,17 @@ def observe_readiness(
     validator_reason: str | None,
     observed_host_version: str | None = None,
     read_document: Any = read_plane_document,
+    active_pointer: Path | None | _Unsupplied = UNSUPPLIED,
 ) -> dict[str, Any]:
     """One read-only host-level readiness observation. Every location above is a parameter."""
     selection = observe_selected_payload(acquisition_receipts, read_document)
-    activation = observe_activation(activation_receipts, validator, validator_reason, read_document)
+    activation = observe_activation(
+        activation_receipts,
+        validator,
+        validator_reason,
+        read_document,
+        active_pointer=active_pointer,
+    )
     return {
         "activation": activation,
         "compatibility": observe_host_compatibility(contract, observed_host_version),
@@ -1173,6 +1376,45 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
                     receipt["locator"],
                 )
             )
+    pointer = activation["active_pointer"]
+    if pointer["state"] == "unreadable":
+        findings.append(
+            readiness_finding(
+                reason_code(pointer["reason"] or ""),
+                f"the activation plane's active-receipt pointer {pointer['reason']}",
+                ACTIVE_POINTER_LOCATOR,
+            )
+        )
+    elif pointer["state"] == "invalid":
+        findings.append(
+            readiness_finding(
+                "state-malformed",
+                f"the activation plane's active-receipt pointer did not validate: {pointer['reason']}",
+                ACTIVE_POINTER_LOCATOR,
+            )
+        )
+    elif pointer["correlation"] == "names-no-filed-activation":
+        findings.append(
+            readiness_finding(
+                "state-ambiguous",
+                "the activation plane's active-receipt pointer names no validated activation receipt "
+                "filed on this plane, so what this plane owns cannot be determined here",
+                ACTIVE_POINTER_LOCATOR,
+            )
+        )
+    elif pointer["correlation"] == "names-more-than-one-filed-document":
+        findings.append(
+            readiness_finding(
+                "state-ambiguous",
+                "the activation plane's active-receipt pointer names a receipt identity more than "
+                "one filed document claims, and this reader does not resolve which one is meant",
+                ACTIVE_POINTER_LOCATOR,
+            )
+        )
+    # Counted over the receipts that are still this plane's statement. A receipt an update SUPERSEDED
+    # is retained on purpose, and the pointer names the current one, so neither the retention nor the
+    # history is an ambiguity; two receipts that name each other's identity in no supersedes ancestor
+    # and no pointer to choose between them still is.
     if len(activation["activated_versions"]) > 1:
         findings.append(
             readiness_finding(

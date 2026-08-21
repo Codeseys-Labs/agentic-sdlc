@@ -50,6 +50,16 @@ THE FOUR PHASES, IN ORDER, EACH REFUSING BY NAME BEFORE THE NEXT COULD MOVE ANYT
      ``none``, and exactly one ``derived-from`` ancestor naming the acquisition receipt's
      ``operation_id``.  An install carries NO ``supersedes`` ancestor: only an update replaces an
      earlier receipt.
+  5. POINT THE PLANE AT THAT RECEIPT.  ``activation/active-receipt.json`` is the only statement of
+     what this plane owns, and it is the admission every later verb reads: ``ccodex sdlc update``
+     and ``ccodex sdlc uninstall`` admit that pointer and nothing else, so an install that sealed a
+     receipt without writing it left a plane no later verb could act on.  The order is fixed and is
+     the same order ``ccodex sdlc update`` uses: the receipt is written create-only and DURABLY
+     first, and only then is the pointer replaced atomically, so there is no window in which the
+     pointer names a receipt no directory holds.  A partial or unknown effect files the receipt as
+     evidence and leaves the pointer ALONE -- a pointer that claims an activation nobody completed
+     is worse than an absent one -- and exit 0 therefore requires all three halves: every claimed
+     effect complete, the receipt sealed, and the pointer naming it.
 
 WHAT THIS MODULE DOES NOT DO, BECAUSE THE TICKET'S MUST-NOTs ARE THE POINT.  No repository
 activation, no config trust, no OCX, no provider, no library, no statusline, no Claude launch, and
@@ -195,6 +205,10 @@ ACQUISITION_CANDIDATE_SEGMENTS = ("agentic-sdlc", "acquisition", "candidates")
 ACQUISITION_CANDIDATE_LEAF = "root"
 #: This module's own artifacts live beside the acquisition plane's, under the same state home.
 ACTIVATION_SEGMENTS = ("agentic-sdlc", "activation")
+#: The plane's ONE active statement, re-expressed from the same name ``ccodex sdlc update`` and
+#: ``ccodex sdlc uninstall`` admit. Those verbs admit this document and nothing else, so this is the
+#: name an install must land for the plane to have a front door at all.
+ACTIVE_RECEIPT_NAME = "active-receipt.json"
 
 CANDIDATE_MANIFEST_NAME = "manifest.json"
 CANDIDATE_MANIFEST_SCHEMA = "release-candidate/v1"
@@ -377,6 +391,10 @@ class Config:
     @property
     def activation_dir(self) -> Path:
         return self.state_home.joinpath(*ACTIVATION_SEGMENTS)
+
+    @property
+    def active_receipt_path(self) -> Path:
+        return self.activation_dir / ACTIVE_RECEIPT_NAME
 
     @property
     def plans_dir(self) -> Path:
@@ -1019,6 +1037,9 @@ class Run:
     effect_started: bool = False
     completed_effects: int = 0
     failures: list[str] = dataclass_field(default_factory=list)
+    #: Whether ``activation/active-receipt.json`` now names THIS run's receipt. False is the honest
+    #: default: an unreplaced pointer is never reported as an activation, and exit 0 requires it.
+    pointer_replaced: bool = False
 
 
 def entry_display_name(destination: Path, agent_root: Path) -> str:
@@ -1711,6 +1732,31 @@ def receipt_identity(payload: AdmittedPayload, instant: str) -> str:
     return token
 
 
+def replace_active_pointer(bundle: ModuleType, config: Config, raw: bytes) -> None:
+    """Point the plane at THIS receipt, atomically, only after it is durably filed.
+
+    ``os.replace`` plus a parent fsync inside ``write_replaceable_document``: a kill before this call
+    leaves the plane with no pointer at all -- exactly the state ``ccodex sdlc update`` and
+    ``ccodex sdlc uninstall`` refuse by name -- and a kill after it leaves this receipt, which is
+    already durably filed under its own id.  There is no window in which the pointer names a receipt
+    no directory holds.
+
+    This mirrors ``ccodex_sdlc_update.replace_active_pointer`` deliberately and is RE-EXPRESSED
+    rather than imported: importing that ticket's module here would make its refusals this module's
+    behaviour.  A failure is never a clean refusal, because the entries have already moved and the
+    receipt is already filed: it is an unknown effect that names the pointer this run could not
+    write, so an operator reads a sealed receipt beside a plane with no active statement rather than
+    a success that was never activated.
+    """
+    try:
+        write_replaceable_document(bundle, config.active_receipt_path, raw, "the active receipt pointer")
+    except Refusal as exc:
+        raise UnknownEffect(
+            f"the activation completed but the active pointer {show(str(config.active_receipt_path))}"
+            f" could not be written, so this plane states no active receipt: {exc}"
+        ) from exc
+
+
 # ---- the run --------------------------------------------------------------------------------------
 
 
@@ -1851,15 +1897,26 @@ def run_install(config: Config, run: Run) -> int:
         receipt_path = config.receipts_dir / f"{receipt_id}.json"
         write_new_document(bundle, receipt_path, receipt_raw, "the activation receipt")
 
+        # The pointer moves LAST and only once the receipt above is durably filed, so the plane never
+        # names a receipt no directory holds. A partial or unknown effect leaves the receipt filed as
+        # evidence and the pointer untouched, because a statement that claims an activation nobody
+        # completed is worse than one an operator can still read.
+        if not run.failures and effect_state == "complete":
+            replace_active_pointer(bundle, config, receipt_raw)
+            run.pointer_replaced = True
+
     reassert_acquisition_receipt(payload, run.effect_started)
     report(config, payload, outcomes, effect_state, terminal_phase, receipt_path, run)
-    # Exit 0 requires BOTH halves: the receipt sealed, and every claimed effect completed durably.
-    # An effect state the producer would not call complete is exit 4 even with no failure recorded,
-    # because an observation nobody could make is not a completion.
-    if run.failures or effect_state != "complete":
+    # Exit 0 requires all three halves: every claimed effect completed durably, the receipt sealed,
+    # and the plane's active statement naming it. An effect state the producer would not call
+    # complete is exit 4 even with no failure recorded, because an observation nobody could make is
+    # not a completion; an unmoved pointer is exit 4 because no later verb could act on this plane.
+    if run.failures or effect_state != "complete" or not run.pointer_replaced:
         raise UnknownEffect(
-            "the activation did not complete every claimed effect, and the sealed receipt records"
-            f" effect_state {show(effect_state)} with terminal_phase {show(terminal_phase)}:"
+            "the activation did not complete every claimed effect and activate its own receipt: the"
+            f" sealed receipt records effect_state {show(effect_state)} with terminal_phase"
+            f" {show(terminal_phase)}, and the active pointer"
+            f" {'names this activation' if run.pointer_replaced else 'was not written'}:"
             f" {'; '.join(run.failures) or 'an observation this run needed could not be made'}"
         )
     return EXIT_OK
@@ -1891,6 +1948,15 @@ def report(
     for failure in run.failures:
         lines.append(f"failure: {escape_display(failure)}")
     lines.append(f"receipt: {escape_display(str(receipt_path))}")
+    lines.append(
+        f"active pointer {escape_display(str(config.active_receipt_path))} "
+        + (
+            "names this activation's receipt"
+            if run.pointer_replaced
+            else "was NOT written, so this plane states no active receipt and no later lifecycle"
+            " verb can act on it"
+        )
+    )
     lines.append(
         "public_channel null and release_claim none: this activation states no published release"
         " exists, and it authorizes no push, publication, merge, or deployment"

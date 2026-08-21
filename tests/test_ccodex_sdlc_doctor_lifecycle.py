@@ -68,6 +68,11 @@ BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@1"
 ENVELOPE_SCHEMA = "agentic-sdlc/receipt-envelope@1"
 RECEIPT_KIND = "distribution-activation"
 ACQUISITION_SCHEMA = "release-candidate-acquisition-receipt/v1"
+# The one relation that retires a receipt, and the one file that names the current one. Both are
+# spelled out here and pinned against the reader's and the family's own constants below, so a rename
+# in either place fails as a named disagreement instead of silently making these fixtures fictional.
+SUPERSEDES_RELATION = "supersedes"
+ACTIVE_POINTER_NAME = "active-receipt.json"
 # The five reader usage lines and the reader forms, pinned as literals: this ticket touches the
 # projection and must leave the f894 grammar surface byte-for-byte alone. The fifth line and the
 # `--apply` form are `recover`'s one mutating spelling (agentic-sdlc-baaa); the four read lines above
@@ -130,16 +135,36 @@ def activation_body(**overrides: Any) -> dict[str, Any]:
     return body
 
 
-def sealed_activation_receipt(**overrides: Any) -> dict[str, Any]:
+def superseding_ancestors(replaced: str, acquisition: str = "acquisition-2") -> list[dict[str, str]]:
+    """The two typed ancestors an ``operation: update`` receipt carries, in the family's own shape.
+
+    The family admits ``supersedes`` ONLY for ``operation: update`` and requires exactly one of it,
+    so a fixture that supersedes anything is an update fixture.  The ``derived-from`` reference names
+    the acquisition the refresh drew its payload from and must never read as a supersession.
+    """
+    return [
+        {"expected_kind": RECEIPT_KIND, "receipt_id": acquisition, "relation": "derived-from"},
+        {"expected_kind": RECEIPT_KIND, "receipt_id": replaced, "relation": SUPERSEDES_RELATION},
+    ]
+
+
+def sealed_activation_receipt(
+    *,
+    receipt_id: str = "activation-1",
+    ancestors: list[dict[str, str]] | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
     """One receipt sealed by the family's OWN producer, so the fixture is never a hand-built seal."""
     document = {
-        "ancestors": [
+        "ancestors": ancestors
+        if ancestors is not None
+        else [
             {"expected_kind": RECEIPT_KIND, "receipt_id": "acquisition-1", "relation": "derived-from"}
         ],
         "body": activation_body(**overrides),
         "content_digest": "",
         "emitting_plane": "repository-gate",
-        "receipt_id": "activation-1",
+        "receipt_id": receipt_id,
         "receipt_kind": RECEIPT_KIND,
         "schema": ENVELOPE_SCHEMA,
         "stated_at": "2026-08-20T12:00:00Z",
@@ -233,6 +258,73 @@ class ReadinessHarness(unittest.TestCase):
         path = self.activation / name
         path.write_bytes(content)
         return path
+
+    @property
+    def pointer(self) -> Path:
+        """The plane's active statement, at the layout position the shipped writers use."""
+        return self.state / "agentic-sdlc" / "activation" / ACTIVE_POINTER_NAME
+
+    def write_pointer(self, receipt: dict[str, Any]) -> Path:
+        """Write the pointer exactly as ``ccodex sdlc install``/``update`` do: the receipt's own bytes."""
+        self.pointer.parent.mkdir(parents=True, exist_ok=True)
+        self.pointer.write_bytes(receipts.canonical_bytes(receipt))
+        return self.pointer
+
+    def file_activation(self, receipt: dict[str, Any], name: str | None = None) -> Path:
+        """File one ALREADY sealed receipt under a name derived from the identity it claims."""
+        self.activation.mkdir(parents=True, exist_ok=True)
+        path = self.activation / (name or f"{hexof(receipt['receipt_id'])}.json")
+        path.write_bytes(receipts.canonical_bytes(receipt))
+        return path
+
+    def write_payload(self, archive: str, version: str) -> Path:
+        """One more acquired candidate root plus its acquisition receipt, keyed by its own digest."""
+        root = self.root / "data" / "candidates" / archive / "root"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "manifest.json").write_text(
+            json.dumps({"candidate_id": hexof(f"candidate-{archive}"), "product_version": version}),
+            encoding="utf-8",
+        )
+        self.acquisition.mkdir(parents=True, exist_ok=True)
+        document = acquisition_receipt(root, archive_sha256=archive)
+        (self.acquisition / f"{archive}.json").write_text(
+            json.dumps(document, sort_keys=True), encoding="utf-8"
+        )
+        return root
+
+    def write_updated_plane(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The plane a HEALTHY ``ccodex sdlc update`` leaves behind, in the shape it really leaves it.
+
+        Two acquired payloads, the prior receipt RETAINED under its own id, the new receipt filed
+        under its own id with one ``supersedes`` ancestor naming the prior one, and the pointer
+        carrying the new receipt's exact bytes.  Nothing here is a mock: both receipts are sealed by
+        the family's own producer, and the pointer is written the way the update verb writes it.
+        """
+        self.write_candidate()
+        self.write_acquisition()
+        new_archive = hexof("archive-b")
+        self.write_payload(new_archive, "0.7.4")
+        prior = sealed_activation_receipt(receipt_id="activation-1")
+        current = sealed_activation_receipt(
+            receipt_id="activation-2",
+            ancestors=superseding_ancestors("activation-1"),
+            operation="update",
+            archive_sha256=new_archive,
+            candidate_id=hexof(f"candidate-{new_archive}"),
+            requested_version="0.7.4",
+            resolved_version="0.7.4",
+        )
+        self.file_activation(prior)
+        self.file_activation(current)
+        self.write_pointer(current)
+        return prior, current
+
+    def receipt_for(self, activation: dict[str, Any], receipt_id: str) -> dict[str, Any]:
+        """The ONE observation whose locator is the filed name of this receipt identity."""
+        locator = f"activation-receipt://{hexof(receipt_id)}"
+        matches = [item for item in activation["receipts"] if item["locator"] == locator]
+        assert len(matches) == 1, (locator, [item["locator"] for item in activation["receipts"]])
+        return matches[0]
 
     # ---- observation --------------------------------------------------------------------------
 
@@ -942,6 +1034,413 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         # the mutating verbs' own refusals and not a broken invocation.
         control = self.run_reader("doctor", "--json")
         self.assertEqual(control.returncode, 0, control.stderr)
+
+
+class SupersededActivationHistoryTest(ReadinessHarness):
+    """A RETAINED prior receipt is history, not an ambiguity (agentic-sdlc-7b2e).
+
+    ``ccodex sdlc update`` retains the receipt it replaced under its own id on purpose: a kill between
+    the two writes must leave a readable prior statement.  So a healthy updated plane holds two filed
+    activation receipts, and a reader that counted every filed receipt as a current activation
+    reported that retention as ``state-ambiguous`` naming both versions -- a defect this reader
+    invented about a plane in its correct state.
+
+    Two independent facts resolve it and NEITHER is guessed here: the pointer the writers maintain
+    names the current receipt, and an update's own ``supersedes`` ancestor names the receipt it
+    replaced.  Genuine ambiguity -- no usable pointer AND more than one non-superseded activation --
+    still produces the finding, and every negative assertion below carries that positive control in
+    the same test.
+    """
+
+    def test_the_relation_and_pointer_name_this_module_pins_are_the_shipped_ones(self) -> None:
+        self.assertEqual(SUPERSEDES_RELATION, reader.SUPERSEDES_RELATION)
+        self.assertEqual(ACTIVE_POINTER_NAME, reader.ACTIVE_POINTER_NAME)
+        self.assertIn(SUPERSEDES_RELATION, receipts.FAMILY_RELATIONS)
+        # Positive control: the same comparison detects a rename, so the equalities are not vacuous.
+        self.assertNotEqual(SUPERSEDES_RELATION, "replaces")
+
+    def test_a_healthy_updated_plane_produces_no_ambiguity_finding(self) -> None:
+        self.write_updated_plane()
+
+        readiness = self.observe()
+        activation = readiness["activation"]
+        findings = reader.readiness_findings(readiness)
+
+        self.assertEqual(["0.7.4"], activation["activated_versions"])
+        self.assertEqual("observed", activation["state"])
+        self.assertEqual("observed", activation["active_pointer"]["state"])
+        self.assertEqual("matched", activation["active_pointer"]["correlation"])
+        # Both documents are still READ -- retention is preserved evidence, not a hidden file.
+        self.assertEqual(2, len(activation["receipts"]))
+        self.assertTrue(self.receipt_for(activation, "activation-1")["superseded"])
+        self.assertFalse(self.receipt_for(activation, "activation-1")["active"])
+        self.assertFalse(self.receipt_for(activation, "activation-2")["superseded"])
+        self.assertTrue(self.receipt_for(activation, "activation-2")["active"])
+        self.assertEqual(
+            [f"activation-receipt://{hexof('activation-1')}"], activation["superseded_activations"]
+        )
+        self.assertEqual(
+            [f"activation-receipt://{hexof('activation-2')}"], activation["active_activations"]
+        )
+        self.assertNotIn("state-ambiguous", self.codes(findings))
+        self.assertEqual([], findings)
+
+        # POSITIVE CONTROL: the identical harness with two NON-superseded receipts and no pointer
+        # still names the ambiguity, so the absence above is the supersession and not a dropped check.
+        self.pointer.unlink()
+        for path in sorted(self.activation.glob("*.json")):
+            path.unlink()
+        self.file_activation(sealed_activation_receipt(receipt_id="activation-1"))
+        self.file_activation(
+            sealed_activation_receipt(
+                receipt_id="activation-2", requested_version="0.6.3", resolved_version="0.6.3"
+            )
+        )
+        control = reader.readiness_findings(self.observe())
+        self.assertIn("state-ambiguous", self.codes(control))
+        self.assertTrue(any("more than one activated version" in item["message"] for item in control))
+
+    def test_the_pointer_alone_resolves_receipts_that_supersede_nothing(self) -> None:
+        """The pointer is PREFERRED: it decides even where no ancestor says anything."""
+        self.write_candidate()
+        self.write_acquisition()
+        new_archive = hexof("archive-b")
+        self.write_payload(new_archive, "0.7.4")
+        first = sealed_activation_receipt(receipt_id="activation-1")
+        second = sealed_activation_receipt(
+            receipt_id="activation-2",
+            archive_sha256=new_archive,
+            candidate_id=hexof(f"candidate-{new_archive}"),
+            requested_version="0.7.4",
+            resolved_version="0.7.4",
+        )
+        self.file_activation(first)
+        self.file_activation(second)
+
+        # POSITIVE CONTROL FIRST: with no pointer and no supersession this plane IS ambiguous.
+        without = self.observe()
+        self.assertEqual(["0.7.3", "0.7.4"], without["activation"]["activated_versions"])
+        self.assertIn("state-ambiguous", self.codes(reader.readiness_findings(without)))
+
+        self.write_pointer(second)
+        readiness = self.observe()
+        activation = readiness["activation"]
+
+        self.assertEqual(["0.7.4"], activation["activated_versions"])
+        self.assertEqual("matched", activation["active_pointer"]["correlation"])
+        # Neither receipt is superseded: no ancestor says so, and the reader states only what it read.
+        self.assertEqual([], activation["superseded_activations"])
+        self.assertEqual(
+            [f"activation-receipt://{hexof('activation-2')}"], activation["active_activations"]
+        )
+        self.assertNotIn("state-ambiguous", self.codes(reader.readiness_findings(readiness)))
+
+    def test_only_a_validated_neighbour_can_retire_a_receipt(self) -> None:
+        """An unvalidated document's ancestors are unchecked text and retire nothing."""
+        self.write_candidate()
+        self.write_acquisition()
+        new_archive = hexof("archive-b")
+        self.write_payload(new_archive, "0.7.4")
+        self.file_activation(sealed_activation_receipt(receipt_id="activation-1"))
+        current = sealed_activation_receipt(
+            receipt_id="activation-2",
+            ancestors=superseding_ancestors("activation-1"),
+            operation="update",
+            archive_sha256=new_archive,
+            candidate_id=hexof(f"candidate-{new_archive}"),
+            requested_version="0.7.4",
+            resolved_version="0.7.4",
+        )
+        current_path = self.file_activation(current)
+
+        # POSITIVE CONTROL FIRST: while its seal holds, this neighbour DOES retire the prior receipt.
+        sealed = self.observe()["activation"]
+        self.assertTrue(self.receipt_for(sealed, "activation-1")["superseded"])
+
+        tampered = copy.deepcopy(current)
+        tampered["body"]["resolved_version"] = "9.9.9"
+        current_path.write_bytes(receipts.canonical_bytes(tampered))
+        # The pointer is not in play here: the supersession walk itself is what is under test.
+        self.assertFalse(self.pointer.exists())
+
+        readiness = self.observe()
+        activation = readiness["activation"]
+        findings = reader.readiness_findings(readiness)
+
+        self.assertEqual("invalid", self.receipt_for(activation, "activation-2")["state"])
+        self.assertEqual([], self.receipt_for(activation, "activation-2")["supersedes"])
+        self.assertFalse(self.receipt_for(activation, "activation-1")["superseded"])
+        self.assertEqual([], activation["superseded_activations"])
+        self.assertIn("state-malformed", self.codes(findings))
+        # The one surviving activation is the prior receipt, and nothing was read out of the broken
+        # document -- not its version, and not the retirement it claimed.
+        self.assertEqual(["0.7.3"], activation["activated_versions"])
+
+    def test_the_pointer_wins_over_an_ancestor_that_claims_to_have_replaced_it(self) -> None:
+        """The state a kill between the two writes leaves: a sealed successor the plane never activated.
+
+        ``update`` files its receipt durably BEFORE it replaces the pointer, so an interruption in that
+        window leaves a receipt whose ``supersedes`` ancestor names the receipt the plane still points
+        at.  The pointer is the plane's own statement of what it owns, so it decides; the successor's
+        claim stays visible rather than becoming a version this plane never activated.
+        """
+        self.write_candidate()
+        self.write_acquisition()
+        new_archive = hexof("archive-b")
+        self.write_payload(new_archive, "0.7.4")
+        prior = sealed_activation_receipt(receipt_id="activation-1")
+        self.file_activation(prior)
+        self.file_activation(
+            sealed_activation_receipt(
+                receipt_id="activation-2",
+                ancestors=superseding_ancestors("activation-1"),
+                operation="update",
+                archive_sha256=new_archive,
+                candidate_id=hexof(f"candidate-{new_archive}"),
+                requested_version="0.7.4",
+                resolved_version="0.7.4",
+            )
+        )
+        # The pointer was never replaced, so it still carries the PRIOR receipt's bytes.
+        self.write_pointer(prior)
+
+        readiness = self.observe()
+        activation = readiness["activation"]
+
+        self.assertEqual(["0.7.3"], activation["activated_versions"])
+        self.assertEqual("matched", activation["active_pointer"]["correlation"])
+        self.assertTrue(self.receipt_for(activation, "activation-1")["active"])
+        # Both facts are kept: another receipt DOES claim to have replaced this one.
+        self.assertTrue(self.receipt_for(activation, "activation-1")["superseded"])
+        self.assertFalse(self.receipt_for(activation, "activation-2")["active"])
+        self.assertNotIn("state-ambiguous", self.codes(reader.readiness_findings(readiness)))
+        # Positive control: replacing the pointer with the successor's bytes -- the write the killed
+        # update never reached -- moves the plane's statement to it, so the pointer is what decided.
+        self.write_pointer(
+            json.loads((self.activation / f"{hexof('activation-2')}.json").read_text(encoding="utf-8"))
+        )
+        moved = self.observe()["activation"]
+        self.assertEqual(["0.7.4"], moved["activated_versions"])
+        self.assertTrue(self.receipt_for(moved, "activation-2")["active"])
+
+    def test_a_pointer_that_names_no_filed_receipt_is_named_ambiguous(self) -> None:
+        self.write_candidate()
+        self.write_acquisition()
+        self.file_activation(sealed_activation_receipt(receipt_id="activation-1"))
+        elsewhere = sealed_activation_receipt(receipt_id="activation-2")
+        self.write_pointer(elsewhere)
+
+        readiness = self.observe()
+        findings = reader.readiness_findings(readiness)
+
+        self.assertEqual("observed", readiness["activation"]["active_pointer"]["state"])
+        self.assertEqual(
+            "names-no-filed-activation", readiness["activation"]["active_pointer"]["correlation"]
+        )
+        self.assertIn("state-ambiguous", self.codes(findings))
+        self.assertTrue(
+            any("names no validated activation receipt" in item["message"] for item in findings)
+        )
+        self.assertTrue(
+            any(item["path"] == reader.ACTIVE_POINTER_LOCATOR for item in findings)
+        )
+        # Positive control: filing the receipt the pointer names correlates it and clears the finding.
+        self.file_activation(elsewhere)
+        cleared = self.observe()
+        self.assertEqual("matched", cleared["activation"]["active_pointer"]["correlation"])
+        self.assertNotIn("state-ambiguous", self.codes(reader.readiness_findings(cleared)))
+
+    def test_a_pointer_naming_an_identity_two_documents_claim_is_not_resolved(self) -> None:
+        self.write_candidate()
+        self.write_acquisition()
+        current = sealed_activation_receipt(receipt_id="activation-1")
+        self.file_activation(current, name=f"{hexof('first-copy')}.json")
+        self.file_activation(current, name=f"{hexof('second-copy')}.json")
+        self.write_pointer(current)
+
+        readiness = self.observe()
+        findings = reader.readiness_findings(readiness)
+
+        self.assertEqual(
+            "names-more-than-one-filed-document",
+            readiness["activation"]["active_pointer"]["correlation"],
+        )
+        self.assertIn("state-ambiguous", self.codes(findings))
+        self.assertTrue(any("more than one filed document" in item["message"] for item in findings))
+        # Positive control: one copy, one identity, and the same harness correlates it cleanly.
+        (self.activation / f"{hexof('second-copy')}.json").unlink()
+        resolved = self.observe()
+        self.assertEqual("matched", resolved["activation"]["active_pointer"]["correlation"])
+        self.assertNotIn("state-ambiguous", self.codes(reader.readiness_findings(resolved)))
+
+    def test_an_unusable_pointer_is_named_and_never_followed(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are required")
+        self.write_candidate()
+        self.write_acquisition()
+        new_archive = hexof("archive-b")
+        self.write_payload(new_archive, "0.7.4")
+        first = sealed_activation_receipt(receipt_id="activation-1")
+        second = sealed_activation_receipt(
+            receipt_id="activation-2",
+            archive_sha256=new_archive,
+            candidate_id=hexof(f"candidate-{new_archive}"),
+            requested_version="0.7.4",
+            resolved_version="0.7.4",
+        )
+        self.file_activation(first)
+        self.file_activation(second)
+        # POSITIVE CONTROL FIRST: as a physical readable file, this pointer resolves the plane.
+        self.write_pointer(second)
+        self.assertNotIn("state-ambiguous", self.codes(self.findings()))
+        pointer_bytes = self.pointer.read_bytes()
+
+        elsewhere = self.root / "elsewhere-pointer.json"
+        elsewhere.write_bytes(pointer_bytes)
+        broken_seal = copy.deepcopy(second)
+        broken_seal["body"]["resolved_version"] = "9.9.9"
+        cases = (
+            ("symlink", None, "state-symlinked", "instead of following"),
+            ("not-json", b"{", "state-unreadable", "is not one strict JSON object"),
+            ("broken-seal", receipts.canonical_bytes(broken_seal), "state-malformed", "did not validate"),
+        )
+        for label, content, code, fragment in cases:
+            with self.subTest(label=label):
+                self.pointer.unlink()
+                if content is None:
+                    self.pointer.symlink_to(elsewhere)
+                else:
+                    self.pointer.write_bytes(content)
+
+                readiness = self.observe()
+                findings = reader.readiness_findings(readiness)
+
+                self.assertIn(code, self.codes(findings))
+                self.assertTrue(any(fragment in item["message"] for item in findings), findings)
+                self.assertTrue(
+                    any(item["path"] == reader.ACTIVE_POINTER_LOCATOR for item in findings)
+                )
+                # NEVER FOLLOWED, and never trusted: the document behind each of these WOULD have
+                # resolved the plane, so the surviving ambiguity is the proof that it was not used.
+                self.assertEqual(["0.7.3", "0.7.4"], readiness["activation"]["activated_versions"])
+                self.assertIn("state-ambiguous", self.codes(findings))
+        # Positive control: restoring the exact readable bytes resolves the plane again.
+        self.pointer.unlink()
+        self.pointer.write_bytes(pointer_bytes)
+        self.assertNotIn("state-ambiguous", self.codes(self.findings()))
+
+    def test_a_supplied_absent_pointer_is_not_the_same_input_as_an_unsupplied_one(self) -> None:
+        self.write_candidate()
+        self.write_acquisition()
+        self.file_activation(sealed_activation_receipt(receipt_id="activation-1"))
+
+        derived = reader.observe_activation(self.activation, receipts, None)["active_pointer"]
+        named_none = reader.observe_activation(
+            self.activation, receipts, None, active_pointer=None
+        )["active_pointer"]
+        named_missing = reader.observe_activation(
+            self.activation, receipts, None, active_pointer=self.root / "nowhere.json"
+        )["active_pointer"]
+
+        self.assertEqual("absent", derived["state"])
+        self.assertFalse(derived["location_supplied"])
+        self.assertEqual("unnamed", named_none["state"])
+        self.assertTrue(named_none["location_supplied"])
+        self.assertEqual("absent", named_missing["state"])
+        self.assertTrue(named_missing["location_supplied"])
+        self.assertNotEqual(derived, named_none)
+        self.assertNotEqual(derived, named_missing)
+        # Positive control: the DERIVED location is the layout's own, so the absence above is the
+        # missing file and not a location this reader never looked at.
+        current = sealed_activation_receipt(receipt_id="activation-1")
+        self.write_pointer(current)
+        found = reader.observe_activation(self.activation, receipts, None)["active_pointer"]
+        self.assertEqual("observed", found["state"])
+        self.assertEqual("activation-1", found["receipt_id"])
+        self.assertEqual(self.pointer, self.activation.parent / ACTIVE_POINTER_NAME)
+
+    def test_an_inadmissible_receipt_id_correlates_with_nothing(self) -> None:
+        """A correlated identity is admitted only in the family's bounded token shape."""
+        for value in ("Activation-1", "activation_1", "-activation", "activation-", "٩", "a" * 129, ""):
+            with self.subTest(value=value):
+                self.assertIsNone(reader.safe_receipt_id(value))
+        for value in (None, 1, 1.5, ["activation-1"]):
+            with self.subTest(value=value):
+                self.assertIsNone(reader.safe_receipt_id(value))
+        # Positive control: the admissible spellings this plane really writes DO pass.
+        for value in ("activation-1", "install-op-" + "0" * 32 + "-20260820t121314z"):
+            with self.subTest(value=value):
+                self.assertEqual(value, reader.safe_receipt_id(value))
+
+    def test_the_updated_plane_is_read_without_touching_it(self) -> None:
+        self.write_updated_plane()
+        pointer_bytes = self.pointer.read_bytes()
+        before = inventory(self.home, self.state, self.root / "data")
+
+        for verb, suffix in READER_VERBS:
+            for extra in ((), ("--json",)):
+                completed = self.run_reader(verb, *suffix, *extra)
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+
+        after = inventory(self.home, self.state, self.root / "data")
+        self.assertEqual(before, after)
+        self.assertEqual(pointer_bytes, self.pointer.read_bytes())
+        report = json.loads(self.run_reader("doctor", "--json").stdout)
+        checkout = {
+            finding["code"] for finding in report["findings"] if finding["component"] == "checkout"
+        }
+        self.assertNotIn("state-ambiguous", checkout)
+        # Positive control: the same inventory function DOES notice a change, so the equality above
+        # is a measurement rather than a comparison of two empty dictionaries.
+        self.assertTrue(before)
+        (self.activation / f"{hexof('probe')}.json").write_bytes(b"{}")
+        self.assertNotEqual(before, inventory(self.home, self.state, self.root / "data"))
+
+    def test_every_pointer_finding_stays_inside_the_pinned_v1_report_vocabulary(self) -> None:
+        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+        codes = set(policy["vocabularies"]["finding_codes"])
+        components = set(policy["vocabularies"]["finding_components"])
+        self.write_candidate()
+        self.write_acquisition()
+        self.file_activation(sealed_activation_receipt(receipt_id="activation-1"))
+        self.write_pointer(sealed_activation_receipt(receipt_id="activation-2"))
+
+        findings = reader.readiness_findings(self.observe())
+
+        self.assertTrue(findings)
+        for finding in findings:
+            with self.subTest(code=finding["code"]):
+                self.assertEqual(set(finding), set(policy["field_vocabularies"]["finding"]))
+                self.assertIn(finding["code"], codes)
+                self.assertIn(finding["component"], components)
+                reader.validate_finding(finding, policy["field_vocabularies"], policy["vocabularies"])
+        # Positive control: the same checker rejects a code outside the vocabulary.
+        with self.assertRaises(reader.ReportInvariantError):
+            reader.validate_finding(
+                {**findings[0], "code": "activation-pointer-missing"},
+                policy["field_vocabularies"],
+                policy["vocabularies"],
+            )
+
+    def test_no_pointer_derived_value_can_forge_a_line_of_this_commands_output(self) -> None:
+        """A reason line derived from the filesystem is ESCAPED before it is rendered."""
+        self.write_candidate()
+        self.write_acquisition()
+        self.file_activation(sealed_activation_receipt(receipt_id="activation-1"))
+        # A DIRECTORY where the pointer should be. The reason text reaches the rendered finding
+        # message through the same escape every other filesystem-derived reason goes through.
+        self.pointer.mkdir(parents=True)
+
+        findings = reader.readiness_findings(self.observe())
+
+        self.assertIn("state-unreadable", self.codes(findings))
+        for finding in findings:
+            for character in ("\n", "\r", "\x1b", "\x7f"):
+                self.assertNotIn(character, finding["message"], finding)
+                self.assertNotIn(character, finding["path"], finding)
+        # Positive control: the escape is not the identity function.
+        self.assertEqual("a\\nb", reader.escape_display("a\nb"))
 
 
 def readable_reason(findings: list[dict[str, str]]) -> bool:

@@ -63,6 +63,12 @@ install = _load(MODULE_PATH, "ccodex_sdlc_install_under_test")
 receipts = _load(RECEIPT_PRODUCER_PATH, "ccodex_sdlc_install_receipt_producer")
 bundle = _load(INSTALLER_PATH, "ccodex_sdlc_install_installer")
 guard = _load(GUARD_PATH, "ccodex_sdlc_install_guard")
+# The neighbouring verb and the reader's projection, loaded for the ONE document all three share:
+# `activation/active-receipt.json`. The update module is DRIVEN here rather than imitated, because
+# what this ticket must prove is that a real install produces a plane the real update admits; the
+# reader is loaded for its pure observers only, never for a guard-installing entrypoint.
+update = _load(ROOT / "scripts" / "ccodex_sdlc_update.py", "ccodex_sdlc_install_then_update")
+reader = _load(READER_PATH, "ccodex_sdlc_install_reader")
 
 INSTANT = "2026-08-20T12:13:14Z"
 LATER_INSTANT = "2026-08-20T12:15:00Z"
@@ -188,6 +194,11 @@ class Fixture:
     def plans(self) -> list[Path]:
         directory = self.state_home / "agentic-sdlc" / "activation" / "plans"
         return sorted(directory.glob("*.json")) if directory.is_dir() else []
+
+    @property
+    def pointer(self) -> Path:
+        """The plane's ONE active statement -- the only document ``update`` and ``uninstall`` admit."""
+        return self.state_home / "agentic-sdlc" / "activation" / "active-receipt.json"
 
 
 def build_fixture(
@@ -475,6 +486,24 @@ class EndToEndInstallTest(TemporaryRoot):
         plan_bytes = fixture.plans()[0].read_bytes()
         self.assertEqual(hashlib.sha256(plan_bytes).hexdigest(), body["plan_sha256"])
         self.assertEqual(before, fixture.acquisition_receipt.read_bytes())
+
+        # THE ACTIVE POINTER IS THE PLANE'S FRONT DOOR. `update` and `uninstall` admit this document
+        # and nothing else, so an install that sealed a receipt without landing it left a plane no
+        # later verb could act on (agentic-sdlc-7b2e).
+        self.assertTrue(fixture.pointer.exists(), "the active pointer must exist after install")
+        self.assertFalse(fixture.pointer.is_symlink(), "the pointer is a document, never a link")
+        receipt_path = fixture.activation_receipts()[0]
+        self.assertEqual(receipt_path.read_bytes(), fixture.pointer.read_bytes())
+        pointed = json.loads(fixture.pointer.read_text(encoding="utf-8"))
+        self.assertEqual(document, pointed)
+        self.assertEqual(f"{pointed['receipt_id']}.json", receipt_path.name)
+        # The pointer's own bytes validate through the family's producer, not merely the file it copies.
+        self.assertEqual(
+            "validated",
+            receipts.derive("validate", pointed, "the active pointer")["verdict"],
+        )
+        self.assertIn(f"active pointer {fixture.pointer}", outcome.stdout)
+        self.assertIn("names this activation's receipt", outcome.stdout)
 
     def test_second_install_of_the_same_payload_writes_nothing_new(self) -> None:
         fixture = self.fixture()
@@ -872,10 +901,49 @@ class InterruptedTransactionTest(TemporaryRoot):
         result = receipts.derive("validate", sealed_receipt(fixture), "the partial receipt")
         self.assertEqual("validated", result["verdict"], result["reasons"])
         self.assertEqual(before, fixture.acquisition_receipt.read_bytes())
-        # Positive control: the same fixture without the fault reports complete.
+        # A PARTIAL EFFECT FILES THE RECEIPT AS EVIDENCE AND LEAVES THE POINTER ALONE. A pointer that
+        # claimed an activation nobody completed is worse than an absent one, and it would be the one
+        # document `update` and `uninstall` admit (agentic-sdlc-7b2e).
+        self.assertFalse(fixture.pointer.exists(), "a partial effect must not write the pointer")
+        self.assertIn("was NOT written", outcome.stdout)
+        self.assertIn("active pointer", outcome.stderr)
+        # Positive control: the same fixture without the fault reports complete AND lands the pointer.
         clean = self.fixture()
         self.assertEqual(0, call_main(clean).code)
         self.assertEqual("complete", sealed_receipt(clean)["body"]["effect_state"])
+        self.assertTrue(clean.pointer.exists())
+        self.assertEqual(clean.activation_receipts()[0].read_bytes(), clean.pointer.read_bytes())
+
+    def test_a_receipt_that_cannot_be_filed_never_becomes_the_plane_s_statement(self) -> None:
+        """The ORDER is load-bearing: the receipt is durably filed BEFORE the pointer names it.
+
+        A pointer written first would survive a kill that stopped the receipt write, and the plane
+        would then name a receipt no directory holds -- which is the one state the later verbs cannot
+        act on and cannot diagnose.  The fault is injected at the receipt write itself, so what is
+        under test is the sequence and not the gate above it.
+        """
+        fixture = self.fixture()
+        with mock.patch.object(
+            install,
+            "write_new_document",
+            side_effect=install.UnknownEffect("fault-injected receipt filing failure"),
+        ):
+            outcome = call_main(fixture)
+
+        self.assertEqual(4, outcome.code)
+        self.assertIn("fault-injected receipt filing failure", outcome.stderr)
+        self.assertEqual([], fixture.activation_receipts())
+        self.assertFalse(
+            fixture.pointer.exists(),
+            "the pointer must never name a receipt that was not filed",
+        )
+        # Positive control: the same fixture without the fault files the receipt AND lands the pointer,
+        # so the absence above is the injected failure and not a run that never got that far.
+        clean = self.fixture()
+        self.assertEqual(0, call_main(clean).code)
+        self.assertEqual(1, len(clean.activation_receipts()))
+        self.assertTrue(clean.pointer.exists())
+        self.assertEqual(clean.activation_receipts()[0].read_bytes(), clean.pointer.read_bytes())
 
     def test_failure_before_any_effect_completed_reports_unknown(self) -> None:
         fixture = self.fixture()
@@ -889,8 +957,12 @@ class InterruptedTransactionTest(TemporaryRoot):
         )
         result = receipts.derive("validate", sealed_receipt(fixture), "the unknown receipt")
         self.assertEqual("validated", result["verdict"], result["reasons"])
-        # Positive control: the fault is what caused it.
-        self.assertEqual(0, call_main(self.fixture()).code)
+        # An UNKNOWN effect is not an activation either: the receipt is filed, the pointer is not.
+        self.assertFalse(fixture.pointer.exists(), "an unknown effect must not write the pointer")
+        # Positive control: the fault is what caused it, and the clean run does land the pointer.
+        control = self.fixture()
+        self.assertEqual(0, call_main(control).code)
+        self.assertTrue(control.pointer.exists())
 
 
 class RecordedUnknownsTest(TemporaryRoot):
@@ -914,11 +986,208 @@ class RecordedUnknownsTest(TemporaryRoot):
             self.assertIsNone(entry["content_sha256"], entry["entry_name"])
         result = receipts.derive("validate", sealed_receipt(fixture), "the partial receipt")
         self.assertEqual("validated", result["verdict"], result["reasons"])
+        # The gate consults the RECORDED UNKNOWNS, not only the outcomes: every entry moved, and the
+        # pointer still stays put, because an observation nobody could make is not a completion.
+        self.assertFalse(fixture.pointer.exists(), "a recorded unknown must not activate the plane")
         # Positive control: without the injected failure the same run digests and reports complete.
         clean = self.fixture()
         self.assertEqual(0, call_main(clean).code)
         self.assertEqual("complete", sealed_receipt(clean)["body"]["effect_state"])
         self.assertEqual([], sealed_receipt(clean)["body"]["unknowns"])
+        self.assertTrue(clean.pointer.exists())
+
+
+SECOND_ARCHIVE_SHA = hashlib.sha256(b"fabricated-archive-two").hexdigest()
+SECOND_CANDIDATE_ID = hashlib.sha256(b"fabricated-candidate-two").hexdigest()
+SECOND_OPERATION_ID = "op-" + hashlib.sha256(b"fabricated-operation-two").hexdigest()[:32]
+SECOND_PRODUCT_VERSION = "0.7.4"
+#: The same entry names with different content, so every entry the refresh touches is an OWNED
+#: verified-unchanged slot rather than a blocked one.
+SECOND_PAYLOAD_FILES = {
+    "skills/alpha-skill/SKILL.md": "---\nname: alpha-skill\n---\nalpha two\n",
+    "skills/alpha-skill/references/notes.md": "notes two\n",
+    "agents/claude/cartographer.md": "cartographer two\n",
+    "agents/codex/cartographer.toml": 'name = "cartographer"\n',
+    "commands/sdlc-frame.md": "frame two\n",
+}
+
+
+def acquire_second_candidate(fixture: Fixture) -> Path:
+    """Fabricate ONE more acquired candidate on the same host: a different identity and version.
+
+    The same fabrication `build_fixture` performs, re-expressed for a second archive digest so the
+    update verb has exactly one admissible candidate that is not the one the install activated.
+    """
+    candidate_root = (
+        fixture.data_home / "agentic-sdlc" / "acquisition" / "candidates" / SECOND_ARCHIVE_SHA / "root"
+    )
+    candidate_root.mkdir(parents=True)
+    for relative, text in SECOND_PAYLOAD_FILES.items():
+        target = candidate_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    contract_path = candidate_root / "policy" / "release-contract.v1.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_bytes(RELEASE_CONTRACT_PATH.read_bytes())
+    manifest = {
+        "archive_root": f"agentic-sdlc-candidate-{SECOND_CANDIDATE_ID}-linux-x64",
+        "artifact_kind": "unpublished-candidate",
+        "candidate_id": SECOND_CANDIDATE_ID,
+        "inventory": inventory_for_tree(candidate_root),
+        "platform": "linux-x64",
+        "product_version": SECOND_PRODUCT_VERSION,
+        "public_channel": None,
+        "release_claim": "none",
+        "schema_version": "release-candidate/v1",
+        "support_tier": "unsupported",
+    }
+    (candidate_root / "manifest.json").write_bytes(canonical(manifest))
+    receipt = {
+        "activation": "absent",
+        "archive_sha256": SECOND_ARCHIVE_SHA,
+        "candidate_root_absolute_physical_path": str(candidate_root),
+        "effect_state": "complete",
+        "installed_at": "2026-08-20T10:00:00Z",
+        "journal_sha256": hashlib.sha256(b"journal-two").hexdigest(),
+        "operation_id": SECOND_OPERATION_ID,
+        "plan_sha256": hashlib.sha256(b"plan-two").hexdigest(),
+        "public_channel": None,
+        "record_sha256": "",
+        "release_claim": "none",
+        "schema_version": "release-candidate-acquisition-receipt/v1",
+        "selection": "absent",
+        "support": "unsupported",
+        "terminal_phase": "installed-unselected",
+    }
+    directory = fixture.state_home / "agentic-sdlc" / "acquisition" / "receipts"
+    (directory / f"{SECOND_ARCHIVE_SHA}.json").write_bytes(seal_acquisition(receipt))
+    return candidate_root
+
+
+class InstallThenUpdateTest(TemporaryRoot):
+    """The two verbs meet at ONE document, and this test drives both of them for real.
+
+    ``ccodex sdlc update`` admits ``activation/active-receipt.json`` and nothing else.  Before
+    agentic-sdlc-7b2e this module never wrote it, so a real install at exit 0 followed by a real
+    update refused at exit 3 with no usable active receipt: the front door of the plane the install
+    had just built did not exist.  Nothing here is a fixture receipt -- the install writes the
+    pointer, and the update reads the document the install actually wrote.
+    """
+
+    def update_config(self, fixture: Fixture, instant: str = LATER_INSTANT) -> Any:
+        return update.Config(
+            home=fixture.home,
+            state_home=fixture.state_home,
+            data_home=fixture.data_home,
+            codex_home=fixture.config.codex_home,
+            installer_state_root=fixture.installer_state_root,
+            observed_host_version=HOST_VERSION,
+            observed_instant=instant,
+        )
+
+    def call_update(self, fixture: Fixture, instant: str = LATER_INSTANT) -> Outcome:
+        out, err = io.StringIO(), io.StringIO()
+        config = self.update_config(fixture, instant)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(update, "default_config", lambda: config))
+            stack.enter_context(contextlib.redirect_stdout(out))
+            stack.enter_context(contextlib.redirect_stderr(err))
+            code = update.main([])
+        assert isinstance(code, int) and not isinstance(code, bool), repr(code)
+        return Outcome(code, out.getvalue(), err.getvalue())
+
+    def test_a_real_install_is_updatable_and_the_update_supersedes_its_pointer(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        installed = json.loads(fixture.pointer.read_text(encoding="utf-8"))
+        install_receipt_id = installed["receipt_id"]
+        self.assertEqual("install", installed["body"]["operation"])
+        self.assertEqual(PRODUCT_VERSION, installed["body"]["resolved_version"])
+
+        acquire_second_candidate(fixture)
+        outcome = self.call_update(fixture)
+
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        current = json.loads(fixture.pointer.read_text(encoding="utf-8"))
+        self.assertEqual("update", current["body"]["operation"])
+        self.assertEqual(SECOND_PRODUCT_VERSION, current["body"]["resolved_version"])
+        self.assertEqual(SECOND_ARCHIVE_SHA, current["body"]["archive_sha256"])
+        self.assertEqual(
+            "validated", receipts.derive("validate", current, "the updated pointer")["verdict"]
+        )
+        # The update SUPERSEDES exactly the receipt the install's pointer named.
+        superseded = [
+            reference["receipt_id"]
+            for reference in current["ancestors"]
+            if reference["relation"] == "supersedes"
+        ]
+        self.assertEqual([install_receipt_id], superseded)
+        # Both receipts are filed, and the prior one is retained byte-identically under its own id.
+        filed = {path.name: path for path in fixture.activation_receipts()}
+        self.assertEqual(
+            {f"{install_receipt_id}.json", f"{current['receipt_id']}.json"}, set(filed)
+        )
+        self.assertEqual(installed, json.loads(filed[f"{install_receipt_id}.json"].read_text()))
+        self.assertEqual(
+            filed[f"{current['receipt_id']}.json"].read_bytes(), fixture.pointer.read_bytes()
+        )
+        # The refresh really replaced the content on disk, so this is one activation, not two planes.
+        self.assertEqual(
+            "cartographer two\n",
+            fixture.destination("agents/cartographer.md").read_text(encoding="utf-8"),
+        )
+        self.assertIn("names this update's receipt", outcome.stdout)
+
+    def test_the_plane_the_two_verbs_leave_is_not_ambiguous_to_the_shipped_reader(self) -> None:
+        """The projection reads the plane these two verbs really built, not a fabricated one."""
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        acquire_second_candidate(fixture)
+        self.assertEqual(0, self.call_update(fixture).code)
+
+        readiness = reader.observe_readiness(
+            json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8")),
+            acquisition_receipts=fixture.state_home / "agentic-sdlc" / "acquisition" / "receipts",
+            activation_receipts=fixture.state_home / "agentic-sdlc" / "activation" / "receipts",
+            validator=receipts,
+            validator_reason=None,
+        )
+        findings = reader.readiness_findings(readiness)
+
+        self.assertEqual(2, len(readiness["activation"]["receipts"]))
+        self.assertEqual([SECOND_PRODUCT_VERSION], readiness["activation"]["activated_versions"])
+        self.assertEqual("matched", readiness["activation"]["active_pointer"]["correlation"])
+        self.assertEqual(1, len(readiness["activation"]["superseded_activations"]))
+        self.assertEqual([], findings)
+        # POSITIVE CONTROL: remove the pointer, and re-seal the second receipt as an INSTALL -- which
+        # the family forbids from carrying a supersedes ancestor at all -- and the identical projection
+        # over two activated receipts DOES name the ambiguity. The seal is re-derived by the family's
+        # own producer, so the control is two VALID receipts and not two broken ones.
+        fixture.pointer.unlink()
+        for path in fixture.activation_receipts():
+            document = json.loads(path.read_text(encoding="utf-8"))
+            if document["body"]["operation"] != "update":
+                continue
+            document["body"]["operation"] = "install"
+            document["body"]["record_sha256"] = ""
+            document["content_digest"] = receipts.UNSEALED
+            document["ancestors"] = [
+                reference
+                for reference in document["ancestors"]
+                if reference["relation"] != "supersedes"
+            ]
+            resealed = receipts.derive("seal", document, "the control receipt")
+            self.assertEqual(receipts.VERDICT_SEALED, resealed["verdict"], resealed["reasons"])
+            path.write_bytes(receipts.canonical_bytes(resealed["receipt"]))
+        control = reader.observe_readiness(
+            json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8")),
+            acquisition_receipts=fixture.state_home / "agentic-sdlc" / "acquisition" / "receipts",
+            activation_receipts=fixture.state_home / "agentic-sdlc" / "activation" / "receipts",
+            validator=receipts,
+            validator_reason=None,
+        )
+        codes = {finding["code"] for finding in reader.readiness_findings(control)}
+        self.assertIn("state-ambiguous", codes)
 
 
 class DispatchContractTest(TemporaryRoot):
