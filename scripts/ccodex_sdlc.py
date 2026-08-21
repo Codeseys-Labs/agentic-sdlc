@@ -956,6 +956,17 @@ def observe_selected_payload(
     (agentic-sdlc-0cce); it is read for the identity it already states.  It carries no version, so
     the payload version comes from the candidate root's own manifest and is unknown-with-a-reason
     whenever that manifest cannot be read.
+
+    DISCLOSURE (agentic-sdlc-7c7d): the candidate manifest read this drives, in
+    ``observe_candidate_version``, ``lstat``-guards the manifest FILE the same way
+    ``read_plane_document`` guards every other plane document -- a symlinked leaf is reported, never
+    opened -- but the candidate root itself came from a sealed receipt's recorded path, and neither
+    that root nor any directory above it is re-checked for a link planted since the receipt sealed.
+    This is hardening-only, not a live gap this reader's own output can carry: the one value read
+    through it, `payload_version`, passes through `safe_version`'s closed 64-character charset before
+    it reaches a finding or a report, so a redirected read can change which plausible-looking version
+    string appears here and nothing else -- it can name no path, inject no control character, and
+    forge no line.
     """
     names, listing_reason = list_plane_documents(directory)
     payloads: list[dict[str, Any]] = []
@@ -1327,6 +1338,15 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
     dimension VALUES, not defects, and this reader does not borrow a defect code to state one: the
     report policy carries no `distribution` dimension and no code for a version delta, and widening
     a byte-pinned policy is not this surface's authority.
+
+    DISCLOSURE (agentic-sdlc-7c7d): these findings render verb-uniformly -- `inspect`, `status`,
+    `doctor`, and `recover --dry-run` all call this same function and see the same list, including
+    `inspect`, by the pre-existing design the call site documents (every reader verb renders ONE
+    semantic report, so a finding one verb hid would make another verb's identical-looking report a
+    differently-shaped truth about the same host).  That is a decision already made, not a gap.  A
+    FUTURE distribution dimension -- one that, unlike the values above, needs to say something only
+    some verbs should show -- must decide per-verb rendering explicitly in its own policy seed rather
+    than assume this function's uniform call site will do it silently.
     """
     findings: list[dict[str, str]] = []
     activation = readiness["activation"]

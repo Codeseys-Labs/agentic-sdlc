@@ -426,11 +426,16 @@ def resolve_destination(config: Config, entry_name: Any) -> Path | None:
 
 
 def parent_is_retargeted(config: Config, destination: Path) -> bool:
-    """Is any directory between the plane root and this entry a link?
+    """Is any directory between the plane root and this entry a link, or unprovable either way?
 
     A deletion reached through a link takes effect wherever the link points, which is outside what
     this receipt describes.  ``lstat`` on each component, never ``resolve``, so the question asked is
-    "is this component a link" and not "where does it end up".
+    "is this component a link" and not "where does it end up".  An ``lstat`` that raises reports
+    retargeted rather than clear (agentic-sdlc-7c7d): a component this walk cannot even inspect is a
+    component this walk cannot clear of being a link, and the per-entry digest proof downstream of
+    this call is a second, independent gate -- it never depends on this fail-open having existed --
+    so failing closed here costs nothing except calling one more destination "preserved" than a fully
+    successful walk would have.
     """
     root = Path(os.path.normpath(str(config.plane_root)))
     current = destination.parent
@@ -439,7 +444,7 @@ def parent_is_retargeted(config: Config, destination: Path) -> bool:
             if stat.S_ISLNK(current.lstat().st_mode):
                 return True
         except OSError:
-            return False
+            return True
         if current == root or current == current.parent:
             return False
         current = current.parent
@@ -1024,6 +1029,15 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
             outcome: dict[str, bool] = {"moved": False, "settled": False}
             try:
                 remove_one(bundle, config, journal, row, outcome, nothing_moved_yet=not ledger["moved"])
+                if not outcome["settled"]:
+                    # `remove_one` returns normally only after it records settlement (agentic-sdlc-
+                    # 7c7d): a normal return that never flipped this flag is not a state this function
+                    # currently produces, but trusting a bare return would let a future regression in
+                    # `remove_one` report a removal as clean when its own bookkeeping never happened.
+                    raise UnknownEffect(
+                        f"the removal of {dar_escape(row['entry_name'])} returned without recording "
+                        "settlement, so its effect is unknown"
+                    )
                 removed.add(row["entry_name"])
             except Refusal as exc:
                 attention.append(str(exc))

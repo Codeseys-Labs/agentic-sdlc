@@ -52,6 +52,7 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
@@ -587,6 +588,31 @@ class OwnershipProof(Harness):
         self.assertIn("preserved: commands/nested/thing.md (retargeted-parent:", report)
         self.assertIn("removed: agents/sdlc-implementer.md", report)
 
+    def test_an_unlstatable_parent_is_treated_as_retargeted_never_as_clear(self) -> None:
+        """A parent ``lstat`` that raises must read as retargeted, not as proven clear.
+
+        The per-entry digest proof downstream never depended on this walk succeeding, so failing
+        closed on an inspection error costs nothing but one extra "preserved" -- and reading the
+        error as "not a link" would let an entry through the exact check that exists to stop it
+        (agentic-sdlc-7c7d).
+        """
+        entries = self.plant_owned()
+        self.plane.seal_active(entries)
+        config = self.plane.config()
+        destination = config.plane_root / "agents" / "sdlc-implementer.md"
+        flaky_parent = config.plane_root / "agents"
+        real_lstat = Path.lstat
+
+        def flaky(path_self: Path, *args: Any, **kwargs: Any) -> Any:
+            if path_self == flaky_parent:
+                raise OSError("simulated: this component cannot be inspected")
+            return real_lstat(path_self, *args, **kwargs)
+
+        with mock.patch.object(Path, "lstat", flaky):
+            self.assertTrue(target.parent_is_retargeted(config, destination))
+        # Positive control: the identical destination, with no injected fault, is not retargeted.
+        self.assertFalse(target.parent_is_retargeted(config, destination))
+
     def test_an_inventory_entry_with_no_digest_is_never_removed(self) -> None:
         entries = self.plant_owned()
         unprovable = self.plane.write_file("agents/sdlc-planner.md", "# planner\n")
@@ -818,6 +844,37 @@ class Interruption(Harness):
         self.assertIn("could not be quarantined, so it was preserved untouched", report)
         body = self.plane.terminal_receipt()["body"]
         self.assertEqual(body["effect_state"], "partial")
+
+    def test_a_normal_return_that_never_recorded_settlement_is_reported_unknown(self) -> None:
+        """``outcome['settled']`` is consulted, not just written (agentic-sdlc-7c7d).
+
+        Nothing in this module today returns from ``remove_one`` without having set it, so this
+        stands in for a future regression: a wrapper that runs the real removal but then clears the
+        flag the way a broken early-return would.
+        """
+        entries = self.plant_owned()
+        self.plane.seal_active(entries)
+        real_remove_one = target.remove_one
+
+        def forgets_to_settle(bundle: Any, config: Any, journal: Any, row: Any, outcome: Any, **kwargs: Any) -> None:
+            real_remove_one(bundle, config, journal, row, outcome, **kwargs)
+            outcome["settled"] = False
+
+        with mock.patch.object(target, "remove_one", forgets_to_settle):
+            code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_UNKNOWN, report)
+        self.assertIn("returned without recording settlement", report)
+        body = self.plane.terminal_receipt()["body"]
+        self.assertEqual(body["effect_state"], "unknown")
+        # Positive control: the identical harness, with the real function alone, retires cleanly.
+        second = Plane(self.temp / "second-normal-settle")
+        second.write_file("agents/sdlc-implementer.md", "# implementer\n")
+        second.seal_active(
+            [entry_record("agents/sdlc-implementer.md", second.entry_digest("agents/sdlc-implementer.md"))]
+        )
+        code_two, report_two = second.run()
+        self.assertEqual(code_two, EXIT_RETIRED, report_two)
 
 
 # ---- refusals ------------------------------------------------------------------------------------

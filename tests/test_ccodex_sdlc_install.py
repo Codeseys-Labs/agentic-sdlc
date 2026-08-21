@@ -1263,7 +1263,20 @@ class GuardInteractionTest(unittest.TestCase):
     def test_the_read_only_guard_blocks_the_primitives_this_activation_needs(self) -> None:
         """The reader cannot borrow this module's authority, and this module never runs guarded."""
         adapter = _load(INSTALLER_PATH, "ccodex_sdlc_install_guard_probe")
-        needed = ("write_state", "persist_state", "installer_lock", "durable_mkdir")
+        needed = (
+            "write_state",
+            "persist_state",
+            "installer_lock",
+            "durable_mkdir",
+            # Landed after the guard's pinned name set was first written (agentic-sdlc-7c7d): these
+            # arm, commit, retire, and rename an entry's own transaction and must be closed into the
+            # same set rather than left reachable by a future reader that loads this module for more
+            # than `readonly_projection`.
+            "transactional_create",
+            "transactional_delete",
+            "transactional_rename",
+            "transactional_replace",
+        )
         for name in needed:
             self.assertTrue(callable(getattr(adapter, name)), name)
         guard.block_lifecycle_mutators(adapter)
@@ -1271,10 +1284,11 @@ class GuardInteractionTest(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(guard.ReadOnlyViolation):
                     getattr(adapter, name)()
-        # Positive control: a name the guard does not pin is still the real function, which is why
-        # this module is never loaded into a guarded reader process in the first place.
-        self.assertTrue(callable(adapter.transactional_create))
-        self.assertNotIn("transactional_create", ("write_state", "persist_state"))
+        # Positive control: a name the guard does not pin is still the real function (calling it
+        # with no arguments dies on its own signature, not on ReadOnlyViolation), which is why this
+        # module is never loaded into a guarded reader process in the first place.
+        with self.assertRaises(TypeError):
+            adapter.readonly_projection()
 
 
 class ConfigSeamTest(unittest.TestCase):

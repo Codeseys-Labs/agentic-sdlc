@@ -204,6 +204,16 @@ def block_lifecycle_mutators(*modules: ModuleType) -> None:
         "self_test",
         "status",
         "_status",
+        # Landed after this set was first pinned (agentic-sdlc-7c7d): the four transactional
+        # writers `install_skill_bundle` uses to arm, commit, retire, and rename an entry's own
+        # transaction.  Harmless while the reader never loads that module for anything but
+        # `readonly_projection` -- and the process-global primitive blocks would stop each at its
+        # first write anyway -- but the set is closed here rather than left to predate whatever
+        # lifecycle writer lands next.
+        "transactional_create",
+        "transactional_delete",
+        "transactional_rename",
+        "transactional_replace",
     }
     for module in modules:
         for name in names:
