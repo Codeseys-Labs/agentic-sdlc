@@ -1,0 +1,53 @@
+{
+ "schema": "agentic-sdlc/workstream-submissions@1",
+ "submission_id": "submissions-f83f-w1",
+ "mission_id": "mission-f83f-sp8",
+ "stated_at": "2026-08-21T16:57:45Z",
+ "declared_concurrency": 1,
+ "workstreams": [
+  {
+   "id": "ws-f83f-fan-in",
+   "objective": "fan the accepted fix into the target branch and run the gate",
+   "authority_class": "authorized-fan-in",
+   "capability_demands": [
+    "git-worktree-write",
+    "repository-gate-execution"
+   ],
+   "dependencies": [
+    "ws-f83f-review"
+   ],
+   "file_custody": [],
+   "worktree_custody": null
+  },
+  {
+   "id": "ws-f83f-fix",
+   "objective": "move the read inside the try and add the exit table plus mutation tests",
+   "authority_class": "owned-worktree-write",
+   "capability_demands": [
+    "git-worktree-write",
+    "python-execution",
+    "uv-python-toolchain"
+   ],
+   "dependencies": [],
+   "file_custody": [
+    "skills/agentic-sdlc/tools/instruction-generator.py",
+    "tests/test_instruction_generator.py"
+   ],
+   "worktree_custody": ".worktrees/agentic-sdlc-f83f-sp8-fix"
+  },
+  {
+   "id": "ws-f83f-review",
+   "objective": "review the fix against the seed's acceptance criteria",
+   "authority_class": "read-only-advisory",
+   "capability_demands": [
+    "repository-read"
+   ],
+   "dependencies": [
+    "ws-f83f-fix"
+   ],
+   "file_custody": [],
+   "worktree_custody": null
+  }
+ ],
+ "digest": "d323dcf55aab22151f797912c55ffac06f462117fecbc096aeadc01045ae955c"
+}

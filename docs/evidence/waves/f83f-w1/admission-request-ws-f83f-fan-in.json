@@ -1,0 +1,57 @@
+{
+ "schema": "agentic-sdlc/runtime-admission-request@1",
+ "node": "ws-f83f-fan-in",
+ "requested_tier": "frontier",
+ "host_injection": {
+  "host": "claude-code",
+  "surface": "workflow_agent_call",
+  "injects_model": true,
+  "injects_effort": true
+ },
+ "assignment": {
+  "schema_version": "runtime-assignment-receipt/v1",
+  "requested_model_id": "claude-fable-5",
+  "requested_effort": "medium",
+  "requested_context_form": "base",
+  "request_injection_status": "verified",
+  "request_injection_evidence": {
+   "source_kind": "immutable_request_receipt",
+   "status": "verified",
+   "schema": "launcher-request-evidence/v1",
+   "adapter_id": "workflow-agent-call",
+   "adapter_version": "1",
+   "adapter_config_sha256": "48c18b8a0487286390e57e4a2adecde8e104f6c718476b05ca7937470ec21266",
+   "request_bytes_sha256": "0d9ec35ee1d6d3bbacf0f9ec37b90401ddf34203de27f8efd2bf5a1fdd0dcb18"
+  },
+  "resolution_state": "resolved",
+  "resolved_provider": "anthropic",
+  "resolved_model_id": "claude-fable-5",
+  "model_identity_basis": "unambiguous_exact_id_mapping",
+  "model_readback_status": "verified",
+  "model_readback_evidence": {
+   "source_kind": "policy_exact_id_mapping",
+   "status": "unavailable",
+   "schema": "runtime-assignment-policy-v1",
+   "reference": "model-provider-map",
+   "mapped_provider": "anthropic",
+   "mapped_model_id": "claude-fable-5",
+   "assignment_binding_sha256": "ebde4aca32afdd04ec37e1ace2a3ca946a47be8ea676baa5d78097c0ab5919b4"
+  },
+  "effort_readback_status": "unavailable",
+  "effort_readback_evidence": {
+   "source_kind": "transport_readback",
+   "status": "unavailable",
+   "schema": "runtime-assignment-readback/v1",
+   "assignment_binding_sha256": "ebde4aca32afdd04ec37e1ace2a3ca946a47be8ea676baa5d78097c0ab5919b4"
+  },
+  "effort_effective_divergence": "unavailable",
+  "context_readback_status": "unavailable",
+  "context_readback_evidence": {
+   "source_kind": "transport_readback",
+   "status": "unavailable",
+   "schema": "runtime-assignment-readback/v1",
+   "assignment_binding_sha256": "ebde4aca32afdd04ec37e1ace2a3ca946a47be8ea676baa5d78097c0ab5919b4"
+  },
+  "context_effective_divergence": "unavailable"
+ }
+}

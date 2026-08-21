@@ -1,0 +1,16 @@
+{
+ "artifacts": [
+  {
+   "path": "skills/agentic-sdlc/tools/instruction-generator.py",
+   "sha256": "4346fc5b46c6abe7afbc54cfb3f0ff3d7f29bdb65abbb1523ada64e38b2ac6fd"
+  },
+  {
+   "path": "tests/test_instruction_generator.py",
+   "sha256": "5887c61eeac7bf0af43628985eb75920e7227e1f326d71b93b427b3c2a905797"
+  }
+ ],
+ "digest": "174b8017e5bfc860e65f2ec1fa653d362aedd8b162191c3b1807acf7c1b22bb5",
+ "schema": "agentic-sdlc/wave-artifact-manifest@1",
+ "target": "/home/codeseys/DevBox/custom-pi-setup/agentic-sdlc",
+ "wave_id": "wave-f83f-w1"
+}
