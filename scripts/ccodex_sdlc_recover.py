@@ -635,11 +635,29 @@ def admit_journals(plan: dict[str, Any]) -> None:
 def resume_operator_tools(
     operator_tools: ModuleType, operator_config: Any, plan: dict[str, Any], ledger: dict[str, bool]
 ) -> tuple[list[str], bool]:
-    """Resume or roll back the operator-tools pending transition through its own machinery."""
+    """Resume or roll back the operator-tools pending transition through its own machinery.
+
+    The journal's exact bytes are re-checked UNDER the lifecycle lock against the digest the approved
+    plan recorded, mirroring ``resume_bundle``'s own pattern: a plan verified before the lock and
+    executed after it would otherwise have admitted whatever moved in between.
+    """
     if not any(item["component"] == "operator-tools" for item in plan["items"]):
         return [], False
+    recorded = {
+        journal["locator"]: journal["digest"]
+        for journal in plan["journal"]
+        if journal["component"] == "operator-tools" and journal["state"] == JOURNAL_PRESENT
+    }
     moved_before = ledger["moved"]
     with operator_tools.lifecycle_lock(operator_config):
+        locator = "journal://operator-tools/state"
+        if locator in recorded:
+            raw, state_name = read_bounded_document(operator_config.state_path, MAX_JOURNAL_BYTES)
+            if raw is None or sha256_bytes(raw) != recorded[locator]:
+                raise Refusal(
+                    f"the operator-tools journal {locator} changed between the approval and the lock"
+                    f" (now {state_name}): the state moved and nothing was touched"
+                )
         state = operator_tools.load_state(operator_config.state_path, operator_config)
         try:
             # Pessimistic on purpose: the flag is raised BEFORE the call, because the write happens

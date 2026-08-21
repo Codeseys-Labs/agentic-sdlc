@@ -497,12 +497,19 @@ def call_main(
     argv: list[str] | None = None,
     config: Any | None = None,
     fail_refresh_after: int | None = None,
+    fail_observe_content_at: int | None = None,
 ) -> Outcome:
-    """Drive ``main([])`` exactly as the dispatcher does, optionally injecting one transaction fault.
+    """Drive ``main([])`` exactly as the dispatcher does, optionally injecting one fault.
 
-    The fault is injected at the ONE seam a real interruption would hit: the shipped installer's
-    ``transactional_replace``, on the sibling instance this run loads.  Patching the file would not
-    work, because every run loads its own module object by absolute path.
+    ``fail_refresh_after`` is injected at the seam a real interruption would hit: the shipped
+    installer's ``transactional_replace``, on the sibling instance this run loads.  Patching the file
+    would not work, because every run loads its own module object by absolute path.
+
+    ``fail_observe_content_at`` is a DIFFERENT seam: the ONE-INDEXED call to this module's own
+    ``observe_content`` that returns an unknown instead of a digest, leaving every other call --
+    including the write each call follows -- to run for real.  Unlike a transaction fault, an
+    observation fault never stops the refresh loop; it is recorded as an unknown and the walk
+    continues, which is why this is a call COUNT rather than a permanent failure from that call on.
     """
     real_loader = update.load_sibling
 
@@ -525,6 +532,24 @@ def call_main(
     with contextlib.ExitStack() as stack:
         stack.enter_context(mock.patch.object(update, "default_config", lambda: config or fixture.config))
         stack.enter_context(mock.patch.object(update, "load_sibling", loader))
+        if fail_observe_content_at is not None:
+            real_observe_content = update.observe_content
+            observations: list[int] = []
+
+            def failing_observe_content(
+                bundle_module: ModuleType, path: Path | None
+            ) -> tuple[str | None, str | None]:
+                observations.append(1)
+                if len(observations) == fail_observe_content_at:
+                    return (
+                        None,
+                        "fault-injected observation failure: the digest could not be trusted",
+                    )
+                return real_observe_content(bundle_module, path)
+
+            stack.enter_context(
+                mock.patch.object(update, "observe_content", failing_observe_content)
+            )
         stack.enter_context(contextlib.redirect_stdout(out))
         stack.enter_context(contextlib.redirect_stderr(err))
         code = update.main([] if argv is None else argv)
@@ -1303,6 +1328,78 @@ class InterruptionTest(TemporaryRoot):
         clean = self.fixture()
         self.assertEqual(0, call_main(clean).code)
         self.assertEqual("complete", clean.new_receipt()["body"]["effect_state"])
+
+    def test_a_digest_failure_after_a_successful_write_is_a_partial_effect_never_a_false_complete(
+        self,
+    ) -> None:
+        """V5 (agentic-sdlc-cd9f): no earlier test exercised a recorded unknown with no failure.
+
+        ``derive_effect_state``'s ``elif unknowns:`` branch is what turns an observation nobody could
+        make into ``partial`` rather than a false ``complete``.  Before this test, flipping that
+        branch to ``complete`` passed every test in this module: no run here had reached the seal with
+        unknowns recorded and ``run.failures`` empty.  The write for the first entry this run touches
+        REALLY SUCCEEDS -- its new content lands on disk -- and only the digest observed right after
+        it fails, which is supplied-but-missing rather than not-supplied.
+        """
+        fixture = self.fixture()
+        prior_pointer = fixture.pointer.read_bytes()
+
+        outcome = call_main(fixture, fail_observe_content_at=1)
+
+        self.assertEqual(4, outcome.code, outcome.stderr)
+        self.assertIn("this update did not complete every claimed effect", outcome.stderr)
+        self.assertIn("effect_state 'partial'", outcome.stderr)
+        # The active pointer never moved: the prior receipt is still this plane's active statement.
+        self.assertEqual(prior_pointer, fixture.pointer.read_bytes())
+        self.assertIn("stays this plane's active statement", outcome.stdout)
+
+        receipt = fixture.new_receipt()
+        body = receipt["body"]
+        self.assertEqual("partial", body["effect_state"])
+        self.assertEqual("activated-partial", body["terminal_phase"])
+        content_unknowns = [row for row in body["unknowns"] if row["observation"] == "entry-content"]
+        self.assertEqual(1, len(content_unknowns), body["unknowns"])
+        failed_name = content_unknowns[0]["subject"]
+        self.assertIn(failed_name, CLAUDE_DESTINATIONS)
+        self.assertIn("fault-injected observation failure", content_unknowns[0]["detail"])
+
+        entries_by_name = {row["entry_name"]: row for row in body["entries"]}
+        self.assertEqual(set(CLAUDE_DESTINATIONS), set(entries_by_name))
+        self.assertIsNone(entries_by_name[failed_name]["content_sha256"])
+        old_digest_by_name = {
+            row["entry_name"]: row["content_sha256"] for row in fixture.prior_receipt["body"]["entries"]
+        }
+        for name in CLAUDE_DESTINATIONS:
+            with self.subTest(name=name):
+                self.assertEqual("refreshed", entries_by_name[name]["disposition"])
+                self.assertEqual("owned", entries_by_name[name]["prestate"])
+                if name == failed_name:
+                    # The write for this entry really happened -- its digest changed from the prior
+                    # receipt's own record -- even though this run never observed the new one.
+                    self.assertNotEqual(
+                        old_digest_by_name[name], bundle.digest(fixture.destination(name))
+                    )
+                else:
+                    self.assertEqual(
+                        bundle.digest(fixture.destination(name)), entries_by_name[name]["content_sha256"]
+                    )
+
+        # The receipt is sealed by the family's own producer and validates, even though its own
+        # effect is partial: a sealed-but-not-yet-activated receipt is still evidence.
+        self.assertEqual(
+            receipts.VERDICT_VALIDATED,
+            receipts.derive("validate", receipt, "the partial receipt")["verdict"],
+        )
+
+        # Positive control: the SAME fixture with no injected observation fault reaches exit 0,
+        # records no unknowns at all, and moves the pointer -- so the partial result above is this
+        # one fault, not a broken harness.
+        clean = self.fixture()
+        clean_outcome = call_main(clean)
+        self.assertEqual(0, clean_outcome.code, clean_outcome.stderr)
+        self.assertEqual([], clean.new_receipt()["body"]["unknowns"])
+        self.assertEqual("complete", clean.new_receipt()["body"]["effect_state"])
+        self.assertNotEqual(receipts.canonical_bytes(clean.prior_receipt), clean.pointer.read_bytes())
 
     def test_an_existing_receipt_for_this_identity_and_instant_refuses_rather_than_repeating(self) -> None:
         fixture = self.fixture()

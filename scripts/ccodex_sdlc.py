@@ -1584,14 +1584,20 @@ def recovery_plan_line(root: Path, adapters: tuple[ModuleType, ModuleType, Modul
             bundle_config=bundle_config,
             activation_receipts=receipts,
         )
+        # The digest and items admission stay INSIDE this try, and ``plan`` is shape-checked before
+        # any subscript: a schema-lying sibling that returns a non-dict ``plan`` (or one with no
+        # ``items`` list) must yield this same handled error, never a traceback after the report has
+        # already been emitted on stdout.
+        if not isinstance(digest, str) or len(digest) != 64 or any(
+            character not in _HEX_CHARACTERS for character in digest
+        ):
+            return "recovery plan: unavailable (the derivation returned no admissible plan digest)\n"
+        if not isinstance(plan, dict) or not isinstance(plan.get("items"), list):
+            return "recovery plan: unavailable (the derivation returned no admissible plan shape)\n"
+        if not plan["items"]:
+            return "recovery plan: nothing to recover, so no plan digest is offered\n"
     except Exception as exc:  # noqa: BLE001 - a plan that cannot be derived states no digest
         return f"recovery plan: unavailable ({bounded_message(str(exc) or repr(exc))})\n"
-    if not isinstance(digest, str) or len(digest) != 64 or any(
-        character not in _HEX_CHARACTERS for character in digest
-    ):
-        return "recovery plan: unavailable (the derivation returned no admissible plan digest)\n"
-    if not plan["items"]:
-        return "recovery plan: nothing to recover, so no plan digest is offered\n"
     return (
         f"recovery plan sha256 {digest}: approve exactly this plan with"
         f" `ccodex sdlc recover {RECOVER_APPLY_FLAG} {digest}`\n"

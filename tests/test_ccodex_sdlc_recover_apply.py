@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
@@ -1084,6 +1085,71 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
             )
             self.assertIn(str(destination), json.loads(journal.read_text(encoding="utf-8"))["entries"])
 
+    def test_an_operator_tools_state_swapped_between_derivation_and_the_lock_refuses(self) -> None:
+        """``resume_operator_tools`` mirrors ``resume_bundle``'s own lock-time byte recheck.
+
+        The plan derived at T0 records the operator-tools journal's exact digest. If the live state
+        moves AFTER that derivation and BEFORE the lock is taken at T1, the mismatch is refused by
+        name rather than acted on -- the same race ``resume_bundle`` already declines for the bundle
+        journal (agentic-sdlc-cd9f).
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _dispatcher, environment = self.make_dispatcher(root)
+            state, command = self.plant_operator_tools_pending(environment, live=None)
+            operator_config = operator_tools.Config(
+                ROOT,
+                Path(environment["HOME"]),
+                Path(environment["XDG_BIN_HOME"]),
+                Path(environment["XDG_STATE_HOME"]),
+                False,
+                False,
+            )
+            before = state.read_bytes()
+            plan = {
+                "items": [{"component": "operator-tools", "path": str(command)}],
+                "journal": [
+                    {
+                        "component": "operator-tools",
+                        "digest": hashlib.sha256(before).hexdigest(),
+                        "locator": "journal://operator-tools/state",
+                        "state": "present",
+                    }
+                ],
+            }
+            real_lock = operator_tools.lifecycle_lock
+
+            @contextlib.contextmanager
+            def swap_then_lock(config):
+                # The race this recheck defends against: the plan was derived over ``before``, and
+                # the live state moves AFTER that derivation but BEFORE the lock is taken here.
+                state.write_bytes(before + b"\n")
+                with real_lock(config):
+                    yield
+
+            ledger = {"moved": False}
+            with mock.patch.object(operator_tools, "lifecycle_lock", swap_then_lock):
+                with self.assertRaises(recover.Refusal) as refused:
+                    recover.resume_operator_tools(operator_tools, operator_config, plan, ledger)
+            self.assertIn("changed between the approval and the lock", str(refused.exception))
+            self.assertFalse(ledger["moved"])
+            # Nothing was touched beyond the planted swap itself.
+            self.assertEqual(state.read_bytes(), before + b"\n")
+            self.assertFalse(command.exists())
+
+            # Positive control: with the state UNSWAPPED, the exact same plan resumes under the real
+            # lock, so the refusal above is the recheck and not an inability to resume at all.
+            state.write_bytes(before)
+            messages, partial = recover.resume_operator_tools(
+                operator_tools, operator_config, plan, ledger
+            )
+            self.assertTrue(ledger["moved"])
+            self.assertFalse(partial, messages)
+            self.assertIn("operator-tools: recovered abort:", messages[0])
+            document = json.loads(state.read_text(encoding="utf-8"))
+            self.assertIsNone(document["pending"])
+            self.assertEqual(document["entries"], {})
+
     def test_the_reader_maps_the_apply_form_onto_its_own_named_module(self) -> None:
         self.assertEqual(
             reader.lifecycle_module_path("recover"),
@@ -1094,6 +1160,50 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
             sorted(reader.LIFECYCLE_MODULES), ["install", "recover", "uninstall", "update"]
         )
         self.assertEqual(reader.RECOVERY_PLAN_SCHEMA, recover.PLAN_SCHEMA)
+
+
+class RecoveryPlanLineTests(RecoverApplyHarness):
+    """``recovery_plan_line`` must render the handled ``unavailable`` line, never a traceback, when
+    the optional recovery-plan sibling lies about its own return shape (agentic-sdlc-cd9f)."""
+
+    def line_for(self, root: Path, derive_plan) -> str:
+        adapters = (None, operator_tools, bundle)
+
+        def fake_load_recovery_planner(script_path: Path, guard: object) -> tuple[object, None]:
+            planner = type("LyingPlanner", (), {"derive_plan": staticmethod(derive_plan)})()
+            return planner, None
+
+        with mock.patch.object(reader, "load_recovery_planner", fake_load_recovery_planner):
+            return reader.recovery_plan_line(root, adapters)
+
+    def test_a_schema_lying_planner_yields_the_handled_unavailable_line_never_a_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for lying in (
+                # A ``plan`` that is not a mapping at all: ``plan["items"]`` would raise TypeError.
+                lambda **kwargs: ("not-a-plan-dict", "d" * 64),
+                # A ``plan`` dict whose ``items`` is present but not a list.
+                lambda **kwargs: ({"items": "not-a-list"}, "d" * 64),
+                # A ``plan`` dict with no ``items`` key at all: ``plan["items"]`` would raise KeyError.
+                lambda **kwargs: ({}, "d" * 64),
+            ):
+                with self.subTest(lying=lying):
+                    line = self.line_for(root, lying)
+                    self.assertIn("recovery plan: unavailable", line)
+                    self.assertNotIn("Traceback", line)
+
+            # Positive control: the SAME harness, given an honestly-shaped plan, renders the real
+            # digest line rather than the unavailable fallback -- the guard above is catching the
+            # lying shape and not swallowing every plan.
+            honest_digest = "e" * 64
+            line = self.line_for(
+                root, lambda **kwargs: ({"items": [{"component": "bundle", "path": "x"}]}, honest_digest)
+            )
+            self.assertEqual(
+                f"recovery plan sha256 {honest_digest}: approve exactly this plan with"
+                f" `ccodex sdlc recover {reader.RECOVER_APPLY_FLAG} {honest_digest}`\n",
+                line,
+            )
 
 
 if __name__ == "__main__":
