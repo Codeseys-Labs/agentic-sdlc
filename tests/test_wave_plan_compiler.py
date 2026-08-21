@@ -54,7 +54,10 @@ asserts a residual names its limit, so closing one has to update the residual in
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -577,6 +580,31 @@ class PlanShapeTests(CompilerCase):
         nodes[1]["worktree_custody"] = "../elsewhere"
         self.refuse("`..` segment", nodes=nodes)
 
+    def test_a_backslash_custody_path_is_refused(self) -> None:
+        # `a\..\..\etc` has no `/`-separated `..` segment at all, so the split-and-check below this
+        # guard would never see one; the backslash has to be refused BEFORE that split runs.
+        nodes = plan_body()["nodes"]
+        nodes[1]["file_custody"] = [r"skills\wave-plan-compiler.py"]
+        self.refuse("carries a backslash", nodes=nodes)
+
+    def test_a_nul_character_in_a_custody_path_is_refused(self) -> None:
+        # This tool owns the custody schema for both file_custody and worktree_custody, so the refusal
+        # belongs here rather than in a sibling gate's own mirror of this rule.
+        nodes = plan_body()["nodes"]
+        nodes[1]["worktree_custody"] = "elsewhere\x00sneaky"
+        self.refuse("carries a NUL character", nodes=nodes)
+
+    def test_an_unsorted_file_custody_list_is_refused(self) -> None:
+        nodes = plan_body()["nodes"]
+        nodes[1]["file_custody"] = list(reversed(nodes[1]["file_custody"]))
+        self.refuse("strictly ascending set", nodes=nodes)
+
+    def test_a_duplicate_file_custody_entry_is_refused(self) -> None:
+        nodes = plan_body()["nodes"]
+        one = nodes[1]["file_custody"][0]
+        nodes[1]["file_custody"] = sorted([*nodes[1]["file_custody"], one])
+        self.refuse("strictly ascending set", nodes=nodes)
+
     def test_revision_one_may_not_supersede_a_plan(self) -> None:
         self.refuse("follows no prior plan", revision=1, supersedes=fake_digest("prior"))
 
@@ -585,6 +613,11 @@ class PlanShapeTests(CompilerCase):
 
     def test_more_nodes_than_the_plans_own_ceiling_is_refused(self) -> None:
         self.refuse("contradicts itself", limits=dict(DEFAULT_LIMITS, max_total_nodes=1))
+
+    def test_declared_concurrency_above_its_own_ceiling_is_refused(self) -> None:
+        # Distinct from the node-count ceiling above: this is `declared_concurrency` against
+        # `limits.max_concurrent_nodes`, the OTHER half of check_plan's self-contradiction guard.
+        self.refuse("declares 5 concurrent nodes against its own recorded ceiling", declared_concurrency=5)
 
     def test_concurrency_above_the_total_ceiling_is_refused(self) -> None:
         self.refuse("can never be reached", limits=dict(DEFAULT_LIMITS, max_concurrent_nodes=99))
@@ -654,6 +687,13 @@ class DiffShapeTests(CompilerCase):
         # A first wave adds its whole graph, so emptiness there is not "identical revisions": there is
         # no revision pair for it to be about. The empty diff `diff` emits always names a prior plan.
         self.refuse("no revision pair this emptiness could be about", changes=[], no_delta_reason=NO_DELTA)
+
+    def test_a_hand_sealed_diff_naming_itself_as_its_own_prior_is_refused(self) -> None:
+        # `compile --diff` refuses this pairing at synthesis time (`StandaloneDiffTests` covers that
+        # half); this is the OTHER half -- a hand-sealed plan-diff@1 document that never went through
+        # synthesis at all -- which is the shape `verify` alone must catch.
+        body = diff_body()
+        self.refuse("a plan superseding itself", prior_plan_digest=body["plan_digest"])
 
 
 class InstantGuardTests(CompilerCase):
@@ -1080,6 +1120,19 @@ class OutputPathTests(AdmissionCase):
         self.assertEqual(out.read_bytes(), canonical(plan))
         self.assertEqual(diff_out.read_bytes(), canonical(result["diff"]))
 
+    def test_diff_out_without_out_writes_an_unpaired_diff_at_exit_zero(self) -> None:
+        # A recorded observation, not a refusal: pairing the two files is the caller's request to
+        # make, and this run's diff still names a plan_digest for a plan it never put on disk.
+        diff_out = self.outside("diff.json")
+        result = self.compile_result(extra=("--diff-out", str(diff_out)))
+        self.assert_compiled(result)
+        self.assertEqual(result["exit_code"], EXIT_OK)
+        self.assertIsNone(result["out"])
+        self.assertEqual(result["diff_out"], str(diff_out))
+        self.assertEqual(diff_out.read_bytes(), canonical(result["diff"]))
+        self.assertEqual(result["diff"]["plan_digest"], result["plan"]["digest"])
+        self.assertIn("--diff-out may be supplied without --out", " || ".join(result["residuals"]))
+
     def test_a_refused_compilation_writes_neither_document(self) -> None:
         out, diff_out = self.outside("plan.json"), self.outside("diff.json")
         streams = submissions_body()["workstreams"]
@@ -1124,6 +1177,21 @@ class OutputPathTests(AdmissionCase):
             self.compile_result(extra=("--diff-out", str(nested / "diff.json"))),
             "resolves inside the snapshot's observed",
         )
+
+    def test_containment_is_measured_through_a_symlinked_parent(self) -> None:
+        """Lexical containment would be defeated by a link, so the caller-side parent is resolved.
+
+        Only the `--out` argument's parent is `realpath`-resolved before the containment comparison;
+        the snapshot-recorded worktree path is compared as recorded.
+        """
+        link = self.work / "elsewhere"
+        try:
+            link.symlink_to(FIXTURES["repository"], target_is_directory=True)
+        except OSError:  # a host without symlink permission cannot ask this question
+            self.skipTest("this host does not permit creating a symlink")
+        result = self.compile_result(extra=("--out", str(link / "plan.json")))
+        self.named(result, "resolves inside the snapshot's observed")
+        self.assertFalse((Path(FIXTURES["repository"]) / "plan.json").exists())
 
     def test_a_destination_with_no_existing_parent_is_refused(self) -> None:
         self.named(
@@ -1711,6 +1779,40 @@ class PartialWriteTests(AdmissionCase):
         self.assert_compiled(result)
         self.assertEqual(result["exit_code"], EXIT_OK)
         self.assertEqual(result["diff_out"], str(writable / "diff.json"))
+
+
+class WriteDocumentRaceGuardTests(unittest.TestCase):
+    """`write_document`'s own `O_EXCL`, isolated from `check_output_path`'s earlier existence check.
+
+    `compile`'s CLI path always refuses an occupied `--out`/`--diff-out` before `write_document` is
+    ever reached, so a subprocess-level test can never exercise `O_EXCL` losing a race to a file that
+    appeared in between: it would only ever prove the earlier check. This class imports the tool
+    directly -- its hyphenated filename means a plain `import` statement cannot name it, so
+    `importlib.util.spec_from_file_location` loads it under a module name of this test's choosing --
+    and calls `write_document` against a target that already exists, which is exactly what a racer
+    winning that gap would leave behind.
+    """
+
+    def setUp(self) -> None:
+        spec = importlib.util.spec_from_file_location("wave_plan_compiler_race_guard", TOOL)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.module = module
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.work = Path(self._tmp.name).resolve()
+
+    def test_a_pre_existing_target_is_left_untouched_and_reports_nothing_created(self) -> None:
+        target = self.work / "plan.json"
+        target.write_bytes(b"a racer's file, already here\n")
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            state = self.module.write_document(target, {"schema": "agentic-sdlc/wave-plan@1"}, "--out")
+        self.assertEqual(state, self.module.WRITE_NOTHING)
+        self.assertEqual(target.read_bytes(), b"a racer's file, already here\n")
+        self.assertIn("cannot create the --out path", captured.getvalue())
+        self.assertIn("nothing was written", captured.getvalue())
 
 
 class EmptyDiffShapeTests(CompilerCase):

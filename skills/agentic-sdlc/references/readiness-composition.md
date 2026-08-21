@@ -34,7 +34,7 @@ What it answers: whether a sealed `WavePlan` is admitted against the caller-supp
 fresh planning snapshot and mission contract — issue 16's `admitted` lifecycle state,
 distinct from the compiler's `compiled` state. Six of issue 16's eleven readiness
 dimensions are decidable from the sealed documents it reads and run as checks; the
-other five, plus five partial refinements of checks that do run, are named in the
+other five, plus six partial refinements of checks that do run, are named in the
 report's own `deferred_dimensions` list rather than reported as met.
 
 What it cannot answer: it observes no repository itself (freshness of the fresh

@@ -51,7 +51,7 @@ reads -- `snapshot-freshness`, `target-and-custody-identity`, `dependency-and-ar
 runs here as a check whose failure is a named blocker. The other five are not expressible in any
 merged schema: no document in this family carries a route candidate, a token or cost budget, an
 egress declaration, a gate or review requirement, a per-node fallback, or a human approval receipt.
-Those five, plus five partial refinements of checks that DO run, are carried in the sealed report's
+Those five, plus six partial refinements of checks that DO run, are carried in the sealed report's
 own `deferred_dimensions` list with the reason each is not decidable. A deferred dimension is never
 reported as a met check, because a met check would claim a proof that does not exist; and it is never
 omitted, because a consumer reading six met checks has to be able to see what the six do not cover.
@@ -149,7 +149,7 @@ RESIDUALS, STATED EXACTLY.
   * The digest is RE-DERIVATION, not a security boundary. A same-OS-user forger can write a
     self-consistent sealed document; what the check catches is drift, a hand-edit, and a mismatched
     pair of artifacts.
-  * FIVE OF ISSUE 16'S ELEVEN DIMENSIONS ARE DEFERRED, and five refinements of checks that do run
+  * FIVE OF ISSUE 16'S ELEVEN DIMENSIONS ARE DEFERRED, and six refinements of checks that do run
     are deferred beside them. The sealed report's `deferred_dimensions` list is the authoritative
     enumeration with a reason each; none of them is ever reported as a met check.
   * The fresh snapshot's FRESHNESS is the caller's claim. This module observes no repository, so it
@@ -304,7 +304,7 @@ ADMITTED_CHECK_ORDER = (
 )
 
 #: What this gate DOES NOT DECIDE, named with the reason it cannot. Five whole dimensions of issue
-#: 16's eleven, and five refinements of a check that does run, so the check's own scope is exactly
+#: 16's eleven, and six refinements of a check that does run, so the check's own scope is exactly
 #: what remains. A dimension named here is never also reported as a met check: a met check claims a
 #: proof, and the whole point of this list is that there is none. The names of whole dimensions are
 #: their check slugs, and a refinement is `<slug>:<aspect>`, which is the snapshot tool's own
@@ -365,6 +365,14 @@ DEFERRED_DIMENSIONS = (
         "a planning snapshot digests the policy/*.json files present, and which ADR or policy applies "
         "to a given wave is a judgment no document in this family records; the mission's authority "
         "ladder and the plan's own recorded execution-profile limits are what is checked here",
+    ),
+    (
+        "policy-and-adr-consistency:recursive-spawn-generations",
+        "the wave plan's limits.recursive_spawn_generations is admitted as a shape by "
+        "check_plan_limits (an integer of at least 0, where 0 is recursion off), but whether a raised "
+        "value is itself policy-admissible is a judgment no document in this family records; only "
+        "max_total_nodes and max_concurrent_nodes are re-checked against the plan's own recorded "
+        "counts here",
     ),
     (
         "route-constraints-and-qualification",
@@ -537,7 +545,7 @@ RESIDUALS = (
     "the digest is re-derivation, not a boundary against a same-OS-user forger",
     "five of issue 16's eleven dimensions -- approval requirements, budgets and declared egress, "
     "fallbacks and stop conditions, gates and review requirements, route constraints and "
-    "qualification -- and five refinements of checks that do run are DEFERRED, and the sealed "
+    "qualification -- and six refinements of checks that do run are DEFERRED, and the sealed "
     "report's deferred_dimensions list is the authoritative enumeration with a reason each; none of "
     "them is ever reported as a met check",
     "the fresh snapshot's freshness is the CALLER's claim: this module observes no repository, so it "
@@ -1120,7 +1128,10 @@ def _relative_custody(assessment: Assessment, slug: str, value: Any, what: str) 
     """A repository-relative custody path, in the ONE spelling the compiler seals.
 
     The rule MIRRORS `wave-plan-compiler.py`'s own: no leading separator, no drive letter, no
-    backslash, and no empty, `.`, or `..` segment. It refuses rather than normalizes, for two reasons.
+    backslash, and no empty, `.`, or `..` segment. The compiler additionally refuses a NUL character;
+    this gate stays deliberately narrower, because a NUL-bearing path never survives the compiler's
+    own seal and this re-derivation is not a boundary (see the recorded residual on that point).
+    It refuses rather than normalizes, for two reasons.
     The compiler needs exactly one spelling so custody exclusivity between nodes is comparable at all;
     this gate needs it because the path is JOINED to the observed worktree root, and quietly rewriting
     `a//b` or `x/../y` here would compare occupancy for a directory the plan did not declare.
@@ -1631,6 +1642,11 @@ def check_custody_availability(
             "claimed worktree is already occupied",
         )
     root = snapshot["repository"]["worktree_path"]
+    # The `!= root` filter below is provably dead: `_relative_custody` already refuses every empty,
+    # `.`, or `..` segment, so no admitted `custody` can ever leave `os.path.join(root, custody)`
+    # normalizing back to `root` itself, and `claimed` (below) can therefore never equal this key
+    # either way. Kept rather than deleted so the exclusion stays documented and self-evident instead
+    # of silently relying on that guarantee holding forever.
     occupied = {
         os.path.normpath(entry["path"]): entry
         for entry in snapshot["worktrees"]
@@ -1837,7 +1853,7 @@ def run_admission_checks(args: argparse.Namespace, admitted: dict[str, Any], ass
     The reasons live in the ASSESSMENT rather than in a list returned beside it, so the sealed report's
     `checks` and the result's `reasons` are generated from one store and cannot disagree.
 
-    The five whole dimensions and five refinements this does NOT decide are in `DEFERRED_DIMENSIONS`
+    The five whole dimensions and six refinements this does NOT decide are in `DEFERRED_DIMENSIONS`
     and reach the sealed report as `deferred_dimensions`. They are deliberately not slugs here: a
     check group in this list claims a comparison actually happened.
     """
@@ -2174,7 +2190,7 @@ def main(argv: list[str] | None = None) -> int:
             "Read-only, offline, clock-free, and subprocess-free: it observes no repository itself, "
             "calls no model, resolves no runtime route, reads no environment variable, and authorizes "
             "nothing. Six of issue 16's eleven dimensions are decidable from the sealed documents it "
-            "reads and run as checks; the other five, plus five partial refinements of checks that "
+            "reads and run as checks; the other five, plus six partial refinements of checks that "
             "do run, are carried in the report's own deferred_dimensions list and are never "
             "reported as met."
         ),

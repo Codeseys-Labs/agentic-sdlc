@@ -503,6 +503,10 @@ RESIDUALS = (
     "determinism here is over the SEALED documents: identical inputs seal identical bytes. The result "
     "document additionally carries the absolute output paths of this run, which depend on the process "
     "directory a relative --out was resolved against, and no path reaches a sealed document",
+    "--diff-out may be supplied without --out: the diff it writes still names a plan_digest for a plan "
+    "this run did not put on disk, and exit is 0. Pairing the two files is the caller's request to "
+    "make, not this tool's to enforce; --out given alongside --diff-out IS ordered plan-first so that "
+    "pair is never left half-written",
 )
 
 _TIME = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
@@ -829,6 +833,9 @@ def _relative_path(assessment: Assessment, slug: str, value: str, what: str) -> 
         return None
     if "\\" in value:
         assessment.note(slug, f"{what} {value!r} carries a backslash; custody paths are forward-slashed")
+        return None
+    if "\x00" in value:
+        assessment.note(slug, f"{what} {value!r} carries a NUL character, which no filesystem path may contain")
         return None
     segments = value.split("/")
     if any(segment in ("", ".", "..") for segment in segments):
@@ -1299,10 +1306,20 @@ def check_diff(assessment: Assessment, document: dict[str, Any]) -> None:
         assessment.note(slug, f"the plan diff declares schema {document.get('schema')!r} rather than {DIFF_SCHEMA!r}")
     _instant(assessment, slug, document, "compiled_at", "the plan diff's compiled_at")
     _identifier(assessment, slug, document, "mission_id", "the plan diff's mission_id")
-    _digest_value(assessment, slug, document.get("plan_digest"), "the plan diff's plan_digest")
+    plan_digest = _digest_value(assessment, slug, document.get("plan_digest"), "the plan diff's plan_digest")
     prior = document.get("prior_plan_digest")
     if prior is not None:
         prior = _digest_value(assessment, slug, prior, "the plan diff's prior_plan_digest")
+    if plan_digest is not None and prior is not None and plan_digest == prior:
+        # `compile --diff` refuses this pairing at synthesis time (see `run_diff`'s "provenance"
+        # check), but a hand-sealed plan-diff@1 document reaches `verify` without ever going through
+        # that synthesis, so the same refusal has to live here too.
+        assessment.note(
+            slug,
+            f"the plan diff's plan_digest and prior_plan_digest are both {plan_digest}; one document "
+            "is not two revisions, and a diff of a plan against itself would describe a plan "
+            "superseding itself",
+        )
     changes = document.get("changes")
     empty_reason = document.get("no_delta_reason")
     if not isinstance(changes, list):

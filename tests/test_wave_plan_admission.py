@@ -83,8 +83,11 @@ words "environment variable" in the sentence promising it reads none.
 from __future__ import annotations
 
 import ast
+import contextlib
 import copy
 import hashlib
+import io
+import importlib.util
 import json
 import os
 import re
@@ -162,6 +165,7 @@ DEFERRED_NAMES = (
     "host-and-tool-capability:harness-demands",
     "host-and-tool-capability:version-qualification",
     "policy-and-adr-consistency:adr-applicability",
+    "policy-and-adr-consistency:recursive-spawn-generations",
     "route-constraints-and-qualification",
 )
 #: The five INPUT positions, in result order. `compiled-snapshot` is one of them: the compile-time
@@ -814,7 +818,10 @@ class ProseCountTests(ToolCase):
             "whole": len([name for name in dimensions if ":" not in name]),
             "refinements": len([name for name in dimensions if ":" in name]),
         }
-        source = TOOL.read_text(encoding="utf-8")
+        # The readiness reference restates these counts for consumers, so it rots the same way the
+        # tool's own prose does (agentic-sdlc-bfea landed exactly that rot); scan both together.
+        reference = ROOT / "skills" / "agentic-sdlc" / "references" / "readiness-composition.md"
+        source = TOOL.read_text(encoding="utf-8") + reference.read_text(encoding="utf-8")
         for claim, count in derived.items():
             found = self.claimed(source, claim)
             # A claim site that VANISHED is its own failure: an unstated count cannot be checked, and
@@ -2330,6 +2337,39 @@ class OutputPathTests(ToolCase):
         code, result, _ = self.admit(out="report.json")
         self.assertEqual(code, EXIT_OK)
         self.assertEqual(result["exit_code"], code)
+
+
+class WriteDocumentRaceGuardTests(unittest.TestCase):
+    """`write_document`'s own `O_EXCL`, isolated from `check_output_path`'s earlier existence check.
+
+    `admit`'s CLI path always refuses an occupied `--out` before `write_document` is ever reached, so a
+    subprocess-level test can never exercise `O_EXCL` losing a race to a file that appeared in between:
+    it would only ever prove the earlier check. This class imports the tool directly -- its hyphenated
+    filename means a plain `import` statement cannot name it, so `importlib.util.spec_from_file_location`
+    loads it under a module name of this test's choosing -- and calls `write_document` against a target
+    that already exists, which is exactly what a racer winning that gap would leave behind.
+    """
+
+    def setUp(self) -> None:
+        spec = importlib.util.spec_from_file_location("wave_plan_admission_race_guard", TOOL)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.module = module
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.work = Path(self._tmp.name).resolve()
+
+    def test_a_pre_existing_target_is_left_untouched_and_reports_nothing_created(self) -> None:
+        target = self.work / "report.json"
+        target.write_bytes(b"a racer's file, already here\n")
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            state = self.module.write_document(target, {"schema": "agentic-sdlc/wave-plan-admission@1"})
+        self.assertEqual(state, self.module.WRITE_NOTHING)
+        self.assertEqual(target.read_bytes(), b"a racer's file, already here\n")
+        self.assertIn("cannot create the --out path", captured.getvalue())
+        self.assertIn("nothing was written", captured.getvalue())
 
 
 class DeterminismTests(ToolCase):

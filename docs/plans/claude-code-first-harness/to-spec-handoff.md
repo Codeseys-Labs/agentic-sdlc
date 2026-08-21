@@ -287,9 +287,9 @@ Decision owner: [planning, drift, and bounded auto](issues/16-define-planning-dr
 ### One wave, one DAG
 
 One approved wave is one artifact-driven Dynamic Workflow DAG. It is not the whole mission.
-Default limits are four concurrent nodes, 64 total nodes, and one recursive child generation;
-limits are configurable but always finite and capability-admitted. Recursive spawn remains off by
-default even when numeric caps are raised.
+Default limits are four concurrent nodes, 64 total nodes, and recursion off; the recursive child
+generation cap is raisable, but limits are configurable and always finite and capability-admitted.
+Recursive spawn remains off by default even when numeric caps are raised.
 
 Every node has declared inputs, output schemas, authority, work ownership, exact
 `RuntimeAssignment`, stop conditions, and one `RoleSubmission`. Every model call injects exact
