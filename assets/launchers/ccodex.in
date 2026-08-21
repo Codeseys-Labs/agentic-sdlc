@@ -35,6 +35,10 @@ set -euo pipefail
 # root override, tool binding, or gateway code can run.
 candidate_readonly_profile=@CANDIDATE_READONLY_PROFILE@
 if [ "$candidate_readonly_profile" = true ]; then
+  # This allowlist is closed by construction, so the three mutating lifecycle verbs -- `sdlc install
+  # --host claude`, `sdlc update`, `sdlc uninstall` -- are refused here without being named: adding
+  # a verb to the grammar below never widens what a candidate projection admits. The reader refuses
+  # them a second time if it is invoked directly with the candidate flag.
   case "$#:$*" in
     "2:sdlc inspect"|"3:sdlc inspect --json"|\
     "2:sdlc status"|"3:sdlc status --json"|\
@@ -112,6 +116,11 @@ Checkout-development evidence (read-only, no gateway or lifecycle effects):
   sdlc <inspect|status|doctor> [--json]
   sdlc recover --dry-run [--json]
 
+Checkout-development lifecycle (mutating verbs; each is admitted or refused by its own module):
+  sdlc install --host claude   Explicit host, no default and no wildcard.
+  sdlc update
+  sdlc uninstall
+
   version                     Report this command's resolved repository root and dependencies.
 
 Help is never a side-effecting operation. \`ccodex <verb> --help\` prints that verb's own help
@@ -123,7 +132,8 @@ Maintenance tasks (test, validate, check, secrets, mermaid, hooks) are deliberat
 they belong to working ON the repository, not to using what it installed. Run them with
 \`mise run <task>\` inside $root
 
-exit codes: 0 ok - 1 failure - 2 usage - 3 refused (a boundary declined the operation)
+exit codes: 0 ok - 1 failure - 2 usage - 3 refused (a boundary declined the operation before any
+effect) - 4 admitted partial or unknown effect (\`sdlc\` lifecycle verbs only)
 EOF
 }
 
@@ -161,9 +171,14 @@ run_python() {
 }
 
 # `ccodex sdlc` intentionally does not share run_python: installation bound and verified a
-# UV-managed Python 3.12.11 interpreter, and daily checkout-development queries invoke it
-# directly with isolated, bytecode-free flags. That keeps this reader away from UV, Mise, OCX,
+# UV-managed Python 3.12.11 interpreter, and daily checkout-development commands invoke it
+# directly with isolated, bytecode-free flags. That keeps this entry away from UV, Mise, OCX,
 # the gateway, ambient Python, and their corresponding network or lifecycle surfaces.
+#
+# The same entry carries the read-only verbs AND the three mutating lifecycle verbs, because the
+# closed grammar has exactly one owner. This function adds no second grammar: it verifies the bound
+# interpreter and the entry file, then forwards the argument vector unchanged. Every verb decision
+# -- admit, refuse by name, or hand off to a per-verb module -- belongs to scripts/ccodex_sdlc.py.
 run_sdlc_python() {
   require_root
   [ -x "$installed_sdlc_python" ] || {
@@ -171,7 +186,7 @@ run_sdlc_python() {
     exit 3
   }
   [ -f "$root/scripts/ccodex_sdlc.py" ] || {
-    printf 'error: the checkout-development read-only report is unavailable in this distribution\n' >&2
+    printf 'error: the checkout-development sdlc entry is unavailable in this distribution\n' >&2
     exit 3
   }
   exec "$installed_sdlc_python" -I -B "$root/scripts/ccodex_sdlc.py" "$@"
@@ -402,6 +417,11 @@ case "$route" in
     ;;
   sdlc)
     shift
+    # Readers and the three mutating lifecycle verbs take the same route on purpose. A second
+    # grammar here could disagree with the reader's closed one, and a verb this dispatcher did not
+    # know would then be refused with the wrong reason. `install --host claude`, `update`, and
+    # `uninstall` are therefore forwarded verbatim, and the reader refuses them by name -- exit 3,
+    # before any effect -- while their per-verb modules are absent from this distribution.
     run_sdlc_python "$@"
     ;;
   version)

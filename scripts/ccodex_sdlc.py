@@ -2,8 +2,14 @@
 """Read-only checkout-development evidence behind ``ccodex sdlc``.
 
 The installed dispatcher invokes this file with its install-bound, UV-managed Python 3.12.11 using
-``-I -B``.  It is intentionally not a lifecycle surface: it reads existing state, never creates or
-repairs it, and renders one closed semantic report in either human or canonical JSON form.
+``-I -B``.  Its reader verbs are intentionally not a lifecycle surface: they read existing state,
+never create or repair it, and render one closed semantic report in either human or canonical JSON
+form.
+
+This file also owns the closed grammar of the three mutating lifecycle verbs (``install --host
+claude``, ``update``, ``uninstall``), and it owns nothing else about them.  It parses them, refuses
+them by name, or hands the admitted vector to one per-verb module loaded by absolute file path; it
+performs no lifecycle mutation and acquires no writer authority of its own.
 """
 
 from __future__ import annotations
@@ -32,10 +38,32 @@ EXPECTED_CHECKOUT = {
     "release_topology_adr_status": "proposed",
     "version": "0.7.3",
 }
+READER_VERBS = ("inspect", "status", "doctor", "recover")
+# The three mutating lifecycle verbs. This file stays a reader: it parses the closed grammar and
+# then either refuses or hands the admitted vector to ONE named per-verb module loaded by absolute
+# file path.  It performs no lifecycle mutation itself and acquires no writer authority.  The
+# modules are separate tickets and are absent today, so every mutating verb refuses BY NAME at
+# exit 3 -- a clean refusal before any effect -- rather than raising.  `update` is the decided
+# spelling; `refresh` is not this plane's verb, and there is no verb family beyond these three.
+LIFECYCLE_VERBS = {
+    "install": "ccodex_sdlc_install",
+    "update": "ccodex_sdlc_update",
+    "uninstall": "ccodex_sdlc_uninstall",
+}
+# `install` requires an explicit host. There is no default and no wildcard.
+LIFECYCLE_HOSTS = ("claude",)
 
 
 class UsageError(ValueError):
     pass
+
+
+class LifecycleRefusal(RuntimeError):
+    """A mutating lifecycle verb declined BEFORE any effect could occur (exit class 3)."""
+
+
+class LifecycleUnknownEffect(RuntimeError):
+    """A per-verb module already executed, so no absence of effect can be claimed (exit class 4)."""
 
 
 class ReportInvariantError(RuntimeError):
@@ -236,25 +264,58 @@ def load_checkout(root: Path) -> dict[str, Any]:
     }
 
 
-def parse_command(argv: list[str]) -> tuple[str, bool, bool]:
+def parse_lifecycle_host(verb: str, rest: list[str]) -> str | None:
+    """Resolve the host of one mutating lifecycle verb, or refuse the spelling as a grammar error.
+
+    Every echoed caller token is rendered with ``!r`` so a control character, an escape sequence,
+    or a bidirectional override in an argument cannot forge a line of this command's own output.
+    Not-supplied, supplied-without-a-value, and supplied-with-an-unsupported-value are three
+    distinct refusals, because collapsing them hides which half of the invocation was wrong.
+    """
+    if verb != "install":
+        if rest:
+            raise UsageError(f"ccodex sdlc {verb} accepts no arguments: {rest[0]!r}")
+        return None
+    if not rest:
+        raise UsageError("ccodex sdlc install requires an explicit --host claude; there is no default host")
+    if rest[0] != "--host":
+        if rest[0].startswith("--host="):
+            raise UsageError("ccodex sdlc install spells its host as two arguments: --host claude")
+        raise UsageError(f"unknown ccodex sdlc install argument: {rest[0]!r}")
+    if len(rest) == 1:
+        raise UsageError("ccodex sdlc install --host was supplied without a host value")
+    if len(rest) > 2:
+        raise UsageError(f"ccodex sdlc install accepts exactly --host claude: {rest[2]!r}")
+    host = rest[1]
+    if host not in LIFECYCLE_HOSTS:
+        raise UsageError(f"unsupported ccodex sdlc install host: {host!r}; the only admitted host is claude")
+    return host
+
+
+def parse_command(argv: list[str]) -> tuple[str, bool, bool, str | None]:
     if argv in (["-h"], ["--help"], ["help"]):
         raise UsageError("help")
     if not argv:
-        raise UsageError("ccodex sdlc needs inspect, status, doctor, or recover --dry-run")
+        raise UsageError(
+            "ccodex sdlc needs inspect, status, doctor, recover --dry-run, install --host claude, update, or uninstall"
+        )
     verb = argv[0]
-    if verb not in {"inspect", "status", "doctor", "recover"}:
-        raise UsageError(f"unknown ccodex sdlc verb: {verb}")
     rest = argv[1:]
+    if verb in LIFECYCLE_VERBS:
+        # A mutating verb carries no reader flag: it is never a dry run and never renders a report.
+        return verb, False, False, parse_lifecycle_host(verb, rest)
+    if verb not in READER_VERBS:
+        raise UsageError(f"unknown ccodex sdlc verb: {verb!r}")
     if verb == "recover":
         if rest == ["--dry-run"]:
-            return verb, True, False
+            return verb, True, False, None
         if rest == ["--dry-run", "--json"]:
-            return verb, True, True
+            return verb, True, True, None
         raise UsageError("ccodex sdlc recover requires exactly --dry-run, optionally followed by --json")
     if rest == []:
-        return verb, False, False
+        return verb, False, False, None
     if rest == ["--json"]:
-        return verb, False, True
+        return verb, False, True, None
     raise UsageError(f"ccodex sdlc {verb} accepts only optional --json")
 
 
@@ -263,10 +324,18 @@ def usage() -> str:
         "usage: ccodex sdlc inspect [--json]\n"
         "       ccodex sdlc status [--json]\n"
         "       ccodex sdlc doctor [--json]\n"
-        "       ccodex sdlc recover --dry-run [--json]\n\n"
-        "Read checkout-development ownership and recovery evidence without installing, updating,\n"
-        "uninstalling, following, or changing state. `recover` is proposal-only and requires\n"
-        "the literal --dry-run safeguard.\n"
+        "       ccodex sdlc recover --dry-run [--json]\n"
+        "       ccodex sdlc install --host claude\n"
+        "       ccodex sdlc update\n"
+        "       ccodex sdlc uninstall\n\n"
+        "inspect, status, doctor, and recover read checkout-development ownership and recovery\n"
+        "evidence without installing, updating, uninstalling, following, or changing state.\n"
+        "`recover` is proposal-only and requires the literal --dry-run safeguard.\n\n"
+        "install, update, and uninstall are the mutating lifecycle verbs. This reader performs no\n"
+        "lifecycle mutation itself: it parses the closed grammar above and hands an admitted vector\n"
+        "to one named per-verb module, refusing by name before any effect when that module is not\n"
+        "present in this distribution. install takes an explicit --host claude; there is no default\n"
+        "host and no wildcard.\n"
     )
 
 
@@ -320,6 +389,94 @@ def load_guard(script_path: Path) -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def lifecycle_module_path(verb: str) -> Path:
+    return Path(__file__).with_name(f"{LIFECYCLE_VERBS[verb]}.py")
+
+
+def load_lifecycle_module(verb: str) -> ModuleType:
+    """Load one named per-verb lifecycle module by absolute file path.
+
+    Same admission shape as ``load_guard`` here and ``load_sibling`` in the read-only guard: an
+    exact physical sibling, never a symlink, never resolved through ambient ``sys.path``.  The
+    read-only guard is deliberately NOT installed on this path, because it exists to block the very
+    effects a lifecycle module owns; the reader hands off instead of borrowing that authority.
+
+    The boundary between the two effect classes is ``exec_module``.  Everything refused before it
+    ran nothing, so it is a clean refusal (exit 3).  Once foreign top-level code has executed, no
+    absence of effect can be claimed, so a failure there is an admitted unknown effect (exit 4).
+    """
+    path = lifecycle_module_path(verb)
+    if path.is_symlink() or not path.is_file():
+        raise LifecycleRefusal(
+            f"ccodex sdlc {verb} is unavailable in this distribution: {str(path)!r} is absent"
+        )
+    spec = importlib.util.spec_from_file_location(f"_ccodex_sdlc_lifecycle_{verb}", path)
+    if spec is None or spec.loader is None:
+        raise LifecycleRefusal(f"ccodex sdlc {verb} module cannot be loaded: {str(path)!r}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - any import-time failure leaves the effect unknown
+        raise LifecycleUnknownEffect(
+            f"ccodex sdlc {verb} module failed while loading, so its effect is unknown: {exc!r}"
+        ) from exc
+    return module
+
+
+def dispatch_lifecycle(verb: str, host: str | None, candidate_mode: bool) -> int:
+    """Refuse, or hand one admitted mutating vector to its per-verb module. Never mutate here.
+
+    ``SystemExit`` from the module is deliberately NOT caught: that status is the module's own
+    decision about its own effect, and re-classifying it here would overwrite the only authority
+    that observed the effect.
+    """
+    try:
+        if candidate_mode:
+            # Defence in depth. The candidate dispatcher's closed allowlist refuses this vector
+            # first; the reader refuses it again so a direct invocation cannot bypass that.
+            raise LifecycleRefusal(
+                f"candidate ccodex sdlc admits only read-only inspection; {verb} is a mutating lifecycle verb"
+            )
+        admitted, _runtime, reason = runtime_admission()
+        if not admitted:
+            raise LifecycleRefusal(
+                f"ccodex sdlc {verb} requires its bound isolated Python 3.12.11: {reason or 'runtime admission refused'}"
+            )
+        module = load_lifecycle_module(verb)
+    except LifecycleRefusal as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except LifecycleUnknownEffect as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 4
+    entry = getattr(module, "main", None)
+    if not callable(entry):
+        print(
+            f"error: ccodex sdlc {verb} module exposes no callable main(argv), and its top-level code"
+            f" already ran, so its effect is unknown: {str(lifecycle_module_path(verb))!r}",
+            file=sys.stderr,
+        )
+        return 4
+    forwarded = ["--host", host] if host is not None else []
+    try:
+        result = entry(forwarded)
+    except Exception as exc:  # noqa: BLE001 - the module was entered; the effect is unknown
+        print(
+            f"error: ccodex sdlc {verb} failed inside its module, so its effect is unknown: {exc!r}",
+            file=sys.stderr,
+        )
+        return 4
+    if isinstance(result, bool) or not isinstance(result, int) or not 0 <= result <= 4:
+        print(
+            f"error: ccodex sdlc {verb} returned no admitted exit class ({result!r}),"
+            " so its effect is unknown",
+            file=sys.stderr,
+        )
+        return 4
+    return result
 
 
 def empty_projection() -> dict[str, Any]:
@@ -580,13 +737,19 @@ def main(argv: list[str] | None = None) -> int:
     if candidate_mode:
         selected = selected[1:]
     try:
-        command, dry_run, json_output = parse_command(selected)
+        command, dry_run, json_output, host = parse_command(selected)
     except UsageError as exc:
         if str(exc) == "help":
             sys.stdout.write(usage())
             return 0
         print(f"error: {exc}\n\n{usage()}", file=sys.stderr, end="")
         return 2
+
+    if command in LIFECYCLE_VERBS:
+        # Handed off before any report policy, release contract, or projection is read: a mutating
+        # verb neither renders nor depends on the read report, and refusing early keeps the refusal
+        # attributable to the missing module rather than to unrelated reader state.
+        return dispatch_lifecycle(command, host, candidate_mode)
 
     root = Path(__file__).parent.parent
     try:
