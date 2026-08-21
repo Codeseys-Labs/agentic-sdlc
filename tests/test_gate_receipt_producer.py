@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -1049,7 +1050,12 @@ class EffectAwareExitTests(_ProducerTestCase):
 
         def reap_then_raise(proc: subprocess.Popen[bytes], *rest: object, **kwargs: object) -> int:
             # Reap first: an unwaited child would leave a ResourceWarning, not a cleaner test.
-            real_wait(proc, *rest, **kwargs)  # type: ignore[arg-type]
+            status = real_wait(proc, *rest, **kwargs)  # type: ignore[arg-type]
+            # Scoped to the GATE by exact argv: the producer's `head` stamp spawns `git rev-parse`
+            # children too (agentic-sdlc-5ee7), and raising on the first of those would abort before
+            # the gate ever ran — which is the opposite of the window this test is about.
+            if list(proc.args) != argv:
+                return status
             raise RuntimeError("boom before _run_gate could return")
 
         with mock.patch.object(subprocess.Popen, "wait", reap_then_raise):
@@ -2771,13 +2777,23 @@ class AbandonedGateChildTests(_ProducerTestCase):
         return mirror
 
     @contextlib.contextmanager
-    def _watch_children(self):
+    def _watch_children(self, argv: list[str]):
+        """Record the GATE's children, named by their exact argv.
+
+        `argv` is required rather than defaulted, because "every child this producer spawns" is not
+        the same set as "the gate" and these tests are about the gate: the producer also reads the
+        repository head for the receipt's `head` stamp (agentic-sdlc-5ee7), which spawns short-lived
+        `git rev-parse` children that no reap rule here governs. Selecting by exact argv keeps each
+        assertion below counting the one child it is about; matching loosely would let a future
+        helper child silently satisfy `len(created) == 1` in place of the gate.
+        """
         created: list[subprocess.Popen[bytes]] = []
         real_popen = subprocess.Popen
 
         def spy(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
             proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
-            created.append(proc)
+            if isinstance(proc.args, list) and list(proc.args) == argv:
+                created.append(proc)
             return proc
 
         try:
@@ -2810,7 +2826,8 @@ class AbandonedGateChildTests(_ProducerTestCase):
 
             def spy(*call_args: object, **kwargs: object) -> subprocess.Popen[bytes]:
                 proc = real_popen(*call_args, **kwargs)  # type: ignore[arg-type]
-                pids.append(proc.pid)  # the PID only: a strong reference would suppress `__del__`
+                if list(proc.args) == argv:  # the GATE's child, not the `head` stamp's `git` reads
+                    pids.append(proc.pid)  # the PID only: a strong reference suppresses `__del__`
                 return proc
 
             reap = (
@@ -2856,7 +2873,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         with (
             mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", self.GRACE),
             mock.patch.object(gate_receipt, "_stderr_mirror", self._raising_mirror),
-            self._watch_children() as created,
+            self._watch_children(argv) as created,
             contextlib.redirect_stderr(io.StringIO()) as err,
         ):
             code = gate_receipt.main(args)
@@ -2877,7 +2894,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         # and every channel they read (exit code, receipt, report text) does carry values.
         release.write_text("go\n", encoding="utf-8")
         with (
-            self._watch_children() as ok_created,
+            self._watch_children(argv) as ok_created,
             contextlib.redirect_stderr(io.StringIO()) as ok_err,
         ):
             ok_code = gate_receipt.main(args)
@@ -2899,7 +2916,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         with (
             mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", 10.0),
             mock.patch.object(gate_receipt, "_stderr_mirror", self._raising_mirror),
-            self._watch_children() as created,
+            self._watch_children(argv) as created,
             contextlib.redirect_stderr(io.StringIO()) as err,
         ):
             started = time.monotonic()
@@ -2947,7 +2964,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         with (
             mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", self.GRACE),
             mock.patch.object(gate_receipt, "_stderr_mirror", self._raising_mirror),
-            self._watch_children() as created,
+            self._watch_children(argv) as created,
         ):
             worker = threading.Thread(target=run, daemon=True)
             worker.start()
@@ -2966,7 +2983,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         # POSITIVE CONTROL: the same deaf gate, released and un-injected, still records a receipt.
         release.write_text("go\n", encoding="utf-8")
         with (
-            self._watch_children() as ok_created,
+            self._watch_children(argv) as ok_created,
             contextlib.redirect_stderr(io.StringIO()) as ok_err,
         ):
             ok_code = gate_receipt.main(args)
@@ -3002,7 +3019,11 @@ class AbandonedGateChildTests(_ProducerTestCase):
         def raise_once_without_reaping(
             proc: subprocess.Popen[bytes], *rest: object, **kwargs: object
         ) -> int:
-            if not raised:
+            # Scoped to the GATE's own wait by exact argv. The producer also spawns `git rev-parse`
+            # children for the receipt's `head` stamp (agentic-sdlc-5ee7), and an unscoped injection
+            # would fire on the first of those instead — before the gate had run at all, which is a
+            # different failure from the one this test exists to describe.
+            if not raised and list(proc.args) == argv:
                 raised.append(proc.pid)
                 raise RuntimeError("boom at wait, with the gate already exited")
             return real_wait(proc, *rest, **kwargs)  # type: ignore[arg-type]
@@ -3010,7 +3031,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         with (
             mock.patch.object(gate_receipt, "_REAP_GRACE_SECONDS", 2.0),
             mock.patch.object(subprocess.Popen, "wait", raise_once_without_reaping),
-            self._watch_children() as created,
+            self._watch_children(argv) as created,
             contextlib.redirect_stderr(io.StringIO()) as err,
         ):
             started = time.monotonic()
@@ -3065,6 +3086,232 @@ class AbandonedGateChildTests(_ProducerTestCase):
             )
         self.assertEqual(len(effects.admitted), 1)  # re-described, never a second admission
         self.assertIn("MAY STILL BE RUNNING", effects.admitted[0])
+
+
+class RepositoryHeadStampTests(_ProducerTestCase):
+    """agentic-sdlc-5ee7: every receipt names the repository head its `cwd` was sitting on.
+
+    A receipt used to be anchored to a path and a toolchain but to no point in the repository's
+    history, so nothing downstream could tell whether it and the artifacts beside it were derived
+    against the same tree. These tests drive the real producer against real temporary repositories,
+    so the stamp is checked against `git rev-parse`'s own answer rather than against a re-expression
+    of it.
+    """
+
+    def _git(self, *arguments: str, cwd: Path | None = None) -> str:
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        environment.update(
+            {
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_AUTHOR_NAME": "test",
+                "GIT_AUTHOR_EMAIL": "test@example.invalid",
+                "GIT_COMMITTER_NAME": "test",
+                "GIT_COMMITTER_EMAIL": "test@example.invalid",
+            }
+        )
+        done = subprocess.run(
+            ["git", *arguments],
+            cwd=str(cwd if cwd is not None else self.repository),
+            capture_output=True,
+            text=True,
+            check=True,
+            env=environment,
+        )
+        return done.stdout.strip()
+
+    def setUp(self) -> None:
+        super().setUp()
+        if shutil.which("git") is None:  # pragma: no cover - environment-dependent
+            self.skipTest("git is unavailable, so no head can be observed")
+        self.repository = self.tmp / "repo"
+        self.repository.mkdir()
+        self._git("init", "-b", "main")
+        self._git("commit", "--allow-empty", "-m", "first")
+
+    def _record(self, out: Path, argv: list[str], *, cwd: Path, expect: int) -> dict[str, object]:
+        done = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "record",
+                "--gate",
+                "fake gate",
+                "--out",
+                str(out),
+                "--lock",
+                str(self.lock),
+                "--cwd",
+                str(cwd),
+                "--quiet",
+                "--",
+                *argv,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(done.returncode, expect, done.stderr)
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    def test_a_receipt_recorded_in_a_repository_stamps_that_repositorys_head(self) -> None:
+        argv = _write_fake_gate(self.tmp, exit_code=0)
+        receipt = self._record(self.tmp / "receipt.json", argv, cwd=self.repository, expect=0)
+        commit = self._git("rev-parse", "HEAD")
+        self.assertEqual(receipt["head"], {"commit": commit, "tree": self._git("rev-parse", f"{commit}^{{tree}}")})
+        # The stamp is inside the seal like every other field, so it cannot be edited out afterwards.
+        self.assertTrue(gate_receipt.verify_receipt(receipt))
+        tampered = dict(receipt)
+        tampered["head"] = {"commit": "0" * 40, "tree": "1" * 40}
+        self.assertFalse(gate_receipt.verify_receipt(tampered))
+
+    def test_the_stamped_tree_belongs_to_the_stamped_commit(self) -> None:
+        # The single-derivation rule, asserted against Git's own answer for the commit the receipt
+        # names -- not for whatever HEAD happens to be at assertion time.
+        # Real content, not a second empty commit: two empty commits share the one empty tree, so an
+        # empty second commit would make the control below compare a value against itself.
+        (self.repository / "content.txt").write_text("second\n", encoding="utf-8")
+        self._git("add", "content.txt")
+        self._git("commit", "-m", "second")
+        argv = _write_fake_gate(self.tmp, exit_code=0)
+        receipt = self._record(self.tmp / "second.json", argv, cwd=self.repository, expect=0)
+        head = receipt["head"]
+        assert isinstance(head, dict)
+        self.assertEqual(head["tree"], self._git("rev-parse", f"{head['commit']}^{{tree}}"))
+        # POSITIVE CONTROL: the repository really does have two commits with distinct trees to get
+        # wrong, so the equality above is not vacuous.
+        first = self._git("rev-parse", "HEAD~1")
+        self.assertNotEqual(self._git("rev-parse", f"{first}^{{tree}}"), head["tree"])
+
+    def test_a_non_repository_cwd_records_a_null_head_and_still_writes_the_receipt(self) -> None:
+        # Null is a first-class answer, not a refusal: a gate that ran outside a repository is still
+        # honest evidence about that gate.
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        argv = _write_fake_gate(self.tmp, exit_code=0)
+        receipt = self._record(self.tmp / "outside.json", argv, cwd=outside, expect=0)
+        self.assertIsNone(receipt["head"])
+        self.assertEqual(receipt["outcome"], "passed")
+        self.assertTrue(gate_receipt.verify_receipt(receipt))
+        # POSITIVE CONTROL: the identical invocation inside the repository DOES stamp a head, so the
+        # null above is the missing repository and not a producer that never stamps anything.
+        inside = self._record(self.tmp / "inside.json", argv, cwd=self.repository, expect=0)
+        self.assertIsNotNone(inside["head"])
+
+    def test_a_head_that_moves_while_the_gate_runs_records_a_null_stamp(self) -> None:
+        """A gate that commits underneath itself leaves no single head it was measured against.
+
+        Recording the pre-gate head would claim the receipt describes a tree the gate did not finish
+        on; recording the post-gate head would claim it describes one the gate did not start on. Both
+        are lies a consumer cannot detect, so the producer records neither.
+        """
+        script = self.tmp / "committing_gate.py"
+        script.write_text(
+            "\n".join(
+                [
+                    "import subprocess, sys",
+                    f"subprocess.run(['git', 'commit', '--allow-empty', '-m', 'moved'], cwd={str(self.repository)!r},",
+                    "               check=True, capture_output=True,",
+                    "               env={'PATH': __import__('os').environ['PATH'],",
+                    "                    'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': __import__('os').devnull,",
+                    "                    'GIT_AUTHOR_NAME': 'test', 'GIT_AUTHOR_EMAIL': 'test@example.invalid',",
+                    "                    'GIT_COMMITTER_NAME': 'test', 'GIT_COMMITTER_EMAIL': 'test@example.invalid'})",
+                    "sys.exit(0)",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        before = self._git("rev-parse", "HEAD")
+        receipt = self._record(self.tmp / "moved.json", [sys.executable, str(script)], cwd=self.repository, expect=0)
+        after = self._git("rev-parse", "HEAD")
+        self.assertNotEqual(before, after, "the fixture gate did not actually move the head")
+        self.assertIsNone(receipt["head"])
+        # ...and the receipt is still written for the gate that really did pass.
+        self.assertEqual(receipt["outcome"], "passed")
+        # POSITIVE CONTROL: the same gate script re-run now that the head is where it will stay
+        # stamps a head, so the null above is the movement and not this fixture being unstampable.
+        settled = self._record(
+            self.tmp / "settled.json", _write_fake_gate(self.tmp, exit_code=0), cwd=self.repository, expect=0
+        )
+        self.assertEqual(settled["head"], {"commit": after, "tree": self._git("rev-parse", f"{after}^{{tree}}")})
+
+    def test_an_ambient_git_dir_cannot_re_point_the_observation(self) -> None:
+        # `GIT_DIR` in the caller's environment would otherwise make `rev-parse` answer for ANOTHER
+        # repository while the receipt went on naming this `cwd` -- a stamp that lies with nobody
+        # editing it. The observation's environment is an allowlist, so the variable never arrives.
+        other = self.tmp / "other"
+        other.mkdir()
+        self._git("init", "-b", "main", cwd=other)
+        self._git("commit", "--allow-empty", "-m", "other repository", cwd=other)
+        foreign = self._git("rev-parse", "HEAD", cwd=other)
+        mine = self._git("rev-parse", "HEAD")
+        self.assertNotEqual(foreign, mine)
+        argv = _write_fake_gate(self.tmp, exit_code=0)
+        out = self.tmp / "ambient.json"
+        done = subprocess.run(
+            [
+                sys.executable, str(SCRIPT), "record", "--gate", "fake gate", "--out", str(out),
+                "--lock", str(self.lock), "--cwd", str(self.repository), "--quiet", "--", *argv,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=dict(os.environ, GIT_DIR=str(other / ".git"), GIT_WORK_TREE=str(other)),
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        receipt = json.loads(out.read_text(encoding="utf-8"))
+        head = receipt["head"]
+        assert isinstance(head, dict)
+        self.assertEqual(head["commit"], mine)
+        self.assertNotEqual(head["commit"], foreign)
+
+    def test_verify_receipt_rejects_a_malformed_head_stamp(self) -> None:
+        # A consumer that refuses on DISAGREEMENT has to be able to rely on the shape it compares, or
+        # a malformed stamp is reported as a head that moved.
+        honest = gate_receipt.build_receipt(
+            gate="mise run check",
+            argv=["mise", "run", "check"],
+            status=0,
+            log_bytes=b"",
+            lock_bytes=LOCK_BYTES,
+            cwd=str(self.repository),
+            head={"commit": "a" * 40, "tree": "b" * 40},
+        )
+        # POSITIVE CONTROL: the well-formed stamp verifies, so each rejection below is the shape.
+        self.assertTrue(gate_receipt.verify_receipt(honest))
+        self.assertTrue(gate_receipt.verify_receipt(_reseal({**honest, "head": None})))
+        self.assertTrue(gate_receipt.verify_receipt(_reseal({**honest, "head": {"commit": "a" * 64, "tree": "b" * 64}})))
+        for label, value in (
+            ("missing tree", {"commit": "a" * 40}),
+            ("extra key", {"commit": "a" * 40, "tree": "b" * 40, "branch": "main"}),
+            ("not an object", "a" * 40),
+            ("uppercase", {"commit": "A" * 40, "tree": "b" * 40}),
+            ("abbreviated", {"commit": "a" * 12, "tree": "b" * 40}),
+            ("non-hex", {"commit": "z" * 40, "tree": "b" * 40}),
+            ("boolean", {"commit": True, "tree": "b" * 40}),
+        ):
+            with self.subTest(shape=label):
+                self.assertFalse(gate_receipt.verify_receipt(_reseal({**honest, "head": value})))
+
+    def test_a_receipt_written_before_the_stamp_existed_still_verifies(self) -> None:
+        # The same additive rule `failures` follows: absence is a receipt from an older producer, not
+        # a broken one. Refusing it HERE would make every consumer's named freshness refusal
+        # unreachable, because the artifact would never get past verification to be refused by name.
+        legacy = _reseal(
+            {
+                "gate": "mise run check",
+                "argv": ["mise", "run", "check"],
+                "status": 0,
+                "signal": None,
+                "outcome": "passed",
+                "log_digest": _sha256_hex(b""),
+                "toolchain_digest": _sha256_hex(LOCK_BYTES),
+                "cwd": str(self.repository),
+            }
+        )
+        self.assertNotIn("head", legacy)
+        self.assertTrue(gate_receipt.verify_receipt(legacy))
 
 
 if __name__ == "__main__":

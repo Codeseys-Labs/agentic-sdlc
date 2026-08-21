@@ -55,6 +55,21 @@ destination from its caller rather than picking a side. A receipt is evidence of
 and what it returned; it authorizes nothing — not push, publication, PR mutation, merge, or
 deployment.
 
+Every receipt also stamps the REPOSITORY HEAD its `cwd` was sitting on, as `head`. A receipt used
+to be anchored to a path and a toolchain but to no point in the repository's history, so a
+composer reading it beside another artifact could not tell whether the two were derived against the
+same tree: `activation-result.py` recorded exactly that as a named residual, and
+`agentic-sdlc-5ee7` is the seed that closed it. The anchor is head identity rather than a clock
+because this host's clock legitimately steps backwards (agentic-sdlc-184b) while head identity is
+deterministic. `head` is `{commit, tree}` or `null`, and `null` is a first-class answer: the `cwd`
+is not a readable Git worktree, `git` is unavailable, or the head MOVED while the gate ran, in
+which case no single head is the one this receipt measured and saying so is the honest record. The
+tree comes from ONE `rev-parse <commit>^{tree}` derivation against the commit just read, never from
+a second independent `rev-parse HEAD^{tree}`, so the pair cannot straddle a head that moved between
+the two calls — the same atomic idiom `planning-snapshot.py` uses. Like `failures`, the field is
+inside `self_digest`, so a stamp cannot be edited afterwards, and a receipt written before the
+stamp existed carries no such key and still verifies.
+
 `--harness unittest` additionally records WHICH tests failed, as the optional `failures` field. That
 field is what makes a receipt a *baseline*: "exact non-worsening" is defined over the SET of named
 failing tests (operator decision, 2026-08-17), and `scripts/gate_baseline.py` compares two of them.
@@ -94,6 +109,13 @@ FAILURES_UNPARSED = "unparsed"
 FAILURE_STATES = (FAILURES_IDENTIFIED, FAILURES_UNPARSED)
 #: The three keys a `failures` record carries — exactly these, always.
 FAILURE_RECORD_KEYS = frozenset({"harness", "state", "names"})
+#: The two keys a `head` stamp carries — exactly these, always.
+HEAD_RECORD_KEYS = frozenset({"commit", "tree"})
+#: A Git object name, in either of the two hash lengths Git writes (sha1 and sha256 repositories).
+#: `[0-9a-f]` is spelled out rather than `\d`, which would also match every Unicode decimal digit.
+_OBJECT_NAME = re.compile(r"\A(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+#: Bounded, so a wedged `git` cannot hang the producer before its gate has even started.
+_HEAD_TIMEOUT_SECONDS = 30
 
 # The producer's exit codes follow the repository's effect-aware exit contract (product-spec
 # Implementation Decision 9): 0 success or exact no-effect, 1 unexpected internal failure before
@@ -298,6 +320,74 @@ def _normalized_failures(failures: dict[str, Any], argv: list[str] | None) -> di
     return {"harness": harness, "state": state, "names": names}
 
 
+#: An allowlist, not an inheritance, mirroring `sdlc-observability-projection.py`'s precedent: the
+#: head observation gets exactly this much ambient environment. It matters more here than politeness
+#: — an inherited `GIT_DIR` or `GIT_WORK_TREE` would silently re-point `rev-parse` at ANOTHER
+#: repository while the receipt went on naming this `cwd`, which is the one way this stamp could lie
+#: without anybody editing it.
+_HEAD_PASSTHROUGH_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "SYSTEMROOT", "TMPDIR")
+
+
+def _git_object_name(cwd: Path, *arguments: str) -> str | None:
+    """One bounded `git rev-parse` in `cwd`, or None when it did not yield one object name.
+
+    Every failure is the same answer — None, "no head was observed" — because the alternatives are
+    worse: raising would let a gate's own honest receipt be lost to a missing `git`, and inventing a
+    value would stamp a head nothing read. A non-repository `cwd`, an unborn branch, an absent
+    `git`, a wedged `git`, and non-UTF-8 output all land here.
+    """
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv, no shell, bounded, allowlisted environment
+            ["git", *arguments],
+            cwd=str(cwd),
+            capture_output=True,
+            timeout=_HEAD_TIMEOUT_SECONDS,
+            env={key: os.environ[key] for key in _HEAD_PASSTHROUGH_ENV if key in os.environ},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        text = done.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    return text if _OBJECT_NAME.match(text) else None
+
+
+def observe_repository_head(cwd: Path) -> dict[str, str] | None:
+    """The `{commit, tree}` head identity of `cwd`, or None when no head could be observed.
+
+    ONE derivation, not two: the tree is resolved from the commit this same call just read
+    (`rev-parse <commit>^{tree}`) rather than by a second independent `rev-parse HEAD^{tree}`, so a
+    head that moves between the two calls cannot produce a commit and a tree from different
+    histories. A commit object names exactly one tree, so the pair is atomic by construction. This
+    is `planning-snapshot.py`'s idiom, re-expressed rather than imported.
+    """
+    commit = _git_object_name(cwd, "rev-parse", "HEAD")
+    if commit is None:
+        return None
+    tree = _git_object_name(cwd, "rev-parse", f"{commit}^{{tree}}")
+    if tree is None:
+        return None
+    return {"commit": commit, "tree": tree}
+
+
+def stable_repository_head(cwd: Path, observed: dict[str, str] | None) -> dict[str, str] | None:
+    """Re-read the head and keep it only if it did not move; otherwise None.
+
+    `observed` is the head read BEFORE the gate started. If the second read disagrees, the gate
+    straddled a head change and no single head is the one it measured, so the receipt records
+    `null` rather than picking the earlier or the later value. This is the same rule
+    `planning-snapshot.py`'s seal applies, with the one difference the evidence posture forces: a
+    snapshot may refuse, while this producer must still write the receipt for a gate that really
+    ran.
+    """
+    if observed is None:
+        return None
+    return observed if observe_repository_head(cwd) == observed else None
+
+
 def build_receipt(
     *,
     gate: str,
@@ -308,6 +398,7 @@ def build_receipt(
     cwd: str,
     signal: int | None = None,
     failures: dict[str, Any] | None = None,
+    head: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Construct a self-hashing gate receipt.
 
@@ -336,6 +427,12 @@ def build_receipt(
       nothing.
     - cwd: absolute path the gate ran in — for an unobserved receipt, the path it WOULD have run
       in, since nothing ran there. Either way it ties the receipt to per-path worktree trust.
+    - head: `{commit, tree}` for the repository head `cwd` was on, or null when no head was
+      observed. It is what lets a composer refuse a receipt that was derived against a different
+      tree from the artifacts beside it (agentic-sdlc-5ee7); `cwd` anchors WHERE, `toolchain_digest`
+      anchors WHICH PINS, and this anchors WHEN in the repository's own history. Null is honest and
+      not an error: a non-repository cwd, an absent `git`, or a head that moved during the run all
+      record null, and a consumer that needs the anchor refuses the null rather than guessing.
     - failures: OPTIONAL, and ABSENT unless a caller asked for failure identification. When present
       it is `{harness, state, names}`: `state: identified` with the exact set of dotted test ids
       (empty for a green run), or `state: unparsed` with no names when the harness's output could
@@ -353,6 +450,11 @@ def build_receipt(
         "log_digest": _sha256_hex(log_bytes),
         "toolchain_digest": _sha256_hex(lock_bytes),
         "cwd": cwd,
+        # Always present, unlike `failures`: an absent key means "written before this producer
+        # stamped heads at all", while a present null means "this producer looked and observed
+        # none". A consumer that needs the anchor has to tell those two apart to say anything
+        # useful, so the shape says which one it is instead of collapsing both into absence.
+        "head": None if head is None else {"commit": head["commit"], "tree": head["tree"]},
     }
     if failures is not None:
         # Absent unless requested: adding a key changes the digest of NEW receipts only, so every
@@ -413,6 +515,23 @@ def _failures_are_consistent(body: dict[str, Any]) -> bool:
     return True
 
 
+def _head_is_consistent(body: dict[str, Any]) -> bool:
+    """True iff a stored `head` stamp is one this producer could honestly have written.
+
+    Null is valid — it is how "no head was observed" is said. Anything else must be exactly
+    `{commit, tree}` with both values Git object names, because a consumer that refuses on
+    disagreement has to be able to rely on the shape it is comparing: a stamp of `{"commit": true}`
+    would otherwise compare unequal to every honest stamp and be reported as a moved head rather
+    than as a malformed one.
+    """
+    head = body.get("head")
+    if head is None:
+        return True
+    if not isinstance(head, dict) or set(head) != HEAD_RECORD_KEYS:
+        return False
+    return all(isinstance(head[key], str) and _OBJECT_NAME.match(head[key]) for key in sorted(HEAD_RECORD_KEYS))
+
+
 def verify_receipt(receipt: dict[str, Any]) -> bool:
     """True iff self_digest re-derives, outcome agrees with status, and the state is honest.
 
@@ -420,7 +539,9 @@ def verify_receipt(receipt: dict[str, Any]) -> bool:
     re-derived over whatever non-self_digest fields are present, so the added fields change the
     digest of NEW receipts only, and the state invariants apply only where `outcome` is present.
     `failures` is scoped the same way — its invariants bind receipts that CARRY it, and its absence
-    is an honest receipt that simply is not a baseline.
+    is an honest receipt that simply is not a baseline. `head` is scoped the same way again: its
+    absence is a receipt written before heads were stamped, and a consumer that needs the anchor
+    refuses it by name rather than reading the absence as agreement.
     """
     stored = receipt.get("self_digest")
     if not isinstance(stored, str):
@@ -434,6 +555,8 @@ def verify_receipt(receipt: dict[str, Any]) -> bool:
         if body["outcome"] != derive_outcome(body.get("status")):
             return False
     if "failures" in body and not _failures_are_consistent(body):
+        return False
+    if "head" in body and not _head_is_consistent(body):
         return False
     return True
 
@@ -944,6 +1067,9 @@ def main(argv: list[str] | None = None) -> int:
             raise _ProducerError(f"gate cwd is not a directory: {cwd}", EXIT_USAGE)
         cwd = cwd.resolve()
         lock_bytes = _read_lock(cwd, args.lock)
+        # Read here, beside the toolchain pin and BEFORE the gate starts, because both answer the
+        # same question about the same moment: what this gate is about to be run against.
+        head_before = observe_repository_head(cwd)
         _refuse_if_one_destination_for_two_artifacts(args.out, args.log)
         _refuse_if_occupied(args.out)
         _refuse_if_occupied(args.log)
@@ -986,6 +1112,15 @@ def main(argv: list[str] | None = None) -> int:
                     "no failing test could be identified in the captured unittest output: "
                     "recording an unparsed failing set, which no baseline comparison will accept\n"
                 )
+        # THE ANCHOR, re-read last: a head that moved while the gate ran leaves no single head this
+        # receipt measured, so the stamp becomes null and the note says so out loud rather than
+        # letting a consumer bind this verdict to a tree it did not run against.
+        head = stable_repository_head(cwd, head_before)
+        if head_before is not None and head is None:
+            note(
+                "the repository head moved while the gate ran, so no single head is the one this "
+                "receipt measured: recording a null head stamp\n"
+            )
         receipt = build_receipt(
             gate=args.gate,
             argv=executed_argv,
@@ -995,6 +1130,7 @@ def main(argv: list[str] | None = None) -> int:
             cwd=str(cwd),
             signal=signal_number,
             failures=failures,
+            head=head,
         )
         payload = canonical_json(receipt) + b"\n"
         if args.log is not None:

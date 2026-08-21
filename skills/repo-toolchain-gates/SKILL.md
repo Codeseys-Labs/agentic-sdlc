@@ -353,6 +353,16 @@ proof against a forger who is the same OS user:
 - `cwd` — the absolute path the gate ran in — for an unobserved receipt, the path it *would* have
   run in, because nothing ran there. Either way it ties the receipt to per-path worktree trust
   (above).
+- `head` — `{commit, tree}` for the repository head `cwd` was on, or `null` when no head was
+  observed. `cwd` anchors *where*, `toolchain_digest` anchors *which pins*, and this anchors *when in
+  the repository's own history* — which is what lets a composer refuse a receipt derived against a
+  different tree from the artifacts beside it (`activation-result.py`'s freshness binding). The tree
+  comes from one `rev-parse <commit>^{tree}` derivation against the commit just read, so the pair
+  cannot straddle a head that moved between two calls. `null` is honest and not an error: a
+  non-repository `cwd`, an absent `git`, or a head that moved *while the gate ran* all record `null`,
+  and a consumer that needs the anchor refuses the `null` rather than guessing. The anchor is head
+  identity and not a timestamp because a host's clock can legitimately step backwards, while head
+  identity is deterministic.
 - `self_digest` — `sha256` of the canonical JSON of every other field.
 
 Produce one with:

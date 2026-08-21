@@ -230,8 +230,11 @@ ACTIVATION_TERMINAL_SCHEMA = "agentic-sdlc/activation-terminal-state@1"
 ACTIVATION_STATES = ("write-ready", "remediation-ready", "refused")
 
 GATE_BASELINE_SCHEMA = "gate-baseline-comparison/v1"
-#: Exactly `gate_receipt.build_receipt`'s keys, `failures` the one optional addition -- re-expressed
-#: from `activation-result.py`'s own `GATE_RECEIPT_KEYS`, never imported.
+#: Exactly `gate_receipt.build_receipt`'s keys, with `failures` and the agentic-sdlc-5ee7 `head`
+#: stamp as the two optional additions -- re-expressed from `activation-result.py`'s own
+#: `GATE_RECEIPT_KEYS`/`GATE_RECEIPT_OPTIONAL_KEYS`, never imported. This projection reads neither
+#: optional field; it must only keep RECOGNISING a receipt that carries them.
+GATE_RECEIPT_OPTIONAL_KEYS = frozenset({"failures", "head"})
 GATE_RECEIPT_KEYS = frozenset(
     {"gate", "argv", "status", "signal", "outcome", "log_digest", "toolchain_digest", "cwd", "self_digest"}
 )
@@ -591,7 +594,7 @@ def _validate_gate_receipt_shape(receipt: dict[str, Any], path: str) -> str | No
     four-state `argv`/`status`/`signal` rule -- `activation-result.py` does not re-express that
     either, and this module inherits the same stated residual."""
     keys = set(receipt)
-    if not GATE_RECEIPT_KEYS <= keys or not keys <= GATE_RECEIPT_KEYS | {"failures"}:
+    if not GATE_RECEIPT_KEYS <= keys or not keys <= GATE_RECEIPT_KEYS | GATE_RECEIPT_OPTIONAL_KEYS:
         return f"the gate receipt {path} does not carry exactly a gate receipt's fields: {sorted(keys)}"
     body = {key: value for key, value in receipt.items() if key != "self_digest"}
     self_digest = receipt.get("self_digest")

@@ -278,7 +278,12 @@ REVIEW_SCHEMA = "agentic-sdlc/wave-review-submission@1"
 CRITIC_SCHEMA = "agentic-sdlc/wave-critic-findings@1"
 CONDUCTOR_RECORD_SCHEMA = "agentic-sdlc/wave-verdict-conductor-record@1"
 
-#: Exactly the keys `gate_receipt.build_receipt` writes; `failures` is the one optional addition.
+#: Exactly the keys `gate_receipt.build_receipt` writes; `failures` and `head` are the two optional
+#: additions. This verdict reads neither -- a wave verdict is about a gate's outcome, not about which
+#: tree it ran on (`activation-result.py` owns that binding) -- but a receipt carrying the
+#: agentic-sdlc-5ee7 head stamp must still be RECOGNISED as a gate receipt here rather than rejected
+#: for carrying a field this module has no use for.
+GATE_RECEIPT_OPTIONAL_KEYS = frozenset({"failures", "head"})
 GATE_RECEIPT_KEYS = frozenset(
     {"gate", "argv", "status", "signal", "outcome", "log_digest", "toolchain_digest", "cwd", "self_digest"}
 )
@@ -519,7 +524,7 @@ def load_gate_receipt(path: str, label: str) -> dict[str, Any]:
     """
     receipt = load_artifact(path, label)
     keys = set(receipt)
-    if not GATE_RECEIPT_KEYS <= keys or not keys <= GATE_RECEIPT_KEYS | {"failures"}:
+    if not GATE_RECEIPT_KEYS <= keys or not keys <= GATE_RECEIPT_KEYS | GATE_RECEIPT_OPTIONAL_KEYS:
         raise InputError(
             f"the {label} {path} does not carry exactly a gate receipt's fields, `outcome` included: "
             f"{sorted(keys)}"

@@ -1425,7 +1425,13 @@ def capture_git_observation(target: Path) -> dict[str, Any]:
     if toplevel != str(target) or reported_git != str(git_dir):
         raise ActivationError("unsupported", "target is not the primary Git worktree")
     head = _git(target, "rev-parse", "HEAD^{commit}").decode().strip()
-    tree = _git(target, "rev-parse", "HEAD^{tree}").decode().strip()
+    # ONE derivation, against the commit the line above just read -- not a second independent
+    # `rev-parse HEAD^{tree}`. A commit object names exactly one tree, so this pair is atomic by
+    # construction; two independent reads of `HEAD` could straddle a head that moved between them
+    # and record a commit and a tree from different histories. Same idiom as
+    # `planning-snapshot.py`'s `observe_head`, and it is load-bearing now that this observation is
+    # what `activation-result.py` binds the whole terminal-state chain to (agentic-sdlc-5ee7).
+    tree = _git(target, "rev-parse", f"{head}^{{tree}}").decode().strip()
     raw = _git(target, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignore-submodules=none", "--no-renames")
     verify_raw, verify_identity = read_stable_file(index, "Git index")
     if index_raw != verify_raw or index_identity != verify_identity:
@@ -2147,7 +2153,20 @@ def _failpoint(name: str) -> None:
         os._exit(97)
 
 
-def _result(command: str, status: str, code: int, target: Path, *, effect: str, plan_digest: str | None = None, operation_id: str | None = None, operation_digest: str | None = None, receipt_digest: str | None = None, legal: list[str] | None = None, reasons: list[str] | None = None, **extra: Any) -> dict[str, Any]:
+def _head_stamp(observation: dict[str, Any]) -> dict[str, str]:
+    """The `{commit, tree}` freshness anchor, read off a Git observation this module already made.
+
+    Every artifact in the terminal-state chain has to name the head it was derived against, or a
+    stale matched plan+apply pair from an earlier tree composes with a fresh gate receipt into a
+    false write-ready -- `activation-result.py` carried exactly that as a named residual, and
+    `agentic-sdlc-5ee7` is the seed that closed it. The stamp is never observed here: it is copied
+    from `capture_git_observation`, whose commit/tree pair is one atomic derivation, so the result
+    cannot claim a head that no observation in this operation read.
+    """
+    return {"commit": observation["head"], "tree": observation["tree"]}
+
+
+def _result(command: str, status: str, code: int, target: Path, *, effect: str, plan_digest: str | None = None, operation_id: str | None = None, operation_digest: str | None = None, receipt_digest: str | None = None, head: dict[str, str] | None = None, legal: list[str] | None = None, reasons: list[str] | None = None, **extra: Any) -> dict[str, Any]:
     """Render one command result. `effect` is REQUIRED, and that is the structural half of the fix.
 
     It used to default to `"none"`, which is how every refusal in this module -- 312 raise sites
@@ -2155,8 +2174,13 @@ def _result(command: str, status: str, code: int, target: Path, *, effect: str, 
     clause that had never looked at what happened. There is no default to fall back on now: a
     success states the effect it completed, and a refusal gets its effect from `_report_failure`,
     which reads the ledger.
+
+    `head` follows the same shape rule as `effect`, one step weaker: the key is ALWAYS present, and
+    null means "this command observed no head", which every refusal and every recover verb honestly
+    did not. A consumer must be able to tell that apart from "written before heads were stamped",
+    which is an absent key, so the absence is never reused to mean both.
     """
-    result = {"schema": RESULT_SCHEMA, "command": command, "status": status, "effect": effect, "exit_code": code, "target": str(target), "plan_digest": plan_digest, "operation_id": operation_id, "operation_digest": operation_digest, "receipt_digest": receipt_digest, "legal_recovery": legal or [], "reasons": reasons or [], "admitted_effects": list(_EFFECTS.admitted), "approval_authenticated": False}
+    result = {"schema": RESULT_SCHEMA, "command": command, "status": status, "effect": effect, "exit_code": code, "target": str(target), "plan_digest": plan_digest, "operation_id": operation_id, "operation_digest": operation_digest, "receipt_digest": receipt_digest, "head": head, "legal_recovery": legal or [], "reasons": reasons or [], "admitted_effects": list(_EFFECTS.admitted), "approval_authenticated": False}
     result.update(extra)
     return result
 
@@ -2248,7 +2272,7 @@ def plan_command(target: Path, manifest_path: Path, selected_path: str) -> tuple
         try:
             target = Path(target)
             plan = _plan_data(target, manifest_path, selected_path)
-            return _result("plan", "planned", 0, target, effect=EFFECT_NONE, plan_digest=digest_record(plan), plan=plan), 0
+            return _result("plan", "planned", 0, target, effect=EFFECT_NONE, plan_digest=digest_record(plan), head=_head_stamp(plan["git"]), plan=plan), 0
         except ActivationError as exc:
             return _report_failure("plan", exc, Path(target))
 
@@ -3531,7 +3555,12 @@ def _apply_effectful(plan: dict[str, Any], manifest_path: Path, grant: dict[str,
             publish_replace(operation_dir, operation, target)
         _failpoint("publish")
         commit, receipt = _commit_operation(operation_dir, operation, target)
-    return _result("apply", "committed", 0, target, effect="committed", plan_digest=digest_record(plan), operation_id=operation["operation_id"], operation_digest=digest_record(operation), receipt_digest=digest_record(receipt)), 0
+    # The POSTSTATE head, not the plan's: it is the observation `write_commit` made for itself after
+    # publication, and `derive_managed_git_delta` has already refused the transaction outright if it
+    # disagreed with the prestate's. So this stamp is both freshly observed and proven equal to the
+    # plan's -- which is what makes `activation-result.py`'s cross-artifact comparison meaningful
+    # rather than a restatement of one document by another.
+    return _result("apply", "committed", 0, target, effect="committed", plan_digest=digest_record(plan), operation_id=operation["operation_id"], operation_digest=digest_record(operation), receipt_digest=digest_record(receipt), head=_head_stamp(commit["git_poststate"])), 0
 
 
 def _apply_noop(plan: dict[str, Any], manifest_path: Path, grant: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -3561,6 +3590,11 @@ def _apply_noop(plan: dict[str, Any], manifest_path: Path, grant: dict[str, Any]
     # the operator's home into `admitted_effects` exactly where `reasons` deliberately never
     # puts it.
     write_new_metadata(plane.anchor_dir / plane.audit_name(operation_id), audit, base=plane.anchor_dir, relative=plane.audit_name(operation_id))
+    # No head stamp, deliberately: this path re-observes no repository of its own -- the audit
+    # carries the PLAN's observation -- so stamping the plan's head here would restate one document
+    # as if a second had confirmed it. A no-op result also reaches no ready state at all
+    # (`activation-result.py` admits only `status: committed`), so the null costs nothing that a
+    # freshness check could otherwise have proved.
     return _result("apply", "no-op", 0, target, effect="audit_only", plan_digest=digest_record(plan), operation_id=operation_id), 0
 
 

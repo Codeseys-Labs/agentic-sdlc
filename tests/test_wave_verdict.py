@@ -2295,6 +2295,26 @@ class MalformedInputTests(WaveCase):
         done = self.derive_failure(args)
         self.assertIn(b"does not carry exactly a gate receipt's fields", done.stderr)
 
+    def test_a_receipt_carrying_the_head_freshness_stamp_is_still_recognised(self) -> None:
+        """agentic-sdlc-5ee7 added `head` to every receipt this producer writes.
+
+        This verdict reads it for nothing -- which tree a gate ran on is `activation-result.py`'s
+        question -- but the field is written by the same producer whose receipts arrive here, so
+        rejecting it as an unknown field would make every current receipt malformed input. The test
+        above is the positive control for this one: an unknown field IS still refused, so admitting
+        `head` is a named exception rather than the key-set check having been loosened away.
+        """
+        args = self.accepted_args()
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        for label, value in (("observed", {"commit": "a" * 40, "tree": "b" * 40}), ("null", None)):
+            with self.subTest(stamp=label):
+                receipt = json.loads((self.work / "gate-receipt.json").read_text(encoding="utf-8"))
+                del receipt["self_digest"]
+                receipt["head"] = value
+                receipt["self_digest"] = receipt_digest(receipt)
+                args["--gate-receipt"] = str(self.store(f"receipt-head-{label}", receipt))
+                self.assertEqual(self.derive(args)["state"], ACCEPTED)
+
     def test_a_projection_that_is_not_a_projected_result_is_malformed_input(self) -> None:
         args = self.accepted_args()
         self.assertEqual(self.derive(args)["state"], ACCEPTED)

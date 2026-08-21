@@ -52,6 +52,21 @@ REMEDIATION_CONSEQUENCE = (
 MANIFEST_PATH = ".agentic-sdlc/repo.toml"
 GATE_LABEL = "mise run check"
 
+#: The one head every operand in the honest fixture chain is derived against (agentic-sdlc-5ee7).
+#: `HEAD_COMMIT`/`HEAD_TREE` are the plan's flat pair, `HEAD_STAMP` the `{commit, tree}` shape the
+#: activation result and the gate receipt carry. Distinct values, so a fix that compared a commit
+#: against a tree would not pass by coincidence.
+HEAD_COMMIT = "0" * 40
+HEAD_TREE = "1" * 40
+HEAD_STAMP = {"commit": HEAD_COMMIT, "tree": HEAD_TREE}
+#: A DIFFERENT well-formed head: the stale-tree fixture, and the one value the composer must refuse.
+OTHER_HEAD_COMMIT = "2" * 40
+OTHER_HEAD_TREE = "3" * 40
+OTHER_HEAD_STAMP = {"commit": OTHER_HEAD_COMMIT, "tree": OTHER_HEAD_TREE}
+#: The sentinel a fixture passes to OMIT a head field entirely, as an artifact written before the
+#: stamp existed does -- distinct from passing None, which is a stamp that observed no head.
+UNSTAMPED = "unstamped"
+
 EXIT_OK = 0
 EXIT_INPUT = 2
 
@@ -147,8 +162,29 @@ def contract_write(
     }
 
 
-def plan_document(target: Path, *, selected_path: str = "AGENTS.md", records: tuple[bytes, ...] = ()) -> dict[str, Any]:
+def plan_document(
+    target: Path,
+    *,
+    selected_path: str = "AGENTS.md",
+    records: tuple[bytes, ...] = (),
+    head: dict[str, str] | None | str = HEAD_STAMP,
+) -> dict[str, Any]:
     encoded, digest = porcelain(*records)
+    git: dict[str, Any] = {
+        "toplevel": str(target),
+        "git_dir": str(target / ".git"),
+        "git_dir_identity": {},
+        "index": {},
+        "porcelain_v2_z_base64": encoded,
+        "porcelain_sha256": digest,
+        "filtered_internal": [],
+    }
+    if head != UNSTAMPED:
+        # The plan's stamp is the FLAT pair `capture_git_observation` writes, not a nested object. A
+        # null pair here reads as MALFORMED rather than as "observed no head", and deliberately so:
+        # the real observer raises instead of recording a null, so a plan carrying one was edited.
+        git["head"] = None if head is None else head["commit"]
+        git["tree"] = None if head is None else head["tree"]
     return {
         "schema": "agentic-sdlc/activation-plan@2",
         "target": {"path": str(target), "parent": {}, "root": {}},
@@ -156,17 +192,7 @@ def plan_document(target: Path, *, selected_path: str = "AGENTS.md", records: tu
         "manifest_sha256": "d" * 64,
         "selected_path": selected_path,
         "read_inputs": [],
-        "git": {
-            "toplevel": str(target),
-            "git_dir": str(target / ".git"),
-            "git_dir_identity": {},
-            "head": "0" * 40,
-            "tree": "1" * 40,
-            "index": {},
-            "porcelain_v2_z_base64": encoded,
-            "porcelain_sha256": digest,
-            "filtered_internal": [],
-        },
+        "git": git,
         "entries": [],
         "verified_outputs": [],
     }
@@ -184,10 +210,11 @@ def activation_result(
     admitted_effects: tuple[str, ...] = (),
     legal_recovery: tuple[str, ...] = (),
     plan_digest: str | None = "unset",
+    head: dict[str, str] | None | str = HEAD_STAMP,
 ) -> dict[str, Any]:
     if plan_digest == "unset":
         plan_digest = None if plan is None else hashlib.sha256(canonical(plan)).hexdigest()
-    return {
+    document: dict[str, Any] = {
         "schema": "agentic-sdlc/activation-result@3",
         "command": command,
         "status": status,
@@ -203,6 +230,9 @@ def activation_result(
         "admitted_effects": list(admitted_effects),
         "approval_authenticated": False,
     }
+    if head != UNSTAMPED:
+        document["head"] = head
+    return document
 
 
 def gate_receipt(
@@ -216,6 +246,7 @@ def gate_receipt(
     signal: int | None = None,
     drop_outcome: bool = False,
     resign: bool = True,
+    head: dict[str, str] | None | str = HEAD_STAMP,
 ) -> dict[str, Any]:
     status = {"passed": 0, "failed": 1, "unobserved": None}[outcome] if outcome in {"passed", "failed", "unobserved"} else 1
     if argv == "default":
@@ -230,6 +261,8 @@ def gate_receipt(
         "toolchain_digest": "b" * 64,
         "cwd": str(target),
     }
+    if head != UNSTAMPED:
+        body["head"] = head
     if failures_state is not None:
         body["failures"] = {"harness": "unittest", "names": list(names), "state": failures_state}
     if drop_outcome:
@@ -1116,6 +1149,277 @@ class TargetAgreementTests(DerivationCase):
         self.assert_refused(result, "names a different target")
 
 
+class FreshnessBindingTests(DerivationCase):
+    """agentic-sdlc-5ee7: three artifacts from two different trees must not compose into one verdict.
+
+    The hole this closes was not a missing check but a missing FACT: `plan_digest` bound the plan and
+    the apply to each other, `cwd`/`target` bound everything to one path, and nothing bound any of it
+    to a point in the repository's history, so a stale matched pair from an earlier, cleaner tree plus
+    a fresh passing receipt derived write-ready by construction. Every test here mutates exactly one
+    head stamp of the shared write-ready fixture and asserts the unmutated set still reaches the ready
+    state first, so a guard that stopped firing would also have to stop admitting the honest chain.
+    """
+
+    def test_the_honest_same_head_chain_derives_write_ready_and_records_the_anchor(self) -> None:
+        # THE POSITIVE CONTROL for every refusal below, and it asserts more than the state: the
+        # derived anchor is reported, so "no refusal fired" is distinguishable from "the comparison
+        # never ran at all".
+        result, code = self.derive()
+        self.assertEqual((result["state"], code), (WRITE_READY, EXIT_OK))
+        self.assertEqual(result["evidence"]["head_commit"], HEAD_COMMIT)
+        self.assertEqual(result["evidence"]["head_tree"], HEAD_TREE)
+
+    def test_the_honest_same_head_chain_still_reaches_remediation_ready(self) -> None:
+        # The second ready state has to survive the binding too: a red-but-non-worsening gate on one
+        # agreed head is exactly the case named hygiene waves exist for.
+        names = ("fixture.Case.test_alpha",)
+        baseline_doc = self.baseline_receipt_doc()
+        pieces = self.evidence(
+            **{
+                "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
+                "baseline-comparison": baseline_report(candidate_failing=names, baseline_receipt=baseline_doc),
+                "baseline-receipt": baseline_doc,
+            }
+        )
+        result, code = self.derive(pieces)
+        self.assertEqual((result["state"], code), (REMEDIATION_READY, EXIT_OK))
+        self.assertEqual(result["evidence"]["head_commit"], HEAD_COMMIT)
+
+    def test_a_stale_plan_apply_pair_beside_a_fresh_gate_receipt_refuses(self) -> None:
+        # THE SEED'S EXACT SCENARIO. The pair is internally perfect -- the apply's plan_digest binds
+        # this plan exactly -- and the receipt is honest. Only the tree differs, and before the head
+        # binding that combination derived write-ready.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        stale_plan = plan_document(self.target, head=OTHER_HEAD_STAMP)
+        pieces = self.evidence(
+            plan=stale_plan,
+            activation=activation_result(self.target, stale_plan, head=OTHER_HEAD_STAMP),
+        )
+        result, code = self.derive(pieces)
+        self.assertEqual(code, EXIT_OK)
+        self.assert_refused(result, "was derived against a different repository head")
+        joined = " || ".join(result["reasons"])
+        # BOTH values named, because a reader has to know which artifact to regenerate.
+        self.assertIn(OTHER_HEAD_COMMIT, joined)
+        self.assertIn(OTHER_HEAD_TREE, joined)
+        self.assertIn(HEAD_COMMIT, joined)
+        self.assertIn(HEAD_TREE, joined)
+        # The plan_digest still binds, so this refusal is the head binding's alone and not a
+        # side effect of the pair check that already existed.
+        self.assertNotIn("plan_digest does not bind", joined)
+        self.assertIsNone(result["evidence"]["head_commit"])
+        self.assertIsNone(result["evidence"]["head_tree"])
+
+    def test_a_gate_receipt_recorded_at_another_head_refuses(self) -> None:
+        # The mirror image: the pair is current and the RECEIPT is the stale operand, which is the
+        # shape a receipt copied out of an older run produces.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        result, _ = self.derive(self.evidence(**{"gate-receipt": gate_receipt(self.target, head=OTHER_HEAD_STAMP)}))
+        self.assert_refused(result, "was derived against a different repository head")
+        self.assertIn(OTHER_HEAD_COMMIT, " || ".join(result["reasons"]))
+
+    def test_an_activation_result_head_edited_to_another_tree_refuses(self) -> None:
+        # The activation result carries no self_digest of its own, so a hand-edited head there is
+        # invisible to every re-derivation check in this module. The cross-artifact comparison is the
+        # ONLY detector, which is precisely why the stamp had to land on more than one artifact.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        plan = plan_document(self.target)
+        pieces = self.evidence(plan=plan, activation=activation_result(self.target, plan, head=OTHER_HEAD_STAMP))
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "was derived against a different repository head")
+
+    def test_an_activation_head_with_the_real_commit_but_a_different_tree_refuses(self) -> None:
+        # THE TREE HALF, ISOLATED. Every other head-mismatch case in this class also changes the
+        # COMMIT, so a comparison that was quietly narrowed to `commit` alone would still refuse all
+        # of them and stay green. Only a stamp that keeps the real, agreed commit and disagrees on
+        # the tree alone can catch that narrowing, which is exactly what this stamp does.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        different_tree = "4" * 40
+        tree_only_mismatch = {"commit": HEAD_COMMIT, "tree": different_tree}
+        plan = plan_document(self.target)
+        pieces = self.evidence(
+            plan=plan, activation=activation_result(self.target, plan, head=tree_only_mismatch)
+        )
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "was derived against a different repository head")
+        joined = " || ".join(result["reasons"])
+        # BOTH trees named, same discipline as the whole-head mismatch above -- and the shared
+        # commit is named too, so a reader can see the commit agreed and only the tree diverged.
+        self.assertIn(different_tree, joined)
+        self.assertIn(HEAD_TREE, joined)
+        self.assertIn(HEAD_COMMIT, joined)
+        # The plan_digest still binds, so this refusal is the head binding's alone.
+        self.assertNotIn("plan_digest does not bind", joined)
+        self.assertIsNone(result["evidence"]["head_commit"])
+        self.assertIsNone(result["evidence"]["head_tree"])
+
+    def test_a_plan_head_edited_to_another_tree_refuses_twice_over(self) -> None:
+        # Editing the PLAN's stamp breaks the plan_digest as well, so this artifact has two
+        # independent detectors and both must fire: the digest says the plan changed, the head says
+        # which tree it now claims.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        honest = plan_document(self.target)
+        edited = plan_document(self.target, head=OTHER_HEAD_STAMP)
+        pieces = self.evidence(plan=edited, activation=activation_result(self.target, honest))
+        result, _ = self.derive(pieces)
+        self.assert_refused(result, "was derived against a different repository head")
+        self.assert_refused(result, "plan_digest does not bind the supplied plan")
+
+    def test_a_tampered_gate_receipt_head_is_an_input_error_not_a_refusal(self) -> None:
+        # A head edited into a SIGNED receipt is caught one layer earlier: the self_digest stops
+        # re-deriving, which is a malformed artifact (exit 2) rather than a verdict about freshness.
+        tampered = gate_receipt(self.target)
+        tampered["head"] = OTHER_HEAD_STAMP
+        payload, code = self.derive(self.evidence(**{"gate-receipt": tampered}))
+        self.assertEqual(code, EXIT_INPUT, payload)
+        self.assertIn("self_digest does not re-derive", payload["stderr"])
+        # POSITIVE CONTROL: the very same head value, RE-SIGNED, gets past the digest check and is
+        # caught by the freshness comparison instead -- so the exit 2 above is about the signature
+        # and not about this test being unable to reach the tool at all.
+        resigned, resigned_code = self.derive(
+            self.evidence(**{"gate-receipt": gate_receipt(self.target, head=OTHER_HEAD_STAMP)})
+        )
+        self.assertEqual(resigned_code, EXIT_OK)
+        self.assert_refused(resigned, "was derived against a different repository head")
+
+    def test_an_unstamped_operand_refuses_by_name_and_says_to_regenerate_it(self) -> None:
+        # The de3a precedent, applied again: an artifact written before the stamp existed is refused
+        # rather than exempted. Admitting it with a named downgrade would keep the whole gap working
+        # for however long an operator's tooling lagged, and these artifacts are regenerable.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        plan = plan_document(self.target)
+        cases = {
+            "activation plan": self.evidence(
+                plan=plan_document(self.target, head=UNSTAMPED),
+                activation=activation_result(self.target, plan_document(self.target, head=UNSTAMPED)),
+            ),
+            "activation result": self.evidence(plan=plan, activation=activation_result(self.target, plan, head=UNSTAMPED)),
+            "gate receipt": self.evidence(**{"gate-receipt": gate_receipt(self.target, head=UNSTAMPED)}),
+        }
+        for label, pieces in cases.items():
+            with self.subTest(artifact=label):
+                result, code = self.derive(pieces)
+                self.assertEqual(code, EXIT_OK, result)
+                self.assert_refused(result, f"the {label} carries no")
+                self.assert_refused(result, "predates repository-head freshness binding")
+                self.assertIsNone(result["evidence"]["head_commit"])
+
+    def test_a_null_head_stamp_refuses_as_unobserved_and_not_as_unstamped(self) -> None:
+        # A producer that LOOKED and observed no head is a different fact from one that never
+        # stamped: the first needs "why was no head readable", the second needs "regenerate". The
+        # reasons must not be interchangeable, or the printed instruction is wrong half the time.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        plan = plan_document(self.target)
+        cases = {
+            "activation result": self.evidence(plan=plan, activation=activation_result(self.target, plan, head=None)),
+            "gate receipt": self.evidence(**{"gate-receipt": gate_receipt(self.target, head=None)}),
+        }
+        for label, pieces in cases.items():
+            with self.subTest(artifact=label):
+                result, _ = self.derive(pieces)
+                self.assert_refused(result, f"the {label} records a null head stamp")
+                self.assertNotIn("predates repository-head freshness binding", " || ".join(result["reasons"]))
+
+    def test_a_malformed_head_stamp_refuses_as_malformed_and_not_as_a_moved_head(self) -> None:
+        # A stamp that is not a {commit, tree} pair of object names compares unequal to every honest
+        # stamp, so the lazy implementation reports it as a head that MOVED and sends a reader looking
+        # for a rebase that never happened.
+        fresh, _ = self.derive()
+        self.assertEqual(fresh["state"], WRITE_READY)
+        plan = plan_document(self.target)
+        cases = {
+            "activation result": self.evidence(
+                plan=plan, activation=activation_result(self.target, plan, head={"commit": HEAD_COMMIT})
+            ),
+            "gate receipt": self.evidence(
+                **{"gate-receipt": gate_receipt(self.target, head={"commit": HEAD_COMMIT, "tree": "z" * 40})}
+            ),
+        }
+        for label, pieces in cases.items():
+            with self.subTest(artifact=label):
+                result, _ = self.derive(pieces)
+                self.assert_refused(result, f"the {label}'s head stamp is not a")
+                self.assertNotIn("derived against a different repository head", " || ".join(result["reasons"]))
+
+    def test_a_sha256_repository_head_is_admitted(self) -> None:
+        # 64-hex object names are Git's other length, and refusing them would make this binding
+        # unusable on a sha256 repository -- a fail-closed check that fails the wrong things closed.
+        wide = {"commit": "a" * 64, "tree": "b" * 64}
+        plan = plan_document(self.target, head=wide)
+        pieces = self.evidence(
+            plan=plan,
+            activation=activation_result(self.target, plan, head=wide),
+            **{"gate-receipt": gate_receipt(self.target, head=wide)},
+        )
+        result, code = self.derive(pieces)
+        self.assertEqual((result["state"], code), (WRITE_READY, EXIT_OK), result)
+        self.assertEqual(result["evidence"]["head_commit"], "a" * 64)
+
+    def test_an_uppercase_or_short_object_name_is_malformed(self) -> None:
+        # Git writes lowercase hex at exactly two lengths. An abbreviated or upper-cased name would
+        # otherwise compare unequal to the full lowercase one and read as a moved head.
+        for label, value in (("uppercase", HEAD_COMMIT.replace("0", "A")), ("abbreviated", "0" * 12)):
+            with self.subTest(shape=label):
+                pieces = self.evidence(
+                    **{"gate-receipt": gate_receipt(self.target, head={"commit": value, "tree": HEAD_TREE})}
+                )
+                result, _ = self.derive(pieces)
+                self.assert_refused(result, "head stamp is not a")
+
+    def test_a_baseline_receipt_from_an_earlier_head_is_still_admitted(self) -> None:
+        # Deliberately NOT an operand of the freshness check: a baseline is from an earlier tree by
+        # construction, which is what makes it a baseline. Requiring it to name this head would make
+        # exact non-worsening comparison impossible on any repository that had moved since.
+        names = ("fixture.Case.test_alpha",)
+        baseline_doc = gate_receipt(
+            self.target, outcome="failed", names=DEFAULT_BASELINE_FAILING, head=OTHER_HEAD_STAMP
+        )
+        pieces = self.evidence(
+            **{
+                "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
+                "baseline-comparison": baseline_report(candidate_failing=names, baseline_receipt=baseline_doc),
+                "baseline-receipt": baseline_doc,
+            }
+        )
+        result, code = self.derive(pieces)
+        self.assertEqual((result["state"], code), (REMEDIATION_READY, EXIT_OK), result)
+        # POSITIVE CONTROL that the earlier head really was different and really was read: an
+        # unstamped baseline receipt is admitted for the same reason, so neither shape is refused.
+        unstamped_baseline = gate_receipt(
+            self.target, outcome="failed", names=DEFAULT_BASELINE_FAILING, head=UNSTAMPED
+        )
+        relaxed = self.evidence(
+            **{
+                "gate-receipt": gate_receipt(self.target, outcome="failed", names=names),
+                "baseline-comparison": baseline_report(candidate_failing=names, baseline_receipt=unstamped_baseline),
+                "baseline-receipt": unstamped_baseline,
+            }
+        )
+        second, _ = self.derive(relaxed)
+        self.assertEqual(second["state"], REMEDIATION_READY, second)
+
+    def test_an_absent_artifact_is_not_reported_as_an_unstamped_one(self) -> None:
+        # One reason per fact: a chain missing its plan altogether already says so, and adding "the
+        # plan carries no head stamp" would send a reader to regenerate a document that does not
+        # exist yet.
+        result, _ = self.derive(self.evidence(plan=None, activation=None))
+        self.assert_refused(result, "no activation plan was supplied")
+        joined = " || ".join(result["reasons"])
+        self.assertNotIn("activation plan carries no", joined)
+        self.assertNotIn("activation result carries no", joined)
+        # POSITIVE CONTROL: the receipt that IS supplied still has its stamp read, so the silence
+        # above is scoped to the absent artifacts rather than the check having been skipped.
+        withheld, _ = self.derive(self.evidence(plan=None, activation=None, **{"gate-receipt": gate_receipt(self.target, head=UNSTAMPED)}))
+        self.assert_refused(withheld, "the gate receipt carries no")
+
+
 class ExhaustiveMatrixTests(DerivationCase):
     """The matrix has to be total and disjoint, and that is asserted rather than argued."""
 
@@ -1413,6 +1717,8 @@ class ResultContractTests(DerivationCase):
                     "baseline_toolchain_drifted",
                     "gate",
                     "gate_failing_tests",
+                    "head_commit",
+                    "head_tree",
                     "manifest_path",
                     "manifest_sha256",
                     "plan_digest",
@@ -1467,14 +1773,23 @@ class ResultContractTests(DerivationCase):
             self.assertIn(fragment, docstring.lower())
         self.assertIn("Decision 9", docstring)
 
-    def test_module_docstring_states_the_plan_apply_pair_is_not_proven_current(self) -> None:
-        # Finding F3: the plan_digest binding proves the apply consumed exactly the supplied plan,
-        # never that the pair is CURRENT -- a stale matched plan+apply pair from an earlier, cleaner
-        # tree, paired with a fresh passing receipt, derives write-ready by construction.
+    def test_module_docstring_points_the_old_freshness_residual_at_the_shipped_binding(self) -> None:
+        # Finding F3 used to be a stated residual here: the plan_digest binding proved the apply
+        # consumed exactly the supplied plan and nothing more, so a stale matched pair from an
+        # earlier tree plus a fresh receipt derived write-ready. agentic-sdlc-5ee7 shipped the head
+        # binding, so the residual must now NAME the closure -- and must no longer tell a reader
+        # that freshness is underivable, which is the sentence that would rot silently.
         docstring = TOOL.read_text(encoding="utf-8").split('"""')[1]
         squeezed = " ".join(docstring.split())
-        self.assertIn("NOT that the pair is current", squeezed)
-        self.assertIn("freshness is underivable from these artifacts", squeezed)
+        self.assertIn("agentic-sdlc-5ee7", squeezed)
+        self.assertIn("assess_freshness", squeezed)
+        self.assertNotIn("freshness is underivable from these artifacts", squeezed)
+        # What is still open has to stay stated: an offline reader cannot prove the agreed head is
+        # the CURRENT head, and the residual must keep saying so rather than overclaiming the fix.
+        self.assertIn("is that the agreed head is the CURRENT head", squeezed)
+        # POSITIVE CONTROL for the two absence assertions above: the same squeezed docstring really
+        # is the text being searched, so an empty answer is evidence rather than a broken read.
+        self.assertIn("RESIDUALS, STATED EXACTLY", squeezed)
 
 
 @unittest.skipUnless(POSIX, "fd-level stderr hostility is POSIX-only")
@@ -1739,6 +2054,45 @@ class JourneyTests(unittest.TestCase):
         self.assertEqual(result["target"], str(self.target))
         self.assertEqual(result["evidence"]["manifest_sha256"], contract["manifest_sha256"])
         self.assertEqual(result["evidence"]["activation_receipt_digest"], applied["receipt_digest"])
+
+    def test_a_real_chain_whose_receipt_was_recorded_after_a_later_commit_refuses(self) -> None:
+        """agentic-sdlc-5ee7, driven end to end by the real producers over one real repository.
+
+        Every constructed-artifact test above could pass on a tool that read a field the producers do
+        not actually write. This one moves the repository's head with a real commit between the apply
+        and the gate recording, so the two stamps come from two real `git rev-parse` observations of
+        two real commits -- and the refusal is evidence that the producers stamp the head they were
+        actually derived against, not merely that this module compares two strings.
+        """
+        git(self.target, "commit", "--allow-empty", "-m", "initial")
+        self.classify()
+        self.write_contract()
+        self.track_manifest()
+        plan, applied = self.activate()
+        self.assertEqual(applied["status"], "committed", applied)
+        # POSITIVE CONTROL, before the head moves: the same real chain on one head is write-ready, so
+        # the refusal below is caused by the later commit and by nothing else in this fixture.
+        self.record_gate("gate.json", PASSING_GATE, expect=0)
+        current = self.derive()
+        self.assertEqual(current["state"], WRITE_READY, current)
+        self.assertEqual(current["evidence"]["head_commit"], plan["git"]["head"])
+        self.assertEqual(current["evidence"]["head_tree"], plan["git"]["tree"])
+        # THE MOVE. The plan and the apply now describe an earlier tree; nothing about either
+        # document changed, and `plan_digest` still binds them to each other exactly as before.
+        (self.target / "later.txt").write_text("a later commit\n", encoding="utf-8")
+        git(self.target, "add", "later.txt")
+        git(self.target, "commit", "-m", "move the head after the apply")
+        (self.artifacts / "gate.json").unlink()
+        moved = json.loads(self.record_gate("gate.json", PASSING_GATE, expect=0).read_bytes())
+        self.assertNotEqual(moved["head"], {"commit": plan["git"]["head"], "tree": plan["git"]["tree"]})
+        result = self.derive()
+        self.assertEqual(result["state"], REFUSED, result)
+        joined = " || ".join(result["reasons"])
+        self.assertIn("was derived against a different repository head", joined)
+        self.assertIn(moved["head"]["commit"], joined)
+        self.assertIn(plan["git"]["head"], joined)
+        self.assertNotIn("plan_digest does not bind", joined)
+        self.assertIsNone(result["evidence"]["head_commit"])
 
     def test_brownfield_journey_reaches_remediation_ready(self) -> None:
         workflows = self.target / ".github" / "workflows"

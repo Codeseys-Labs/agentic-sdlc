@@ -28,8 +28,11 @@ re-expressions honest -- they drive the real producers, so a drifted canonical f
 
 WHAT EACH STATE REQUIRES. Both ready states require ALL of: an admitted classification (greenfield
 or brownfield), the tracked manifest present and clean in the plan's Git projection, a committed
-activation receipt at exit 0 whose `plan_digest` binds the supplied plan, and every artifact naming
-the same target. They differ only in the gate:
+activation receipt at exit 0 whose `plan_digest` binds the supplied plan, every artifact naming the
+same target, and every artifact naming the same repository HEAD -- the plan, the activation result,
+and the gate receipt each stamp the commit and tree they were derived against, and a chain whose
+stamps disagree, or that carries no stamp at all, is refused (see `assess_freshness`). They differ
+only in the gate:
 
     write-ready          the gate receipt's derived `outcome` is `passed`
     remediation-ready    `outcome` is `failed`, the failing set is `identified` (exact NAMES, never
@@ -92,10 +95,19 @@ RESIDUALS, STATED EXACTLY.
     so it cannot substitute for the `apply` result. This is deliberate: without that digest the plan
     whose projection is being read is bound to the activation by target alone, and a stale plan from
     an earlier, cleaner tree would pass.
-  * The `plan_digest` binding proves only that this apply consumed exactly this plan, NOT that the
-    pair is current: a stale matched plan+apply pair from an earlier, cleaner tree, paired with a
-    fresh passing gate receipt, derives write-ready by construction, because freshness is
-    underivable from these artifacts.
+  * The `plan_digest` binding proves only that this apply consumed exactly this plan, and that alone
+    never proved the pair was derived against the current tree. That used to be this module's
+    loudest residual -- a stale matched plan+apply pair from an earlier, cleaner tree, paired with a
+    fresh passing gate receipt, derived write-ready by construction -- and `agentic-sdlc-5ee7`
+    closed it: the plan's `git.head`/`git.tree`, the activation result's `head`, and the gate
+    receipt's `head` are now compared as ONE anchor by `assess_freshness`, and a chain whose stamps
+    disagree, or whose stamp is absent, null, or malformed, is refused by name. What is still NOT
+    proven, and is not provable by a module that reads paths and touches no repository, is that the
+    agreed head is the CURRENT head; comparing a recorded head against a live one is plan
+    admission's job, exactly as `planning-snapshot.py` records for its own seal. The anchor is head
+    identity and not time because this host's clock legitimately steps backwards
+    (agentic-sdlc-184b), so recorded wall time cannot order two artifacts, while head identity is
+    deterministic.
   * Every digest check here is RE-DERIVATION, not a security boundary. A same-OS-user forger can
     write a self-consistent receipt, plan, or result; what these checks catch is drift, truncation,
     a hand-edit, and a mismatched pair of artifacts.
@@ -157,10 +169,43 @@ OUTCOME_UNOBSERVED = "unobserved"
 
 FAILURES_IDENTIFIED = "identified"
 
-#: Exactly the keys `gate_receipt.build_receipt` writes; `failures` is the one optional addition.
+#: Exactly the keys `gate_receipt.build_receipt` writes; `failures` and `head` are the two optional
+#: additions. `head` is optional HERE although the current producer always writes it, because a
+#: receipt written before the stamp existed must reach a NAMED freshness refusal rather than an
+#: exit-2 "not a gate receipt": it is a perfectly well-formed receipt that simply cannot be anchored.
+GATE_RECEIPT_OPTIONAL_KEYS = frozenset({"failures", "head"})
 GATE_RECEIPT_KEYS = frozenset(
     {"gate", "argv", "status", "signal", "outcome", "log_digest", "toolchain_digest", "cwd", "self_digest"}
 )
+
+#: The two keys a head stamp carries, in every artifact that carries one.
+HEAD_STAMP_KEYS = frozenset({"commit", "tree"})
+
+#: The two lengths Git writes an object name in (a sha1 and a sha256 repository). Checked against an
+#: explicit lowercase-hex alphabet rather than a regular expression's `\d`, which would also admit
+#: every Unicode decimal digit and let `٤` pass for a hex character.
+OBJECT_NAME_LENGTHS = (40, 64)
+HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+class _Absent:
+    """A key that is not there at all, which is NOT the same fact as a key holding null.
+
+    An absent `head` means the artifact was written before its producer stamped heads; a null `head`
+    means the producer looked and observed none. Both refuse, and they refuse with different
+    reasons, because the fix for the first is "regenerate the artifact" and the fix for the second is
+    "find out why no head was readable". Collapsing them into one absence would print the wrong
+    instruction for one of the two.
+    """
+
+
+ABSENT = _Absent()
+
+#: One head-stamp classification per artifact, and every one of the four is a distinct reason.
+HEAD_ABSENT = "absent"
+HEAD_UNOBSERVED = "unobserved"
+HEAD_MALFORMED = "malformed"
+HEAD_STAMPED = "stamped"
 
 #: The read-only verb that is always legal to run next, for a plane that named no other.
 DEFAULT_RECOVER_VERB = "recover inspect"
@@ -247,7 +292,7 @@ def load_gate_receipt(path: str) -> dict[str, Any]:
     """
     receipt = load_artifact(path, "gate receipt")
     keys = set(receipt)
-    if not GATE_RECEIPT_KEYS <= keys or not keys <= GATE_RECEIPT_KEYS | {"failures"}:
+    if not GATE_RECEIPT_KEYS <= keys or not keys <= GATE_RECEIPT_KEYS | GATE_RECEIPT_OPTIONAL_KEYS:
         raise InputError(
             f"the gate receipt {path} does not carry exactly a gate receipt's fields, `outcome` "
             f"included: {sorted(keys)}"
@@ -329,6 +374,44 @@ def porcelain_paths(observation: dict[str, Any], path: str) -> frozenset[str]:
     return frozenset(found)
 
 
+def is_object_name(value: Any) -> bool:
+    """True iff `value` is a lowercase-hex Git object name of one of the two lengths Git writes."""
+    return isinstance(value, str) and len(value) in OBJECT_NAME_LENGTHS and set(value) <= HEX_DIGITS
+
+
+def classify_head(value: Any) -> tuple[str, dict[str, str] | None]:
+    """Classify one artifact's head stamp, and return its exact value only when it is usable.
+
+    A malformed stamp is its own classification rather than a value that happens to compare unequal
+    to every honest one: `{"commit": true}` would otherwise be reported as a head that MOVED, which
+    sends a reader looking for a rebase that never happened.
+    """
+    if isinstance(value, _Absent):
+        return HEAD_ABSENT, None
+    if value is None:
+        return HEAD_UNOBSERVED, None
+    if not isinstance(value, dict) or set(value) != HEAD_STAMP_KEYS:
+        return HEAD_MALFORMED, None
+    if not all(is_object_name(value[key]) for key in sorted(HEAD_STAMP_KEYS)):
+        return HEAD_MALFORMED, None
+    return HEAD_STAMPED, {"commit": value["commit"], "tree": value["tree"]}
+
+
+def plan_head_value(plan: dict[str, Any]) -> Any:
+    """The plan's head stamp, read from the flat `git.head`/`git.tree` pair it already carried.
+
+    The plan is the one operand that did not need a new field: `capture_git_observation` has always
+    recorded the commit and the tree it observed. What it did not have was anybody comparing them to
+    anything, which is why the residual this closes described the pair as sharing NO anchor. Reading
+    the two flat keys into the same `{commit, tree}` shape the other two artifacts stamp is what
+    makes one comparison possible over all three.
+    """
+    git = plan.get("git")
+    if not isinstance(git, dict) or "head" not in git or "tree" not in git:
+        return ABSENT
+    return {"commit": git["head"], "tree": git["tree"]}
+
+
 class Assessment:
     """The accumulating evidence. Nothing here decides; `state` derives from `reasons` and the gate."""
 
@@ -349,6 +432,12 @@ class Assessment:
             "baseline_toolchain_drifted": None,
             "gate": None,
             "gate_failing_tests": None,
+            # The derived freshness anchor, and populated ONLY when every supplied operand in the
+            # chain stamped the same head. On disagreement it stays null and the reasons name both
+            # values, because printing one of two disagreeing heads as "the" anchor would present
+            # the very ambiguity that refused as if it had been resolved.
+            "head_commit": None,
+            "head_tree": None,
             "manifest_path": None,
             "manifest_sha256": None,
             "plan_digest": None,
@@ -505,6 +594,99 @@ def assess_activation(
             "the activation result's plan_digest does not bind the supplied plan, so the Git "
             "projection just read belongs to a different plan"
         )
+
+
+def _render_head(value: dict[str, str]) -> str:
+    """One head, rendered for a human reading a refusal. Both halves, because either can differ."""
+    return f"commit {value['commit']} tree {value['tree']}"
+
+
+def assess_freshness(
+    assessment: Assessment,
+    plan: dict[str, Any] | None,
+    activation: dict[str, Any] | None,
+    receipt: dict[str, Any] | None,
+) -> None:
+    """Bind every operand to ONE repository head, so a stale chain cannot compose into write-ready.
+
+    This is the durable closure of the residual this module used to carry as a known hole: a matched
+    plan+apply pair from an earlier, cleaner tree, paired with a fresh passing gate receipt, derived
+    write-ready by construction because no operand carried an anchor a read-only composer could
+    check. `plan_digest` bound the pair to each other and `cwd`/target bound everything to one path,
+    but nothing bound any of it to a POINT IN THE REPOSITORY'S HISTORY (agentic-sdlc-5ee7).
+
+    WHY HEAD IDENTITY AND NOT TIME. A timestamp is the obvious anchor and it is the wrong one on
+    this host: the clock legitimately steps backwards (agentic-sdlc-184b), so "the receipt is newer
+    than the plan" is not a decidable question from recorded wall time, and an artifact ordering
+    built on it would refuse honest chains and admit dishonest ones by turns. Head identity is
+    deterministic: two artifacts either name the same commit and tree or they do not, and no clock
+    is consulted to find out.
+
+    WHAT THIS DOES AND DOES NOT PROVE. It proves the operands were derived against the SAME tree.
+    It does not prove that tree is the CURRENT one -- this module reads paths and touches no
+    repository, so "still current" is unanswerable here and is the plan-admission check's job, in
+    exactly the split `planning-snapshot.py` records for its own seal. What it closes is the gap
+    where three artifacts from two different trees composed into one verdict.
+
+    FAIL CLOSED, FOUR WAYS, EACH NAMED. An operand whose stamp is absent predates the stamp and is
+    refused rather than exempted: these artifacts are regenerable, and admitting an unstamped one
+    with a named downgrade would keep the whole gap working for however long an operator's tooling
+    lagged (the agentic-sdlc-de3a precedent, applied again). A null stamp is a producer that looked
+    and saw no head. A malformed stamp is neither. And two well-formed stamps that disagree are the
+    stale pair itself, refused with BOTH values printed, because a reader has to see which artifact
+    to regenerate.
+    """
+    operands: list[tuple[str, str, str, dict[str, str] | None]] = []
+    if plan is not None:
+        state, value = classify_head(plan_head_value(plan))
+        operands.append(("activation plan", "git.head/git.tree", state, value))
+    if activation is not None:
+        state, value = classify_head(activation.get("head", ABSENT))
+        operands.append(("activation result", "head", state, value))
+    if receipt is not None:
+        state, value = classify_head(receipt.get("head", ABSENT))
+        operands.append(("gate receipt", "head", state, value))
+    # An absent ARTIFACT is not an unstamped one, and it already has its own named reason from the
+    # assessor that owns it -- one reason per fact, as `assess_activation` puts it.
+    for label, field, state, _ in operands:
+        if state == HEAD_ABSENT:
+            assessment.refuse(
+                f"the {label} carries no {field} head stamp, so it predates repository-head "
+                "freshness binding and cannot be proven to describe the same tree as the artifacts "
+                f"beside it; re-produce the {label}"
+            )
+        elif state == HEAD_UNOBSERVED:
+            assessment.refuse(
+                f"the {label} records a null head stamp, so its producer observed no repository "
+                "head at all and this chain cannot be anchored to one tree"
+            )
+        elif state == HEAD_MALFORMED:
+            assessment.refuse(
+                f"the {label}'s head stamp is not a {sorted(HEAD_STAMP_KEYS)} pair of Git object "
+                "names, so what tree it claims cannot be established"
+            )
+    stamped = [(label, value) for label, _, state, value in operands if state == HEAD_STAMPED and value is not None]
+    if not stamped:
+        return
+    # Same idiom as `assess_target`: one reference, every other operand compared against it. Equality
+    # is transitive, so this refuses a pair that disagrees with each other and a pair that disagrees
+    # with the gate receipt's, which is the whole closed set the seed's decision names.
+    reference_label, reference = stamped[0]
+    agreed = True
+    for label, value in stamped[1:]:
+        if value != reference:
+            agreed = False
+            assessment.refuse(
+                f"the {label} was derived against a different repository head "
+                f"({_render_head(value)}) from the {reference_label} ({_render_head(reference)}), so "
+                "these artifacts describe two different trees and one of them is stale"
+            )
+    if agreed and len(stamped) == len(operands):
+        # The anchor is recorded only when it is genuinely derived: every supplied operand stamped a
+        # head and they all agree. A chain where one operand refused above has no agreed anchor to
+        # report, and reporting the survivors' as one would overstate what was proven.
+        assessment.evidence["head_commit"] = reference["commit"]
+        assessment.evidence["head_tree"] = reference["tree"]
 
 
 def assess_gate(
@@ -720,6 +902,12 @@ def derive_command(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     assess_manifest(assessment, contract, plan, args.plan)
     assess_activation(assessment, activation, plan)
     assess_gate(assessment, receipt, baseline, baseline_receipt)
+    # Last, and deliberately not folded into the three assessors above: freshness is the one question
+    # no single artifact can answer, so it is asked of the set rather than of any member. The
+    # BASELINE receipt is not an operand here -- a baseline is from an earlier tree by construction,
+    # which is what makes it a baseline, so requiring it to name this head would make exact
+    # non-worsening comparison impossible on any repository that had moved since.
+    assess_freshness(assessment, plan, activation, receipt)
 
     state = assessment.state()
     result = {

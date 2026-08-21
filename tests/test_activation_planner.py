@@ -81,6 +81,27 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(result["status"], "refused")
 
+    def test_a_plan_result_stamps_the_head_it_observed_and_a_refusal_stamps_none(self) -> None:
+        # agentic-sdlc-5ee7: the result carries the freshness anchor `activation-result.py` binds the
+        # terminal-state chain to. The key is always present, so "no head observed" (a refusal) is
+        # distinguishable from "written before heads were stamped" (no key at all).
+        result, code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+        self.assertEqual(code, 0, result)
+        observed = result["plan"]["git"]
+        self.assertEqual(result["head"], {"commit": observed["head"], "tree": observed["tree"]})
+        # The tree is derived from the observed commit, so it is that commit's own tree.
+        rendered = subprocess.run(
+            ["git", "rev-parse", f"{observed['head']}^{{tree}}"],
+            cwd=str(self.target), capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(observed["tree"], rendered.stdout.strip())
+        # A refusal observed no head, and says so with a null rather than by omitting the key.
+        (self.target / "seed.txt").write_text("dirty\n")
+        refused, refused_code = ap.plan_command(self.target, self.manifest, "AGENTS.md")
+        self.assertEqual(refused_code, 1)
+        self.assertIn("head", refused)
+        self.assertIsNone(refused["head"])
+
     def test_cli_plan_prints_exactly_one_canonical_object(self) -> None:
         completed = subprocess.run([sys.executable, str(SCRIPT), "plan", "--target", str(self.target), "--manifest", str(self.manifest), "--entry", "AGENTS.md"], capture_output=True)
         self.assertEqual(completed.returncode, 0, completed.stderr.decode())
