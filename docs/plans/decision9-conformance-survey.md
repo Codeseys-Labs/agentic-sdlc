@@ -136,7 +136,7 @@ for that surface by construction, not that it went unprobed.
 | 34 | `scripts/run-git-bash.ps1`, `scripts/run-windows-mise.ps1` | not drivable on Linux | | | | NOT-MEASURED (platform) |
 | 35 | `scripts/bump-version.sh`, `scripts/install-skill-bundle.sh`, `scripts/validate-bundle.sh` | every probe exited 1 from `mise ERROR error parsing config file` before reaching the wrapper's own logic | | | | NOT-MEASURED (mise-gated; this survey may not invoke mise) |
 | 36 | `scripts/run_all_hosts.py` | aggregate of two mise-gated host legs; `status` exited 1 from the WSL leg's mise failure | | | | NOT-MEASURED (mise-gated) |
-| 37 | **`skills/agentic-sdlc/tools/seeds-launcher.mjs`** | **2 for `--help`** | 2 | 2 | **no 3, no 4; the Seeds child's own exit is passed through** | **NONCONFORMING** (SP-1) |
+| 37 | `skills/agentic-sdlc/tools/seeds-launcher.mjs` | 0 (`--help`/`-h` prints the usage line, performs nothing, and answers before the executing-Node admission; **was** 2 for `--help`) | 2 (unknown verb, no arguments, unadmitted record flag or flag value) | 2 (a supplied-but-missing `--target` or `--distribution`, distinguished from recorded state the launcher must re-read) | 3 for every clean pre-effect refusal (wrong Node, missing/partial/superseded receipt, tuple and hash drift, dirty distribution, occupied `.seeds`, compare-and-swap drift, prestate refusals) and 4 for `record`/`init` once a surface moved, including a post-writer readback divergence escalated by the effect ledger (**was** no 3 anywhere in the file, class 4 unreachable, and every one of these 2) | **CONFORMING** (closed by `agentic-sdlc-5a69`; the inspect verbs still report the Seeds child's own status, now named and justified as outside the reserved block in the module's own `EXITS` table) |
 | 38 | **`skills/agentic-sdlc/tools/activation-planner.py`** | 0 | 2 | **1 (`status` traceback; `plan`/`apply` emit `status:refused, effect:none, exit_code:1`)** | 3, 4 exist but 86 certain + 2 indeterminate of 315 raise sites land on 1 | **NONCONFORMING** (SP-2), closed by `agentic-sdlc-3d9a` |
 | 39 | `scripts/provision_mermaid_linux.py` | 0 (`--help` prints usage and provisions nothing; **was** a 358 MiB browser + `node_modules` download at 0) | 2 (**was** none — argv ignored) | — (accepts no arguments) | 3 pre-effect, 4 at or after `npm ci` (**was** neither) | **CONFORMING** (closed by `agentic-sdlc-bcdd`) |
 | 40 | `scripts/secrets_scan.py` | 0 (`--help`, and a clean scan; **was** the whole scan for `--help` and `--zzz-not-a-flag`) | 2 (**was** none — argv ignored) | 2 (a path over the scanner's argv ceiling) | 3 (missing pinned config, absent `betterleaks`, failed enumeration; **was** 2); a found leak stays 1 | **CONFORMING** (closed by `agentic-sdlc-bcdd`) |
@@ -227,6 +227,30 @@ and 3 when nothing has; `--help` becomes a 0-class query parsed before any recei
 tests both directions: revert any raise site's class and the corresponding test must die; drive a real
 interrupted `record` on a `/tmp` queue and assert 4 with the queue digest named, paired with a
 clean-refusal control on the same fixture that asserts 3 and a byte-identical queue.
+
+REMEDIATION (2026-08-21, `agentic-sdlc-5a69`): the fix shape above landed and row 37 now records the
+current conduct, so the exits measured earlier in this section are the dated record of the closed
+defect rather than a claim still true of the module. One frozen `EXITS` table is the module's only
+derivation point; `LauncherError` takes `code` as a required positional (the SP-2 lesson, applied
+before the same defect could grow here); the bare `fail()` spelling is GONE, replaced by
+`failGrammar`/`failRefusal`/`failEffectUnknown`/`failInternal` so no site can stay silent about its
+class; and one `reportFailure(error)` produces every code a thrown refusal reaches (help's 0 and inspect's spawn-error 3 are set directly). Two
+departures from the paragraph above are deliberate and are recorded here rather than left implicit.
+**First**, the class a raise site names is a FLOOR, not the verdict: rather than re-classifying each
+of the 26 `readback divergence` checks, `record` and `init` open an escalate-only effect ledger
+before the queue writer starts and only a completed byte-identical readback of the whole queue
+surface closes it, so a divergence found after a surface moved reports 4 — including a plan-cascade
+divergence, which is why five expectations in `tests/test_seeds_launcher.py` flipped from 2 to 4 —
+while a failure that proves nothing moved stays 3. That is the escalate-only ledger this survey
+called exemplary at `activation-planner.py:2337`, applied where it recommended. **Second**, the
+inspect verbs still report the Seeds child's own status; the `EXITS` table now names that as the one
+code outside the reserved block and states the collision it accepts, because `check-agentic-sdlc-prereqs.sh:45`
+returns that status verbatim and inspect exists to be that read-only child. `bootstrap` and `record`
+translate their children's failures and never mirror them. Two boundaries stay open by choice:
+`bootstrap`'s refusals after its `mise --locked install` remain 3 rather than 4 (the acquisition is
+idempotent and re-converges, and the receipt publication is atomic, so no partial receipt exists to
+admit), and the named 5 that would end the inspect passthrough collision is not taken here because it
+would change every caller that reads Seeds' verdict through this seam.
 
 ### SP-2 — `activation-planner.py` reports 86 of its 315 refusals as unexpected internal failures
 

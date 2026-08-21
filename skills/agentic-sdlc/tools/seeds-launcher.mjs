@@ -99,12 +99,99 @@ const VALID_ISSUE_STATUSES = new Set(['open', 'in_progress', 'closed']);
 const PLAN_STATUSES = new Set(['draft', 'approved', 'active', 'done']);
 const CREATE_FLAGS = new Set(['--title', '--type', '--priority', '--description', '--labels']);
 const UPDATE_FLAGS = new Set(['--status', '--title', '--description', '--priority', '--set-labels', '--add-label', '--remove-label']);
-const HELP = 'usage: seeds-launcher.mjs bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json]) | record --target <repository> --queue-writer conductor --expect-queue (absent init | <sha256> (create --title <text> [--type <type>] [--priority <0-4>] [--description <text>] [--labels <list>] | update <id> <recorded-field>...))';
+const HELP = 'usage: seeds-launcher.mjs --help | bootstrap --distribution <reviewed-distribution> | inspect --target <repository> (--version | prime | ready [--format json] | blocked [--format json]) | record --target <repository> --queue-writer conductor --expect-queue (absent init | <sha256> (create --title <text> [--type <type>] [--priority <0-4>] [--description <text>] [--labels <list>] | update <id> <recorded-field>...))';
+// A help request is a valid query, so it is the ONE argv form that answers at 0. It is exactly one
+// of these two spellings and nothing else: `inspect --target X --help` stays a grammar error,
+// because a request that also names a verb and a target is not a question about usage.
+const HELP_FLAGS = new Set(['--help', '-h']);
 
-class LauncherError extends Error {}
+// ── Implementation Decision 9's exit vocabulary: this launcher's ONE derivation point ───────────
+// Every exit this launcher chooses for itself is a member of this table, and the member is carried
+// by the thrown `LauncherError` rather than decided at the throw site, so `reportFailure` is the
+// only place a code is produced.
+//
+//   0 `ok`             a valid query (`--help`) or a closed requested result.
+//   1 `internal`       an unexpected internal failure: a throw that is not a `LauncherError`, or an
+//                      invariant only a launcher bug can reach.
+//   2 `grammar`        a bad verb, a bad flag, a flag value this launcher cannot admit, or a path
+//                      the CALLER supplied that is unusable as input. State this launcher itself
+//                      recorded and must re-read is not caller input; see 3.
+//   3 `refusal`        a clean refusal taken BEFORE any surface moved: the wrong executing Node, a
+//                      missing/partial/superseded receipt, tuple or hash drift, a dirty
+//                      distribution, an occupied `.seeds`, a compare-and-swap mismatch, or any
+//                      prestate this launcher will not write over.
+//   4 `effectUnknown`  an admitted partial or unknown effect: the queue writer moved a surface and
+//                      this launcher will not vouch for the result. See `admitUnprovenSurface`.
+//
+// ONE code sits outside that reserved block, named and justified here rather than left implicit.
+// On the `inspect` verbs the launcher execs a read-only Seeds child with `stdio: 'inherit'` and
+// then reports THE CHILD'S OWN status, so a nonzero inspect exit is Seeds' verdict about the
+// target, not this launcher's verdict about the request. `scripts/gate_receipt.py:120-125` forbids
+// mirroring a producer's code precisely because it makes the two indistinguishable, and that
+// warning applies here in full: an inspect exit of 2, 3, or 4 is the Seeds CLI's number and may
+// collide with the three above. It is kept because inspect exists to BE that child --- the
+// launcher's whole contribution is the exact runtime and the environment allowlist, and callers
+// (`scripts/check-agentic-sdlc-prereqs.sh:45`, which returns `child_status` verbatim) read Seeds'
+// own status. The collision is bounded to the inspect verbs: `bootstrap` and `record` translate
+// their children's failures into 3 or 4 and never mirror them. Widening the reserved block with a
+// named 5 for "the child refused" would be the gate-receipt-shaped fix and is deliberately NOT
+// taken here, because it would break every caller that reads Seeds' status through this seam.
+const EXITS = Object.freeze({
+  ok: 0,
+  internal: 1,
+  grammar: 2,
+  refusal: 3,
+  effectUnknown: 4,
+});
 
-function fail(message) {
-  throw new LauncherError(message);
+class LauncherError extends Error {
+  // `code` is positional and required. It was a keyword default on the sibling activation planner
+  // and 85 named refusals silently inherited it (`docs/plans/decision9-conformance-survey.md`,
+  // SP-2), so no spelling here lets a raise site stay silent about its class.
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
+// The three classes a raise site may choose, one named spelling each. There is deliberately no
+// bare `fail`: the class is part of what a refusal SAYS, so a site that does not state one cannot
+// compile a message either.
+function failGrammar(message) {
+  throw new LauncherError(EXITS.grammar, message);
+}
+
+function failRefusal(message) {
+  throw new LauncherError(EXITS.refusal, message);
+}
+
+function failEffectUnknown(message) {
+  throw new LauncherError(EXITS.effectUnknown, message);
+}
+
+function failInternal(message) {
+  throw new LauncherError(EXITS.internal, message);
+}
+
+// ── The effect ledger, and why a raise site's class is a FLOOR rather than the verdict ──────────
+// `record`'s two mutating verbs start a queue writer this launcher does not control. From the
+// instant that child is spawned the launcher can no longer SAY "nothing happened" without proving
+// it, and most of what it does next --- reading the queue back, parsing it, comparing the surface
+// --- can itself fail. Those failures are refusals in shape but not in truth, so they are
+// escalated rather than reported: `admitUnprovenSurface` is called before the writer starts, every
+// refusal raised while it stands reports 4, and only `proveSurfaceUnchanged` --- a COMPLETED
+// byte-identical readback of the surface snapshotted before the writer ran --- takes it back down.
+// This mirrors the escalate-only ledger `activation-planner.py:2337` derives its effect from, and
+// it is why the readback divergence checks need no per-site bookkeeping: whether a refusal is
+// pre-effect is a fact about when it happened, not about which message it carries.
+let UNPROVEN_SURFACE = null;
+
+function admitUnprovenSurface(description) {
+  UNPROVEN_SURFACE = description;
+}
+
+function proveSurfaceUnchanged() {
+  UNPROVEN_SURFACE = null;
 }
 
 function hashBytes(bytes) {
@@ -113,7 +200,7 @@ function hashBytes(bytes) {
 
 function hashFile(path) {
   const node = lstatSync(path);
-  if (!node.isFile()) fail(`required regular file is unavailable: ${path}`);
+  if (!node.isFile()) failRefusal(`required regular file is unavailable: ${path}`);
   return hashBytes(readFileSync(path));
 }
 
@@ -122,10 +209,28 @@ function realDirectory(path, label) {
   try {
     node = lstatSync(path);
   } catch {
-    fail(`${label} is unavailable: ${path}`);
+    failRefusal(`${label} is unavailable: ${path}`);
   }
-  if (node.isSymbolicLink() || !node.isDirectory()) fail(`${label} must be a real directory: ${path}`);
+  if (node.isSymbolicLink() || !node.isDirectory()) failRefusal(`${label} must be a real directory: ${path}`);
   return process.platform === 'win32' ? realpathSync.native(path) : realpathSync(path);
+}
+
+// The same resolution for a directory the CALLER named on the command line, where an absent path is
+// an unusable supplied input (Decision 9's 2) rather than a refusal about the world (3). That is the
+// supplied-but-missing distinction `agentic-sdlc-f83f` drew for a supplied-but-missing manifest; a
+// directory this launcher RECORDED and must re-read goes through `realDirectory` and keeps 3,
+// because its absence is drift the caller did not type. A path that exists but is a symlink or not a
+// directory is state, not spelling, so it stays a 3 from `realDirectory`.
+function suppliedDirectory(argument, label) {
+  if (typeof argument !== 'string' || argument.length === 0) failGrammar(`${label} requires an exact path`);
+  let node;
+  try {
+    node = lstatSync(argument);
+  } catch {
+    failGrammar(`${label} is unavailable: ${argument}`);
+  }
+  if (node.isSymbolicLink() && !existsSync(argument)) failGrammar(`${label} is unavailable: ${argument}`);
+  return realDirectory(argument, label);
 }
 
 function realRegularFile(path, label) {
@@ -133,15 +238,15 @@ function realRegularFile(path, label) {
   try {
     resolved = realpathSync(path);
   } catch {
-    fail(`${label} is unavailable: ${path}`);
+    failRefusal(`${label} is unavailable: ${path}`);
   }
   let node;
   try {
     node = statSync(resolved);
   } catch {
-    fail(`${label} is unavailable: ${path}`);
+    failRefusal(`${label} is unavailable: ${path}`);
   }
-  if (!node.isFile()) fail(`${label} must be a regular file: ${path}`);
+  if (!node.isFile()) failRefusal(`${label} must be a regular file: ${path}`);
   return resolved;
 }
 
@@ -150,13 +255,13 @@ function contained(root, candidate, label) {
   const realCandidate = realpathSync(candidate);
   const boundary = realRoot.endsWith(sep) ? realRoot : `${realRoot}${sep}`;
   if (!(realCandidate === realRoot || realCandidate.startsWith(boundary))) {
-    fail(`${label} escapes its reviewed root: ${candidate}`);
+    failRefusal(`${label} escapes its reviewed root: ${candidate}`);
   }
   return realCandidate;
 }
 
 function containedFile(root, candidate, label) {
-  if (!isAbsolute(candidate)) fail(`${label} must be absolute: ${candidate}`);
+  if (!isAbsolute(candidate)) failRefusal(`${label} must be absolute: ${candidate}`);
   const resolved = contained(root, candidate, label);
   return realRegularFile(resolved, label);
 }
@@ -180,7 +285,7 @@ function treeHash(root) {
         hasher.update(`L\0${rel}\0`);
         hasher.update(readlinkSync(path));
       } else {
-        fail(`unsupported filesystem node in reviewed tree: ${path}`);
+        failRefusal(`unsupported filesystem node in reviewed tree: ${path}`);
       }
     }
   };
@@ -207,7 +312,7 @@ function distributionTreeHash(root) {
         hasher.update(`L\0${rel}\0`);
         hasher.update(readlinkSync(path));
       } else {
-        fail(`unsupported filesystem node in distribution tree: ${path}`);
+        failRefusal(`unsupported filesystem node in distribution tree: ${path}`);
       }
     }
   };
@@ -217,9 +322,9 @@ function distributionTreeHash(root) {
 
 function exactVersion(executable, expected, label) {
   const completed = spawnSync(executable, ['--version'], { encoding: 'utf8', shell: false, windowsHide: true, env: {} });
-  if (completed.error || completed.status !== 0) fail(`cannot execute exact ${label} version probe`);
+  if (completed.error || completed.status !== 0) failRefusal(`cannot execute exact ${label} version probe`);
   const actual = (completed.stdout || '').trim().replace(/^v/, '');
-  if (actual !== expected) fail(`exact ${label} version mismatch: expected ${expected}, got ${actual || 'empty'}`);
+  if (actual !== expected) failRefusal(`exact ${label} version mismatch: expected ${expected}, got ${actual || 'empty'}`);
 }
 
 function pathEntries(value) {
@@ -244,12 +349,12 @@ function findExecutable(name, label) {
       }
     }
   }
-  fail(`${label} is unavailable on PATH`);
+  failRefusal(`${label} is unavailable on PATH`);
 }
 
 function runMise(mise, args, cwd, env) {
   const completed = spawnSync(mise, args, { cwd, encoding: 'utf8', shell: false, windowsHide: true, env });
-  if (completed.error || completed.status !== 0) fail(`mise ${args.join(' ')} failed: ${(completed.stderr || completed.error?.message || '').trim()}`);
+  if (completed.error || completed.status !== 0) failRefusal(`mise ${args.join(' ')} failed: ${(completed.stderr || completed.error?.message || '').trim()}`);
   return (completed.stdout || '').trim();
 }
 
@@ -258,9 +363,9 @@ function parsePackage(path) {
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
-    fail(`cannot parse Seeds package metadata: ${error.message}`);
+    failRefusal(`cannot parse Seeds package metadata: ${error.message}`);
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) fail('Seeds package metadata must be an object');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) failRefusal('Seeds package metadata must be an object');
   return parsed;
 }
 
@@ -288,10 +393,10 @@ function rejectPackageControlFiles(packageRoot) {
       if (entry.name === 'node_modules') continue;
       const path = join(directory, entry.name);
       const node = lstatSync(path);
-      if (packageControlFile(entry.name)) fail(`Seeds package contains prohibited execution control: ${relative(packageRoot, path).split(sep).join('/')}`);
+      if (packageControlFile(entry.name)) failRefusal(`Seeds package contains prohibited execution control: ${relative(packageRoot, path).split(sep).join('/')}`);
       if (node.isDirectory()) walk(path);
       else if (node.isFile() && entry.name.toLowerCase() === 'package.json' && !samePath(path, join(packageRoot, 'package.json')) && packageHasExecutionControl(parsePackage(path))) {
-        fail(`Seeds package contains prohibited execution control: ${relative(packageRoot, path).split(sep).join('/')}`);
+        failRefusal(`Seeds package contains prohibited execution control: ${relative(packageRoot, path).split(sep).join('/')}`);
       }
     }
   };
@@ -309,7 +414,7 @@ function packageRootFor(seedsRoot) {
       // Each platform has an explicit, finite expected layout list.
     }
   }
-  fail('Seeds package root is unavailable in the expected platform layout');
+  failRefusal('Seeds package root is unavailable in the expected platform layout');
 }
 
 function expectedBinary(root, kind) {
@@ -332,14 +437,14 @@ function validateTuple(roots) {
   const packageJson = join(packageRoot, 'package.json');
   const metadata = parsePackage(packageJson);
   if (metadata.name !== SEEDS_PACKAGE || metadata.version !== SEEDS_VERSION) {
-    fail(`Seeds package mismatch: expected ${SEEDS_PACKAGE}@${SEEDS_VERSION}`);
+    failRefusal(`Seeds package mismatch: expected ${SEEDS_PACKAGE}@${SEEDS_VERSION}`);
   }
   if (!metadata.bin || typeof metadata.bin !== 'object' || Array.isArray(metadata.bin) || typeof metadata.bin[SEEDS_BIN] !== 'string') {
-    fail('Seeds package must define the exact sd bin');
+    failRefusal('Seeds package must define the exact sd bin');
   }
   const binValue = metadata.bin[SEEDS_BIN];
-  if (isAbsolute(binValue) || binValue.split(/[\\/]+/).includes('..')) fail('Seeds package bin escapes its package root');
-  if (packageHasExecutionControl(metadata)) fail('Seeds package declares prohibited execution control');
+  if (isAbsolute(binValue) || binValue.split(/[\\/]+/).includes('..')) failRefusal('Seeds package bin escapes its package root');
+  if (packageHasExecutionControl(metadata)) failRefusal('Seeds package declares prohibited execution control');
   rejectPackageControlFiles(packageRoot);
   const entry = containedFile(packageRoot, resolve(packageRoot, binValue), 'Seeds bin entry');
   return { nodeRoot, bunRoot, seedsRoot, node, bun, packageRoot, packageJson: realRegularFile(packageJson, 'Seeds package metadata'), entry, binValue };
@@ -358,12 +463,12 @@ function ensurePrivateDirectory(path) {
   if (parent !== destination) {
     if (!existsSync(parent)) ensurePrivateDirectory(parent);
     const parentNode = lstatSync(parent);
-    if (parentNode.isSymbolicLink() || !parentNode.isDirectory()) fail(`state path is not a real directory: ${parent}`);
+    if (parentNode.isSymbolicLink() || !parentNode.isDirectory()) failRefusal(`state path is not a real directory: ${parent}`);
   }
   if (!existsSync(destination)) mkdirSync(destination, { mode: 0o700 });
   const node = lstatSync(destination);
-  if (node.isSymbolicLink() || !node.isDirectory()) fail(`state path is not a real directory: ${destination}`);
-  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail(`state path is not owned by this user: ${destination}`);
+  if (node.isSymbolicLink() || !node.isDirectory()) failRefusal(`state path is not a real directory: ${destination}`);
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) failRefusal(`state path is not owned by this user: ${destination}`);
   if (process.platform !== 'win32') chmodSync(destination, 0o700);
 }
 
@@ -374,7 +479,7 @@ function fsyncDirectory(path) {
     descriptor = openSync(path, 'r');
     fsyncSync(descriptor);
   } catch {
-    fail(`cannot persist state directory: ${path}`);
+    failRefusal(`cannot persist state directory: ${path}`);
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
@@ -404,10 +509,10 @@ function existingTrustedEmptyFile(path, name) {
   try {
     node = lstatSync(path);
   } catch {
-    fail(`trusted ${name} is unavailable`);
+    failRefusal(`trusted ${name} is unavailable`);
   }
-  if (node.isSymbolicLink() || !node.isFile() || node.size !== 0) fail(`trusted ${name} must be an owned empty regular file`);
-  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail(`trusted ${name} is not owned by this user`);
+  if (node.isSymbolicLink() || !node.isFile() || node.size !== 0) failRefusal(`trusted ${name} must be an owned empty regular file`);
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) failRefusal(`trusted ${name} is not owned by this user`);
   return realRegularFile(path, `trusted ${name}`);
 }
 
@@ -417,10 +522,10 @@ function existingTrustedJsonFile(path, name) {
   try {
     node = lstatSync(path);
   } catch {
-    fail(`trusted ${name} is unavailable`);
+    failRefusal(`trusted ${name} is unavailable`);
   }
-  if (node.isSymbolicLink() || !node.isFile() || node.size !== bytes.length || !readFileSync(path).equals(bytes)) fail(`trusted ${name} must be an owned inert JSON regular file`);
-  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail(`trusted ${name} is not owned by this user`);
+  if (node.isSymbolicLink() || !node.isFile() || node.size !== bytes.length || !readFileSync(path).equals(bytes)) failRefusal(`trusted ${name} must be an owned inert JSON regular file`);
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) failRefusal(`trusted ${name} is not owned by this user`);
   return realRegularFile(path, `trusted ${name}`);
 }
 
@@ -437,8 +542,8 @@ function trustedEmptyFile(directory, name) {
     fsyncDirectory(directory);
   }
   const node = lstatSync(path);
-  if (node.isSymbolicLink() || !node.isFile() || node.size !== 0) fail(`trusted ${name} must be an owned empty regular file`);
-  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail(`trusted ${name} is not owned by this user`);
+  if (node.isSymbolicLink() || !node.isFile() || node.size !== 0) failRefusal(`trusted ${name} must be an owned empty regular file`);
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) failRefusal(`trusted ${name} is not owned by this user`);
   if (process.platform !== 'win32') chmodSync(path, 0o600);
   return realRegularFile(path, `trusted ${name}`);
 }
@@ -451,13 +556,13 @@ function receiptDirectory() {
 
 function capture(git, args, message, env, input) {
   const completed = spawnSync(git, args, { encoding: 'utf8', shell: false, windowsHide: true, env, input });
-  if (completed.error || completed.status !== 0) fail(message);
+  if (completed.error || completed.status !== 0) failRefusal(message);
   return (completed.stdout || '').trim();
 }
 
 function captureBytes(git, args, message, env) {
   const completed = spawnSync(git, args, { shell: false, windowsHide: true, env });
-  if (completed.error || completed.status !== 0) fail(message);
+  if (completed.error || completed.status !== 0) failRefusal(message);
   return completed.stdout;
 }
 
@@ -487,9 +592,9 @@ function rawRegularFile(path, label) {
   try {
     node = lstatSync(path);
   } catch {
-    fail(`${label} is unavailable: ${path}`);
+    failRefusal(`${label} is unavailable: ${path}`);
   }
-  if (node.isSymbolicLink() || !node.isFile()) fail(`${label} must be a regular file: ${path}`);
+  if (node.isSymbolicLink() || !node.isFile()) failRefusal(`${label} must be a regular file: ${path}`);
   return path;
 }
 
@@ -497,7 +602,7 @@ function metadataLine(path, label) {
   const file = rawRegularFile(path, label);
   const bytes = readFileSync(file, 'utf8');
   const line = bytes.endsWith('\n') ? bytes.slice(0, -1).replace(/\r$/, '') : bytes;
-  if (!line || line.includes('\n') || line.includes('\0')) fail(`${label} is invalid: ${path}`);
+  if (!line || line.includes('\n') || line.includes('\0')) failRefusal(`${label} is invalid: ${path}`);
   return line;
 }
 
@@ -511,14 +616,14 @@ function referencedGitDirectory(distribution) {
   try {
     node = lstatSync(marker);
   } catch {
-    fail(`reviewed distribution must be an exact Git root: ${distribution}`);
+    failRefusal(`reviewed distribution must be an exact Git root: ${distribution}`);
   }
   if (node.isDirectory()) return metadataDirectory(marker, 'reviewed distribution Git directory');
-  if (!node.isFile() || node.isSymbolicLink()) fail(`reviewed distribution must be an exact Git root: ${distribution}`);
+  if (!node.isFile() || node.isSymbolicLink()) failRefusal(`reviewed distribution must be an exact Git root: ${distribution}`);
   const reference = metadataLine(marker, 'reviewed distribution Git directory reference');
-  if (!reference.startsWith('gitdir: ')) fail(`reviewed distribution must be an exact Git root: ${distribution}`);
+  if (!reference.startsWith('gitdir: ')) failRefusal(`reviewed distribution must be an exact Git root: ${distribution}`);
   const location = reference.slice('gitdir: '.length);
-  if (!location) fail(`reviewed distribution must be an exact Git root: ${distribution}`);
+  if (!location) failRefusal(`reviewed distribution must be an exact Git root: ${distribution}`);
   return metadataDirectory(isAbsolute(location) ? location : resolve(dirname(marker), location), 'reviewed distribution Git directory');
 }
 
@@ -531,7 +636,7 @@ function commonGitDirectory(source) {
 
 function refPath(directory, reference) {
   if (!reference.startsWith('refs/') || reference.includes('\0') || reference.split('/').some((part) => !part || part === '.' || part === '..')) {
-    fail('reviewed distribution has an invalid Git reference');
+    failRefusal('reviewed distribution has an invalid Git reference');
   }
   return join(directory, reference);
 }
@@ -562,11 +667,11 @@ function exactHeadCommit(source, common) {
   let value = metadataLine(join(source, 'HEAD'), 'reviewed distribution HEAD');
   for (let redirects = 0; redirects < 8; redirects += 1) {
     if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(value)) return value;
-    if (!value.startsWith('ref: ')) fail('reviewed distribution HEAD must resolve to an exact commit');
+    if (!value.startsWith('ref: ')) failRefusal('reviewed distribution HEAD must resolve to an exact commit');
     const reference = value.slice('ref: '.length);
     value = looseReference(reference, directories) || packedReference(reference, directories) || '';
   }
-  fail('reviewed distribution HEAD must resolve to an exact commit');
+  failRefusal('reviewed distribution HEAD must resolve to an exact commit');
 }
 
 function gitMetadata(distribution) {
@@ -607,26 +712,26 @@ function gitDistribution(distribution) {
     const commit = capture(git, ['rev-parse', '--verify', 'HEAD^{commit}'], 'reviewed distribution must have an exact Git commit', environment);
     const expectedTree = capture(git, ['rev-parse', '--verify', 'HEAD^{tree}'], 'reviewed distribution must have an exact Git tree', environment);
     const indexTree = capture(git, ['write-tree'], 'reviewed distribution index must match its exact Git tree', environment);
-    if (indexTree !== expectedTree) fail('reviewed distribution must have a clean Git tree and index');
+    if (indexTree !== expectedTree) failRefusal('reviewed distribution must have a clean Git tree and index');
     const indexed = captureBytes(git, ['ls-files', '--stage', '-z'], 'cannot enumerate indexed distribution files', environment);
     for (const record of indexed.toString('utf8').split('\0')) {
       if (!record) continue;
       const separator = record.indexOf('\t');
       const metadata = separator === -1 ? [] : record.slice(0, separator).split(' ');
       const path = separator === -1 ? '' : record.slice(separator + 1);
-      if (metadata.length !== 3 || !/^[0-7]{6}$/.test(metadata[0]) || !/^[0-9a-f]{40,64}$/.test(metadata[1]) || metadata[2] !== '0' || !path) fail('reviewed distribution index is not an exact ordinary file tree');
+      if (metadata.length !== 3 || !/^[0-7]{6}$/.test(metadata[0]) || !/^[0-9a-f]{40,64}$/.test(metadata[1]) || metadata[2] !== '0' || !path) failRefusal('reviewed distribution index is not an exact ordinary file tree');
       let bytes;
       try {
         bytes = readFileSync(join(distribution, path));
       } catch {
-        fail('reviewed distribution must have a clean Git tree and index');
+        failRefusal('reviewed distribution must have a clean Git tree and index');
       }
       const actual = capture(git, ['hash-object', '--no-filters', '--stdin'], 'cannot hash tracked distribution file', environment, bytes);
-      if (actual !== metadata[1]) fail('reviewed distribution must have a clean Git tree and index');
+      if (actual !== metadata[1]) failRefusal('reviewed distribution must have a clean Git tree and index');
     }
     const untracked = capture(git, ['ls-files', '--others', '--exclude-standard'], 'cannot enumerate untracked distribution files', environment);
     const ignored = capture(git, ['ls-files', '--others', '--ignored', '--exclude-standard'], 'cannot enumerate ignored distribution files', environment);
-    if (untracked || ignored) fail('reviewed distribution must contain no untracked or ignored files');
+    if (untracked || ignored) failRefusal('reviewed distribution must contain no untracked or ignored files');
     return { path: git, hash: hashFile(git), commit, tree: expectedTree };
   } finally {
     rmSync(admission.directory, { force: true, recursive: true });
@@ -665,7 +770,7 @@ function bootstrapEnvironment(distribution, directory, mise) {
 }
 
 function exactLauncherNode() {
-  if (process.versions.node !== NODE_VERSION) fail(`launcher Node version mismatch: expected ${NODE_VERSION}, got ${process.versions.node}`);
+  if (process.versions.node !== NODE_VERSION) failRefusal(`launcher Node version mismatch: expected ${NODE_VERSION}, got ${process.versions.node}`);
 }
 
 function currentLauncher() {
@@ -687,8 +792,8 @@ function trustedEmptyJsonFile(directory, name) {
     fsyncDirectory(directory);
   }
   const node = lstatSync(path);
-  if (node.isSymbolicLink() || !node.isFile() || node.size !== bytes.length || !readFileSync(path).equals(bytes)) fail(`trusted ${name} must be an owned inert JSON regular file`);
-  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail(`trusted ${name} is not owned by this user`);
+  if (node.isSymbolicLink() || !node.isFile() || node.size !== bytes.length || !readFileSync(path).equals(bytes)) failRefusal(`trusted ${name} must be an owned inert JSON regular file`);
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) failRefusal(`trusted ${name} is not owned by this user`);
   if (process.platform !== 'win32') chmodSync(path, 0o600);
   return realRegularFile(path, `trusted ${name}`);
 }
@@ -704,7 +809,7 @@ function windowsGitAdapterSource(git) {
 
 function compileWindowsGitAdapter(directory, git, bun, bunfig, tsconfig) {
   const build = join(directory, 'git-adapter-build');
-  if (existsSync(build)) fail('trusted Git adapter build directory already exists');
+  if (existsSync(build)) failRefusal('trusted Git adapter build directory already exists');
   mkdirSync(build, { mode: 0o700 });
   try {
     const source = join(build, 'adapter.ts');
@@ -726,12 +831,12 @@ function compileWindowsGitAdapter(directory, git, bun, bunfig, tsconfig) {
       `--outfile=${output}`,
       source,
     ], { cwd: build, env: {}, encoding: 'utf8', shell: false, windowsHide: true });
-    if (completed.error || completed.status !== 0) fail(`cannot compile trusted Git adapter: ${(completed.stderr || completed.error?.message || '').trim()}`);
+    if (completed.error || completed.status !== 0) failRefusal(`cannot compile trusted Git adapter: ${(completed.stderr || completed.error?.message || '').trim()}`);
     const adapter = realRegularFile(output, 'compiled Git adapter');
     const destination = join(directory, 'git.exe');
     if (existsSync(destination)) {
       const existing = existingTrustedAdapter(destination, git);
-      if (hashFile(existing) !== hashFile(adapter)) fail('existing trusted Git adapter does not match exact compiled bytes');
+      if (hashFile(existing) !== hashFile(adapter)) failRefusal('existing trusted Git adapter does not match exact compiled bytes');
       return existing;
     }
     renameSync(adapter, destination);
@@ -758,21 +863,21 @@ function trustedGitAdapter(directory, git, bun, bunfig, tsconfig) {
     fsyncDirectory(directory);
   }
   const node = lstatSync(path);
-  if (node.isSymbolicLink() || !node.isFile() || readFileSync(path, 'utf8') !== content) fail('trusted Git adapter must be an exact owned regular file');
-  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail('trusted Git adapter is not owned by this user');
+  if (node.isSymbolicLink() || !node.isFile() || readFileSync(path, 'utf8') !== content) failRefusal('trusted Git adapter must be an exact owned regular file');
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) failRefusal('trusted Git adapter is not owned by this user');
   if (process.platform !== 'win32') chmodSync(path, 0o700);
   return realRegularFile(path, 'trusted Git adapter');
 }
 
 function existingTrustedAdapter(path, git) {
   const node = lstatSync(path);
-  if (node.isSymbolicLink() || !node.isFile() || (process.platform !== 'win32' && readFileSync(path, 'utf8') !== posixGitAdapterContent(git))) fail('trusted Git adapter must be an exact regular file');
-  if (process.platform !== 'win32' && node.uid !== process.getuid()) fail('trusted Git adapter is not owned by this user');
+  if (node.isSymbolicLink() || !node.isFile() || (process.platform !== 'win32' && readFileSync(path, 'utf8') !== posixGitAdapterContent(git))) failRefusal('trusted Git adapter must be an exact regular file');
+  if (process.platform !== 'win32' && node.uid !== process.getuid()) failRefusal('trusted Git adapter is not owned by this user');
   return realRegularFile(path, 'trusted Git adapter');
 }
 
 function bootstrap(distributionArgument) {
-  const distribution = realDirectory(distributionArgument, 'reviewed distribution');
+  const distribution = suppliedDirectory(distributionArgument, 'reviewed distribution');
   const miseToml = containedFile(distribution, join(distribution, 'mise.toml'), 'reviewed mise.toml');
   const miseLock = containedFile(distribution, join(distribution, 'mise.lock'), 'reviewed mise.lock');
   const git = gitDistribution(distribution);
@@ -785,7 +890,7 @@ function bootstrap(distributionArgument) {
     bun: runMise(mise, ['--no-config', 'where', TOOL_NAMES.bun], miseEnvironment.HOME, miseEnvironment),
     seeds: runMise(mise, ['--no-config', 'where', TOOL_NAMES.seeds], miseEnvironment.HOME, miseEnvironment),
   };
-  if (!Object.values(roots).every((value) => isAbsolute(value))) fail('mise must return absolute exact tool roots');
+  if (!Object.values(roots).every((value) => isAbsolute(value))) failRefusal('mise must return absolute exact tool roots');
   const tuple = validateTuple(roots);
   const launcher = currentLauncher();
   const bunfig = trustedEmptyFile(directory, 'trusted-bunfig.toml');
@@ -873,22 +978,22 @@ function receiptPath() {
 }
 
 function loadReceipt(path = receiptPath(), pins = TUPLE_PINS_CURRENT) {
-  if (pins !== TUPLE_PINS_CURRENT && pins !== TUPLE_PINS_SUPERSEDED) fail('tuple pin admission mode is unknown');
+  if (pins !== TUPLE_PINS_CURRENT && pins !== TUPLE_PINS_SUPERSEDED) failInternal('tuple pin admission mode is unknown');
   const current = pins === TUPLE_PINS_CURRENT;
   let receipt;
   let receiptNode;
   try {
     receiptNode = lstatSync(path);
-    if (receiptNode.isSymbolicLink() || !receiptNode.isFile() || (process.platform !== 'win32' && receiptNode.uid !== process.getuid())) fail(`active tuple receipt is missing or corrupt: ${path}`);
+    if (receiptNode.isSymbolicLink() || !receiptNode.isFile() || (process.platform !== 'win32' && receiptNode.uid !== process.getuid())) failRefusal(`active tuple receipt is missing or corrupt: ${path}`);
     receipt = JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
     if (error instanceof LauncherError) throw error;
-    fail(`active tuple receipt is missing or corrupt: ${path}`);
+    failRefusal(`active tuple receipt is missing or corrupt: ${path}`);
   }
   if (!exactKeys(receipt, RECEIPT_KEYS) || receipt.schema !== SCHEMA || receipt.platform !== process.platform || !text(receipt.createdAt)
     || !exactKeys(receipt.distribution, DISTRIBUTION_KEYS) || !exactKeys(receipt.runtime, RUNTIME_KEYS) || !exactKeys(receipt.tuple, TUPLE_KEYS) || !exactKeys(receipt.hashes, HASH_KEYS)
     || !exactKeys(receipt.hashes.distribution, DISTRIBUTION_HASH_KEYS)) {
-    fail('active tuple receipt is partial or invalid');
+    failRefusal('active tuple receipt is partial or invalid');
   }
   const { node, bun, seeds, git, trusted } = receipt.tuple;
   const distribution = receipt.distribution;
@@ -908,7 +1013,7 @@ function loadReceipt(path = receiptPath(), pins = TUPLE_PINS_CURRENT) {
     || distribution.tree !== distributionHashes.tree || distribution.miseToml !== distributionHashes.miseToml || distribution.miseLock !== distributionHashes.miseLock
     || distributionHashes.commit !== hashBytes(Buffer.from(distribution.commit, 'utf8'))
     || samePath(distribution.root, distribution.launcher)) {
-    fail('active tuple receipt is partial or invalid');
+    failRefusal('active tuple receipt is partial or invalid');
   }
   return receipt;
 }
@@ -916,22 +1021,22 @@ function loadReceipt(path = receiptPath(), pins = TUPLE_PINS_CURRENT) {
 function checkCurrentReceipt(receipt) {
   const { node, bun, seeds, git, trusted } = receipt.tuple;
   const expected = receipt.hashes;
-  if (![expected.node, expected.nodeExecutable, expected.bun, expected.seeds, expected.packageJson, expected.entry, expected.git, expected.gitAdapter, expected.bunfig, expected.tsconfig, expected.gitconfig].every(text)) fail('active tuple receipt is partial or invalid');
+  if (![expected.node, expected.nodeExecutable, expected.bun, expected.seeds, expected.packageJson, expected.entry, expected.git, expected.gitAdapter, expected.bunfig, expected.tsconfig, expected.gitconfig].every(text)) failRefusal('active tuple receipt is partial or invalid');
   const tuple = validateTuple({ node: node.root, bun: bun.root, seeds: seeds.root });
-  if (tuple.node !== node.executable || tuple.bun !== bun.executable || tuple.packageRoot !== seeds.packageRoot || tuple.binValue !== seeds.binValue || tuple.entry !== seeds.entry) fail('active tuple receipt does not match exact platform layout');
+  if (tuple.node !== node.executable || tuple.bun !== bun.executable || tuple.packageRoot !== seeds.packageRoot || tuple.binValue !== seeds.binValue || tuple.entry !== seeds.entry) failRefusal('active tuple receipt does not match exact platform layout');
   const executingNode = realRegularFile(process.execPath, 'executing Node');
-  if (!samePath(executingNode, receipt.runtime.node) || hashFile(executingNode) !== expected.nodeExecutable) fail('executing Node does not match exact recorded Node');
-  if (treeHash(node.root) !== expected.node || treeHash(bun.root) !== expected.bun || treeHash(seeds.root) !== expected.seeds || hashFile(tuple.packageJson) !== expected.packageJson || hashFile(tuple.entry) !== expected.entry) fail('exact tuple hash drift detected');
-  if (realRegularFile(git.path, 'recorded Git executable') !== git.path || hashFile(git.path) !== expected.git || hashFile(git.path) !== git.hash) fail('recorded Git executable hash drift detected');
+  if (!samePath(executingNode, receipt.runtime.node) || hashFile(executingNode) !== expected.nodeExecutable) failRefusal('executing Node does not match exact recorded Node');
+  if (treeHash(node.root) !== expected.node || treeHash(bun.root) !== expected.bun || treeHash(seeds.root) !== expected.seeds || hashFile(tuple.packageJson) !== expected.packageJson || hashFile(tuple.entry) !== expected.entry) failRefusal('exact tuple hash drift detected');
+  if (realRegularFile(git.path, 'recorded Git executable') !== git.path || hashFile(git.path) !== expected.git || hashFile(git.path) !== git.hash) failRefusal('recorded Git executable hash drift detected');
   const launcher = currentLauncher();
-  if (!samePath(launcher, receipt.distribution.launcher) || hashFile(launcher) !== receipt.distribution.launcherHash) fail('current installed launcher identity or hash drift detected');
+  if (!samePath(launcher, receipt.distribution.launcher) || hashFile(launcher) !== receipt.distribution.launcherHash) failRefusal('current installed launcher identity or hash drift detected');
   const bunfig = existingTrustedEmptyFile(trusted.bunfig, 'trusted-bunfig.toml');
   const tsconfig = existingTrustedJsonFile(trusted.tsconfig, 'trusted-tsconfig.json');
   const gitconfig = existingTrustedEmptyFile(trusted.gitconfig, 'trusted-gitconfig');
   const gitAdapter = existingTrustedAdapter(trusted.gitAdapter, git.path);
   if (bunfig !== trusted.bunfig || tsconfig !== trusted.tsconfig || gitconfig !== trusted.gitconfig || gitAdapter !== trusted.gitAdapter
     || hashFile(bunfig) !== expected.bunfig || hashFile(tsconfig) !== expected.tsconfig || hashFile(gitconfig) !== expected.gitconfig
-    || hashFile(gitAdapter) !== expected.gitAdapter) fail('trusted configuration hash drift detected');
+    || hashFile(gitAdapter) !== expected.gitAdapter) failRefusal('trusted configuration hash drift detected');
   return { ...tuple, bunfig, tsconfig, gitconfig, gitAdapter };
 }
 
@@ -939,12 +1044,12 @@ function grammar(values) {
   if (values.length === 1 && values[0] === '--version') return values;
   if (values.length === 1 && values[0] === 'prime') return values;
   if ((values[0] === 'ready' || values[0] === 'blocked') && (values.length === 1 || (values.length === 3 && values[1] === '--format' && values[2] === 'json'))) return values;
-  fail('Seeds inspect accepts only --version, prime, ready [--format json], or blocked [--format json]');
+  failGrammar('Seeds inspect accepts only --version, prime, ready [--format json], or blocked [--format json]');
 }
 
 function inspect(targetArgument, values) {
   const args = grammar(values); // Parse every allowed form before inspecting any executable.
-  const target = realDirectory(targetArgument, 'Seeds target');
+  const target = suppliedDirectory(targetArgument, 'Seeds target');
   const tuple = checkCurrentReceipt(loadReceipt());
   const child = spawn(tuple.bun, seedsArguments(tuple, args), {
     cwd: target,
@@ -954,12 +1059,18 @@ function inspect(targetArgument, values) {
     windowsHide: true,
   });
   child.once('error', (error) => {
+    // The child never started, so this is the launcher's own clean refusal before any effect, not
+    // the child's verdict: it is the one nonzero inspect exit the launcher chooses for itself.
     process.stderr.write(`cannot start exact Seeds Bun entry: ${error.message}\n`);
-    process.exitCode = 2;
+    process.exitCode = EXITS.refusal;
   });
   child.once('close', (code, signal) => {
+    // THE CHILD'S OWN STATUS, deliberately and only here. See the `EXITS` table's named exception:
+    // inspect exists to be this read-only child, and its callers read Seeds' verdict about the
+    // target. A code that never arrived with no signal is not the child's answer, so it becomes the
+    // launcher's own internal failure rather than a fabricated success.
     if (signal) process.kill(process.pid, signal);
-    else process.exitCode = code === null ? 1 : code;
+    else process.exitCode = code === null ? EXITS.internal : code;
   });
 }
 
@@ -993,7 +1104,7 @@ function seedsArguments(tuple, args) {
 
 function isoTimestamp(value, label) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) || Number.isNaN(Date.parse(value))) {
-    fail(`queue readback ${label} is not an exact timestamp`);
+    failRefusal(`queue readback ${label} is not an exact timestamp`);
   }
   return value;
 }
@@ -1003,10 +1114,10 @@ function recordFlags(values, allowed, label) {
   for (let index = 0; index < values.length; index += 2) {
     const flag = values[index];
     const value = values[index + 1];
-    if (!allowed.has(flag)) fail(`Seeds record ${label} does not admit ${flag}`);
-    if (flags.has(flag)) fail(`Seeds record ${label} does not admit a repeated ${flag}`);
-    if (value === undefined || value.startsWith('--')) fail(`Seeds record ${label} requires an exact value for ${flag}`);
-    if (value.includes('\0')) fail(`Seeds record ${label} rejects a NUL in ${flag}`);
+    if (!allowed.has(flag)) failGrammar(`Seeds record ${label} does not admit ${flag}`);
+    if (flags.has(flag)) failGrammar(`Seeds record ${label} does not admit a repeated ${flag}`);
+    if (value === undefined || value.startsWith('--')) failGrammar(`Seeds record ${label} requires an exact value for ${flag}`);
+    if (value.includes('\0')) failGrammar(`Seeds record ${label} rejects a NUL in ${flag}`);
     flags.set(flag, value);
   }
   return flags;
@@ -1016,7 +1127,7 @@ function recordGrammar(values) {
   const verb = values[0];
   if (verb === 'create') {
     const flags = recordFlags(values.slice(1), CREATE_FLAGS, 'create');
-    if (!flags.has('--title')) fail('a recorded queue creation requires --title');
+    if (!flags.has('--title')) failGrammar('a recorded queue creation requires --title');
     // Every requested value is judged here, before the queue writer starts.
     requestedTitle(flags);
     requestedType(flags);
@@ -1025,34 +1136,34 @@ function recordGrammar(values) {
   }
   if (verb === 'update') {
     const id = values[1];
-    if (!id || id.startsWith('--')) fail('a recorded queue amendment requires an exact issue id');
+    if (!id || id.startsWith('--')) failGrammar('a recorded queue amendment requires an exact issue id');
     const flags = recordFlags(values.slice(2), UPDATE_FLAGS, 'update');
-    if (flags.size === 0) fail('a recorded queue amendment requires at least one recorded field');
+    if (flags.size === 0) failGrammar('a recorded queue amendment requires at least one recorded field');
     requestedTitle(flags);
     requestedStatus(flags);
     requestedPriority(flags, undefined);
     return { verb, id, flags };
   }
-  fail(`Seeds record admits only the conductor queue verbs create and update, never ${verb || 'an empty verb'}`);
+  failGrammar(`Seeds record admits only the conductor queue verbs create and update, never ${verb || 'an empty verb'}`);
 }
 
 function requestedType(flags) {
   const value = flags.get('--type') ?? 'task';
-  if (!VALID_ISSUE_TYPES.has(value)) fail(`Seeds record does not admit the issue type ${value}`);
+  if (!VALID_ISSUE_TYPES.has(value)) failGrammar(`Seeds record does not admit the issue type ${value}`);
   return value;
 }
 
 function requestedPriority(flags, fallback) {
   const value = flags.get('--priority');
   if (value === undefined) return fallback;
-  if (!/^[0-4]$/.test(value)) fail('Seeds record admits only an exact priority 0-4');
+  if (!/^[0-4]$/.test(value)) failGrammar('Seeds record admits only an exact priority 0-4');
   return Number(value);
 }
 
 function requestedStatus(flags) {
   const value = flags.get('--status');
   if (value === undefined) return undefined;
-  if (!VALID_ISSUE_STATUSES.has(value)) fail(`Seeds record does not admit the issue status ${value}`);
+  if (!VALID_ISSUE_STATUSES.has(value)) failGrammar(`Seeds record does not admit the issue status ${value}`);
   return value;
 }
 
@@ -1065,7 +1176,7 @@ function requestedTitle(flags) {
   const value = flags.get('--title');
   if (value === undefined) return undefined;
   const trimmed = value.trim();
-  if (!trimmed) fail('Seeds record admits only a non-empty title');
+  if (!trimmed) failGrammar('Seeds record admits only a non-empty title');
   return trimmed;
 }
 
@@ -1076,12 +1187,12 @@ function requireQueueOwningRepositoryRoot(target, operation, tuple) {
     node = lstatSync(marker);
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      fail(`Seeds ${operation} requires the queue-owning Git repository root: ${target}`);
+      failRefusal(`Seeds ${operation} requires the queue-owning Git repository root: ${target}`);
     }
-    fail(`Seeds ${operation} cannot classify the repository marker: ${marker}`);
+    failRefusal(`Seeds ${operation} cannot classify the repository marker: ${marker}`);
   }
   if (node.isSymbolicLink() || !node.isDirectory()) {
-    fail(`Seeds ${operation} refuses a linked worktree or submodule target: its queue write redirects to another root, and the conductor records at the queue-owning root`);
+    failRefusal(`Seeds ${operation} refuses a linked worktree or submodule target: its queue write redirects to another root, and the conductor records at the queue-owning root`);
   }
   const completed = spawnSync(tuple.gitAdapter, ['rev-parse', '--git-dir'], {
     cwd: target,
@@ -1092,11 +1203,11 @@ function requireQueueOwningRepositoryRoot(target, operation, tuple) {
     windowsHide: true,
   });
   if (completed.error || completed.status !== 0) {
-    fail(`Seeds ${operation} requires a valid queue-owning Git repository root: ${target}`);
+    failRefusal(`Seeds ${operation} requires a valid queue-owning Git repository root: ${target}`);
   }
   const lines = completed.stdout.trimEnd().split(/\r?\n/);
   if (lines.length !== 1 || !samePath(resolve(target, lines[0]), marker)) {
-    fail(`Seeds ${operation} refuses a target that is not its queue-owning Git repository root: ${target}`);
+    failRefusal(`Seeds ${operation} refuses a target that is not its queue-owning Git repository root: ${target}`);
   }
   const common = spawnSync(tuple.gitAdapter, ['rev-parse', '--git-common-dir'], {
     cwd: target,
@@ -1109,11 +1220,11 @@ function requireQueueOwningRepositoryRoot(target, operation, tuple) {
   // An adapter that never started has no stdout to read, so admission is checked before the
   // path comparison: a failed probe is this launcher's named refusal, never a thrown TypeError.
   if (common.error || common.status !== 0) {
-    fail(`Seeds ${operation} requires a queue-owning Git repository whose common Git directory the trusted adapter resolves: ${target}`);
+    failRefusal(`Seeds ${operation} requires a queue-owning Git repository whose common Git directory the trusted adapter resolves: ${target}`);
   }
   const commonLines = common.stdout.trimEnd().split(/\r?\n/);
   if (commonLines.length !== 1 || !samePath(resolve(target, commonLines[0]), marker)) {
-    fail(`Seeds ${operation} refuses a repository whose common Git directory redirects outside the queue-owning root: ${target}`);
+    failRefusal(`Seeds ${operation} refuses a repository whose common Git directory redirects outside the queue-owning root: ${target}`);
   }
   const head = spawnSync(tuple.gitAdapter, ['rev-parse', '--verify', 'HEAD^{commit}'], {
     cwd: target,
@@ -1124,7 +1235,7 @@ function requireQueueOwningRepositoryRoot(target, operation, tuple) {
     windowsHide: true,
   });
   if (head.error || head.status !== 0 || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(head.stdout.trim())) {
-    fail(`Seeds ${operation} requires a queue-owning Git repository with an exact HEAD commit: ${target}`);
+    failRefusal(`Seeds ${operation} requires a queue-owning Git repository with an exact HEAD commit: ${target}`);
   }
 }
 
@@ -1146,8 +1257,8 @@ function queueSurface(directory) {
     if (/\.lock$|\.lock\.stale\.|\.tmp\./.test(entry.name)) continue;
     const path = join(directory, entry.name);
     const node = lstatSync(path);
-    if (node.isDirectory()) fail(`unsupported directory inside the Seeds queue: ${entry.name}`);
-    if (!node.isFile()) fail(`unsupported filesystem node inside the Seeds queue: ${entry.name}`);
+    if (node.isDirectory()) failRefusal(`unsupported directory inside the Seeds queue: ${entry.name}`);
+    if (!node.isFile()) failRefusal(`unsupported filesystem node inside the Seeds queue: ${entry.name}`);
     surface.set(entry.name, hashBytes(readFileSync(path)));
   }
   return surface;
@@ -1155,7 +1266,7 @@ function queueSurface(directory) {
 
 function queueRecords(bytes, label) {
   if (bytes.length > 0 && !bytes.subarray(bytes.length - 1).equals(Buffer.from('\n'))) {
-    fail(`${label} is not newline-terminated, so an exact readback is unavailable`);
+    failRefusal(`${label} is not newline-terminated, so an exact readback is unavailable`);
   }
   const content = bytes.toString('utf8');
   const lines = content.length === 0 ? [] : content.slice(0, -1).split('\n');
@@ -1166,11 +1277,11 @@ function queueRecords(bytes, label) {
     try {
       parsed = JSON.parse(line);
     } catch {
-      fail(`${label} holds a line the queue writer would silently drop, so an exact readback is unavailable`);
+      failRefusal(`${label} holds a line the queue writer would silently drop, so an exact readback is unavailable`);
     }
-    if (!object(parsed) || !text(parsed.id)) fail(`${label} holds a record without an exact id`);
-    if (JSON.stringify(parsed) !== line) fail(`${label} is not canonically serialized, so an exact readback is unavailable`);
-    if (seen.has(parsed.id)) fail(`${label} holds the duplicate id ${parsed.id}, which the queue writer would collapse`);
+    if (!object(parsed) || !text(parsed.id)) failRefusal(`${label} holds a record without an exact id`);
+    if (JSON.stringify(parsed) !== line) failRefusal(`${label} is not canonically serialized, so an exact readback is unavailable`);
+    if (seen.has(parsed.id)) failRefusal(`${label} holds the duplicate id ${parsed.id}, which the queue writer would collapse`);
     seen.add(parsed.id);
     records.push({ line, parsed });
   }
@@ -1242,9 +1353,9 @@ function childReport(completed, verb) {
   try {
     report = JSON.parse(completed.stdout || '');
   } catch {
-    fail('queue writer did not emit an exact JSON record');
+    failRefusal('queue writer did not emit an exact JSON record');
   }
-  if (!object(report) || report.success !== true || report.command !== verb) fail('queue writer did not report the exact requested queue write');
+  if (!object(report) || report.success !== true || report.command !== verb) failRefusal('queue writer did not report the exact requested queue write');
   return report;
 }
 
@@ -1254,9 +1365,9 @@ function optionalRegularFileSnapshot(path, label) {
     node = lstatSync(path);
   } catch (error) {
     if (error?.code === 'ENOENT') return { exists: false, bytes: null, digest: INIT_EXPECTATION };
-    fail(`cannot snapshot ${label}: ${path}`);
+    failRefusal(`cannot snapshot ${label}: ${path}`);
   }
-  if (node.isSymbolicLink() || !node.isFile()) fail(`${label} must be absent or a regular file: ${path}`);
+  if (node.isSymbolicLink() || !node.isFile()) failRefusal(`${label} must be absent or a regular file: ${path}`);
   const bytes = readFileSync(path);
   return { exists: true, bytes, digest: `file:${hashBytes(bytes)}` };
 }
@@ -1287,13 +1398,13 @@ function admittedGitattributesText(before) {
   try {
     existing = new TextDecoder('utf-8', { fatal: true }).decode(before.bytes);
   } catch {
-    fail('Seeds init refuses non-UTF-8 .gitattributes because the pinned initializer cannot preserve its bytes');
+    failRefusal('Seeds init refuses non-UTF-8 .gitattributes because the pinned initializer cannot preserve its bytes');
   }
   const exactLines = new Set(existing.split('\n'));
   const exactMissing = INIT_MERGE_UNION_LINES.filter((line) => !exactLines.has(line));
   const upstreamMissing = INIT_MERGE_UNION_LINES.filter((line) => !existing.includes(line));
   if (JSON.stringify(exactMissing) !== JSON.stringify(upstreamMissing)) {
-    fail('Seeds init refuses .gitattributes whose exact lines disagree with the pinned initializer substring-match behavior');
+    failRefusal('Seeds init refuses .gitattributes whose exact lines disagree with the pinned initializer substring-match behavior');
   }
   return existing;
 }
@@ -1322,33 +1433,33 @@ function verifyInitializedSurface(target, beforeAttributes) {
   const entries = readdirSync(directory, { withFileTypes: true });
   const names = new Set(entries.map((entry) => entry.name));
   for (const name of INIT_SURFACE) {
-    if (!names.has(name)) fail(`Seeds init readback divergence: initialized .seeds is missing ${name}`);
+    if (!names.has(name)) failRefusal(`Seeds init readback divergence: initialized .seeds is missing ${name}`);
   }
   for (const name of names) {
-    if (!INIT_SURFACE.has(name)) fail(`Seeds init readback divergence: initialized .seeds added unrequested ${name}`);
+    if (!INIT_SURFACE.has(name)) failRefusal(`Seeds init readback divergence: initialized .seeds added unrequested ${name}`);
   }
   for (const entry of entries) {
     const path = join(directory, entry.name);
     const node = lstatSync(path);
-    if (node.isSymbolicLink() || !node.isFile()) fail(`Seeds init readback divergence: initialized .seeds contains non-regular ${entry.name}`);
+    if (node.isSymbolicLink() || !node.isFile()) failRefusal(`Seeds init readback divergence: initialized .seeds contains non-regular ${entry.name}`);
   }
   const config = readFileSync(rawRegularFile(join(directory, SEEDS_CONFIG_FILE), 'initialized Seeds configuration'));
   const expectedConfig = Buffer.from(`project: "${basename(target)}"\nversion: "1"\nmax_plan_depth: 3\n`, 'utf8');
-  if (!config.equals(expectedConfig)) fail('Seeds init readback divergence: initialized config.yaml is not the exact initializer policy');
+  if (!config.equals(expectedConfig)) failRefusal('Seeds init readback divergence: initialized config.yaml is not the exact initializer policy');
   for (const name of [SEEDS_ISSUES_FILE, SEEDS_TEMPLATES_FILE, SEEDS_PLANS_FILE]) {
     const path = rawRegularFile(join(directory, name), `initialized Seeds ${name}`);
-    if (lstatSync(path).size !== 0) fail(`Seeds init readback divergence: initialized ${name} is not empty`);
+    if (lstatSync(path).size !== 0) failRefusal(`Seeds init readback divergence: initialized ${name} is not empty`);
   }
   const ignore = readFileSync(rawRegularFile(join(directory, SEEDS_GITIGNORE_FILE), 'initialized Seeds ignore file'));
-  if (!ignore.equals(Buffer.from('*.lock\n', 'utf8'))) fail('Seeds init readback divergence: initialized .gitignore is not the exact lock-only policy');
+  if (!ignore.equals(Buffer.from('*.lock\n', 'utf8'))) failRefusal('Seeds init readback divergence: initialized .gitignore is not the exact lock-only policy');
   const attributes = optionalRegularFileSnapshot(join(target, GITATTRIBUTES_FILE), 'target .gitattributes readback');
   if (!attributes.exists || !attributes.bytes.equals(expectedGitattributes(beforeAttributes))) {
-    fail('Seeds init readback divergence: .gitattributes is not the precise merge-union append');
+    failRefusal('Seeds init readback divergence: .gitattributes is not the precise merge-union append');
   }
 }
 
 function initialize(targetArgument) {
-  const target = realDirectory(targetArgument, 'Seeds target');
+  const target = suppliedDirectory(targetArgument, 'Seeds target');
   const tuple = checkCurrentReceipt(loadReceipt());
   requireQueueOwningRepositoryRoot(target, 'init', tuple);
   const seedsPath = join(target, SEEDS_DIRECTORY);
@@ -1356,15 +1467,19 @@ function initialize(targetArgument) {
   try {
     seedsNode = lstatSync(seedsPath);
   } catch (error) {
-    if (error?.code !== 'ENOENT') fail(`Seeds init cannot classify .seeds: ${seedsPath}`);
+    if (error?.code !== 'ENOENT') failRefusal(`Seeds init cannot classify .seeds: ${seedsPath}`);
   }
   if (seedsNode !== undefined) {
     const kind = seedsNode.isSymbolicLink() ? 'symlink' : seedsNode.isDirectory() ? 'directory' : seedsNode.isFile() ? 'file' : 'filesystem node';
-    fail(`Seeds init requires --expect-queue absent and an absent .seeds; found existing ${kind}`);
+    failRefusal(`Seeds init requires --expect-queue absent and an absent .seeds; found existing ${kind}`);
   }
   const attributesPath = join(target, GITATTRIBUTES_FILE);
   const attributes = optionalRegularFileSnapshot(attributesPath, 'target .gitattributes');
   expectedGitattributes(attributes); // Prove the pinned initializer and exact verifier agree before mutation.
+  // Everything above this line refuses cleanly. Below it the initializer runs, so the ledger is
+  // opened FIRST and every later refusal --- including one raised while reading the surface back ---
+  // reports an unknown effect until the two digests below prove nothing moved.
+  admitUnprovenSurface(`the .seeds initialization surface under ${rendered(target)}`);
   const completed = spawnSync(tuple.bun, seedsArguments(tuple, ['init', '--json']), {
     cwd: target,
     encoding: 'utf8',
@@ -1376,65 +1491,82 @@ function initialize(targetArgument) {
   const afterDigest = surfaceNodeDigest(seedsPath);
   const attributesAfterDigest = surfaceNodeDigest(attributesPath);
   const surfaceMoved = afterDigest !== INIT_EXPECTATION || attributesAfterDigest !== attributes.digest;
+  // The one proof that closes the ledger: both surfaces still carry their exact prestate digest.
+  if (!surfaceMoved) proveSurfaceUnchanged();
   if (completed.error || completed.status !== 0) {
-    if (surfaceMoved) fail(`Seeds init effect is unknown: the queue writer failed after moving the initialization surface to .seeds=${afterDigest}, .gitattributes=${attributesAfterDigest}`);
-    fail('Seeds init refused: the queue writer failed and left .seeds and .gitattributes unchanged');
+    if (surfaceMoved) failEffectUnknown(`Seeds init effect is unknown: the queue writer failed after moving the initialization surface to .seeds=${afterDigest}, .gitattributes=${attributesAfterDigest}`);
+    failRefusal('Seeds init refused: the queue writer failed and left .seeds and .gitattributes unchanged');
   }
   const report = childReport(completed, 'init');
-  if (!text(report.dir) || !samePath(resolve(report.dir), seedsPath)) fail('Seeds init readback divergence: the queue writer reported a different directory');
+  if (!text(report.dir) || !samePath(resolve(report.dir), seedsPath)) failRefusal('Seeds init readback divergence: the queue writer reported a different directory');
   verifyInitializedSurface(target, attributes);
   process.stdout.write(`recorded conductor queue initialization: ${seedsPath}\nverified absent prestate, exact runtime, closed .seeds surface, and precise .gitattributes merge-union append\n`);
 }
 
+// The ledger's proof half: a boolean, not an assertion, because "did anything move" has to be
+// answerable before the launcher decides which class its refusal belongs to. `assertUnchangedQueue`
+// below is the verdict half and admits the two files a requested write may legitimately move.
+function sameQueueSurface(before, after) {
+  if (before.size !== after.size) return false;
+  for (const [name, digest] of before) {
+    if (after.get(name) !== digest) return false;
+  }
+  return true;
+}
+
 function assertUnchangedQueue(before, after, label) {
   for (const [name, digest] of before) {
-    if (!after.has(name)) fail(`${label}: the queue writer removed ${name}`);
-    if (after.get(name) !== digest && name !== SEEDS_ISSUES_FILE && name !== SEEDS_PLANS_FILE) fail(`${label}: the queue writer changed ${name}`);
+    if (!after.has(name)) failRefusal(`${label}: the queue writer removed ${name}`);
+    if (after.get(name) !== digest && name !== SEEDS_ISSUES_FILE && name !== SEEDS_PLANS_FILE) failRefusal(`${label}: the queue writer changed ${name}`);
   }
   for (const name of after.keys()) {
-    if (!before.has(name)) fail(`${label}: the queue writer added ${name}`);
+    if (!before.has(name)) failRefusal(`${label}: the queue writer added ${name}`);
   }
 }
 
 function assertBoundedPlanCascade(directory, plansBefore, before, after, id, statusRequested) {
   if (before.get(SEEDS_PLANS_FILE) === after.get(SEEDS_PLANS_FILE)) return;
-  if (!statusRequested) fail('queue readback divergence: the queue writer changed plans.jsonl without a recorded status change');
+  if (!statusRequested) failRefusal('queue readback divergence: the queue writer changed plans.jsonl without a recorded status change');
   const previous = queueRecords(plansBefore, 'the Seeds plan queue prestate');
   const current = queueRecords(readFileSync(join(directory, SEEDS_PLANS_FILE)), 'the Seeds plan queue readback');
-  if (previous.length !== current.length) fail('queue readback divergence: the plan cascade changed the plan count');
+  if (previous.length !== current.length) failRefusal('queue readback divergence: the plan cascade changed the plan count');
   for (let index = 0; index < previous.length; index += 1) {
     if (previous[index].line === current[index].line) continue;
     const plan = previous[index].parsed;
     const observed = current[index].parsed;
     if (!Array.isArray(plan.children) || !plan.children.includes(id)) {
-      fail(`queue readback divergence: the plan cascade changed plan ${plan.id}, which does not own ${id}`);
+      failRefusal(`queue readback divergence: the plan cascade changed plan ${plan.id}, which does not own ${id}`);
     }
     // A bounded cascade is verified, not re-derived: only status and updatedAt may move.
     const sealed = { ...plan, status: observed.status, updatedAt: isoTimestamp(observed.updatedAt, `plan ${plan.id} timestamp`) };
     if (!PLAN_STATUSES.has(observed.status) || JSON.stringify(sealed) !== current[index].line) {
-      fail(`queue readback divergence: the plan cascade changed more than plan ${plan.id} status and timestamp`);
+      failRefusal(`queue readback divergence: the plan cascade changed more than plan ${plan.id} status and timestamp`);
     }
   }
 }
 
 function record(targetArgument, expected, values) {
   const request = recordGrammar(values); // Parse the whole admitted form before touching the queue.
-  if (!/^[0-9a-f]{64}$/.test(expected)) fail('Seeds record requires the exact sha256 the conductor decided against in --expect-queue');
-  const target = realDirectory(targetArgument, 'Seeds target');
+  if (!/^[0-9a-f]{64}$/.test(expected)) failGrammar('Seeds record requires the exact sha256 the conductor decided against in --expect-queue');
+  const target = suppliedDirectory(targetArgument, 'Seeds target');
   const tuple = checkCurrentReceipt(loadReceipt());
   const directory = seedsDirectory(target, tuple);
   const surfaceBefore = queueSurface(directory);
   const plansBefore = queueFile(directory, SEEDS_PLANS_FILE, 'target Seeds plan queue').bytes;
   const queue = queueFile(directory, SEEDS_ISSUES_FILE, 'target Seeds queue');
   if (queue.digest !== expected) {
-    fail(`Seeds record compare-and-swap refused: the queue is ${queue.digest}, not the ${expected} the conductor decided against`);
+    failRefusal(`Seeds record compare-and-swap refused: the queue is ${queue.digest}, not the ${expected} the conductor decided against`);
   }
   const before = queueRecords(queue.bytes, 'the Seeds queue prestate');
   const index = request.verb === 'update' ? before.findIndex((entry) => entry.parsed.id === request.id) : -1;
-  if (request.verb === 'update' && index === -1) fail(`recorded queue amendment refused: ${request.id} is absent from the queue prestate`);
+  if (request.verb === 'update' && index === -1) failRefusal(`recorded queue amendment refused: ${request.id} is absent from the queue prestate`);
   const args = [request.verb, ...(request.id === null ? [] : [request.id])];
   for (const [flag, value] of request.flags) args.push(flag, value);
   args.push('--json');
+  // Same boundary as init: the ledger opens before the queue writer starts, so a readback that
+  // cannot even be TAKEN --- a deleted queue file, a directory where a record file was --- reports
+  // an unknown effect instead of a clean refusal it cannot honestly claim.
+  admitUnprovenSurface(`the Seeds queue under ${rendered(directory)} at prestate sha256 ${queue.digest}`);
   const completed = spawnSync(tuple.bun, seedsArguments(tuple, args), {
     cwd: target,
     encoding: 'utf8',
@@ -1444,44 +1576,49 @@ function record(targetArgument, expected, values) {
     windowsHide: true,
   });
   const after = queueFile(directory, SEEDS_ISSUES_FILE, 'target Seeds queue');
+  // ONE post-writer surface snapshot, taken here rather than after the record checks, because it is
+  // both halves of the ledger's proof and the input `assertUnchangedQueue` compares below. The queue
+  // the conductor named must be byte-identical AND no sibling queue file may have moved; a writer
+  // that left issues.jsonl alone but rewrote config.yaml has still had an effect.
+  const surfaceAfter = queueSurface(directory);
+  if (after.digest === queue.digest && sameQueueSurface(surfaceBefore, surfaceAfter)) proveSurfaceUnchanged();
   if (completed.error || completed.status !== 0) {
-    if (after.digest !== queue.digest) fail(`Seeds record effect is unknown: the queue writer failed yet moved the queue to ${after.digest}`);
-    fail(`Seeds record refused: the queue writer failed and left the queue at ${queue.digest}`);
+    if (after.digest !== queue.digest) failEffectUnknown(`Seeds record effect is unknown: the queue writer failed yet moved the queue to ${after.digest}`);
+    failRefusal(`Seeds record refused: the queue writer failed and left the queue at ${queue.digest}`);
   }
   const report = childReport(completed, request.verb);
   const observed = queueRecords(after.bytes, 'the Seeds queue readback');
   if (request.verb === 'create') {
-    if (observed.length !== before.length + 1) fail(`queue readback divergence: create recorded ${observed.length - before.length} records, not exactly one`);
+    if (observed.length !== before.length + 1) failRefusal(`queue readback divergence: create recorded ${observed.length - before.length} records, not exactly one`);
     for (let position = 0; position < before.length; position += 1) {
-      if (observed[position].line !== before[position].line) fail(`queue readback divergence: create rewrote the existing record ${before[position].parsed.id}`);
+      if (observed[position].line !== before[position].line) failRefusal(`queue readback divergence: create rewrote the existing record ${before[position].parsed.id}`);
     }
     const appended = observed[observed.length - 1];
-    if (!text(report.id) || appended.parsed.id !== report.id) fail('queue readback divergence: the appended record is not the record the queue writer reported');
-    if (before.some((entry) => entry.parsed.id === report.id)) fail(`queue readback divergence: create reused the existing id ${report.id}`);
+    if (!text(report.id) || appended.parsed.id !== report.id) failRefusal('queue readback divergence: the appended record is not the record the queue writer reported');
+    if (before.some((entry) => entry.parsed.id === report.id)) failRefusal(`queue readback divergence: create reused the existing id ${report.id}`);
     const createdAt = isoTimestamp(appended.parsed.createdAt, 'createdAt');
     const updatedAt = isoTimestamp(appended.parsed.updatedAt, 'updatedAt');
-    if (createdAt !== updatedAt) fail('queue readback divergence: a created record must carry one exact timestamp');
+    if (createdAt !== updatedAt) failRefusal('queue readback divergence: a created record must carry one exact timestamp');
     if (JSON.stringify(expectedCreatedRecord(report.id, request.flags, createdAt, updatedAt)) !== appended.line) {
-      fail('queue readback divergence: the recorded fields are not exactly the requested fields');
+      failRefusal('queue readback divergence: the recorded fields are not exactly the requested fields');
     }
   } else {
-    if (observed.length !== before.length) fail('queue readback divergence: update changed the queue record count');
+    if (observed.length !== before.length) failRefusal('queue readback divergence: update changed the queue record count');
     for (let position = 0; position < before.length; position += 1) {
       if (position === index || observed[position].line === before[position].line) continue;
-      fail(`queue readback divergence: update rewrote the untouched record ${before[position].parsed.id}`);
+      failRefusal(`queue readback divergence: update rewrote the untouched record ${before[position].parsed.id}`);
     }
     const changed = observed[index];
-    if (changed.parsed.id !== request.id) fail(`queue readback divergence: update moved ${request.id} within the queue`);
-    if (!object(report.issue) || report.issue.id !== request.id) fail('queue readback divergence: the queue writer reported a different record');
+    if (changed.parsed.id !== request.id) failRefusal(`queue readback divergence: update moved ${request.id} within the queue`);
+    if (!object(report.issue) || report.issue.id !== request.id) failRefusal('queue readback divergence: the queue writer reported a different record');
     const updatedAt = isoTimestamp(changed.parsed.updatedAt, 'updatedAt');
     if (Date.parse(updatedAt) < Date.parse(isoTimestamp(before[index].parsed.updatedAt, 'prestate updatedAt'))) {
-      fail('queue readback divergence: update moved the record timestamp backwards');
+      failRefusal('queue readback divergence: update moved the record timestamp backwards');
     }
     if (JSON.stringify(expectedUpdatedRecord(before[index].parsed, request.flags, updatedAt)) !== changed.line) {
-      fail('queue readback divergence: the recorded fields are not exactly the requested fields');
+      failRefusal('queue readback divergence: the recorded fields are not exactly the requested fields');
     }
   }
-  const surfaceAfter = queueSurface(directory);
   assertUnchangedQueue(surfaceBefore, surfaceAfter, 'queue readback divergence');
   assertBoundedPlanCascade(directory, plansBefore, surfaceBefore, surfaceAfter, request.id, request.flags.has('--status'));
   const recorded = request.verb === 'create' ? report.id : request.id;
@@ -1492,29 +1629,65 @@ function parse(argv) {
   if (argv[0] === 'bootstrap' && argv.length === 3 && argv[1] === '--distribution') return { mode: 'bootstrap', distribution: argv[2] };
   if (argv[0] === 'inspect' && argv.length >= 4 && argv[1] === '--target') return { mode: 'inspect', target: argv[2], args: argv.slice(3) };
   if (argv[0] === 'record') {
-    if (argv.length < 8 || argv[1] !== '--target' || argv[3] !== '--queue-writer' || argv[5] !== '--expect-queue') fail(HELP);
+    if (argv.length < 8 || argv[1] !== '--target' || argv[3] !== '--queue-writer' || argv[5] !== '--expect-queue') failGrammar(HELP);
     if (argv[4] !== QUEUE_WRITER) {
-      fail(`Seeds record admits only the sole queue writer: pass --queue-writer ${QUEUE_WRITER}, never ${argv[4]}`);
+      failGrammar(`Seeds record admits only the sole queue writer: pass --queue-writer ${QUEUE_WRITER}, never ${argv[4]}`);
     }
     const expected = argv[6];
     const args = argv.slice(7);
     if (args[0] === 'init') {
-      if (expected !== INIT_EXPECTATION || args.length !== 1) fail('Seeds init requires exactly --queue-writer conductor --expect-queue absent init');
+      if (expected !== INIT_EXPECTATION || args.length !== 1) failGrammar('Seeds init requires exactly --queue-writer conductor --expect-queue absent init');
       return { mode: 'init', target: argv[2] };
     }
     return { mode: 'record', target: argv[2], expected, args };
   }
-  fail(HELP);
+  failGrammar(HELP);
+}
+
+// The single point where a code is derived, and the reason a raise site's class is a floor rather
+// than the verdict. Two inputs, and the rule between them is escalate-only:
+//
+//   1. THE LEDGER IS THE FLOOR. Once a surface may have moved and nothing has proven it did not, no
+//      refusal may exit as a grammar verdict, a clean pre-effect refusal, or an internal failure,
+//      because on disk the result is partial or unknown. Decision 9's 4 is the only honest answer,
+//      and the escalation NAMES what is unproven rather than replacing the refusal's own message.
+//   2. A RAISE SITE MAY ONLY ESCALATE. `failEffectUnknown` still reports over an empty ledger, for
+//      the case this launcher observes but did not cause. What no site can do any more is claim a
+//      clean refusal over something that already happened.
+function reportFailure(error) {
+  if (!(error instanceof LauncherError)) {
+    // Not a classified refusal: a launcher bug, and Decision 9's 1 rather than the 2 every throw in
+    // this file used to collapse onto. The ledger outranks even this branch: an unclassified throw
+    // raised after the queue writer started still cannot claim less than an unknown effect.
+    process.stderr.write(`launcher failure: ${error?.message ?? error}\n`);
+    if (UNPROVEN_SURFACE !== null) {
+      process.stderr.write(`Seeds effect is unknown: this failure was raised after the queue writer started and nothing proved ${UNPROVEN_SURFACE} unchanged\n`);
+      return EXITS.effectUnknown;
+    }
+    return EXITS.internal;
+  }
+  process.stderr.write(`${error.message}\n`);
+  if (UNPROVEN_SURFACE === null || error.code === EXITS.effectUnknown) return error.code;
+  process.stderr.write(`Seeds effect is unknown: this refusal was raised after the queue writer started and nothing proved ${UNPROVEN_SURFACE} unchanged\n`);
+  return EXITS.effectUnknown;
 }
 
 try {
-  exactLauncherNode();
-  const command = parse(process.argv.slice(2));
-  if (command.mode === 'bootstrap') bootstrap(command.distribution);
-  else if (command.mode === 'init') initialize(command.target);
-  else if (command.mode === 'record') record(command.target, command.expected, command.args);
-  else inspect(command.target, command.args);
+  const argv = process.argv.slice(2);
+  // A help request performs nothing, so it is answered before the executing-Node admission: a query
+  // cannot honestly fail on a capability it never uses, and an operator who needs the usage line is
+  // usually the operator who does not yet have the exact Node.
+  if (argv.length === 1 && HELP_FLAGS.has(argv[0])) {
+    process.stdout.write(`${HELP}\n`);
+    process.exitCode = EXITS.ok;
+  } else {
+    exactLauncherNode();
+    const command = parse(argv);
+    if (command.mode === 'bootstrap') bootstrap(command.distribution);
+    else if (command.mode === 'init') initialize(command.target);
+    else if (command.mode === 'record') record(command.target, command.expected, command.args);
+    else inspect(command.target, command.args);
+  }
 } catch (error) {
-  process.stderr.write(`${error instanceof LauncherError ? error.message : `launcher failure: ${error.message}`}\n`);
-  process.exitCode = 2;
+  process.exitCode = reportFailure(error);
 }

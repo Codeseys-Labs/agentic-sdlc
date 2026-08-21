@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -373,13 +374,13 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
 
         self.write_superseded_tuple_receipt()
         refused = self.launcher("inspect", "--target", str(self.target), "prime")
-        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.returncode, 3, refused.stderr)
         self.assertIn("partial or invalid", refused.stderr)
         self.assertFalse(self.bun_log.exists())
         # The conductor's write seam inherits every inspect admission: only bootstrap gained the
         # supersede path, because only bootstrap establishes a tuple.
         writer = self.launcher("record", "--target", str(self.target), "--queue-writer", "conductor", "--expect-queue", "absent", "init")
-        self.assertNotEqual(writer.returncode, 0)
+        self.assertEqual(writer.returncode, 3, writer.stderr)
         self.assertIn("partial or invalid", writer.stderr)
         self.assertFalse(self.bun_log.exists())
         self.assertFalse((self.target / ".seeds").exists())
@@ -693,6 +694,122 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self.assertIn("finally", windows)
         self.assertIn("$childStatus = $LASTEXITCODE", windows)
 
+    def test_help_is_a_valid_query_at_zero_and_a_grammar_error_is_two(self) -> None:
+        """Implementation Decision 9's 0 for `--help`, its 2 for every request that is not one.
+
+        Before `agentic-sdlc-5a69` a help request exited 2 -- the launcher reported a question as a
+        grammar error, because every throw in the file collapsed onto one code.
+        """
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                helped = self.launcher(flag)
+                self.assertEqual(helped.returncode, 0, helped.stderr)
+                self.assertIn("usage: seeds-launcher.mjs", helped.stdout)
+                self.assertEqual(helped.stderr, "", "a query writes no diagnostic")
+                self.assertFalse(self.active_receipt_path().exists(), "a query publishes nothing")
+        # The positive control for the same comparison: the identical usage text, on stderr, at 2.
+        # Without it "help exits 0" could pass on a launcher that exits 0 for everything.
+        for name, args in {
+            "unknown verb": ("zzz-not-a-verb",),
+            "no request at all": (),
+            "record without its admitted shape": ("record", "--target", str(self.target)),
+        }.items():
+            with self.subTest(request=name):
+                refused = self.launcher(*args)
+                self.assertEqual(refused.returncode, 2, refused.stderr)
+                self.assertIn("usage: seeds-launcher.mjs", refused.stderr)
+                self.assertEqual(refused.stdout, "")
+        # A help flag beside a verb and a target is a request, not a question, so it stays a grammar
+        # error and prints no usage on stdout.
+        beside = self.launcher("inspect", "--target", str(self.target), "--help")
+        self.assertEqual(beside.returncode, 2, beside.stderr)
+        self.assertEqual(beside.stdout, "")
+        self.assertIn("Seeds inspect accepts only", beside.stderr)
+        # The positive control for "a query publishes nothing": the same path the assertions above
+        # found absent is the one a real bootstrap fills, so those were measurements of the receipt
+        # rather than of a misspelled path.
+        self.assertEqual(self.bootstrap().returncode, 0)
+        self.assertTrue(self.active_receipt_path().exists())
+
+    @unittest.skipIf(HOSTILE_NODE is None, "a second, non-22.23.2 Node is required")
+    def test_help_answers_before_the_executing_node_admission(self) -> None:
+        """A query cannot honestly fail on a capability it never uses.
+
+        The operator who most needs the usage line is the one who has not yet got the exact Node, and
+        printing a string starts no child. Every other verb still refuses that interpreter.
+        """
+        helped = subprocess.run([HOSTILE_NODE, str(LAUNCHER), "--help"], text=True, capture_output=True, env=self.environment(), check=False)
+        self.assertEqual(helped.returncode, 0, helped.stderr)
+        self.assertIn("usage: seeds-launcher.mjs", helped.stdout)
+        # Positive control on the same interpreter: a real verb is still refused by it, at 3, so this
+        # is not a test that the wrong Node became acceptable.
+        refused = subprocess.run([HOSTILE_NODE, str(LAUNCHER), "inspect", "--target", str(self.target), "prime"], text=True, capture_output=True, env=self.environment(), check=False)
+        self.assertEqual(refused.returncode, 3, refused.stderr)
+        self.assertIn("launcher Node version mismatch", refused.stderr)
+
+    def test_a_clean_pre_effect_refusal_is_three_and_supplied_input_stays_two(self) -> None:
+        """The two codes SP-1 found indistinguishable, driven on one fixture.
+
+        Every case below refuses before any surface moves. What separates them is whose mistake it
+        is: a value the caller typed is input (2), and state the launcher recorded or discovered is
+        the world (3).
+        """
+        no_receipt = self.launcher("inspect", "--target", str(self.target), "prime")
+        self.assertEqual(no_receipt.returncode, 3, no_receipt.stderr)
+        self.assertIn("active tuple receipt is missing or corrupt", no_receipt.stderr)
+
+        self.assertEqual(self.bootstrap().returncode, 0)
+        supplied_missing = self.launcher("inspect", "--target", str(self.root / "no such target"), "prime")
+        self.assertEqual(supplied_missing.returncode, 2, supplied_missing.stderr)
+        self.assertIn("Seeds target is unavailable", supplied_missing.stderr)
+
+        bad_verb = self.launcher("inspect", "--target", str(self.target), "create", "no")
+        self.assertEqual(bad_verb.returncode, 2, bad_verb.stderr)
+        self.assertIn("Seeds inspect accepts only", bad_verb.stderr)
+
+        entry = self.seeds_root / "lib" / "node_modules" / "@os-eco" / "seeds-cli" / "src" / "index.ts"
+        pristine_entry = entry.read_bytes()
+        entry.write_text("drifted\n", encoding="utf-8")
+        drift = self.launcher("inspect", "--target", str(self.target), "prime")
+        self.assertEqual(drift.returncode, 3, drift.stderr)
+        self.assertIn("drift", drift.stderr)
+        entry.write_bytes(pristine_entry)
+
+        (self.distribution / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
+        self._run(["git", "add", "dirty.txt"], cwd=self.distribution)
+        dirty = self.bootstrap()
+        self.assertEqual(dirty.returncode, 3, dirty.stderr)
+        self.assertIn("clean Git tree and index", dirty.stderr)
+
+        missing_distribution = self.launcher("bootstrap", "--distribution", str(self.root / "no such distribution"))
+        self.assertEqual(missing_distribution.returncode, 2, missing_distribution.stderr)
+        self.assertIn("reviewed distribution is unavailable", missing_distribution.stderr)
+
+    def test_the_exit_vocabulary_has_exactly_one_derivation_point(self) -> None:
+        """A source pin, because the defect SP-1 recorded was structural, not behavioural.
+
+        The launcher exited 2 from one catch-all `process.exitCode = 2`, and no per-case test can
+        keep a future site from reaching for a literal. So: every code the launcher chooses for
+        itself is an `EXITS` member, and every raise states its class.
+        """
+        source = LAUNCHER.read_text(encoding="utf-8")
+        self.assertEqual(
+            sorted(set(re.findall(r"process\.exitCode = ([^;]+);", source))),
+            ["EXITS.ok", "EXITS.refusal", "code === null ? EXITS.internal : code", "reportFailure(error)"],
+        )
+        self.assertEqual(sorted(set(re.findall(r"return (EXITS\.[a-zA-Z]+);", source))), ["EXITS.effectUnknown", "EXITS.internal"])
+        for spelling in ("failGrammar", "failRefusal", "failEffectUnknown", "failInternal"):
+            with self.subTest(spelling=spelling):
+                self.assertIn(f"function {spelling}(message) {{\n  throw new LauncherError(EXITS.", source)
+        # Exactly four `LauncherError` constructions exist: one per class, all inside those four
+        # helpers, so no site can construct an unclassified refusal.
+        self.assertEqual(len(re.findall(r"new LauncherError\(", source)), 4)
+        unclassified = r"(?<![A-Za-z_])fail\("
+        self.assertNotRegex(source, unclassified)
+        # Positive control: the same pattern DOES see a bare `fail(`, so the assertion above is a
+        # measurement rather than a regex that can never match.
+        self.assertRegex("  if (broken) fail('a refusal with no class');", unclassified)
+
 
 @unittest.skipIf(NODE is None or os.name == "nt", "exact Node and POSIX fixture executables are required")
 class SeedsRecordTests(LauncherFixture, unittest.TestCase):
@@ -931,7 +1048,9 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
                 mutation()
                 self.install_exact_initializer()
                 refused = self.init()
-                self.assertNotEqual(refused.returncode, 0)
+                # An occupied `.seeds` is discovered state, refused before the initializer starts:
+                # Decision 9's 3, and the `assertFalse` below is the same statement about the writer.
+                self.assertEqual(refused.returncode, 3, refused.stderr)
                 self.assertIn("absent .seeds", refused.stderr)
                 self.assertFalse(self.bun_log.exists())
 
@@ -1112,7 +1231,10 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
             "sys.exit(7)\n"
         )
         unknown = self.init()
-        self.assertNotEqual(unknown.returncode, 0)
+        # Decision 9's 4: the initializer failed after moving the surface, so the effect is admitted
+        # and unknown. This exact code is what `agentic-sdlc-5a69` gave the distinction the prose
+        # already drew; before it, this and the clean refusal below were both 2.
+        self.assertEqual(unknown.returncode, 4, unknown.stderr)
         self.assertIn("effect is unknown", unknown.stderr)
 
         shutil.rmtree(self.seeds)
@@ -1121,7 +1243,9 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
         original_attributes = attributes.read_bytes()
         self.install_queue_writer("sys.exit(7)\n")
         clean = self.init()
-        self.assertNotEqual(clean.returncode, 0)
+        # The paired control on the same fixture and the same failing writer: nothing moved, so this
+        # is Decision 9's 3 and NOT 4. The pair is what makes each number mean something.
+        self.assertEqual(clean.returncode, 3, clean.stderr)
         self.assertIn("left .seeds and .gitattributes unchanged", clean.stderr)
         self.assertNotIn("effect is unknown", clean.stderr)
         self.assertFalse(self.seeds.exists())
@@ -1264,7 +1388,8 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
         self.write_records(self.issues, [self.seed("fixture-0000"), self.seed("fixture-0002")])
         current = self.issues.read_bytes()
         refused = self.record("create", "--title", "raced", expect=stale)
-        self.assertNotEqual(refused.returncode, 0)
+        # A prestate that moved under the conductor is the world, refused before the writer: 3.
+        self.assertEqual(refused.returncode, 3, refused.stderr)
         self.assertIn("compare-and-swap refused", refused.stderr)
         self.assertIn(stale, refused.stderr)
         self.assertIn(self.digest(), refused.stderr)
@@ -1272,7 +1397,9 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
         for expected in ("", "not-a-digest", "abc", stale.upper(), f"{stale}0"):
             with self.subTest(expected=expected):
                 malformed = self.record("create", "--title", "raced", expect=expected)
-                self.assertNotEqual(malformed.returncode, 0)
+                # The paired control: a `--expect-queue` value that is not a digest at all is the
+                # caller's spelling, so it is 2 where the drift above is 3.
+                self.assertEqual(malformed.returncode, 2, malformed.stderr)
                 self.assertIn("exact sha256", malformed.stderr)
                 self.assertEqual(self.issues.read_bytes(), current)
 
@@ -1341,13 +1468,17 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
             "updatedAt": "2026-08-01T00:00:00.000Z",
         }
         unrelated = {**plan, "id": "plan-0002", "children": ["fixture-9999"]}
+        # Every divergence here is observed AFTER the queue writer moved both issues.jsonl and
+        # plans.jsonl, so Decision 9's honest code is 4 (an admitted effect this launcher will not
+        # vouch for), not the 2 these five cases pinned while every refusal in the launcher collapsed
+        # onto one number. `agentic-sdlc-5a69` flipped them deliberately; 0 is unchanged.
         cascades = {
             "owning plan status and timestamp": ("plans[0].update(status='active', updatedAt=now)\n", 0),
-            "plan that owns nothing here": ("plans[1].update(status='active', updatedAt=now)\n", 2),
-            "plan children rewritten": ("plans[0].update(status='active', updatedAt=now, children=['fixture-0001', 'smuggled'])\n", 2),
-            "plan title rewritten": ("plans[0].update(status='active', updatedAt=now, title='renamed')\n", 2),
-            "plan invented": ("plans.append({**plans[0], 'id': 'plan-0003'})\n", 2),
-            "plan status not a status": ("plans[0].update(status='smuggled', updatedAt=now)\n", 2),
+            "plan that owns nothing here": ("plans[1].update(status='active', updatedAt=now)\n", 4),
+            "plan children rewritten": ("plans[0].update(status='active', updatedAt=now, children=['fixture-0001', 'smuggled'])\n", 4),
+            "plan title rewritten": ("plans[0].update(status='active', updatedAt=now, title='renamed')\n", 4),
+            "plan invented": ("plans.append({**plans[0], 'id': 'plan-0003'})\n", 4),
+            "plan status not a status": ("plans[0].update(status='smuggled', updatedAt=now)\n", 4),
         }
         for name, (mutation, expected_code) in cascades.items():
             with self.subTest(cascade=name):
@@ -1586,6 +1717,100 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
         result = self.record("create", "--title", "a finding")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.read_records(self.issues)), 1)
+
+    def test_record_splits_an_unknown_effect_from_a_clean_refusal_on_one_fixture(self) -> None:
+        """SP-1's prescribed pair: the SAME failing writer, once after moving the queue and once not.
+
+        Before `agentic-sdlc-5a69` both exited 2 and so did an argument typo, which is the whole
+        defect: the launcher's prose distinguished an unknown effect from a clean refusal and no exit
+        code carried the distinction.
+        """
+        self.write_records(self.issues, [self.seed("fixture-0000")])
+        pristine = self.issues.read_bytes()
+        expected = self.digest()
+
+        self.install_queue_writer(
+            "store(issues, load(issues) + [{'id': 'fixture-0001', 'title': 'partial', 'status': 'open',\n"
+            "  'type': 'task', 'priority': 2, 'createdAt': '2026-08-02T00:00:00.000Z',\n"
+            "  'updatedAt': '2026-08-02T00:00:00.000Z'}])\n"
+            "sys.exit(7)\n"
+        )
+        unknown = self.record("create", "--title", "a finding", expect=expected)
+        self.assertEqual(unknown.returncode, 4, unknown.stderr)
+        self.assertIn("effect is unknown", unknown.stderr)
+        # The refusal names the digest the queue actually reached, so the conductor can decide against
+        # a real number rather than a guess.
+        self.assertIn(sha256(self.issues.read_bytes()).hexdigest(), unknown.stderr)
+        self.assertNotEqual(self.issues.read_bytes(), pristine)
+        # Never the child's own status: the writer exited 7 and the launcher translated it.
+        self.assertNotEqual(unknown.returncode, 7)
+
+        self.issues.write_bytes(pristine)
+        self.install_queue_writer("sys.exit(7)\n")
+        clean = self.record("create", "--title", "a finding", expect=expected)
+        self.assertEqual(clean.returncode, 3, clean.stderr)
+        self.assertIn(f"left the queue at {expected}", clean.stderr)
+        self.assertNotIn("effect is unknown", clean.stderr)
+        self.assertEqual(self.issues.read_bytes(), pristine, "a clean refusal leaves the queue byte-identical")
+
+    def test_record_escalates_a_readback_divergence_over_a_moved_queue_to_an_unknown_effect(self) -> None:
+        """A divergence found AFTER the writer succeeded is an admitted effect, not a clean refusal.
+
+        The queue moved; the launcher simply will not vouch for what it became. Saying 3 there --
+        Decision 9's "clean refusal before effect" -- would be a false statement about the disk.
+        """
+        self.write_records(self.issues, [self.seed("fixture-0000")])
+        self.install_queue_writer(
+            "now = '2026-08-02T00:00:00.000Z'\n"
+            "records = load(issues)\n"
+            "records[0] = {**records[0], 'title': 'smuggled'}\n"
+            "records.append({'id': 'fixture-0001', 'title': 'a finding', 'status': 'open', 'type': 'task',\n"
+            "                'priority': 2, 'createdAt': now, 'updatedAt': now})\n"
+            "store(issues, records)\n"
+            "print(json.dumps({'success': True, 'command': 'create', 'id': 'fixture-0001'}))\n"
+        )
+        refused = self.record("create", "--title", "a finding")
+        self.assertEqual(refused.returncode, 4, refused.stderr)
+        self.assertIn("queue readback divergence", refused.stderr)
+        self.assertIn("effect is unknown", refused.stderr)
+
+        # Positive control on the same assertion: a refusal raised BEFORE the writer starts still
+        # reports 3, so the escalation is bound to a possible effect and is not a blanket 4.
+        self.tearDown()
+        self.setUp()
+        self.install_exact_queue_writer()
+        self.issues.write_text(json.dumps(self.seed("fixture-0000"), indent=None) + "\n", encoding="utf-8")
+        pristine = self.issues.read_bytes()
+        prestate = self.record("create", "--title", "a finding")
+        self.assertEqual(prestate.returncode, 3, prestate.stderr)
+        self.assertNotIn("effect is unknown", prestate.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertEqual(self.issues.read_bytes(), pristine)
+
+    def test_record_reports_an_unknown_effect_when_a_failed_writer_moved_only_a_sibling_queue_file(self) -> None:
+        """The queue the conductor named is byte-identical and something still happened.
+
+        A writer that fails after rewriting `config.yaml` has had an effect, so comparing only
+        `issues.jsonl` would let the launcher claim a clean refusal over a changed queue directory.
+        """
+        self.write_records(self.issues, [self.seed("fixture-0000")])
+        pristine = self.issues.read_bytes()
+        self.install_queue_writer(
+            "(issues.parent / 'config.yaml').write_text('project: hijacked\\n')\n"
+            "sys.exit(7)\n"
+        )
+        refused = self.record("create", "--title", "a finding")
+        self.assertEqual(refused.returncode, 4, refused.stderr)
+        self.assertIn("effect is unknown", refused.stderr)
+        self.assertEqual(self.issues.read_bytes(), pristine, "the queue itself never moved")
+
+        # Positive control: the same failing writer that touches nothing at all is still 3, so this
+        # is the sibling file being noticed rather than every failed writer becoming a 4.
+        (self.seeds / "config.yaml").write_text("project: fixture\nversion: '1'\n", encoding="utf-8")
+        self.install_queue_writer("sys.exit(7)\n")
+        clean = self.record("create", "--title", "a finding")
+        self.assertEqual(clean.returncode, 3, clean.stderr)
+        self.assertNotIn("effect is unknown", clean.stderr)
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows launcher fixture")
