@@ -85,6 +85,39 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi
 
+# Exit vocabulary for the executed (non-sourced) preflight check, kept in one derivation
+# point so a later change cannot silently reintroduce Decision 9's 1-versus-5 confusion.
+EXIT_OK=0
+EXIT_INTERNAL=1
+EXIT_USAGE=2
+# The check ran to completion and named at least one missing required prerequisite.
+# Deliberately outside the reserved 0-4 block, exactly as `scripts/gate_baseline.py`'s
+# `EXIT_WORSENED` is: "I checked, and something is missing" is not "I failed to check",
+# so it may never collide with EXIT_INTERNAL.
+EXIT_MISSING=5
+
+case "${1:-}" in
+  --help|-h)
+    cat <<'USAGE'
+usage: check-agentic-sdlc-prereqs.sh [--help]
+
+Read-only preflight check for the agentic-sdlc kit. Prints each prerequisite's state and
+exits:
+  0  every required prerequisite is present
+  2  an unrecognized argument was supplied (this check takes none besides --help)
+  5  the check completed and named at least one MISSING required prerequisite
+  1  reserved for a real internal failure of the check itself, never a named outcome
+USAGE
+    exit "$EXIT_OK"
+    ;;
+  '') ;;
+  *)
+    printf 'unknown argument: %s\n' "$1" >&2
+    printf 'usage: check-agentic-sdlc-prereqs.sh [--help]\n' >&2
+    exit "$EXIT_USAGE"
+    ;;
+esac
+
 missing=0
 req() {
   if command -v "$1" >/dev/null 2>&1; then printf 'ok:       %s\n' "$1"
@@ -125,4 +158,8 @@ fi
 opt tmux "session/view backend skipped; native orchestration is unaffected"
 opt cmux "view/event adapter skipped; native orchestration is unaffected"
 if command -v cmux >/dev/null 2>&1 && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then printf 'optional: active cmux view/event adapter detected\n'; fi
-exit "$missing"
+if [ "$missing" -eq 0 ]; then
+  exit "$EXIT_OK"
+else
+  exit "$EXIT_MISSING"
+fi

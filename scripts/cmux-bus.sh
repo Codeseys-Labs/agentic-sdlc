@@ -19,12 +19,37 @@
 #     — --limit N waits for N real EVENT frames (ack doesn't count) and hangs on an idle bus.
 #   * Frames cap at 16KiB: put big payloads in a FILE, publish the path (claim-check).
 #   * Capture seq BEFORE spawning workers; subscribe --after <seq>; dedupe (replay re-delivers).
+# Exit vocabulary, one derivation point:
+#   0  a valid query (--help) or a completed publish/seq/sub
+#   2  a grammar error (unknown mode, missing topic/message) -- left exactly as measured
+#   3  a clean refusal before any effect: cmux is absent, or this process is not inside cmux
+#   6  `pub`'s one real effect (the `cmux log` call) was attempted and failed. Named rather than
+#      mirrored: `cmux log`'s own exit status belongs to an arbitrary external CLI and can
+#      collide with this wrapper's own clean-refusal 3 (a `cmux log` that itself exits 3 would
+#      otherwise be byte-identical to a refusal that never touched the bus at all) -- the same
+#      collision gate_receipt.py's exit-code block names for a gate's own exit code, with the
+#      same fix: 6 sits outside the reserved 0-4 block precisely so it can report an observed-
+#      but-not-passed-through child result. Translated (not merely documented) per the
+#      decision9 survey's SP-5 REMEDIATION.
 set -u
 
-command -v cmux >/dev/null 2>&1 || { echo "cmux-bus: cmux CLI not on PATH." >&2; exit 1; }
-[ -n "${CMUX_WORKSPACE_ID:-}" ] || { echo "cmux-bus: not inside cmux (CMUX_WORKSPACE_ID unset)." >&2; exit 0; }
+EXIT_OK=0
+EXIT_REFUSED=3
+EXIT_PUBLISH_FAILED=6
 
 MODE="${1:-}"; shift 2>/dev/null || true
+
+# The help/no-mode query is a 0-class read of this file's own header and must be reachable
+# on a host with no cmux CLI and no CMUX_WORKSPACE_ID -- it asks nothing of either.
+case "$MODE" in
+  ""|-h|--help|help)
+    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+    exit "$EXIT_OK"
+    ;;
+esac
+
+command -v cmux >/dev/null 2>&1 || { echo "cmux-bus: cmux CLI not on PATH." >&2; exit "$EXIT_REFUSED"; }
+[ -n "${CMUX_WORKSPACE_ID:-}" ] || { echo "cmux-bus: not inside cmux (CMUX_WORKSPACE_ID unset)." >&2; exit "$EXIT_REFUSED"; }
 
 case "$MODE" in
   pub)
@@ -33,7 +58,10 @@ case "$MODE" in
     MSG="$*"
     [ -n "$MSG" ] || { echo "cmux-bus pub: need a message" >&2; exit 2; }
     B64="$(printf '%s' "$MSG" | base64 | tr -d '\n')"
-    cmux log --level info --source "msg:$TOPIC" "MSGB64:$B64" >/dev/null 2>&1
+    if ! cmux log --level info --source "msg:$TOPIC" "MSGB64:$B64" >/dev/null 2>&1; then
+      echo "cmux-bus pub: cmux log failed" >&2
+      exit "$EXIT_PUBLISH_FAILED"
+    fi
     ;;
   seq)
     timeout 3 cmux events --no-heartbeat 2>/dev/null | head -1 | python3 -c \
@@ -67,9 +95,6 @@ for line in sys.stdin:
     sys.stdout.write("%s\t%s\t%s\n" % (e.get("seq",""), topic, msg))
     sys.stdout.flush()
 ' "$TOPIC"
-    ;;
-  ""|-h|--help|help)
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
     echo "cmux-bus: unknown mode '$MODE' (pub|sub|seq)" >&2; exit 2

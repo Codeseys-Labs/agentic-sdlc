@@ -672,6 +672,66 @@ class ExactRuntimeWrapperTests(unittest.TestCase):
             self.calls_read(),
         )
 
+    def test_help_exits_zero_without_running_the_check(self) -> None:
+        # Positive control for test_unknown_argument_is_a_grammar_error: a query that IS
+        # recognized reaches 0, not 2, and never starts the exact-node front door.
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "--help"],
+            cwd=self.target,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+        self.assertNotIn("ok:", result.stdout)
+        self.assertNotIn("locked Seeds", result.stdout)
+        self.assertEqual(self.calls_read(), [])
+
+    def test_unknown_argument_is_a_grammar_error(self) -> None:
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "--zzz-not-a-flag"],
+            cwd=self.target,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("unknown argument", result.stderr)
+        self.assertEqual(self.calls_read(), [])
+
+    def test_completed_check_naming_a_missing_prerequisite_is_not_the_internal_failure_code(self) -> None:
+        # The negative half: a completed, read-only check that names a MISSING prerequisite
+        # must not collide with Decision 9's unexpected-internal-failure code (1).
+        result = subprocess.run(
+            [BASH, str(SCRIPT)],
+            cwd=self.target,
+            env=self.environment(AGENTIC_SDLC_LAUNCHER=str(self.root / "no-such-launcher.mjs")),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertNotEqual(result.returncode, 1)
+        self.assertIn("MISSING: installed flagship Seeds launcher", result.stderr)
+
+    def test_completed_check_with_nothing_missing_stays_zero(self) -> None:
+        # Positive control for the previous test: the same code path (missing == 0 branch)
+        # still answers 0 when nothing is actually missing, so the mapping distinguishes two
+        # real states rather than just banning the number 1.
+        result = subprocess.run(
+            [BASH, str(SCRIPT)],
+            cwd=self.target,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("locked Seeds 0.5.15 active receipt", result.stdout)
+
 
 @unittest.skip("replaced by receipt-based installed launcher fixtures")
 class PreflightCapabilityTests(unittest.TestCase):

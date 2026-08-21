@@ -36,6 +36,16 @@ class OperatorToolsError(RuntimeError):
     pass
 
 
+class HostPreconditionError(OperatorToolsError):
+    """A fact about the HOST (not the caller's argv) blocks the requested lifecycle action.
+
+    Decision 9 reserves 2 for a grammar/schema/input error and 3 for a clean refusal before
+    effect. `bin_dir` being absent from PATH is nothing the caller typed wrong -- it is a
+    fact about this host's shell -- so it is one derivation point away from every other
+    `OperatorToolsError` (main()'s `except` clauses below), which stay 2.
+    """
+
+
 @dataclass(frozen=True)
 class Config:
     repo_root: Path
@@ -156,7 +166,7 @@ def validate_bin_dir(config: Config) -> None:
     if bin_dir == Path(bin_dir.anchor) or bin_dir == config.repo_root or config.repo_root in bin_dir.parents:
         raise OperatorToolsError(f"unsafe operator-tools bin directory: {bin_dir}")
     if config.require_path and os.path.normcase(str(bin_dir)) not in path_entries():
-        raise OperatorToolsError(
+        raise HostPreconditionError(
             f"operator-tools bin directory is not on PATH: {bin_dir}; {path_guidance(bin_dir)}"
         )
     current = bin_dir
@@ -499,7 +509,6 @@ def commit_pending(config: Config, state: dict[str, object]) -> None:
 
 
 def _install(config: Config) -> tuple[int, list[str]]:
-    validate_bin_dir(config)
     desired = desired_files(config)
     state = load_state(config.state_path, config)
     messages: list[str] = []
@@ -553,6 +562,11 @@ def _install(config: Config) -> tuple[int, list[str]]:
 
 
 def install(config: Config) -> tuple[int, list[str]]:
+    # validate_bin_dir() runs BEFORE the lock is even taken, so a host precondition refusal
+    # never creates the lock file or its parent directories -- lifecycle_lock() itself is an
+    # effect (durable_mkdir + O_CREAT), and admitting it before the precondition check would
+    # make the "before any effect" refusal untrue.
+    validate_bin_dir(config)
     with lifecycle_lock(config):
         return _install(config)
 
@@ -612,7 +626,6 @@ def _status(config: Config) -> tuple[int, list[str]]:
 
 
 def _retire_aliases(config: Config) -> tuple[int, list[str]]:
-    validate_bin_dir(config)
     state = load_state(config.state_path, config)
     messages: list[str] = []
     if state.get("pending") is not None:
@@ -661,6 +674,8 @@ def _retire_aliases(config: Config) -> tuple[int, list[str]]:
 
 
 def retire_aliases(config: Config) -> tuple[int, list[str]]:
+    # See install()'s comment: the precondition check must precede lifecycle_lock() itself.
+    validate_bin_dir(config)
     with lifecycle_lock(config):
         return _retire_aliases(config)
 
@@ -902,7 +917,6 @@ def status(config: Config) -> tuple[int, list[str]]:
 
 
 def _uninstall(config: Config) -> tuple[int, list[str]]:
-    validate_bin_dir(config)
     state = load_state(config.state_path, config)
     messages: list[str] = []
     if state.get("pending") is not None:
@@ -936,6 +950,8 @@ def _uninstall(config: Config) -> tuple[int, list[str]]:
 
 
 def uninstall(config: Config) -> tuple[int, list[str]]:
+    # See install()'s comment: the precondition check must precede lifecycle_lock() itself.
+    validate_bin_dir(config)
     with lifecycle_lock(config):
         return _uninstall(config)
 
@@ -1015,6 +1031,12 @@ def main(argv: list[str] | None = None) -> int:
                 "retire-aliases": retire_aliases,
                 "uninstall": uninstall,
             }[args.command](config)
+        except HostPreconditionError as exc:
+            # Decision 9's clean-refusal-before-effect class: this exact exception type is
+            # raised only from validate_bin_dir(), before any of the four verbs above has
+            # written anything, so no effect boundary is crossed by reporting it here.
+            print(f"fatal: {exc}", file=sys.stderr)
+            return 3
         except OperatorToolsError as exc:
             print(f"fatal: {exc}", file=sys.stderr)
             return 2

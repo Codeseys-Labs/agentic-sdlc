@@ -140,10 +140,10 @@ for that surface by construction, not that it went unprobed.
 | 38 | **`skills/agentic-sdlc/tools/activation-planner.py`** | 0 | 2 | **1 (`status` traceback; `plan`/`apply` emit `status:refused, effect:none, exit_code:1`)** | 3, 4 exist but 86 certain + 2 indeterminate of 315 raise sites land on 1 | **NONCONFORMING** (SP-2), closed by `agentic-sdlc-3d9a` |
 | 39 | `scripts/provision_mermaid_linux.py` | 0 (`--help` prints usage and provisions nothing; **was** a 358 MiB browser + `node_modules` download at 0) | 2 (**was** none — argv ignored) | — (accepts no arguments) | 3 pre-effect, 4 at or after `npm ci` (**was** neither) | **CONFORMING** (closed by `agentic-sdlc-bcdd`) |
 | 40 | `scripts/secrets_scan.py` | 0 (`--help`, and a clean scan; **was** the whole scan for `--help` and `--zzz-not-a-flag`) | 2 (**was** none — argv ignored) | 2 (a path over the scanner's argv ceiling) | 3 (missing pinned config, absent `betterleaks`, failed enumeration; **was** 2); a found leak stays 1 | **CONFORMING** (closed by `agentic-sdlc-bcdd`) |
-| 41 | **`scripts/check-agentic-sdlc-prereqs.sh`** | 0 only when nothing is missing | **none — argv ignored, so `--help` runs the check** | none | **1 for a completed check that names a MISSING prerequisite** | **NONCONFORMING** (SP-4) |
-| 42 | **`scripts/cmux-bus.sh`** | 0 | 2 | — | **1 for an absent `cmux`; 0 for "not inside cmux"; `cmux log`'s own code passed through** | **NONCONFORMING** (SP-5) |
-| 43 | **`scripts/manage_claude_statusline.py`** | 0 | 2 | 2 | **1 for all five read-only states** | **NONCONFORMING** (SP-6) |
-| 44 | **`scripts/install_operator_tools.py`** | 0 | 2 | 2 | **2 for a host precondition (`bin directory is not on PATH`)** | **NONCONFORMING** (SP-7) |
+| 41 | `scripts/check-agentic-sdlc-prereqs.sh` | 0 (nothing missing); `--help` prints usage and runs no check (was argv-ignored, so `--help` ran the check too) | 2 (`--zzz-not-a-flag`; was none — argv ignored) | none | 5 for a completed check that names a MISSING prerequisite (was 1) | CONFORMING (closed by agentic-sdlc-d259) |
+| 42 | `scripts/cmux-bus.sh` | 0 (`--help`/no-mode, now reachable without `cmux` on PATH; was unreachable without `cmux` and exited 1) | 2 | — | 3 for an absent `cmux`; 3 for "not inside cmux" (was 1 and a silent 0); a failed `cmux log` for `pub` now exits the named **6** (`EXIT_PUBLISH_FAILED`, outside the reserved block), never mirroring the child's own exit code (**was** mirrored, disclosed rather than translated) | CONFORMING (closed by agentic-sdlc-4d00; the `cmux log` translation landed under agentic-sdlc-d259) |
+| 43 | `scripts/manage_claude_statusline.py` | 0 | 2 | 2 | 0 for all five read-only states, distinguished in the returned message rather than the code (was 1) | CONFORMING (closed by agentic-sdlc-d0a4) |
+| 44 | `scripts/install_operator_tools.py` | 0 | 2 | 2 | 3 for the host precondition (`bin directory is not on PATH`), a new `HostPreconditionError` subclass so `main()` can tell it apart; 2 preserved for a genuine caller-input error (was 2 for both) | CONFORMING (closed by agentic-sdlc-92ff) |
 | 45 | **`skills/agentic-sdlc/tools/instruction-generator.py`** | 0 | 2 | **1 + traceback for a supplied-but-missing manifest** | — | **NONCONFORMING** (SP-8) |
 | 46 | **`scripts/render_mermaid_linux.py`** | **2 for `--help`, with no diagnostic at all** | 2 (silent) | 1 | 3 = unsupported platform | **NONCONFORMING** (SP-9) — help/grammar closed by `agentic-sdlc-61ce`; input axis still 1 (queued) |
 | 47 | `skills/agentic-sdlc/tools/offline-inspect.py` | 0 | 2 | 2 | **was 1 for a derived NOT_READY** | **FIXED HERE** (worked example) |
@@ -334,6 +334,18 @@ internal failure. Mutation tests both directions: a test asserting the missing-p
 NOT 1 must die when `:128` is reverted; the positive control drives a host where nothing is missing
 and asserts 0, so the assertion distinguishes two real states rather than asserting one number.
 
+REMEDIATION (2026-08-21, `agentic-sdlc-d259`): the fix shape above landed exactly as proposed. A
+`case "${1:-}"` block parses the grammar before the check runs: `--help`/`-h` prints usage and
+exits `EXIT_OK` (0) without touching a single prerequisite; any other supplied argument exits
+`EXIT_USAGE` (2) naming it; the completed check's own outcome moved from a bare `exit "$missing"`
+to an explicit `EXIT_OK`/`EXIT_MISSING` (5) split, with `EXIT_MISSING` documented in the same block
+as "deliberately outside the reserved 0-4 block, exactly as `scripts/gate_baseline.py`'s
+`EXIT_WORSENED` is." Two mutations were executed against the fixed file and reverted after: disabling
+the new grammar `case` block reproduced the old argv-ignored behavior and killed both the `--help`
+and the unknown-argument test; reverting the final `if`/`exit "$EXIT_MISSING"` back to `exit
+"$missing"` killed the missing-prerequisite test by reproducing exit 1. `tests/test_preflight_capabilities.py`'s `ExactRuntimeWrapperTests` carries the four new assertions
+(help, grammar, missing-prerequisite, and the nothing-missing positive control already present).
+
 ### SP-5 — `cmux-bus.sh` reports an absent dependency as 1 and a silent no-op as SUCCESS
 
 Title: *Refuse cleanly at 3 when cmux is absent, never publish-as-no-op at 0, and never mirror
@@ -353,6 +365,45 @@ tests both directions: a test asserting `pub` outside cmux is nonzero must die w
 to `exit 0`; the positive control asserts a real `pub` inside a stub cmux is 0, so the test is not
 simply requiring failure everywhere.
 
+REMEDIATION (2026-08-21, `agentic-sdlc-4d00`): landed two of the three named deviations as fixes
+and left the third disclosed rather than translated — not because the umbrella's child seed asked
+for that split (it named no such scope; there is no record of it asking for disclosure-only on the
+third deviation), but because the change that shipped simply stopped short of the fix shape's third
+clause. `MODE` is now parsed before either dependency check, so the help/no-mode query is reachable
+and exits `EXIT_OK` (0) on a host with no `cmux` CLI and no `CMUX_WORKSPACE_ID` at all — the
+`--help`-measured-1 consequence named above is fixed as a side effect of that reordering. Both
+`:24` and `:25`'s conditions now exit the named `EXIT_REFUSED` (3) instead of 1 and a silent 0,
+respectively. `pub`'s `cmux log` passthrough was left exactly mirrored, and the file's header at
+the time rationalized this after the fact ("that call IS the wrapper's one real effect, not a
+refusal being disguised as one") rather than recording an agreed scope cut. `:38-41`'s `seq`-branch
+pipeline-status residual is untouched and stays open. Three mutations were executed against the
+fixed file and reverted after: reverting `:46`'s `EXIT_REFUSED` to `exit 1` killed the
+absent-dependency test; reverting `:47`'s to `exit 0` killed the not-inside-cmux test; appending
+`|| true` to the `cmux log` invocation killed the log-failure-is-mirrored test. `tests/test_cmux_bus.py`
+is new (SP-5 had no prior test module) and carried all ten assertions, five of them explicit
+positive controls, at the time.
+
+REMEDIATION (2026-08-21, `agentic-sdlc-d259`): closes the mirrored-`cmux log` residual left open
+above — the translation the original fix shape proposed shipped here, not disclosure. `EXIT_PUBLISH_FAILED=6`
+is now named in the header's exit table, outside the reserved 0-4 block exactly as `gate_receipt.py`
+names `EXIT_GATE_FAILED`/`EXIT_UNOBSERVED` there (its own header explains why: mirroring a foreign
+exit code risks colliding with this wrapper's own clean-refusal 3, which a `cmux log` that itself
+exits 3 would otherwise reproduce byte-for-byte). The `pub` branch now inspects `cmux log`'s exit
+status and translates any failure to that one named code rather than passing the child's raw status
+through; success (0) still exits 0, unchanged. `tests/test_cmux_bus.py`'s former
+`test_cmux_log_failure_is_mirrored_not_swallowed` is renamed
+`test_cmux_log_failure_is_translated_to_the_named_publish_failed_code` and now asserts child exit
+statuses 1, 2, 3, and 7 all come out as 6; the child-0-stays-0 positive control is kept (renamed
+`test_cmux_log_success_still_exits_zero`, since "mirrored" no longer describes what it proves). One
+mutation was executed against the fixed file and reverted after: reverting the
+`if ! cmux log ...; then ... exit "$EXIT_PUBLISH_FAILED"; fi` block back to the bare mirrored call
+killed the re-pointed test at all four substituted statuses (1, 2, 3, 7). The help/no-mode query's
+`sed` range was also widened from `2,22p` to `2,33p` to cover the grown header including the new
+exit-table row — verified by running `--help` and confirming the table's last line reaches stdout,
+not by assuming a wider range is automatically wide enough — and a new test assertion pins that
+distinctive last line so a future truncation is caught by the suite rather than by eyeballing
+output.
+
 ### SP-6 — `manage_claude_statusline.py` reports five distinct read-only states as one code
 
 Title: *One derived read-only statusline state, one code — and none of them 1.*
@@ -371,6 +422,30 @@ derivation; `inactive` and `not managed` are ordinary answers at 0 with the stat
 asserting the five states map to distinct, non-1 codes must die when any `return 1` is restored; the
 positive control asserts the `active` path is still 0 through the same mapping.
 
+REMEDIATION (2026-08-21, `agentic-sdlc-d0a4`): the landed rule is stricter than the two-tier split
+this paragraph proposed. Rather than giving `conflict`/`recovery pending` a named non-reserved code
+distinct from `inactive`/`unmanaged`, the conductor's ratified rule for this surface is: **every**
+completed answer from a non-mutating read is 0, full stop, with the five states distinguished only
+in the returned message — never in the exit code — and a genuine read failure (corrupt settings,
+an unreadable receipt, a foreign-owned path) still raises `StatuslineError`/`OperatorToolsError`
+and is reported at 2 by `main()`, unchanged. This follows `wave-verdict.py`'s precedent from this
+same umbrella's worked example ("a derived result is 0") rather than `gate_baseline.py`'s
+("a named problem is 5"), because unlike `gate_baseline.py`'s comparison, none of these five states
+is itself a problem: `deactivate` finding nothing to deactivate is the requested end state already
+true, exactly as the two mutating verbs `activate`/`deactivate` were already 0 on success. `EXIT_OK
+= 0` and `EXIT_REFUSED = 2` are now the module's one derivation point, both in the module docstring
+and at every return site. Five mutations (reverting each `EXIT_OK` return to `1`) were executed
+against an isolated `/tmp` mirror of the two scripts plus their shared test module and reverted
+after: each killed its own test, and — checked in isolation — the `deactivate`-side mutation killed
+`test_deactivation_recovers_after_settings_replacement` specifically at the `deactivate()` call
+rather than being masked by an earlier assertion. The pre-existing `status`-pinning assertions in
+`tests/test_manage_claude_statusline.py` were flipped from 1 to 0 in place; four new tests cover the
+`inactive`/`unmanaged`/`conflict` states directly (no prior test exercised their return code), one
+is a positive control for the unchanged `active` state, and one is a negative control proving a
+genuine read failure still raises rather than returning 0. `scripts/opencodex-claude.sh` and
+`docs/runbooks/verification.md` were checked for a consumer of this exit code and have none — the
+runbook's own statusline line is `operator-tools:status`'s inventory entry, a different script.
+
 ### SP-7 — `install_operator_tools.py status` refuses a host precondition at the grammar code
 
 Title: *A host precondition is a clean refusal (3), not an input error (2).*
@@ -384,6 +459,24 @@ one derivation point; and consider whether a read-only `status` should refuse on
 reporting it as a finding. Mutation tests both directions: a test asserting the PATH refusal is 3 must
 die when the raise is reverted to the input class; the positive control asserts a genuinely malformed
 `--bin-dir` value still exits 2 through the same code path.
+
+REMEDIATION (2026-08-21, `agentic-sdlc-92ff`): the error-type split landed as proposed; the
+"consider removing the PATH refusal from `status` entirely" question was left open rather than
+acted on, since narrowing what `status` refuses on is a separate design decision from naming the
+refusal it already makes. A new `HostPreconditionError(OperatorToolsError)` subclass is raised only
+from `validate_bin_dir`'s not-on-PATH branch; `main()` now catches it ahead of the general
+`OperatorToolsError` handler and returns 3, while every other `OperatorToolsError` — including the
+sibling "unsafe operator-tools bin directory" raise one line above it in the same function — still
+returns 2 through the unchanged handler, so the fix is one raise site and one added `except`
+clause, not a reclassification of the whole error hierarchy. Two mutations were executed against an
+isolated `/tmp` copy of the script and reverted after: reverting the raise site back to plain
+`OperatorToolsError` (leaving the new `except` clause in place) collapsed the not-on-PATH exit back
+to 2, killing the refusal test; the unsafe-bin-dir positive control was independently confirmed to
+stay at 2 both before and after that mutation, proving the fix does not depend on which
+`except` clause happens to run first for every input. `tests/test_operator_tools.py` gained two CLI
+subprocess tests (the refusal and its positive control) and one added assertion on the pre-existing
+`test_path_preflight_refuses_unlisted_directory`, pinning the new exception subclass by `isinstance`
+rather than only by message substring.
 
 ### SP-8 — `instruction-generator.py` leaks a traceback for a supplied-but-missing manifest
 

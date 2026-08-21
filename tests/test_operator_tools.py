@@ -170,6 +170,56 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertIn("never edits PATH", str(raised.exception))
             self.assertIn("start a new shell", str(raised.exception))
             self.assertFalse(config.bin_dir.exists())
+            # decision9-conformance-survey SP-7 / agentic-sdlc-92ff: this is a fact about the
+            # HOST's shell, not the caller's argv, so it is the named refusal subclass rather
+            # than a plain OperatorToolsError.
+            self.assertIsInstance(raised.exception, operator_tools.HostPreconditionError)
+
+    def test_status_refuses_path_precondition_at_the_named_refusal_code(self) -> None:
+        # decision9-conformance-survey SP-7 / agentic-sdlc-92ff: `status` refusing because the
+        # host's bin dir is off PATH must land on 3 (clean refusal before effect), never 2
+        # (Decision 9's grammar/schema/input class) -- nothing about this command line is
+        # malformed.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            bin_dir = root / "bin"; bin_dir.mkdir(parents=True)
+            state = root / "state"
+
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT), "status",
+                    "--home", str(home), "--bin-dir", str(bin_dir), "--state-root", str(state),
+                ],
+                capture_output=True, text=True, check=False,
+                env={**os.environ, "PATH": "/usr/bin"},
+            )
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertNotEqual(result.returncode, 2)
+            self.assertIn("not on PATH", result.stderr)
+
+    def test_status_still_reports_an_unsafe_bin_dir_at_two(self) -> None:
+        # Positive control for the previous test: a GENUINE caller-input mistake (asking to
+        # manage the repository root itself as the bin dir) must keep the pre-existing
+        # grammar/input code -- the fix narrows one exact raise site, not every
+        # OperatorToolsError into a refusal.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            state = root / "state"
+
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT), "status",
+                    "--home", str(home), "--bin-dir", str(SCRIPT.parents[1]), "--state-root", str(state),
+                ],
+                capture_output=True, text=True, check=False,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertNotEqual(result.returncode, 3)
+            self.assertIn("unsafe operator-tools bin directory", result.stderr)
 
     def test_cli_help_explains_read_only_inspection_and_path_boundary(self) -> None:
         # argparse re-wraps usage and epilog to the caller's terminal width, so COLUMNS is pinned
