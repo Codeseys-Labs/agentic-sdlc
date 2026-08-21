@@ -48,7 +48,12 @@ layout matches exact `@os-eco/seeds-cli@0.5.15`. It permits only the real packag
 `engines.bun` compatibility declaration; it rejects actual Bun/config/TypeScript/macro/preload
 controls. It records a trusted empty Bun configuration, the exact Git root/commit/tree plus
 `mise.toml`/`mise.lock`, and typed tree/file hashes. It retains the preceding receipt for explicit
-rollback. The receipt establishes an execution integrity boundary against ordinary accidental
+rollback. A structurally intact preceding receipt that records a superseded tuple is retained and
+its superseded tuple named, never refused: establishing a new tuple is precisely what bootstrap is
+for, and a pin bump is the one expected reason a prior receipt disagrees with the launcher's
+constants. Malformed preceding state is still refused and never repaired, and every other verb still
+refuses a receipt whose recorded tuple is not the current one.
+The receipt establishes an execution integrity boundary against ordinary accidental
 drift. It does not establish tarball/transitive authenticity. It does not stop a
 same-UID TOCTOU attacker that races verification against execution. An npm version, a backend,
 and a lock do not authenticate a tarball or its transitive dependencies.

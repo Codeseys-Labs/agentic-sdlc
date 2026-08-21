@@ -64,6 +64,13 @@ const BUN_KEYS = new Set(['root', 'executable', 'version']);
 const SEEDS_KEYS = new Set(['root', 'packageRoot', 'package', 'version', 'bin', 'binValue', 'entry']);
 const GIT_KEYS = new Set(['path', 'hash', 'commit', 'tree']);
 const TRUSTED_KEYS = new Set(['bunfig', 'tsconfig', 'gitconfig', 'gitAdapter']);
+// A receipt records the tuple that was current when it was published. Every verb that RUNS the
+// recorded tuple demands that it still equal this launcher's constants. Bootstrap's job is to
+// ESTABLISH a tuple, so its retention step reads the prior receipt for structure and internal
+// consistency only: a well-formed predecessor that records a superseded tuple is rollback material,
+// not corruption. These two spellings are the only admitted modes; nothing else is a mode.
+const TUPLE_PINS_CURRENT = 'require-current-tuple-pins';
+const TUPLE_PINS_SUPERSEDED = 'admit-superseded-tuple-pins';
 const SEEDS_DIRECTORY = '.seeds';
 const SEEDS_CONFIG_FILE = 'config.yaml';
 const SEEDS_ISSUES_FILE = 'issues.jsonl';
@@ -816,13 +823,35 @@ function bootstrap(distributionArgument) {
     },
   };
   const active = join(directory, 'active.json');
+  const retained = join(directory, 'previous.json');
+  let superseded;
   if (existsSync(active)) {
-    // Validate before retaining as rollback material; malformed partial state is never repaired.
-    const previous = loadReceipt(active);
-    atomicWrite(join(directory, 'previous.json'), `${JSON.stringify(previous, null, 2)}\n`);
+    // Validate shape and internal consistency before retaining as rollback material; malformed
+    // partial state is never repaired. A structurally intact predecessor that records a superseded
+    // tuple is retained and named here instead of refused, because a pin bump is the one expected
+    // reason a prior receipt disagrees with this launcher's constants and publishing the new tuple is
+    // precisely this verb's job. Every other verb still refuses that receipt.
+    const previous = loadReceipt(active, TUPLE_PINS_SUPERSEDED);
+    superseded = supersededTupleDescription(previous);
+    atomicWrite(retained, `${JSON.stringify(previous, null, 2)}\n`);
   }
   atomicWrite(active, `${JSON.stringify(receipt, null, 2)}\n`);
+  if (superseded !== undefined) process.stdout.write(`superseded prior tuple receipt (${superseded}) retained for rollback: ${retained}\n`);
   process.stdout.write(`bootstrapped locked Seeds tuple receipt: ${active}\n`);
+}
+
+function rendered(value) {
+  // JSON.stringify quotes the value and escapes the C0 controls; the explicit pass also escapes DEL
+  // and the C1 range, so no byte a receipt records can inject or terminate a line of this output.
+  return JSON.stringify(value).replace(/[\u007f-\u009f]/gu, (character) => `\\u${character.codePointAt(0).toString(16).padStart(4, '0')}`);
+}
+
+function supersededTupleDescription(previous) {
+  // Only a recorded tuple that DIFFERS from this launcher's constants is a supersession worth
+  // naming; an ordinary re-bootstrap of the same tuple retains its predecessor exactly as before.
+  const { node, bun, seeds } = previous.tuple;
+  if (node.version === NODE_VERSION && bun.version === BUN_VERSION && seeds.package === SEEDS_PACKAGE && seeds.version === SEEDS_VERSION && seeds.bin === SEEDS_BIN) return undefined;
+  return `node ${rendered(node.version)}, bun ${rendered(bun.version)}, ${rendered(seeds.package)} ${rendered(seeds.version)}, bin ${rendered(seeds.bin)}`;
 }
 
 function object(value) {
@@ -843,7 +872,9 @@ function receiptPath() {
   return join(stateBase(), 'agentic-sdlc', 'seeds-runtime', `v${SCHEMA}`, 'active.json');
 }
 
-function loadReceipt(path = receiptPath()) {
+function loadReceipt(path = receiptPath(), pins = TUPLE_PINS_CURRENT) {
+  if (pins !== TUPLE_PINS_CURRENT && pins !== TUPLE_PINS_SUPERSEDED) fail('tuple pin admission mode is unknown');
+  const current = pins === TUPLE_PINS_CURRENT;
   let receipt;
   let receiptNode;
   try {
@@ -864,7 +895,10 @@ function loadReceipt(path = receiptPath()) {
   const runtime = receipt.runtime;
   const distributionHashes = receipt.hashes.distribution;
   if (!exactKeys(node, NODE_KEYS) || !exactKeys(bun, BUN_KEYS) || !exactKeys(seeds, SEEDS_KEYS) || !exactKeys(git, GIT_KEYS) || !exactKeys(trusted, TRUSTED_KEYS)
-    || node.version !== NODE_VERSION || bun.version !== BUN_VERSION || seeds.package !== SEEDS_PACKAGE || seeds.version !== SEEDS_VERSION || seeds.bin !== SEEDS_BIN
+    // Recorded, non-empty, and typed in BOTH modes; equal to this launcher's constants only when the
+    // caller intends to run the recorded tuple. A missing or blank version is malformed either way.
+    || ![node.version, bun.version, seeds.package, seeds.version, seeds.bin].every(text)
+    || (current && (node.version !== NODE_VERSION || bun.version !== BUN_VERSION || seeds.package !== SEEDS_PACKAGE || seeds.version !== SEEDS_VERSION || seeds.bin !== SEEDS_BIN))
     || ![node.root, node.executable, bun.root, bun.executable, seeds.root, seeds.packageRoot, seeds.binValue, seeds.entry, git.path, git.hash, git.commit, git.tree, trusted.bunfig, trusted.tsconfig, trusted.gitconfig, trusted.gitAdapter].every(text)
     || ![distribution.root, distribution.commit, distribution.gitTree, distribution.tree, distribution.miseToml, distribution.miseLock, distribution.launcher, distribution.launcherHash].every(text)
     || ![runtime.node, runtime.nodeHash, runtime.launcherHash].every(text)

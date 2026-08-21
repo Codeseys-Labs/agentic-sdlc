@@ -36,6 +36,11 @@ EXACT_NODE = Path(
 )
 NODE = str(EXACT_NODE) if EXACT_NODE.is_file() else HOST_NODE
 RECEIPT_SCHEMA = 2
+# The exact tuple this repository pinned before the 2026-08-20 bump, which is what a real receipt
+# published by the previous launcher records once the constants move forward.
+SUPERSEDED_NODE = "22.22.3"
+SUPERSEDED_BUN = "1.3.10"
+SUPERSEDED_SEEDS = "0.5.14"
 
 
 class LauncherFixture:
@@ -194,6 +199,17 @@ class LauncherFixture:
     def active_receipt_path(self) -> Path:
         return self.state / "agentic-sdlc" / "seeds-runtime" / f"v{RECEIPT_SCHEMA}" / "active.json"
 
+    def write_superseded_tuple_receipt(self) -> dict:
+        """Leave behind exactly what a pin bump leaves behind: the receipt the launcher published,
+        still structurally intact and internally consistent, recording the PREVIOUS tuple."""
+        active = self.active_receipt_path()
+        receipt = json.loads(active.read_text(encoding="utf-8"))
+        receipt["tuple"]["node"]["version"] = SUPERSEDED_NODE
+        receipt["tuple"]["bun"]["version"] = SUPERSEDED_BUN
+        receipt["tuple"]["seeds"]["version"] = SUPERSEDED_SEEDS
+        active.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        return receipt
+
     def installed_launcher_path(self) -> Path:
         return self.active_receipt_path().parent / "seeds-launcher.mjs"
 
@@ -252,6 +268,121 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         second = self.bootstrap()
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertTrue((active.parent / "previous.json").is_file())
+
+    def test_bootstrap_supersedes_a_structurally_intact_prior_tuple_receipt(self) -> None:
+        self.assertEqual(self.bootstrap().returncode, 0)
+        active = self.active_receipt_path()
+        retained = active.parent / "previous.json"
+        self.assertFalse(retained.exists())
+        obsolete = self.write_superseded_tuple_receipt()
+
+        # The wedge this covers: a pin bump leaves a receipt whose recorded tuple CANNOT equal the
+        # new launcher's constants, and bootstrap is the one verb whose job is to establish a tuple,
+        # so it retains the predecessor and publishes instead of refusing at validate-before-retain.
+        upgrade = self.bootstrap()
+        self.assertEqual(upgrade.returncode, 0, upgrade.stderr)
+        self.assertIn("superseded prior tuple receipt", upgrade.stdout)
+        self.assertIn(f'node "{SUPERSEDED_NODE}"', upgrade.stdout)
+        self.assertIn(f'bun "{SUPERSEDED_BUN}"', upgrade.stdout)
+        self.assertIn(f'"{SUPERSEDED_SEEDS}"', upgrade.stdout)
+        self.assertIn(str(retained), upgrade.stdout)
+        self.assertEqual(json.loads(retained.read_text(encoding="utf-8")), obsolete, "the obsolete receipt is the rollback predecessor, byte for byte")
+        published = json.loads(active.read_text(encoding="utf-8"))
+        self.assertEqual(published["tuple"]["node"]["version"], "22.23.2")
+        self.assertEqual(published["tuple"]["bun"]["version"], "1.4.0")
+        self.assertEqual(published["tuple"]["seeds"]["version"], "0.5.15")
+
+        # Positive control: an ordinary same-tuple re-bootstrap still succeeds, still retains its
+        # predecessor, and prints NO supersession line -- so that line is evidence of an actual
+        # tuple change rather than a banner every bootstrap emits.
+        again = self.bootstrap()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertNotIn("superseded", again.stdout)
+        self.assertEqual(json.loads(retained.read_text(encoding="utf-8")), published)
+
+        # C1 escaping: a recorded tuple field carrying a raw C1 byte (U+009B) must render escaped
+        # in the supersession line, never as the raw byte, so no receipt field can inject or
+        # terminate a line of this launcher's stdout. JSON.stringify alone does not escape this
+        # range -- only rendered()'s explicit .replace does -- so this exercises that pass directly.
+        with self.subTest(seeds_version="C1 byte"):
+            c1_active = json.loads(active.read_text(encoding="utf-8"))
+            c1_active["tuple"]["seeds"]["version"] = "0.5.14\u009b"
+            active.write_text(json.dumps(c1_active, indent=2) + "\n", encoding="utf-8")
+            c1_upgrade = self.bootstrap()
+            self.assertEqual(c1_upgrade.returncode, 0, c1_upgrade.stderr)
+            self.assertIn("superseded prior tuple receipt", c1_upgrade.stdout)
+            # Positive control: the plain, unescaped prefix is still visible, so the assertion
+            # below is about the C1 byte specifically and not about the whole field vanishing.
+            self.assertIn("0.5.14", c1_upgrade.stdout)
+            self.assertIn('"0.5.14\\u009b"', c1_upgrade.stdout)
+            self.assertNotIn("\u009b", c1_upgrade.stdout)
+
+    def test_bootstrap_still_refuses_a_prior_receipt_that_fails_its_own_validation(self) -> None:
+        self.assertEqual(self.bootstrap().returncode, 0)
+        active = self.active_receipt_path()
+        retained = active.parent / "previous.json"
+        pristine = json.loads(active.read_text(encoding="utf-8"))
+        corruptions = (
+            # Closed key sets and internal cross-references are untouched by the relaxation: only
+            # the tuple-version comparison against the current constants moved.
+            lambda receipt: receipt["distribution"].pop("gitTree"),
+            lambda receipt: receipt["distribution"].__setitem__("extra", "forged"),
+            lambda receipt: receipt["runtime"].__setitem__("launcherHash", "0" * 64),
+            lambda receipt: receipt["distribution"].__setitem__("commit", "b" * 40),
+            lambda receipt: receipt["hashes"]["distribution"].pop("commit"),
+            lambda receipt: receipt.__setitem__("schema", RECEIPT_SCHEMA + 1),
+            # Supplied-but-blank is not the same fact as a superseded version: an empty string is
+            # malformed in both modes, so the relaxed comparison can never admit one.
+            lambda receipt: receipt["tuple"]["node"].__setitem__("version", ""),
+            lambda receipt: receipt["tuple"]["bun"].__setitem__("version", ""),
+            lambda receipt: receipt["tuple"]["seeds"].__setitem__("version", ""),
+            lambda receipt: receipt["tuple"]["seeds"].__setitem__("package", ""),
+            lambda receipt: receipt["tuple"]["seeds"].__setitem__("bin", ""),
+            # Not supplied at all is a different fact again, and it breaks the closed key set.
+            lambda receipt: receipt["tuple"]["node"].pop("version"),
+            lambda receipt: receipt["tuple"]["seeds"].pop("bin"),
+            # A non-string version is neither current nor superseded.
+            lambda receipt: receipt["tuple"]["node"].__setitem__("version", 22.232),
+            lambda receipt: receipt["tuple"]["bun"].__setitem__("version", None),
+        )
+        for corrupt in corruptions:
+            with self.subTest(corrupt=corrupt):
+                receipt = json.loads(json.dumps(pristine))
+                corrupt(receipt)
+                active.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+                refused = self.bootstrap()
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("partial or invalid", refused.stderr)
+                self.assertFalse(retained.exists(), "a refused predecessor is never retained as rollback material")
+                self.assertEqual(json.loads(active.read_text(encoding="utf-8")), receipt, "the refusal leaves the receipt exactly as it found it")
+        # Positive control: the same fixture bootstraps cleanly the moment the predecessor is well
+        # formed again, so the refusals above are about the receipt and not about the fixture.
+        active.write_text(json.dumps(pristine) + "\n", encoding="utf-8")
+        recovered = self.bootstrap()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertTrue(retained.is_file())
+
+    def test_inspect_and_record_still_refuse_a_superseded_tuple_receipt(self) -> None:
+        self.assertEqual(self.bootstrap().returncode, 0)
+        # Positive control first: the pristine receipt really does run, so the refusals below are
+        # about the recorded tuple rather than a fixture that never worked.
+        admitted = self.launcher("inspect", "--target", str(self.target), "prime")
+        self.assertEqual(admitted.returncode, 0, admitted.stderr)
+        self.assertTrue(self.bun_log.exists())
+        self.bun_log.unlink()
+
+        self.write_superseded_tuple_receipt()
+        refused = self.launcher("inspect", "--target", str(self.target), "prime")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("partial or invalid", refused.stderr)
+        self.assertFalse(self.bun_log.exists())
+        # The conductor's write seam inherits every inspect admission: only bootstrap gained the
+        # supersede path, because only bootstrap establishes a tuple.
+        writer = self.launcher("record", "--target", str(self.target), "--queue-writer", "conductor", "--expect-queue", "absent", "init")
+        self.assertNotEqual(writer.returncode, 0)
+        self.assertIn("partial or invalid", writer.stderr)
+        self.assertFalse(self.bun_log.exists())
+        self.assertFalse((self.target / ".seeds").exists())
 
     def test_bootstrap_git_probes_ignore_repository_global_system_config_and_hooks(self) -> None:
         marker = self.root / "git-execution-marker"

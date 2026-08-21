@@ -27,7 +27,12 @@ macro, preload, and other actual execution-control forms remain forbidden. It cr
 owned empty Bun config and hashes the reviewed distribution tree, exact Git commit and tree,
 `mise.toml`, `mise.lock`, every tool tree, package metadata, entry, Git binary, and trusted configs,
 then atomically publishes an active versioned receipt under platform state while retaining the
-preceding receipt for rollback.
+preceding receipt for rollback. Retention shape-validates that predecessor without comparing its
+recorded tuple to the current constants, so a pin bump does not wedge bootstrap: a well-formed
+receipt recording a superseded tuple becomes the retained rollback predecessor, its superseded tuple
+is named on stdout, and the new tuple is published. Malformed predecessor state is still refused
+before anything moves, and `inspect`/`record` still refuse a receipt whose recorded tuple is not the
+current one.
 
 The lock and npm backend establish exact version selection but **do not authenticate the npm
 tarball or transitive dependency graph**. The receipt catches ordinary post-bootstrap drift but
