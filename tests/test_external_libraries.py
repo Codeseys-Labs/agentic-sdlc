@@ -1309,6 +1309,29 @@ class RecordedAgentSetTests(unittest.TestCase):
         self.assertNotIn("some-other-agent", output)
         self.assertNotIn("further hyperresearch-prefixed", output)
 
+    def test_a_recorded_agent_rendered_as_a_bare_directory_is_not_residue(self) -> None:
+        # `present_names` reports whatever the directory holds, and a render layout that uses a
+        # bare `<name>` directory instead of a lone `<name>.md` file is still one of the recorded
+        # 16 -- `hyperresearch-fetcher` is itself a name in RECORDED_HYPERRESEARCH_AGENTS.
+        # `expected_agent_files` has to accept BOTH spellings (`<name>` and `<name>.md`); dropping
+        # the bare-name half would make this legitimate entry look like drift the recorded set
+        # does not name. The positive control below (16/16, no residue line) is what a dropped
+        # bare-name half would flip to a false "1 further ... file(s)" residue report.
+        home = make_home()
+        agents = home / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        for name in RECORDED_HYPERRESEARCH_AGENTS:
+            if name == "hyperresearch-fetcher":
+                (agents / name).mkdir()
+            else:
+                (agents / f"{name}.md").write_text("", encoding="utf-8")
+        code, lines = MODULE.command_status(MODULE.Config(repo_root=ROOT, home=home))
+        output = "\n".join(lines)
+        self.assertEqual(code, 0, output)
+        self.assertIn("agents: 16/16 of the recorded 0.10.0 set present", output)
+        self.assertNotIn("does not name", output)
+        self.assertNotIn("further hyperresearch-prefixed", output)
+
 
 class IsolationFromInstallPathTests(unittest.TestCase):
     """No verb here may be reachable from bundle:install, setup, or any gate leaf."""
