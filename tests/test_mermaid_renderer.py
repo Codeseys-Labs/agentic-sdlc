@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -25,9 +29,96 @@ SANDBOX_BINARY = Path(json.loads(POLICY_PATH.read_text(encoding="utf-8"))["sandb
 SANDBOX_AVAILABLE = SANDBOX_BINARY.is_file() and not SANDBOX_BINARY.is_symlink()
 SANDBOX_SKIP_REASON = f"the pinned sandbox binary {SANDBOX_BINARY} is unavailable on this host"
 
+# Past the arity/help gate the wrapper returns EXIT_UNSUPPORTED off Linux x64 before it reads any
+# path, so a test that asserts a later code must name that host requirement instead of failing.
+LINUX_X64 = sys.platform == "linux" and os.uname().machine in {"x86_64", "amd64"}
+LINUX_X64_SKIP_REASON = "the renderer is certified for Linux x64 only; other hosts return 3 first"
+
 
 
 class MermaidRendererTests(unittest.TestCase):
+    def test_help_exits_zero_and_prints_the_two_positional_usage(self) -> None:
+        with mock.patch.object(
+            renderer, "load_policy", side_effect=AssertionError("--help must not render")
+        ):
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = renderer.main(["--help"])
+        self.assertEqual(code, renderer.EXIT_OK)
+        self.assertIn("render_mermaid_linux.py <definition> <final-svg>", buffer.getvalue())
+
+    def test_short_help_flag_also_exits_zero_without_rendering(self) -> None:
+        with mock.patch.object(
+            renderer, "load_policy", side_effect=AssertionError("-h must not render")
+        ):
+            code = renderer.main(["-h"])
+        self.assertEqual(code, renderer.EXIT_OK)
+
+    def test_argv_none_dispatch_reads_the_real_sys_argv(self) -> None:
+        # `main()` is what `if __name__ == "__main__"` calls, with no argument at all, so the
+        # `argv is None` path must read the real `sys.argv`. Every other test here passes an
+        # explicit list and would still pass if that path were broken.
+        with mock.patch.object(sys, "argv", ["render_mermaid_linux.py", "--help"]):
+            with mock.patch.object(
+                renderer, "load_policy", side_effect=AssertionError("--help must not render")
+            ):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    code = renderer.main()
+        self.assertEqual(code, renderer.EXIT_OK)
+        self.assertIn("render_mermaid_linux.py <definition> <final-svg>", buffer.getvalue())
+
+        # Positive control on the same `argv is None` path: a bare real `sys.argv` is the wrong
+        # arity, so it must be refused with a named reason rather than treated as help.
+        with mock.patch.object(sys, "argv", ["render_mermaid_linux.py"]):
+            buffer = io.StringIO()
+            with contextlib.redirect_stderr(buffer):
+                code = renderer.main()
+        self.assertEqual(code, renderer.EXIT_USAGE)
+        self.assertIn("received 0", buffer.getvalue())
+
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
+    def test_help_with_a_second_argument_is_a_render_request_not_the_help_path(self) -> None:
+        # Positive control bounding the new help branch: `--help` is the 0-class query only as
+        # the WHOLE argv. With a second argument the call has the renderer's exact arity, so it
+        # is a render request whose definition path happens to be spelled `--help`, and it must
+        # be refused as an unusable input instead of being answered with usage on stdout.
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp) / "destination.svg"
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = renderer.main(["--help", str(destination)])
+        self.assertEqual(code, renderer.EXIT_ERROR)
+        self.assertIn("input path must be absolute and traversal-free", err.getvalue())
+        self.assertEqual(out.getvalue(), "", "usage must not be printed for a render request")
+        self.assertFalse(destination.exists())
+
+    def test_wrong_arity_exits_two_and_names_the_reason_on_stderr(self) -> None:
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer):
+            code = renderer.main([])
+        self.assertEqual(code, renderer.EXIT_USAGE)
+        stderr = buffer.getvalue()
+        self.assertIn("render_mermaid_linux.py <definition> <final-svg>", stderr)
+        self.assertIn("error:", stderr)
+
+    def test_two_argument_call_is_unaffected_by_the_new_help_path(self) -> None:
+        # Positive control for SP-9: the ordinary two-positional path must still reach past the
+        # arity/help gate into the real renderer logic, proving --help was added without
+        # widening what the wrapper will render.
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "definition.mmd"
+            destination = Path(temp) / "destination.svg"
+            source.write_text("flowchart TD\nA-->B\n", encoding="utf-8")
+            with mock.patch.object(
+                renderer,
+                "_runtime_receipt",
+                side_effect=renderer.RendererError("missing receipt (test double)"),
+            ):
+                code = renderer.main([str(source), str(destination)])
+        self.assertEqual(code, renderer.EXIT_ERROR)
+        self.assertFalse(destination.exists())
+
     def test_cli_rejects_extra_arguments_before_touching_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

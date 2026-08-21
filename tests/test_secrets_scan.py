@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -208,6 +210,73 @@ class SecretsScanTests(unittest.TestCase):
             flattened.extend(command[6:])
         self.assertEqual(flattened, paths)
 
+    def test_help_exits_zero_and_does_not_enumerate_or_scan(self) -> None:
+        module = self.module()
+        with mock.patch.object(
+            module, "git_visible_files", side_effect=AssertionError("--help must not scan")
+        ) as sentinel:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                with self.assertRaises(SystemExit) as ctx:
+                    module.main(["--help"])
+
+        self.assertEqual(ctx.exception.code, module.EXIT_OK)
+        # The usage line must actually reach stdout: a `print_help` that emitted nothing would
+        # otherwise pass on the exit code alone.
+        self.assertIn("usage: secrets_scan.py", buffer.getvalue())
+        sentinel.assert_not_called()
+
+    def test_unknown_flag_exits_two_before_enumerating_or_scanning(self) -> None:
+        module = self.module()
+        with mock.patch.object(
+            module, "git_visible_files", side_effect=AssertionError("--zzz must not scan")
+        ) as sentinel:
+            buffer = io.StringIO()
+            with contextlib.redirect_stderr(buffer):
+                with self.assertRaises(SystemExit) as ctx:
+                    module.main(["--zzz-not-a-flag"])
+
+        self.assertEqual(ctx.exception.code, module.EXIT_USAGE)
+        self.assertIn("unrecognized arguments", buffer.getvalue())
+        sentinel.assert_not_called()
+
+    def test_argv_none_dispatch_reads_the_real_sys_argv(self) -> None:
+        # `main()` is what `if __name__ == "__main__"` calls, with no argument at all, so the
+        # `argv is None` path must reach argparse through the real `sys.argv`. Every other test
+        # here passes an explicit list and would still pass if that path were broken.
+        module = self.module()
+        with mock.patch.object(sys, "argv", ["secrets_scan.py", "--zzz-not-a-flag"]):
+            with mock.patch.object(
+                module, "git_visible_files", side_effect=AssertionError("sys.argv must be parsed")
+            ) as refused:
+                buffer = io.StringIO()
+                with contextlib.redirect_stderr(buffer):
+                    with self.assertRaises(SystemExit) as ctx:
+                        module.main()
+
+        self.assertEqual(ctx.exception.code, module.EXIT_USAGE)
+        self.assertIn("unrecognized arguments", buffer.getvalue())
+        refused.assert_not_called()
+
+        # Positive control on the same `argv is None` path: a bare real `sys.argv` scans.
+        with mock.patch.object(sys, "argv", ["secrets_scan.py"]):
+            with mock.patch.object(module, "git_visible_files", return_value=[]) as reached:
+                code = module.main()
+
+        reached.assert_called_once()
+        self.assertEqual(code, module.EXIT_OK)
+
+    def test_no_arguments_still_reaches_the_real_scan_entry_point(self) -> None:
+        # Positive control for the two tests above: a bare invocation (the mise secrets task's
+        # exact shape) must still reach the enumeration step, so "nothing happened" above is not
+        # vacuously true because the seam is never called at all.
+        module = self.module()
+        with mock.patch.object(module, "git_visible_files", return_value=[]) as sentinel:
+            code = module.main([])
+
+        sentinel.assert_called_once()
+        self.assertEqual(code, 0)
+
     def test_findings_exit_one_when_no_scanner_error_occurs(self) -> None:
         module = self.module()
         with mock.patch.object(module.shutil, "which", return_value="/stub/betterleaks"), mock.patch.object(
@@ -221,6 +290,112 @@ class SecretsScanTests(unittest.TestCase):
             )
 
         self.assertEqual(code, 1)
+
+
+class SecretsScanExitSplitTests(unittest.TestCase):
+    """SP-3's third clause for this surface: a refusal reached before any file is scanned is
+    EXIT_PRECONDITION (3), so it can no longer be mistaken for argparse's 2, while the scan's own
+    codes -- 0, a found leak's 1, and a passed-through scanner code -- are unchanged, because
+    `mise run check` reads them.
+    """
+
+    # The module loader is borrowed rather than inherited: subclassing the suite above would
+    # re-run every one of its tests a second time under this class's name.
+    module = SecretsScanTests.module
+
+    def assert_precondition(self, error: BaseException, module: object) -> None:
+        self.assertIsInstance(error, module.SecretsScanError)
+        self.assertIn(str(error), module.PRECONDITION_REASONS)
+        self.assertEqual(module.refusal_exit_code(error), module.EXIT_PRECONDITION)
+        self.assertEqual(module.EXIT_PRECONDITION, 3)
+
+    def test_missing_pinned_config_is_a_precondition_refusal_at_three(self) -> None:
+        module = self.module()
+        with mock.patch.object(module, "CONFIG_PATH", Path("no-such-dir/betterleaks.toml")):
+            with mock.patch.object(
+                module, "git_visible_files", side_effect=AssertionError("must not enumerate")
+            ) as sentinel:
+                with self.assertRaises(module.SecretsScanError) as ctx:
+                    module.main([])
+
+        self.assertEqual(str(ctx.exception), "pinned-secrets-config-missing")
+        self.assert_precondition(ctx.exception, module)
+        sentinel.assert_not_called()
+
+    def test_failed_git_enumeration_is_a_precondition_refusal_at_three(self) -> None:
+        module = self.module()
+        failed = subprocess.CompletedProcess([], 1, b"", b"fatal: not a git repository")
+        with mock.patch.object(module.subprocess, "run", return_value=failed):
+            with mock.patch.object(
+                module, "scan_paths", side_effect=AssertionError("must not scan")
+            ) as sentinel:
+                with self.assertRaises(module.SecretsScanError) as ctx:
+                    module.main([])
+
+        self.assertEqual(str(ctx.exception), "git-visible-file-enumeration-failed")
+        self.assert_precondition(ctx.exception, module)
+        sentinel.assert_not_called()
+
+    def test_absent_betterleaks_is_a_precondition_refusal_at_three(self) -> None:
+        module = self.module()
+        with mock.patch.object(module, "git_visible_files", return_value=["tracked.txt"]):
+            with mock.patch.object(module.shutil, "which", return_value=None):
+                with mock.patch.object(
+                    module, "run_scanner_batch", side_effect=AssertionError("no scanner to run")
+                ) as sentinel:
+                    with self.assertRaises(module.SecretsScanError) as ctx:
+                        module.main([])
+
+        self.assertEqual(str(ctx.exception), "betterleaks-not-found")
+        self.assert_precondition(ctx.exception, module)
+        sentinel.assert_not_called()
+
+    def test_an_oversized_path_stays_an_input_class_two_not_a_precondition(self) -> None:
+        # Negative control for the three tests above: the mapping is a named set, not "every
+        # SecretsScanError is now 3". An enumerated path that cannot fit the scanner's argv is an
+        # unusable input, which Decision 9 puts at 2.
+        module = self.module()
+        error = module.SecretsScanError("path-exceeds-scanner-argv-limit")
+
+        self.assertNotIn(str(error), module.PRECONDITION_REASONS)
+        self.assertEqual(module.refusal_exit_code(error), module.EXIT_USAGE)
+        self.assertEqual(module.EXIT_USAGE, 2)
+
+    def test_the_missing_config_refusal_exits_three_end_to_end(self) -> None:
+        # The `__main__` block is the only place `refusal_exit_code` is consumed, and no
+        # in-process test can reach it. Run a copy of the real script in a tree with no pinned
+        # config so the whole path -- raise, message, exit -- is observed from outside.
+        with tempfile.TemporaryDirectory() as temp:
+            copy = Path(temp) / "scripts" / "secrets_scan.py"
+            copy.parent.mkdir()
+            copy.write_bytes(SCRIPT.read_bytes())
+            completed = subprocess.run(
+                [sys.executable, "-B", str(copy)],
+                cwd=temp,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 3, completed.stderr)
+        self.assertIn("error: pinned-secrets-config-missing", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+
+    def test_a_found_leak_still_exits_one_because_the_gate_reads_that_code(self) -> None:
+        # Positive control for the whole split: moving a refusal to 3 must not have moved the
+        # finding code, which `mise run check` depends on.
+        module = self.module()
+        self.assertEqual(module.EXIT_FINDING, 1)
+        with mock.patch.object(module.shutil, "which", return_value="/stub/betterleaks"):
+            with mock.patch.object(module, "run_scanner_batch", return_value=1):
+                code = module.scan_paths(Path("/repo"), ["leaky.txt"], Path("/repo/config.toml"))
+        self.assertEqual(code, module.EXIT_FINDING)
+
+        # ... and a scanner's own non-finding code is still passed through unchanged.
+        with mock.patch.object(module.shutil, "which", return_value="/stub/betterleaks"):
+            with mock.patch.object(module, "run_scanner_batch", return_value=7):
+                code = module.scan_paths(Path("/repo"), ["leaky.txt"], Path("/repo/config.toml"))
+        self.assertEqual(code, 7)
 
 
 if __name__ == "__main__":

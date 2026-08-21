@@ -138,21 +138,23 @@ for that surface by construction, not that it went unprobed.
 | 36 | `scripts/run_all_hosts.py` | aggregate of two mise-gated host legs; `status` exited 1 from the WSL leg's mise failure | | | | NOT-MEASURED (mise-gated) |
 | 37 | **`skills/agentic-sdlc/tools/seeds-launcher.mjs`** | **2 for `--help`** | 2 | 2 | **no 3, no 4; the Seeds child's own exit is passed through** | **NONCONFORMING** (SP-1) |
 | 38 | **`skills/agentic-sdlc/tools/activation-planner.py`** | 0 | 2 | **1 (`status` traceback; `plan`/`apply` emit `status:refused, effect:none, exit_code:1`)** | 3, 4 exist but 86 certain + 2 indeterminate of 315 raise sites land on 1 | **NONCONFORMING** (SP-2), closed by `agentic-sdlc-3d9a` |
-| 39 | **`scripts/provision_mermaid_linux.py`** | **`--help` PROVISIONED: 358 MiB browser + `node_modules`, exit 0** | **none — argv ignored** | none | none | **NONCONFORMING** (SP-3) |
-| 40 | **`scripts/secrets_scan.py`** | **`--help` and `--zzz-not-a-flag` each ran the whole scan, exit 0** | **none — argv ignored** | 2 (config missing) | none | **NONCONFORMING** (SP-3) |
+| 39 | `scripts/provision_mermaid_linux.py` | 0 (`--help` prints usage and provisions nothing; **was** a 358 MiB browser + `node_modules` download at 0) | 2 (**was** none — argv ignored) | — (accepts no arguments) | 3 pre-effect, 4 at or after `npm ci` (**was** neither) | **CONFORMING** (closed by `agentic-sdlc-bcdd`) |
+| 40 | `scripts/secrets_scan.py` | 0 (`--help`, and a clean scan; **was** the whole scan for `--help` and `--zzz-not-a-flag`) | 2 (**was** none — argv ignored) | 2 (a path over the scanner's argv ceiling) | 3 (missing pinned config, absent `betterleaks`, failed enumeration; **was** 2); a found leak stays 1 | **CONFORMING** (closed by `agentic-sdlc-bcdd`) |
 | 41 | **`scripts/check-agentic-sdlc-prereqs.sh`** | 0 only when nothing is missing | **none — argv ignored, so `--help` runs the check** | none | **1 for a completed check that names a MISSING prerequisite** | **NONCONFORMING** (SP-4) |
 | 42 | **`scripts/cmux-bus.sh`** | 0 | 2 | — | **1 for an absent `cmux`; 0 for "not inside cmux"; `cmux log`'s own code passed through** | **NONCONFORMING** (SP-5) |
 | 43 | **`scripts/manage_claude_statusline.py`** | 0 | 2 | 2 | **1 for all five read-only states** | **NONCONFORMING** (SP-6) |
 | 44 | **`scripts/install_operator_tools.py`** | 0 | 2 | 2 | **2 for a host precondition (`bin directory is not on PATH`)** | **NONCONFORMING** (SP-7) |
 | 45 | **`skills/agentic-sdlc/tools/instruction-generator.py`** | 0 | 2 | **1 + traceback for a supplied-but-missing manifest** | — | **NONCONFORMING** (SP-8) |
-| 46 | **`scripts/render_mermaid_linux.py`** | **2 for `--help`, with no diagnostic at all** | 2 (silent) | 1 | 3 = unsupported platform | **NONCONFORMING** (SP-9) |
+| 46 | **`scripts/render_mermaid_linux.py`** | **2 for `--help`, with no diagnostic at all** | 2 (silent) | 1 | 3 = unsupported platform | **NONCONFORMING** (SP-9) — help/grammar closed by `agentic-sdlc-61ce`; input axis still 1 (queued) |
 | 47 | `skills/agentic-sdlc/tools/offline-inspect.py` | 0 | 2 | 2 | **was 1 for a derived NOT_READY** | **FIXED HERE** (worked example) |
 | 48 | **`skills/codex-research-os/scripts/install_research_os.py`** | 0 | 2 | **1 with a raw `FileNotFoundError` traceback for `--target <missing> --dry-run`** (`:1441` `_open_root`, reached via `_apply_locked` `:2783`) | 3 declared | **NONCONFORMING** (SP-10) |
 | 49 | **`skills/model-tier-rightsizing/scripts/receipt_admission.py`** | **none — argv ignored; `main()` (`:871`) reads stdin (`:874`), so `--help` returns `{"status":"invalid"}` at 2** | **2 for `--zzz-not-a-flag`, same path** | 2 | — | **NONCONFORMING** (SP-11) |
 | 50 | `skills/model-tier-rightsizing/scripts/rightsize.py` | 0 | 2 | 2 | 3 declared (`evaluate` digest refusal) | CONFORMING |
 
-The arithmetic closes exactly. Rows 1-20, 25-32, and 50 are **29 conforming** surfaces. Rows 37-46
-plus 48-49 are **12 nonconforming** surfaces and row 47 is **the one fixed here**. Rows 35 and 36 are
+The arithmetic closes exactly **as surveyed**. It is the original census and is deliberately not
+recomputed each time a child seed closes, so a row's own verdict cell — not this paragraph — is the
+current state. Rows 1-20, 25-32, and 50 were **29 conforming** surfaces. Rows 37-46
+plus 48-49 were **12 nonconforming** surfaces and row 47 is **the one fixed here**. Rows 35 and 36 are
 **4 unmeasurable** surfaces (3 mise-gated shells plus the mise-gated host aggregator):
 29 + 12 + 1 + 4 = **46 Linux-reachable distinct surfaces**. Row 34's 2 PowerShell wrappers bring the
 distinct roster to **48**. Rows 33 and 21-24 are listed for completeness and counted in neither
@@ -160,7 +162,7 @@ total: a forwarder or dispatcher-owned module is not a distinct surface — it i
 tool that owns its grammar (rows 38, 45, and 20).
 
 **The seed's "six" was an undercount of the offenders and an overcount of the work**: 12 surfaces
-deviate, not 6, and the deliverable is 11 child seeds plus 1 worked example, not a six-surface change.
+deviated, not 6, and the deliverable is 11 child seeds plus 1 worked example, not a six-surface change.
 
 ## Worked example: `offline-inspect.py`'s NOT_READY verdict (row 47)
 
@@ -261,16 +263,16 @@ true of the module.
 ### SP-3 — `secrets_scan.py` and `provision_mermaid_linux.py` ignore argv entirely, so `--help` performs the operation
 
 Title: *Give the two argv-less entrypoints a parsed grammar, so a query cannot trigger an effect.*
-`scripts/secrets_scan.py:110` is `def main() -> int:` with no parameter, and
-`scripts/provision_mermaid_linux.py:165` likewise, so neither surface reads `sys.argv` at all. Every
-argument is silently accepted and the surface performs its whole operation. Measured, and this is the
+As surveyed, `scripts/secrets_scan.py` was `def main() -> int:` with no parameter, and
+`scripts/provision_mermaid_linux.py` likewise, so neither surface read `sys.argv` at all. Every
+argument was silently accepted and the surface performed its whole operation. Measured, and this is the
 severe half: `uv run --python 3.12.11 scripts/provision_mermaid_linux.py --help` **provisioned** — it
 downloaded the pinned `chrome-headless-shell 150.0.7871.24` and installed `node_modules`, 358 MiB plus
 446 MiB, wrote `.mermaid-runtime/runtime-receipt.json`, and exited **0**. An operator typing `--help`
 at a surface `AGENTS.md` describes as staying "an explicit operator step" because "provisioning
 downloads a pinned browser" gets an unrequested network download reported as success. `secrets_scan.py
---zzz-not-a-flag` likewise ran the full scan at exit 0. Neither has any class 2 for an unknown
-argument and neither has a 0-class query. Fix shape: one `argparse` parser per surface accepting no
+--zzz-not-a-flag` likewise ran the full scan at exit 0. Neither had any class 2 for an unknown
+argument and neither had a 0-class query. Fix shape: one `argparse` parser per surface accepting no
 positional arguments, `--help` as the only 0-class query, an unknown argument as 2 **before** any
 `git ls-files`, `shutil.which`, or download; the scan's `SecretsScanError` mapping and the
 provisioner's `ProvisionError` become a named 3-versus-4 split (nothing downloaded versus a partly
@@ -278,6 +280,20 @@ populated cache). Mutation tests both directions: removing the parser must fail 
 `--zzz` exits 2 and that a sentinel-observed side effect did **not** occur; the positive control is
 the same sentinel test over a real invocation, which must observe the effect, so "nothing happened"
 is never vacuously true.
+
+Closed by `agentic-sdlc-bcdd` (rows 39 and 40). Both entry points now take and parse `argv`
+(`scripts/secrets_scan.py:156-157`, `scripts/provision_mermaid_linux.py:214-215`) and each module
+docstring carries the exit table that derives its codes. The scan maps its three
+before-anything-is-scanned reasons to 3 through one derivation point
+(`PRECONDITION_REASONS`/`refusal_exit_code`, `scripts/secrets_scan.py:42-57`), keeps argparse on 2,
+and leaves a found leak on 1 because `mise run check` reads that code. The provisioner's split is
+positional rather than message-matched: the `mkdir`/`rmtree` block moved **below** tool resolution,
+so the five refusals above the marked effect boundary
+(`scripts/provision_mermaid_linux.py:152-157`) are 3 with nothing created or deleted, and every
+failure below it — including a `RendererError` from the npm shim check — is re-raised as
+`ProvisionPartialError` and reported as 4. Thirteen executed mutants (both directions per axis,
+including re-mapping a pre-effect refusal back to 1, restoring the pre-move ordering, and moving the
+finding code off 1) each killed a named test.
 
 ### SP-4 — `check-agentic-sdlc-prereqs.sh` reports a named missing prerequisite as an internal failure
 
@@ -368,9 +384,9 @@ path still exits 2 with the same message, so the new test is not merely acceptin
 ### SP-9 — `render_mermaid_linux.py` reports `--help` as a silent grammar error
 
 Title: *Give the renderer wrapper a 0-class help and a reason on every 2.*
-`scripts/render_mermaid_linux.py:556-559`: `main` takes `values = list(sys.argv[1:])` and returns
+As surveyed, `main` took `values = list(sys.argv[1:])` and returned
 `EXIT_USAGE` whenever `len(values) != 2`, with **no message on any stream**. Measured: `--help`,
-no arguments, and `--zzz-not-a-flag` each exit 2 having printed nothing at all, so an operator gets a
+no arguments, and `--zzz-not-a-flag` each exited 2 having printed nothing at all, so an operator got a
 bare failure with no statement of what the wrapper wanted. Decision 9 gives `--help` to 0, and a 2
 that names nothing is indistinguishable from a crash that printed nothing. The arity restriction
 itself must be preserved: `AGENTS.md` requires that "callers may invoke only
@@ -382,6 +398,16 @@ asserting `--help` exits 0 and that a wrong-arity call exits 2 **with a nonempty
 when either branch is reverted; the positive control asserts the valid two-argument path is
 unaffected on a host where the runtime receipt is absent, i.e. that help was added without widening
 what the wrapper will render.
+
+Half-closed. The help and grammar axes are closed by `agentic-sdlc-61ce`: `USAGE_LINE` and
+`_usage_error` are the single derivation point for every 2, and the `--help`/`-h` branch returns 0
+(`scripts/render_mermaid_linux.py:556-574`). `agentic-sdlc-bcdd` added the boundary controls for
+that branch — one test drives the `argv is None` dispatch through the real `sys.argv`, and one
+asserts `main(["--help", "<absolute-out>"])` is a *render request* whose definition path is spelled
+`--help`, refused at 1 naming `input path must be absolute and traversal-free` with nothing on
+stdout, so the 0-class query stays exactly the whole-argv form. Row 46 is **not** flipped: the input
+axis is still 1, because every `RendererError` — including an unusable supplied path — lands on
+`EXIT_ERROR`. That remains queued.
 
 ### SP-10 — `install_research_os.py` leaks a traceback for a supplied-but-missing target
 
