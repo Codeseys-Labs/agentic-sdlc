@@ -59,12 +59,12 @@ MUTATING_MODULES = {
     "update": "ccodex_sdlc_update.py",
     "uninstall": "ccodex_sdlc_uninstall.py",
 }
-# The real checkout's per-verb module inventory, pinned explicitly: install and uninstall shipped
-# (agentic-sdlc-bfe9, agentic-sdlc-bbfe), update is the remaining separate ticket. The ticket that
-# lands ccodex_sdlc_update.py flips its entry here and re-points the real-checkout dispatch
-# assertions the same way bfe9/bbfe did. Absent-module refusals for every verb stay covered
-# forever through the shadow checkout, which plants its own modules.
-ABSENT_MODULES = ("update",)
+# The real checkout's per-verb module inventory, pinned explicitly: all three per-verb modules now
+# ship (install agentic-sdlc-bfe9, uninstall agentic-sdlc-bbfe, update agentic-sdlc-b711), so this
+# tuple is EMPTY and every mutating verb must refuse in its own module's name rather than through the
+# loader's absence path. Absent-module refusals stay covered forever through the shadow checkout,
+# which plants its own modules and can therefore withhold one.
+ABSENT_MODULES: tuple[str, ...] = ()
 # The four reader usage lines, pinned as literals rather than derived from the function under test.
 # A refactor that reflows them is a change to a shipped grammar surface and must fail here.
 READER_USAGE_LINES = (

@@ -926,18 +926,10 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
             with self.subTest(verb=vector[0]):
                 completed = self.run_reader(*vector)
                 self.assertEqual(completed.returncode, 3, completed.stderr)
-                if vector[0] == "update":
-                    # The one per-verb module still unshipped refuses through the loader.
-                    self.assertIn(
-                        f"ccodex sdlc {vector[0]} is unavailable in this distribution",
-                        completed.stderr,
-                    )
-                else:
-                    # install and uninstall are shipped modules: they refuse pre-effect in their
-                    # own name, and the loader's absence message appearing here would mean
-                    # dispatch never reached them.
-                    self.assertIn(f"error: ccodex sdlc {vector[0]} ", completed.stderr)
-                    self.assertNotIn("is unavailable in this distribution", completed.stderr)
+                # All three per-verb modules ship, so each refuses pre-effect in its OWN name; the
+                # loader's absence message appearing here would mean dispatch never reached one.
+                self.assertIn(f"error: ccodex sdlc {vector[0]} ", completed.stderr)
+                self.assertNotIn("is unavailable in this distribution", completed.stderr)
                 self.assertEqual(completed.stdout, "")
                 self.assertNotIn("Traceback", completed.stderr)
         self.assertEqual(before, inventory(self.home, self.state))

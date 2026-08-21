@@ -1,0 +1,1429 @@
+"""``ccodex sdlc update``: dual admission, a blocked refresh, one transactional refresh, one seal.
+
+WHAT THIS MODULE PROVES, AND HOW IT AVOIDS PROVING NOTHING.  Every negative assertion here carries a
+POSITIVE CONTROL in the same test: an absence proves nothing unless the same harness is shown to
+detect the presence.  A refusal test therefore always runs the same fixture twice -- once with the
+defect and once without -- and every "nothing was written" assertion is paired with a run that does
+write.
+
+THE FIXTURE IS A FABRICATED PLANE, NOT A MOCK.  Each test builds TWO real candidate payload trees
+under a real ``XDG_DATA_HOME``, two real sealed ``release-candidate-acquisition-receipt/v1``
+documents under a real ``XDG_STATE_HOME``, and a real activated Claude home -- activated by driving
+the SHIPPED installer's own ``transactional_create``, so the ownership records the refresh replaces
+are the records production would hold.  The active ``distribution-activation@1`` receipt is sealed by
+the family's OWN producer over the digests of the files that were really written, so a change to
+either algorithm surfaces here rather than in production.
+
+The end-to-end path is additionally driven through ``scripts/ccodex_sdlc.py`` in a subprocess under
+the isolated ``-I -B`` Python 3.12.11 the dispatcher requires, because the in-process tests can
+prove behaviour but not that the real dispatcher's contract is met.
+"""
+
+from __future__ import annotations
+
+import ast
+import contextlib
+from dataclasses import dataclass
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+from types import ModuleType
+from typing import Any
+import unittest
+from unittest import mock
+
+
+ROOT = Path(__file__).parents[1]
+MODULE_PATH = ROOT / "scripts" / "ccodex_sdlc_update.py"
+RECEIPT_PRODUCER_PATH = ROOT / "scripts" / "distribution_activation_receipt.py"
+INSTALLER_PATH = ROOT / "scripts" / "install_skill_bundle.py"
+READER_PATH = ROOT / "scripts" / "ccodex_sdlc.py"
+ENVELOPE_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "receipt-envelope.py"
+ACQUISITION_POLICY_PATH = ROOT / "policy" / "release-candidate-acquisition.v1.json"
+RELEASE_CONTRACT_PATH = ROOT / "policy" / "release-contract.v1.json"
+
+
+def _load(path: Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+update = _load(MODULE_PATH, "ccodex_sdlc_update_under_test")
+receipts = _load(RECEIPT_PRODUCER_PATH, "ccodex_sdlc_update_receipt_producer")
+bundle = _load(INSTALLER_PATH, "ccodex_sdlc_update_installer")
+reader = _load(READER_PATH, "ccodex_sdlc_update_reader")
+
+PRIOR_INSTANT = "2026-08-19T09:10:11Z"
+INSTANT = "2026-08-20T12:13:14Z"
+LATER_INSTANT = "2026-08-20T12:45:00Z"
+HOST_VERSION = "2.1.233"
+
+ARCHIVE_A = hashlib.sha256(b"fabricated-archive-a").hexdigest()
+ARCHIVE_B = hashlib.sha256(b"fabricated-archive-b").hexdigest()
+CANDIDATE_A = hashlib.sha256(b"fabricated-candidate-a").hexdigest()
+CANDIDATE_B = hashlib.sha256(b"fabricated-candidate-b").hexdigest()
+OPERATION_A = "op-" + hashlib.sha256(b"fabricated-operation-a").hexdigest()[:32]
+OPERATION_B = "op-" + hashlib.sha256(b"fabricated-operation-b").hexdigest()[:32]
+VERSION_A = "0.7.3"
+VERSION_B = "0.7.4"
+
+#: The payload subset each fixture carries. One skill DIRECTORY with a nested file, one Claude agent,
+#: one command, and one CODEX agent that a claude-host refresh must never touch.
+PAYLOAD_A = {
+    "skills/alpha-skill/SKILL.md": "---\nname: alpha-skill\n---\nalpha one\n",
+    "skills/alpha-skill/references/notes.md": "notes one\n",
+    "agents/claude/cartographer.md": "cartographer one\n",
+    "agents/codex/cartographer.toml": 'name = "cartographer"\n',
+    "commands/sdlc-frame.md": "frame one\n",
+}
+PAYLOAD_B = {
+    "skills/alpha-skill/SKILL.md": "---\nname: alpha-skill\n---\nalpha two\n",
+    "skills/alpha-skill/references/notes.md": "notes two\n",
+    "agents/claude/cartographer.md": "cartographer two\n",
+    "agents/codex/cartographer.toml": 'name = "cartographer"\n',
+    "commands/sdlc-frame.md": "frame two\n",
+}
+CLAUDE_DESTINATIONS = ("skills/alpha-skill", "agents/cartographer.md", "commands/sdlc-frame.md")
+CODEX_DESTINATION = "agents/cartographer.toml"
+
+
+def executable_source(path: Path) -> str:
+    """Re-render one module from its syntax tree with every docstring and comment removed.
+
+    ``ast.unparse`` drops comments, and every module/class/function docstring is popped, so a
+    forbidden-vocabulary scan reads what the module DOES rather than what its prose names.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = getattr(node, "body", [])
+        if len(body) > 1 and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+            if isinstance(body[0].value.value, str):
+                body.pop(0)
+    return ast.unparse(tree)
+
+
+def canonical(document: Any) -> bytes:
+    return (
+        json.dumps(document, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode("ascii")
+
+
+def seal_acquisition(receipt: dict[str, Any]) -> bytes:
+    """The acquisition producer's own seal: digest the canonical bytes MINUS ``record_sha256``."""
+    body = {key: value for key, value in receipt.items() if key != "record_sha256"}
+    body["record_sha256"] = hashlib.sha256(canonical(body)).hexdigest()
+    return canonical(body)
+
+
+def inventory_for_tree(root: Path) -> list[dict[str, Any]]:
+    """The candidate manifest's inventory shape, mirroring the release-candidate builder's walk."""
+    rows: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if relative == "manifest.json":
+            continue
+        item = path.lstat()
+        if stat.S_ISLNK(item.st_mode):
+            target = os.readlink(path)
+            rows.append(
+                {
+                    "mode": 0o755,
+                    "path": relative,
+                    "size": len(target.encode()),
+                    "target": target,
+                    "type": "symlink",
+                }
+            )
+        elif stat.S_ISDIR(item.st_mode):
+            rows.append({"mode": 0o755, "path": relative, "size": 0, "type": "dir"})
+        else:
+            rows.append(
+                {
+                    "mode": 0o644,
+                    "path": relative,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "size": item.st_size,
+                    "type": "file",
+                }
+            )
+    rows.sort(key=lambda row: str(row["path"]))
+    return rows
+
+
+def write_candidate(
+    data_home: Path,
+    archive: str,
+    candidate_id: str,
+    version: str,
+    payload: dict[str, str],
+    *,
+    contract: dict[str, Any] | None = None,
+    manifest_overrides: dict[str, Any] | None = None,
+) -> Path:
+    """One acquired candidate payload tree with its own manifest identity."""
+    candidate_root = data_home / "agentic-sdlc" / "acquisition" / "candidates" / archive / "root"
+    candidate_root.mkdir(parents=True)
+    for relative, text in payload.items():
+        target = candidate_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    contract_document = (
+        contract if contract is not None else json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
+    )
+    contract_path = candidate_root / "policy" / "release-contract.v1.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_bytes(canonical(contract_document))
+    manifest = {
+        "archive_root": f"agentic-sdlc-candidate-{candidate_id}-linux-x64",
+        "artifact_kind": "unpublished-candidate",
+        "candidate_id": candidate_id,
+        "inventory": inventory_for_tree(candidate_root),
+        "platform": "linux-x64",
+        "product_version": version,
+        "public_channel": None,
+        "release_claim": "none",
+        "schema_version": "release-candidate/v1",
+        "support_tier": "unsupported",
+    }
+    manifest.update(manifest_overrides or {})
+    (candidate_root / "manifest.json").write_bytes(canonical(manifest))
+    return candidate_root
+
+
+def write_acquisition_receipt(
+    state_home: Path,
+    archive: str,
+    candidate_root: Path,
+    operation_id: str,
+    installed_at: str,
+    *,
+    overrides: dict[str, Any] | None = None,
+    reseal: bool = True,
+) -> Path:
+    receipt = {
+        "activation": "absent",
+        "archive_sha256": archive,
+        "candidate_root_absolute_physical_path": str(candidate_root),
+        "effect_state": "complete",
+        "installed_at": installed_at,
+        "journal_sha256": hashlib.sha256(b"acquisition-journal").hexdigest(),
+        "operation_id": operation_id,
+        "plan_sha256": hashlib.sha256(b"acquisition-plan").hexdigest(),
+        "public_channel": None,
+        "record_sha256": "",
+        "release_claim": "none",
+        "schema_version": "release-candidate-acquisition-receipt/v1",
+        "selection": "absent",
+        "support": "unsupported",
+        "terminal_phase": "installed-unselected",
+    }
+    receipt.update(overrides or {})
+    directory = state_home / "agentic-sdlc" / "acquisition" / "receipts"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{archive}.json"
+    path.write_bytes(seal_acquisition(receipt) if reseal else canonical(receipt))
+    return path
+
+
+def activate_with_the_shipped_installer(
+    candidate_root: Path, home: Path, codex_home: Path, state_root: Path
+) -> list[tuple[str, Path]]:
+    """Copy-activate one candidate's claude entries through the SHIPPED installer's own transactions.
+
+    The prestate this ticket refreshes is therefore the prestate production holds -- real copies plus
+    real v2 ownership records -- rather than a hand-written state file that could agree with a defect.
+    """
+    config = bundle.Config(candidate_root, home, codex_home, "copy", False, "claude", state_root)
+    written: list[tuple[str, Path]] = []
+    with bundle.installer_lock(config):
+        state = bundle.load_config_state(config)
+        for entry in bundle.discover_entries(candidate_root):
+            if entry.agent != "claude":
+                continue
+            destination = bundle.destination_for(entry, config)
+            bundle.ensure_collection(entry, destination, config)
+            root_token, collection_token = bundle.authority_tokens(entry, destination, config)
+            mode = bundle.transactional_create(
+                entry, destination, config, state, root_token, collection_token
+            )
+            assert mode == "copy", mode
+            written.append(
+                (destination.relative_to(bundle.agent_root(entry, config)).as_posix(), destination)
+            )
+    written.sort(key=lambda row: row[0])
+    return written
+
+
+def sealed_prior_receipt(
+    entries: list[tuple[str, Path]],
+    *,
+    candidate_id: str = CANDIDATE_A,
+    archive: str = ARCHIVE_A,
+    version: str = VERSION_A,
+    operation_id: str = OPERATION_A,
+    instant: str = PRIOR_INSTANT,
+    receipt_id: str | None = None,
+    body_overrides: dict[str, Any] | None = None,
+    entry_digest: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """The ACTIVE receipt, sealed by the family's own producer over the digests really on disk."""
+    rows: list[dict[str, Any]] = []
+    for name, destination in entries:
+        digest = (entry_digest or {}).get(name, bundle.digest(destination))
+        rows.append(
+            {
+                "content_sha256": digest,
+                "disposition": "installed",
+                "entry_name": name,
+                "prestate": "absent",
+            }
+        )
+    rows.sort(key=lambda row: str(row["entry_name"]))
+    body = {
+        "activation_scope": "claude-home",
+        "archive_sha256": archive,
+        "candidate_id": candidate_id,
+        "effect_state": "complete",
+        "entries": rows,
+        "host": "claude",
+        "journal_sha256": hashlib.sha256(b"prior-journal").hexdigest(),
+        "operation": "install",
+        "plan_sha256": hashlib.sha256(b"prior-plan").hexdigest(),
+        "public_channel": None,
+        "record_sha256": "",
+        "release_claim": "none",
+        "requested_version": None,
+        "resolved_version": version,
+        "schema_version": receipts.BODY_SCHEMA,
+        "terminal_phase": "activated",
+        "unknowns": [],
+        "version_source": "archive-manifest",
+    }
+    body.update(body_overrides or {})
+    compact = instant.replace("-", "").replace(":", "").lower()
+    document = {
+        "ancestors": [
+            {
+                "expected_kind": receipts.RECEIPT_KIND,
+                "receipt_id": operation_id,
+                "relation": "derived-from",
+            }
+        ],
+        "body": body,
+        "content_digest": "",
+        "emitting_plane": "acquired-candidate",
+        "receipt_id": receipt_id or f"install-{operation_id}-{compact}",
+        "receipt_kind": receipts.RECEIPT_KIND,
+        "schema": receipts.ENVELOPE_SCHEMA,
+        "stated_at": instant,
+    }
+    result = receipts.derive("seal", document, "the prior activation")
+    if result["verdict"] != receipts.VERDICT_SEALED:
+        raise AssertionError(f"fixture did not seal: {result['reasons']}")
+    sealed = result["receipt"]
+    assert isinstance(sealed, dict)
+    return sealed
+
+
+@dataclass
+class Fixture:
+    root: Path
+    home: Path
+    state_home: Path
+    data_home: Path
+    codex_home: Path
+    candidate_a: Path
+    candidate_b: Path | None
+    acquisition_a: Path
+    acquisition_b: Path | None
+    activated: list[tuple[str, Path]]
+    prior_receipt: dict[str, Any]
+    config: Any
+
+    @property
+    def claude_root(self) -> Path:
+        return self.home / ".claude"
+
+    @property
+    def activation_dir(self) -> Path:
+        return self.state_home / "agentic-sdlc" / "activation"
+
+    @property
+    def pointer(self) -> Path:
+        return self.activation_dir / "active-receipt.json"
+
+    def destination(self, relative: str) -> Path:
+        return self.claude_root / relative
+
+    def receipt_paths(self) -> list[Path]:
+        directory = self.activation_dir / "receipts"
+        return sorted(directory.glob("*.json")) if directory.is_dir() else []
+
+    def journals(self) -> list[Path]:
+        directory = self.activation_dir / "journals"
+        return sorted(directory.glob("*.json")) if directory.is_dir() else []
+
+    def plans(self) -> list[Path]:
+        directory = self.activation_dir / "plans"
+        return sorted(directory.glob("*.json")) if directory.is_dir() else []
+
+    def journal(self) -> dict[str, Any]:
+        paths = self.journals()
+        assert len(paths) == 1, paths
+        return json.loads(paths[0].read_text(encoding="utf-8"))
+
+    def new_receipt(self) -> dict[str, Any]:
+        prior_name = f"{self.prior_receipt['receipt_id']}.json"
+        fresh = [path for path in self.receipt_paths() if path.name != prior_name]
+        assert len(fresh) == 1, fresh
+        return json.loads(fresh[0].read_text(encoding="utf-8"))
+
+    def config_at(self, instant: str = INSTANT, **overrides: Any) -> Any:
+        values: dict[str, Any] = {
+            "home": self.home,
+            "state_home": self.state_home,
+            "data_home": self.data_home,
+            "codex_home": self.codex_home,
+            "installer_state_root": self.state_home,
+            "observed_host_version": HOST_VERSION,
+            "observed_instant": instant,
+        }
+        values.update(overrides)
+        return update.Config(**values)
+
+
+def build_fixture(
+    root: Path,
+    *,
+    payload_a: dict[str, str] | None = None,
+    payload_b: dict[str, str] | None = None,
+    version_b: str = VERSION_B,
+    candidate_b_id: str = CANDIDATE_B,
+    include_b: bool = True,
+    contract_b: dict[str, Any] | None = None,
+    manifest_overrides_b: dict[str, Any] | None = None,
+    write_pointer: bool = True,
+    retain_prior: bool = False,
+    prior_body_overrides: dict[str, Any] | None = None,
+    prior_entry_digest: dict[str, str] | None = None,
+    drop_inventory_entries: tuple[str, ...] = (),
+) -> Fixture:
+    """Fabricate one ACTIVATED plane plus one different acquired candidate, ready to update."""
+    home = root / "operator-home"
+    state_home = root / "state"
+    data_home = root / "data"
+    codex_home = root / "codex-home"
+    for directory in (home, state_home, data_home):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    candidate_a = write_candidate(
+        data_home, ARCHIVE_A, CANDIDATE_A, VERSION_A, payload_a or PAYLOAD_A
+    )
+    acquisition_a = write_acquisition_receipt(
+        state_home, ARCHIVE_A, candidate_a, OPERATION_A, "2026-08-19T08:00:00Z"
+    )
+    candidate_b: Path | None = None
+    acquisition_b: Path | None = None
+    if include_b:
+        candidate_b = write_candidate(
+            data_home,
+            ARCHIVE_B,
+            candidate_b_id,
+            version_b,
+            payload_b or PAYLOAD_B,
+            contract=contract_b,
+            manifest_overrides=manifest_overrides_b,
+        )
+        acquisition_b = write_acquisition_receipt(
+            state_home, ARCHIVE_B, candidate_b, OPERATION_B, "2026-08-20T08:00:00Z"
+        )
+
+    activated = activate_with_the_shipped_installer(candidate_a, home, codex_home, state_home)
+    inventory = [row for row in activated if row[0] not in drop_inventory_entries]
+    prior = sealed_prior_receipt(
+        inventory, body_overrides=prior_body_overrides, entry_digest=prior_entry_digest
+    )
+    activation_dir = state_home / "agentic-sdlc" / "activation"
+    (activation_dir / "receipts").mkdir(parents=True, exist_ok=True)
+    if write_pointer:
+        (activation_dir / "active-receipt.json").write_bytes(receipts.canonical_bytes(prior))
+    if retain_prior:
+        (activation_dir / "receipts" / f"{prior['receipt_id']}.json").write_bytes(
+            receipts.canonical_bytes(prior)
+        )
+
+    fixture = Fixture(
+        root=root,
+        home=home,
+        state_home=state_home,
+        data_home=data_home,
+        codex_home=codex_home,
+        candidate_a=candidate_a,
+        candidate_b=candidate_b,
+        acquisition_a=acquisition_a,
+        acquisition_b=acquisition_b,
+        activated=activated,
+        prior_receipt=prior,
+        config=None,
+    )
+    fixture.config = fixture.config_at()
+    return fixture
+
+
+@dataclass
+class Outcome:
+    code: int
+    stdout: str
+    stderr: str
+
+
+def call_main(
+    fixture: Fixture,
+    *,
+    argv: list[str] | None = None,
+    config: Any | None = None,
+    fail_refresh_after: int | None = None,
+) -> Outcome:
+    """Drive ``main([])`` exactly as the dispatcher does, optionally injecting one transaction fault.
+
+    The fault is injected at the ONE seam a real interruption would hit: the shipped installer's
+    ``transactional_replace``, on the sibling instance this run loads.  Patching the file would not
+    work, because every run loads its own module object by absolute path.
+    """
+    real_loader = update.load_sibling
+
+    def loader(stem: str) -> ModuleType:
+        module = real_loader(stem)
+        if stem == "install_skill_bundle" and fail_refresh_after is not None:
+            original = module.transactional_replace
+            calls: list[int] = []
+
+            def failing(*args: Any, **kwargs: Any) -> Any:
+                calls.append(1)
+                if len(calls) > fail_refresh_after:
+                    raise module.InstallerError("fault-injected transaction failure")
+                return original(*args, **kwargs)
+
+            module.transactional_replace = failing
+        return module
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(update, "default_config", lambda: config or fixture.config))
+        stack.enter_context(mock.patch.object(update, "load_sibling", loader))
+        stack.enter_context(contextlib.redirect_stdout(out))
+        stack.enter_context(contextlib.redirect_stderr(err))
+        code = update.main([] if argv is None else argv)
+    assert isinstance(code, int) and not isinstance(code, bool), repr(code)
+    assert 0 <= code <= 4, code
+    return Outcome(code, out.getvalue(), err.getvalue())
+
+
+def plane_inventory(*roots: Path) -> dict[str, str]:
+    """Every file under each root by path, with its digest, symlink target, and size."""
+    seen: dict[str, str] = {}
+    for root in roots:
+        for path in sorted(root.rglob("*")) if root.exists() else []:
+            item = path.lstat()
+            if stat.S_ISLNK(item.st_mode):
+                seen[str(path)] = f"link:{os.readlink(path)}"
+            elif stat.S_ISDIR(item.st_mode):
+                seen[str(path)] = "dir"
+            else:
+                seen[str(path)] = f"file:{item.st_size}:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+    return seen
+
+
+class TemporaryRoot(unittest.TestCase):
+    """One temporary directory per test, so no test can observe another's plane."""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+
+    def fixture(self, **kwargs: Any) -> Fixture:
+        directory = Path(tempfile.mkdtemp(dir=self.root))
+        return build_fixture(directory, **kwargs)
+
+    def repoint(self, fixture: Fixture, **kwargs: Any) -> dict[str, Any]:
+        """Re-seal this plane's ACTIVE receipt with overrides and rewrite the pointer."""
+        prior = sealed_prior_receipt(fixture.activated, **kwargs)
+        fixture.prior_receipt = prior
+        fixture.pointer.write_bytes(receipts.canonical_bytes(prior))
+        return prior
+
+
+class ReExpressedContractsTest(TemporaryRoot):
+    """The constants and decisions this module re-expresses must still agree with the shipped tree."""
+
+    def test_acquisition_receipt_contract_matches_shipped_policy(self) -> None:
+        policy = json.loads(ACQUISITION_POLICY_PATH.read_text(encoding="utf-8"))
+        schema = policy["records"]["schemas"]["immutable_receipt"]
+        self.assertEqual(
+            tuple(sorted(schema["required_keys"])), tuple(sorted(update.ACQUISITION_RECEIPT_KEYS))
+        )
+        expected = dict(schema["constants"])
+        expected["schema_version"] = schema["schema_version"]
+        self.assertEqual(expected, update.ACQUISITION_RECEIPT_CONSTANTS)
+        layout = policy["filesystem"]["layout"]
+        self.assertEqual(
+            "$XDG_STATE_HOME/" + "/".join(update.ACQUISITION_RECEIPT_SEGMENTS) + "/<archive-sha256>.json",
+            layout["receipt"],
+        )
+        self.assertEqual(
+            "$XDG_DATA_HOME/"
+            + "/".join(update.ACQUISITION_CANDIDATE_SEGMENTS)
+            + f"/<archive-sha256>/{update.ACQUISITION_CANDIDATE_LEAF}",
+            layout["candidate_root"],
+        )
+        # Positive control: the same lookups do detect a disagreement.
+        self.assertNotEqual(expected, {**expected, "selection": "chosen"})
+
+    def test_escape_display_agrees_with_the_receipt_producer(self) -> None:
+        for sample in ("plain", "a\nb", "a\rb", "a\tb", "a\\b", "\x1b[2J", "\x7f", "٩"):
+            with self.subTest(sample=sample):
+                self.assertEqual(receipts.escape_display(sample), update.escape_display(sample))
+        # Positive control: the escape is not the identity, so the agreement above is not vacuous.
+        self.assertNotEqual("a\nb", update.escape_display("a\nb"))
+        self.assertEqual("a\\nb", update.escape_display("a\nb"))
+
+    def test_release_contract_fixture_is_the_shipped_one(self) -> None:
+        contract = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(update.RELEASE_CONTRACT_HOST, contract["compatibility"]["core"]["host"])
+        self.assertEqual([], contract["compatibility"]["known_incompatible_host_versions"])
+
+    def test_the_family_admits_no_removal_for_an_update_so_a_dropped_entry_is_preserved(self) -> None:
+        """The recorded reason this module preserves rather than removes a dropped entry.
+
+        If the family ever admitted ``removed`` for an update, this test fails and the preserve-only
+        decision must be revisited deliberately instead of surviving as a stale comment.
+        """
+        self.assertNotIn("removed", receipts.OPERATION_DISPOSITIONS["update"])
+        self.assertEqual(("installed", "preserved", "refreshed"), receipts.OPERATION_DISPOSITIONS["update"])
+        # Positive control: the same lookup does report a removal for the operation that owns removal.
+        self.assertIn("removed", receipts.OPERATION_DISPOSITIONS["uninstall"])
+        self.assertIn("activated", receipts.OPERATION_PHASES["update"])
+        # An update replaces exactly one earlier receipt, which is why this module seals two ancestors.
+        self.assertIn("supersedes", receipts.FAMILY_RELATIONS)
+
+    def test_module_carries_no_wildcard_purge_or_delete_vocabulary(self) -> None:
+        """The MUST-NOTs are pinned in the CODE, with every docstring and comment stripped first.
+
+        A naive line filter would read the prose that NAMES the forbidden vocabulary as a use of it,
+        which is why the module is re-rendered from its own syntax tree instead.
+        """
+        code = executable_source(MODULE_PATH)
+        for forbidden in (
+            "--all",
+            "purge",
+            "rmtree",
+            "transactional_delete",
+            "remove_path",
+            "durable_unlink",
+            "ccodex_sdlc_install",
+            "ccodex_sdlc_uninstall",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, code)
+        # Positive control: the same search does find the tokens the module really uses.
+        self.assertIn("transactional_replace", code)
+        self.assertIn("transactional_create", code)
+
+    def test_every_class_maps_to_one_prestate_and_only_the_admitted_classes_are_written(self) -> None:
+        self.assertEqual(sorted(update.CLASS_PRESTATE), sorted(update.CLASS_REASON))
+        for classification, prestate in update.CLASS_PRESTATE.items():
+            with self.subTest(classification=classification):
+                self.assertIn(prestate, receipts.PRESTATES)
+        self.assertEqual(
+            (update.CLASS_ABSENT, update.CLASS_OWNED_EXACT, update.CLASS_OWNED_CURRENT),
+            update.ADMITTED_CLASSES,
+        )
+        # Positive control: a class outside the admitted tuple really is a blocking one.
+        blocking = [name for name in update.CLASS_PRESTATE if name not in update.ADMITTED_CLASSES]
+        self.assertIn(update.CLASS_MODIFIED, blocking)
+        self.assertIn(update.CLASS_FOREIGN, blocking)
+
+
+class EndToEndUpdateTest(TemporaryRoot):
+    def test_update_refreshes_owned_entries_and_seals_one_receipt_with_both_ancestors(self) -> None:
+        fixture = self.fixture()
+        prior_pointer = fixture.pointer.read_bytes()
+        acquisitions = {
+            path: path.read_bytes() for path in (fixture.acquisition_a, fixture.acquisition_b) if path
+        }
+
+        outcome = call_main(fixture)
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertEqual("", outcome.stderr)
+
+        # Every claude destination now holds the NEW payload's content, still as a copy.
+        self.assertEqual("cartographer two\n", fixture.destination("agents/cartographer.md").read_text())
+        self.assertEqual("frame two\n", fixture.destination("commands/sdlc-frame.md").read_text())
+        self.assertEqual(
+            "notes two\n", fixture.destination("skills/alpha-skill/references/notes.md").read_text()
+        )
+        for relative in CLAUDE_DESTINATIONS:
+            with self.subTest(relative=relative):
+                self.assertFalse(fixture.destination(relative).is_symlink())
+        # A claude-host refresh never touches the codex plane, and there is no wildcard host.
+        self.assertFalse((fixture.home / ".codex" / CODEX_DESTINATION).exists())
+        self.assertFalse((fixture.codex_home / CODEX_DESTINATION).exists())
+
+        receipt = fixture.new_receipt()
+        body = receipt["body"]
+        self.assertEqual("update", body["operation"])
+        self.assertEqual(CANDIDATE_B, body["candidate_id"])
+        self.assertEqual(ARCHIVE_B, body["archive_sha256"])
+        self.assertEqual(VERSION_B, body["resolved_version"])
+        self.assertIsNone(body["requested_version"])
+        self.assertEqual("archive-manifest", body["version_source"])
+        self.assertEqual("complete", body["effect_state"])
+        self.assertEqual("activated", body["terminal_phase"])
+        self.assertIsNone(body["public_channel"])
+        self.assertEqual("none", body["release_claim"])
+        self.assertEqual([], body["unknowns"])
+        self.assertEqual(
+            {("refreshed", "owned")}, {(row["disposition"], row["prestate"]) for row in body["entries"]}
+        )
+        self.assertEqual(
+            [
+                {"expected_kind": receipts.RECEIPT_KIND, "receipt_id": OPERATION_B, "relation": "derived-from"},
+                {
+                    "expected_kind": receipts.RECEIPT_KIND,
+                    "receipt_id": fixture.prior_receipt["receipt_id"],
+                    "relation": "supersedes",
+                },
+            ],
+            receipt["ancestors"],
+        )
+        # Each inventory digest is the digest really on disk now, not the one the prior receipt held.
+        for row in body["entries"]:
+            with self.subTest(entry=row["entry_name"]):
+                self.assertEqual(
+                    bundle.digest(fixture.destination(str(row["entry_name"]))), row["content_sha256"]
+                )
+
+        # The pointer moved to THIS receipt, and the prior one is still readable under its own id.
+        self.assertEqual(receipts.canonical_bytes(receipt), fixture.pointer.read_bytes())
+        retained = fixture.activation_dir / "receipts" / f"{fixture.prior_receipt['receipt_id']}.json"
+        self.assertEqual(prior_pointer, retained.read_bytes())
+        # Both sealed acquisition receipts are byte-identical, and both payload roots survive.
+        for path, before in acquisitions.items():
+            with self.subTest(path=path.name):
+                self.assertEqual(before, path.read_bytes())
+        self.assertTrue((fixture.candidate_a / "manifest.json").is_file())
+        assert fixture.candidate_b is not None
+        self.assertTrue((fixture.candidate_b / "manifest.json").is_file())
+
+    def test_the_new_receipt_validates_through_the_family_and_the_skills_plane_envelope(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        receipt = fixture.new_receipt()
+
+        result = receipts.derive("validate", receipt, "the sealed update receipt")
+        self.assertEqual(receipts.VERDICT_VALIDATED, result["verdict"], result["reasons"])
+
+        path = fixture.root / "receipt-for-the-envelope.json"
+        path.write_bytes(receipts.canonical_bytes(receipt))
+        proof = subprocess.run(
+            [sys.executable, str(ENVELOPE_TOOL), "verify", "--receipt", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proof.returncode, proof.stderr)
+        report = json.loads(proof.stdout)
+        self.assertEqual("verified", report["verdict"], proof.stdout)
+        self.assertEqual(
+            {"derived-from", "supersedes"},
+            {reference["relation"] for reference in receipt["ancestors"]},
+        )
+        # Positive control for the ENVELOPE checker: it refuses a body edit, because its content digest
+        # seals the body. Its own residuals say the digest does NOT bind the ancestor list, which is
+        # why the ancestor half is proved through the family's checker below instead.
+        edited = json.loads(json.dumps(receipt))
+        edited["body"]["resolved_version"] = "9.9.9"
+        broken = fixture.root / "tampered.json"
+        broken.write_bytes(receipts.canonical_bytes(edited))
+        refusal = subprocess.run(
+            [sys.executable, str(ENVELOPE_TOOL), "verify", "--receipt", str(broken)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual("verified", json.loads(refusal.stdout)["verdict"], refusal.stdout)
+        # Positive control for the FAMILY checker's ancestor rule: an update with no supersedes is
+        # refused, so the two ancestors above are a requirement this receipt met and not decoration.
+        without = json.loads(json.dumps(receipt))
+        without["ancestors"] = [
+            reference for reference in without["ancestors"] if reference["relation"] != "supersedes"
+        ]
+        stripped = receipts.derive("validate", without, "an update with no supersedes")
+        self.assertEqual(receipts.VERDICT_REFUSED, stripped["verdict"])
+        self.assertIn("supersedes", " ".join(str(reason) for reason in stripped["reasons"]))
+
+    def test_an_already_retained_prior_receipt_is_reused_and_a_different_one_refuses(self) -> None:
+        reused = self.fixture(retain_prior=True)
+        self.assertEqual(0, call_main(reused).code, "a byte-identical retained copy is the retained copy")
+
+        conflicting = self.fixture()
+        path = conflicting.activation_dir / "receipts" / f"{conflicting.prior_receipt['receipt_id']}.json"
+        other = sealed_prior_receipt(conflicting.activated, version="0.7.2")
+        path.write_bytes(receipts.canonical_bytes(other))
+        before = plane_inventory(conflicting.claude_root)
+
+        outcome = call_main(conflicting)
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("error: ccodex sdlc update ", outcome.stderr)
+        self.assertIn("as a DIFFERENT document", outcome.stderr)
+        # Neither document was overwritten and no entry moved.
+        self.assertEqual(receipts.canonical_bytes(other), path.read_bytes())
+        self.assertEqual(before, plane_inventory(conflicting.claude_root))
+
+    def test_the_real_dispatcher_runs_update_end_to_end(self) -> None:
+        """The shipped reader loads this module by absolute path and honours its integer exit class."""
+        fixture = self.fixture()
+        binary = fixture.root / "bin"
+        binary.mkdir()
+        stub = binary / "claude"
+        stub.write_text(f"#!/bin/sh\necho '{HOST_VERSION} (Claude Code)'\n", encoding="utf-8")
+        stub.chmod(0o755)
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", str(READER_PATH), "update"],
+            env={
+                "HOME": str(fixture.home),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": str(binary),
+                "XDG_STATE_HOME": str(fixture.state_home),
+                "XDG_DATA_HOME": str(fixture.data_home),
+                "CODEX_HOME": str(fixture.codex_home),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertIn("ccodex sdlc update: effect complete, terminal activated", completed.stdout)
+        self.assertNotIn("Traceback", completed.stderr)
+        self.assertEqual("cartographer two\n", fixture.destination("agents/cartographer.md").read_text())
+        receipt = fixture.new_receipt()
+        self.assertEqual("update", receipt["body"]["operation"])
+        self.assertEqual(receipts.canonical_bytes(receipt), fixture.pointer.read_bytes())
+        self.assertEqual(
+            receipts.VERDICT_VALIDATED,
+            receipts.derive("validate", receipt, "the dispatched receipt")["verdict"],
+        )
+        # Positive control: the same dispatcher refuses the same plane once the pointer is gone.
+        fixture.pointer.unlink()
+        again = subprocess.run(
+            [sys.executable, "-I", "-B", str(READER_PATH), "update"],
+            env={
+                "HOME": str(fixture.home),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": str(binary),
+                "XDG_STATE_HOME": str(fixture.state_home),
+                "XDG_DATA_HOME": str(fixture.data_home),
+                "CODEX_HOME": str(fixture.codex_home),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(3, again.returncode, again.stderr)
+        self.assertIn("error: ccodex sdlc update ", again.stderr)
+        self.assertNotIn("is unavailable in this distribution", again.stderr)
+        self.assertEqual("", again.stdout)
+
+    def test_an_entry_the_new_payload_no_longer_carries_is_preserved_and_named(self) -> None:
+        payload = {name: text for name, text in PAYLOAD_B.items() if name != "commands/sdlc-frame.md"}
+        fixture = self.fixture(payload_b=payload)
+        outcome = call_main(fixture)
+        self.assertEqual(0, outcome.code, outcome.stderr)
+
+        dropped = fixture.destination("commands/sdlc-frame.md")
+        # Preserved, not removed: the retired payload's content is still exactly there.
+        self.assertEqual("frame one\n", dropped.read_text())
+        self.assertIn("[not carried by the new payload]", outcome.stdout)
+        rows = {row["entry_name"]: row for row in fixture.new_receipt()["body"]["entries"]}
+        self.assertEqual("preserved", rows["commands/sdlc-frame.md"]["disposition"])
+        self.assertEqual("owned", rows["commands/sdlc-frame.md"]["prestate"])
+        self.assertEqual(bundle.digest(dropped), rows["commands/sdlc-frame.md"]["content_sha256"])
+        # Positive control: the entries the new payload DOES carry were refreshed in the same run.
+        self.assertEqual("refreshed", rows["agents/cartographer.md"]["disposition"])
+        self.assertEqual("cartographer two\n", fixture.destination("agents/cartographer.md").read_text())
+
+    def test_an_acquisition_receipt_written_during_the_run_is_an_unknown_effect(self) -> None:
+        """The sealed acquisition receipt is this update's provenance and this module never writes it.
+
+        A concurrent writer is simulated at the ONE point where the run has already had an effect, so
+        the honest outcome is an unknown rather than a success with drifted provenance.
+        """
+        fixture = self.fixture()
+        assert fixture.acquisition_b is not None
+
+        def toucher(point: str) -> None:
+            if point == "after-refresh":
+                document = json.loads(fixture.acquisition_b.read_text(encoding="utf-8"))
+                document["installed_at"] = "2026-08-20T08:00:02Z"
+                fixture.acquisition_b.write_bytes(seal_acquisition(document))
+
+        outcome = call_main(fixture, config=fixture.config_at(checkpoint=toucher))
+        self.assertEqual(4, outcome.code, outcome.stderr)
+        self.assertIn("changed during this run", outcome.stderr)
+        self.assertIn("its provenance is no longer exact", outcome.stderr)
+        # Positive control: with no concurrent writer the same plane completes and both sealed
+        # acquisition receipts are byte-identical afterwards.
+        clean = self.fixture()
+        assert clean.acquisition_b is not None
+        before = (clean.acquisition_a.read_bytes(), clean.acquisition_b.read_bytes())
+        self.assertEqual(0, call_main(clean).code)
+        self.assertEqual(before, (clean.acquisition_a.read_bytes(), clean.acquisition_b.read_bytes()))
+
+    def test_an_absent_recorded_destination_is_installed_rather_than_blocked(self) -> None:
+        fixture = self.fixture()
+        victim = fixture.destination("agents/cartographer.md")
+        victim.unlink()
+        outcome = call_main(fixture)
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertEqual("cartographer two\n", victim.read_text())
+        rows = {row["entry_name"]: row for row in fixture.new_receipt()["body"]["entries"]}
+        self.assertEqual("installed", rows["agents/cartographer.md"]["disposition"])
+        self.assertEqual("absent", rows["agents/cartographer.md"]["prestate"])
+        # Positive control: an entry that was present is recorded as a refresh in the same receipt.
+        self.assertEqual("refreshed", rows["commands/sdlc-frame.md"]["disposition"])
+
+
+class AdmissionRefusalTest(TemporaryRoot):
+    """Both admissions refuse BY NAME before any effect, and each refusal has a positive control."""
+
+    def assert_clean_refusal(self, fixture: Fixture, outcome: Outcome, *fragments: str) -> None:
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertEqual("", outcome.stdout)
+        self.assertIn("error: ccodex sdlc update ", outcome.stderr)
+        self.assertNotIn("Traceback", outcome.stderr)
+        for fragment in fragments:
+            self.assertIn(fragment, outcome.stderr)
+        self.assertEqual([], fixture.plans())
+        self.assertEqual([], fixture.journals())
+
+    def test_no_active_receipt_refuses_by_name(self) -> None:
+        fixture = self.fixture(write_pointer=False)
+        before = plane_inventory(fixture.claude_root)
+        outcome = call_main(fixture)
+        self.assert_clean_refusal(
+            fixture,
+            outcome,
+            "found no usable active distribution-activation receipt",
+            "install --host claude` is the front door",
+        )
+        self.assertEqual(before, plane_inventory(fixture.claude_root))
+        # Positive control: the identical fixture with the pointer written completes.
+        fixture.pointer.write_bytes(receipts.canonical_bytes(fixture.prior_receipt))
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_an_unsealed_or_tampered_active_receipt_refuses(self) -> None:
+        fixture = self.fixture()
+        tampered = json.loads(json.dumps(fixture.prior_receipt))
+        tampered["body"]["resolved_version"] = "9.9.9"
+        fixture.pointer.write_bytes(receipts.canonical_bytes(tampered))
+        outcome = call_main(fixture)
+        self.assert_clean_refusal(fixture, outcome, "does not validate as", receipts.BODY_SCHEMA)
+        # Positive control: restoring the sealed bytes admits the same plane.
+        fixture.pointer.write_bytes(receipts.canonical_bytes(fixture.prior_receipt))
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_an_active_receipt_that_is_a_link_refuses_rather_than_being_followed(self) -> None:
+        fixture = self.fixture()
+        elsewhere = fixture.root / "elsewhere.json"
+        elsewhere.write_bytes(receipts.canonical_bytes(fixture.prior_receipt))
+        fixture.pointer.unlink()
+        fixture.pointer.symlink_to(elsewhere)
+        outcome = call_main(fixture)
+        self.assert_clean_refusal(fixture, outcome, "is a link")
+        # Positive control: the same bytes as a regular file at the same path are admitted.
+        fixture.pointer.unlink()
+        fixture.pointer.write_bytes(elsewhere.read_bytes())
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_a_retired_active_receipt_refuses_because_there_is_nothing_to_update_over(self) -> None:
+        fixture = self.fixture()
+        retired_rows = [
+            {"content_sha256": None, "disposition": "removed", "entry_name": name, "prestate": "owned"}
+            for name, _ in fixture.activated
+        ]
+        self.repoint(
+            fixture,
+            body_overrides={
+                "entries": sorted(retired_rows, key=lambda row: str(row["entry_name"])),
+                "operation": "uninstall",
+                "terminal_phase": "retired",
+            },
+        )
+        outcome = call_main(fixture)
+        self.assert_clean_refusal(fixture, outcome, "records operation 'uninstall'")
+        # Positive control: the live activation the same harness seals is admitted.
+        self.repoint(fixture)
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_an_activated_partial_plane_is_updatable_but_a_not_activated_one_is_not(self) -> None:
+        refused = self.fixture()
+        self.repoint(
+            refused,
+            body_overrides={"effect_state": "none", "terminal_phase": "not-activated", "entries": []},
+        )
+        outcome = call_main(refused)
+        self.assert_clean_refusal(refused, outcome, "terminates 'not-activated'")
+        # Positive control: `activated-partial` is a live plane and the same harness updates it.
+        admitted = self.fixture()
+        self.repoint(
+            admitted,
+            body_overrides={"effect_state": "partial", "terminal_phase": "activated-partial"},
+        )
+        self.assertEqual(0, call_main(admitted).code)
+
+    def test_the_same_identity_selection_refuses_on_both_axes(self) -> None:
+        only_active = self.fixture(include_b=False)
+        outcome = call_main(only_active)
+        self.assert_clean_refusal(
+            only_active,
+            outcome,
+            "is the one this plane already activated",
+            "a re-activation of the same identity is never silent",
+        )
+
+        same_candidate = self.fixture(candidate_b_id=CANDIDATE_A)
+        second = call_main(same_candidate)
+        self.assert_clean_refusal(
+            same_candidate,
+            second,
+            "which is the identity this plane already activated",
+            "There is nothing to update",
+        )
+        # Positive control: a DIFFERENT identity through the identical harness completes.
+        self.assertEqual(0, call_main(self.fixture()).code)
+
+    def test_two_other_acquired_candidates_are_an_ambiguity_this_update_refuses(self) -> None:
+        fixture = self.fixture()
+        third_archive = hashlib.sha256(b"fabricated-archive-c").hexdigest()
+        third_root = write_candidate(
+            fixture.data_home,
+            third_archive,
+            hashlib.sha256(b"fabricated-candidate-c").hexdigest(),
+            "0.7.5",
+            PAYLOAD_B,
+        )
+        write_acquisition_receipt(
+            fixture.state_home,
+            third_archive,
+            third_root,
+            "op-" + hashlib.sha256(b"fabricated-operation-c").hexdigest()[:32],
+            "2026-08-20T09:00:00Z",
+        )
+        outcome = call_main(fixture)
+        self.assert_clean_refusal(
+            fixture, outcome, "acquired candidates other than the active one", "would be a guess"
+        )
+        # Positive control: removing the ambiguity leaves exactly one admissible candidate.
+        (fixture.state_home / "agentic-sdlc" / "acquisition" / "receipts" / f"{third_archive}.json").unlink()
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_a_tampered_acquisition_seal_refuses_before_the_candidate_is_read(self) -> None:
+        fixture = self.fixture()
+        assert fixture.acquisition_b is not None
+        document = json.loads(fixture.acquisition_b.read_text(encoding="utf-8"))
+        document["installed_at"] = "2026-08-20T08:00:01Z"
+        fixture.acquisition_b.write_bytes(canonical(document))
+        outcome = call_main(fixture)
+        self.assert_clean_refusal(fixture, outcome, "mismatched pair")
+        # Positive control: the resealed receipt for the same values is admitted.
+        fixture.acquisition_b.write_bytes(seal_acquisition(document))
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_off_linux_refuses_by_name(self) -> None:
+        fixture = self.fixture()
+        outcome = call_main(fixture, config=fixture.config_at(observed_system="Darwin"))
+        self.assert_clean_refusal(
+            fixture, outcome, "certified only on Linux", "the observed operating system is 'Darwin'"
+        )
+        machine = call_main(fixture, config=fixture.config_at(observed_machine="aarch64"))
+        self.assert_clean_refusal(fixture, machine, "the observed architecture is 'aarch64'")
+        # Positive control: the same plane on the certified platform completes.
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_a_declared_incompatibility_and_an_unobservable_host_version_both_refuse(self) -> None:
+        contract = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
+        contract["compatibility"]["known_incompatible_host_versions"] = [
+            {"reason": "the fabricated payload declares this host broken", "version": HOST_VERSION}
+        ]
+        declared = self.fixture(contract_b=contract)
+        outcome = call_main(declared)
+        self.assert_clean_refusal(
+            declared, outcome, "DECLARES the observed Claude Code host version", "refused by name"
+        )
+
+        blind = self.fixture()
+        second = call_main(blind, config=blind.config_at(observed_host_version=None))
+        self.assert_clean_refusal(
+            blind,
+            second,
+            "the Claude Code host version could not be observed",
+            "never substitutes another version for the observed one",
+        )
+        # Positive control: the observed version the contract admits completes the same update.
+        self.assertEqual(0, call_main(blind).code)
+
+    def test_a_non_finite_number_and_a_duplicate_key_are_refused_in_a_read_document(self) -> None:
+        """``1e400`` never reaches ``parse_constant``, so the iterative walk is what catches it."""
+        with self.assertRaises(update.Refusal):
+            update.parse_json_object(b'{"n": 1e400}', "a fabricated document")
+        with self.assertRaises(update.Refusal):
+            update.parse_json_object(b'{"a": 1, "a": 2}', "a fabricated document")
+        with self.assertRaises(update.Refusal):
+            update.parse_json_object(b'{"n": NaN}', "a fabricated document")
+        # Positive control: the same reader accepts an ordinary document with a finite number.
+        self.assertEqual({"n": 1.5}, update.parse_json_object(b'{"n": 1.5}', "a fabricated document"))
+
+    def test_the_module_admits_no_arguments_and_returns_an_exit_class_never_a_bool(self) -> None:
+        fixture = self.fixture()
+        outcome = call_main(fixture, argv=["--host", "claude"])
+        self.assertEqual(3, outcome.code)
+        self.assertIn("accepts no arguments", outcome.stderr)
+        self.assertEqual([], fixture.journals())
+        # Positive control: the empty vector the dispatcher forwards is admitted.
+        clean = call_main(fixture)
+        self.assertEqual(0, clean.code, clean.stderr)
+        self.assertIsInstance(clean.code, int)
+        self.assertNotIsInstance(clean.code, bool)
+
+
+class BlockedRefreshTest(TemporaryRoot):
+    """A modified or foreign entry is preserved, NAMED, and blocks the whole refresh pre-effect."""
+
+    def assert_blocked(self, fixture: Fixture, outcome: Outcome, name: str, classification: str) -> None:
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertEqual("", outcome.stdout)
+        self.assertIn(update.BLOCK_SENTENCE, outcome.stderr)
+        self.assertIn(name, outcome.stderr)
+        self.assertIn(classification, outcome.stderr)
+        # No partial update past a blocked entry: no receipt, no journal, and the pointer is untouched.
+        self.assertEqual(
+            [fixture.activation_dir / "receipts" / f"{fixture.prior_receipt['receipt_id']}.json"]
+            if (fixture.activation_dir / "receipts" / f"{fixture.prior_receipt['receipt_id']}.json").exists()
+            else [],
+            fixture.receipt_paths(),
+        )
+        self.assertEqual([], fixture.journals())
+        self.assertEqual(receipts.canonical_bytes(fixture.prior_receipt), fixture.pointer.read_bytes())
+
+    def test_a_modified_entry_blocks_and_the_whole_plane_is_left_untouched(self) -> None:
+        fixture = self.fixture()
+        victim = fixture.destination("agents/cartographer.md")
+        victim.write_text("hand-edited by the operator\n", encoding="utf-8")
+        before = plane_inventory(fixture.claude_root)
+
+        outcome = call_main(fixture)
+        self.assert_blocked(fixture, outcome, "agents/cartographer.md", update.CLASS_MODIFIED)
+        # The modified entry is preserved byte-for-byte AND no other entry was refreshed past it.
+        self.assertEqual("hand-edited by the operator\n", victim.read_text())
+        self.assertEqual("frame one\n", fixture.destination("commands/sdlc-frame.md").read_text())
+        self.assertEqual(before, plane_inventory(fixture.claude_root))
+        # Positive control: restoring the recorded content lets the identical fixture refresh.
+        victim.write_text(PAYLOAD_A["agents/claude/cartographer.md"], encoding="utf-8")
+        self.assertEqual(0, call_main(fixture).code)
+        self.assertEqual("cartographer two\n", victim.read_text())
+
+    def test_a_foreign_entry_blocks_and_is_preserved_never_adopted(self) -> None:
+        payload = dict(PAYLOAD_B)
+        payload["commands/sdlc-extra.md"] = "extra two\n"
+        fixture = self.fixture(payload_b=payload)
+        foreign = fixture.destination("commands/sdlc-extra.md")
+        foreign.parent.mkdir(parents=True, exist_ok=True)
+        foreign.write_text("the operator's own command\n", encoding="utf-8")
+        before = plane_inventory(fixture.claude_root)
+
+        outcome = call_main(fixture)
+        self.assert_blocked(fixture, outcome, "commands/sdlc-extra.md", update.CLASS_FOREIGN)
+        self.assertEqual("the operator's own command\n", foreign.read_text())
+        self.assertEqual(before, plane_inventory(fixture.claude_root))
+        # Positive control: with the destination free, the same payload entry installs into the slot.
+        foreign.unlink()
+        self.assertEqual(0, call_main(fixture).code)
+        self.assertEqual("extra two\n", foreign.read_text())
+
+    def test_a_symlinked_destination_blocks_rather_than_being_replaced_through_the_link(self) -> None:
+        fixture = self.fixture()
+        outside = fixture.root / "outside.md"
+        outside.write_text("content outside the plane\n", encoding="utf-8")
+        victim = fixture.destination("agents/cartographer.md")
+        victim.unlink()
+        victim.symlink_to(outside)
+
+        outcome = call_main(fixture)
+        self.assert_blocked(fixture, outcome, "agents/cartographer.md", update.CLASS_FOREIGN_LINK)
+        self.assertTrue(victim.is_symlink())
+        self.assertEqual("content outside the plane\n", outside.read_text())
+
+    def test_an_inventory_row_with_no_digest_blocks_because_nothing_proves_ownership(self) -> None:
+        fixture = self.fixture()
+        self.repoint(
+            fixture,
+            entry_digest={"agents/cartographer.md": None},
+            body_overrides={
+                "effect_state": "partial",
+                "terminal_phase": "activated-partial",
+                "unknowns": [
+                    {
+                        "detail": "the entry could not be digested when it was activated",
+                        "observation": "entry-content",
+                        "subject": "agents/cartographer.md",
+                    }
+                ],
+            },
+        )
+        outcome = call_main(fixture)
+        self.assert_blocked(fixture, outcome, "agents/cartographer.md", update.CLASS_UNPROVABLE)
+        self.assertEqual("cartographer one\n", fixture.destination("agents/cartographer.md").read_text())
+        # Positive control: the same plane with a recorded digest for that entry refreshes.
+        self.repoint(fixture, body_overrides={"effect_state": "partial", "terminal_phase": "activated-partial"})
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_a_missing_ownership_record_blocks_because_a_refresh_must_prove_what_it_replaces(self) -> None:
+        fixture = self.fixture()
+        state_path = fixture.state_home / "agentic-sdlc-installer" / "state.json"
+        self.assertTrue(state_path.is_file())
+        kept = state_path.read_bytes()
+        state_path.unlink()
+
+        outcome = call_main(fixture)
+        self.assert_blocked(fixture, outcome, "agents/cartographer.md", update.CLASS_NO_RECORD)
+        self.assertEqual("cartographer one\n", fixture.destination("agents/cartographer.md").read_text())
+        # Positive control: the restored ownership state admits the identical refresh.
+        state_path.write_bytes(kept)
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_an_outstanding_installer_transaction_refuses_rather_than_being_resolved(self) -> None:
+        """The outstanding transaction is armed with the installer's OWN primitives, not hand-written.
+
+        A hand-written journal row is refused by ``validate_state`` first, which would prove only that
+        an invalid state is invalid; this one is a record the shipped installer itself would recognise
+        as recoverable, so the refusal under test is the "recovery is a separate operation" one.
+        """
+        fixture = self.fixture()
+        state_path = fixture.state_home / "agentic-sdlc-installer" / "state.json"
+        config = bundle.Config(
+            fixture.candidate_a, fixture.home, fixture.codex_home, "copy", False, "claude", fixture.state_home
+        )
+        state = bundle.load_config_state(config)
+        key = sorted(state["entries"])[0]
+        record = state["entries"][key]
+        artifact = bundle.reserve_private_artifact(Path(key), "backup")
+        transaction = bundle.transaction_record(
+            "delete", key, old_record=record, old_owned=True, new_record=None, stage=None, backup=artifact
+        )
+        armed = bundle.state_with_transaction(state, key, transaction)
+        bundle.write_state(state_path, armed, False)
+        bundle.validate_state(config, bundle.load_config_state(config))  # positive control: it is valid
+
+        outcome = call_main(fixture)
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("outstanding lifecycle", outcome.stderr)
+        self.assertIn("recovery is a separate explicit operation", outcome.stderr)
+        self.assertEqual([], fixture.journals())
+        self.assertEqual("cartographer one\n", fixture.destination("agents/cartographer.md").read_text())
+
+
+class InterruptionTest(TemporaryRoot):
+    """A kill mid-flight leaves the PRIOR receipt active, a recoverable journal, and an honest 4."""
+
+    def test_a_kill_after_the_seal_leaves_the_prior_receipt_as_the_active_statement(self) -> None:
+        fixture = self.fixture()
+        prior_pointer = fixture.pointer.read_bytes()
+
+        def killer(point: str) -> None:
+            if point == "after-receipt-sealed":
+                raise KeyboardInterrupt("the operator killed this run")
+
+        outcome = call_main(fixture, config=fixture.config_at(checkpoint=killer))
+        self.assertEqual(4, outcome.code, outcome.stderr)
+        self.assertIn("so its effect is unknown", outcome.stderr)
+        # The prior receipt is STILL this plane's active statement, and it is readable under its own id.
+        self.assertEqual(prior_pointer, fixture.pointer.read_bytes())
+        retained = fixture.activation_dir / "receipts" / f"{fixture.prior_receipt['receipt_id']}.json"
+        self.assertEqual(prior_pointer, retained.read_bytes())
+        # The journal is recoverable and names both receipts of the transition it stopped inside.
+        journal = fixture.journal()
+        self.assertEqual("prior-receipt", journal["pointer_when_recorded"])
+        self.assertEqual("effects-recorded", journal["phase"])
+        self.assertEqual(fixture.prior_receipt["receipt_id"], journal["prior_receipt_id"])
+        self.assertEqual(str(fixture.pointer), journal["active_pointer"])
+        self.assertTrue(Path(journal["receipt_path"]).is_file())
+        # The effect really did happen, which is why this is an unknown rather than a refusal.
+        self.assertEqual("cartographer two\n", fixture.destination("agents/cartographer.md").read_text())
+        # Positive control: the same fixture without the kill reaches exit 0 and moves the pointer.
+        clean = self.fixture()
+        self.assertEqual(0, call_main(clean).code)
+        self.assertNotEqual(
+            receipts.canonical_bytes(clean.prior_receipt), clean.pointer.read_bytes()
+        )
+
+    def test_a_failed_transaction_leaves_the_prior_receipt_active_and_records_a_partial_effect(self) -> None:
+        fixture = self.fixture()
+        prior_pointer = fixture.pointer.read_bytes()
+        outcome = call_main(fixture, fail_refresh_after=1)
+        self.assertEqual(4, outcome.code, outcome.stderr)
+        self.assertIn("fault-injected transaction failure", outcome.stderr)
+        self.assertEqual(prior_pointer, fixture.pointer.read_bytes())
+        body = fixture.new_receipt()["body"]
+        self.assertEqual("partial", body["effect_state"])
+        self.assertEqual("activated-partial", body["terminal_phase"])
+        self.assertEqual(
+            receipts.VERDICT_VALIDATED,
+            receipts.derive("validate", fixture.new_receipt(), "the partial receipt")["verdict"],
+        )
+        self.assertIn("active pointer", outcome.stdout)
+        self.assertIn("stays this plane's active statement", outcome.stdout)
+        # Positive control: without the fault the same plane completes and activates its own receipt.
+        clean = self.fixture()
+        self.assertEqual(0, call_main(clean).code)
+        self.assertEqual("complete", clean.new_receipt()["body"]["effect_state"])
+
+    def test_an_existing_receipt_for_this_identity_and_instant_refuses_rather_than_repeating(self) -> None:
+        fixture = self.fixture()
+        receipt_id = f"update-{OPERATION_B}-20260820t121314z"
+        occupied = fixture.activation_dir / "receipts" / f"{receipt_id}.json"
+        occupied.write_bytes(b"{}\n")
+        outcome = call_main(fixture)
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("already exists", outcome.stderr)
+        self.assertEqual(b"{}\n", occupied.read_bytes())
+        self.assertEqual("cartographer one\n", fixture.destination("agents/cartographer.md").read_text())
+        # Positive control: the same run at a different instant writes its own receipt.
+        self.assertEqual(0, call_main(fixture, config=fixture.config_at(LATER_INSTANT)).code)
+
+
+class ReportTest(TemporaryRoot):
+    """Every rendered line derived from an artifact is escaped, and the report claims no authority."""
+
+    def test_control_characters_from_the_superseded_receipt_are_escaped_in_the_report(self) -> None:
+        hostile = "cleared\x1b[2J and\na second line\r"
+        active = update.ActiveActivation(
+            path=self.root / "active-receipt.json",
+            raw=b"{}",
+            receipt={"receipt_id": "install-prior"},
+            body={
+                "candidate_id": "a" * 64,
+                "resolved_version": "0.7.3",
+                "unknowns": [
+                    {"detail": hostile, "observation": "entry-content", "subject": "agents/x.md"}
+                ],
+            },
+            receipt_id="install-prior",
+            inventory={},
+        )
+        payload = update.AdmittedPayload(
+            receipt_path=self.root / "acquisition.json",
+            receipt_bytes=b"{}",
+            receipt={},
+            archive_sha256="b" * 64,
+            operation_id=OPERATION_B,
+            candidate_root=self.root / "candidate",
+            manifest={},
+            candidate_id="c" * 64,
+            resolved_version="0.7.4",
+            inventory={},
+        )
+        outcome = update.Outcome(
+            name="agents/x.md",
+            prestate="owned",
+            disposition="refreshed",
+            detail="a detail with\na forged line",
+            content_sha256="d" * 64,
+            unknown_detail=None,
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            update.report(
+                update.Config(
+                    home=self.root / "home",
+                    state_home=self.root / "state",
+                    data_home=self.root / "data",
+                    codex_home=self.root / "codex",
+                ),
+                payload,
+                active,
+                [outcome],
+                [],
+                "complete",
+                "activated",
+                self.root / "receipt.json",
+                self.root / "retained.json",
+                self.root / "journal.json",
+                update.Run(pointer_replaced=True),
+            )
+        rendered = out.getvalue()
+        self.assertIn("\\x1b[2J", rendered)
+        self.assertIn("\\n", rendered)
+        self.assertIn("\\r", rendered)
+        self.assertNotIn("\x1b", rendered)
+        # One line per fact: the two forged newlines never become lines of this command's own output.
+        # Ten facts: three header lines, one entry, one inherited unknown, the journal, the retained
+        # prior receipt, this run's receipt, the pointer, and the no-authority statement.
+        self.assertEqual(10, len(rendered.splitlines()), rendered)
+        self.assertIn("authorizes no push, publication, PR mutation, merge, deployment", rendered)
+        # Positive control: the same renderer does emit the hostile text, escaped rather than dropped.
+        self.assertIn("cleared", rendered)
+
+    def test_the_plan_and_the_journal_record_the_identity_transition(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        plans = fixture.plans()
+        self.assertEqual(1, len(plans), plans)
+        plan = json.loads(plans[0].read_text(encoding="utf-8"))
+        self.assertEqual(update.PLAN_SCHEMA, plan["schema_version"])
+        self.assertEqual(CANDIDATE_A, plan["prior_candidate_id"])
+        self.assertEqual(CANDIDATE_B, plan["candidate_id"])
+        self.assertEqual(fixture.prior_receipt["receipt_id"], plan["prior_receipt_id"])
+        self.assertEqual(
+            sorted(name for name, _ in fixture.activated),
+            sorted(str(row["entry_name"]) for row in plan["refresh"]),
+        )
+        self.assertEqual([], plan["preserve"])
+        self.assertIsNone(plan["public_channel"])
+        self.assertEqual("none", plan["release_claim"])
+
+        journal_paths = fixture.journals()
+        self.assertEqual(1, len(journal_paths), journal_paths)
+        journal = fixture.journal()
+        self.assertEqual(update.JOURNAL_SCHEMA, journal["schema_version"])
+        self.assertEqual("effects-recorded", journal["phase"])
+        self.assertEqual("prior-receipt", journal["pointer_when_recorded"])
+        self.assertEqual(str(fixture.pointer), journal["active_pointer"])
+        body = fixture.new_receipt()["body"]
+        # The receipt binds the plan and the journal by the digest of the bytes still on disk: a
+        # journal rewritten after the seal would leave the receipt bound to a digest the file no
+        # longer has, which is indistinguishable from tampering.
+        self.assertEqual(hashlib.sha256(plans[0].read_bytes()).hexdigest(), body["plan_sha256"])
+        self.assertEqual(hashlib.sha256(journal_paths[0].read_bytes()).hexdigest(), body["journal_sha256"])
+        # Positive control: those two digests are different values, so neither assertion is vacuous.
+        self.assertNotEqual(body["plan_sha256"], body["journal_sha256"])
+
+
+if __name__ == "__main__":
+    unittest.main()
