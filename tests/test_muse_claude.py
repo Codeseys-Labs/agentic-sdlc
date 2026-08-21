@@ -411,7 +411,9 @@ class MuseClaudeTests(unittest.TestCase):
             "MODEL_ACCESS_TOKEN": "planted-access-token-not-a-credential",
             "DEPLOY_CREDENTIALS": "planted-credentials-not-a-credential",
             "GIT_PRIVATE_KEY": "planted-private-key-not-a-credential",
-            "PASSWORD": "planted-password-not-a-credential",
+            # The synthetic value trips the scanner's generic-password rule on shape alone; the
+            # allow marker scopes to this one fixture line, never the rule.
+            "PASSWORD": "planted-password-not-a-credential",  # gitleaks:allow
             # The second measured reproduction: a bare `TOKEN` ending was missing, so GITHUB_TOKEN
             # (and CI_JOB_TOKEN, the same shape) reached the child verbatim -- neither ends in
             # AUTH_TOKEN or ACCESS_TOKEN, the only TOKEN-shaped endings the grammar had before.
