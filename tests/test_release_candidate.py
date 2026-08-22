@@ -951,6 +951,52 @@ class VerifyTrustBoundaryTests(unittest.TestCase):
                 candidate.verify_archive(archive, temp_parent=directory, _host_snapshot=host, _after_pin_copy=mutate_same_inode)
             self.assertEqual(raised.exception.code, "archive-mutated")
 
+    def test_verify_refuses_both_attacks_with_no_timestamp_signal_available(self) -> None:
+        # The test above can only observe what this host's filesystem timestamps
+        # happen to record. A filesystem whose timestamp granularity is coarser
+        # than the attack window degenerates _archive_identity to its
+        # timestamp-free terms, and CI demonstrably behaves that way. Expressing
+        # that host fact as a mock keeps the assertion granularity-independent:
+        # every refusal below must come from a check that never reads a clock.
+        def timestamp_free(item: os.stat_result) -> tuple[int, int, int]:
+            return item.st_dev, item.st_ino, item.st_size
+
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            archive = build_for_test(directory, host=True)
+            original_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            host, _, _ = host_snapshot(directory / "verify-host")
+            displaced = directory / "displaced.tar.gz"
+
+            # Control: dropping the timestamp terms must not by itself refuse an
+            # untouched archive, so each refusal below is the attack, not the mock.
+            with mock.patch.object(candidate, "_archive_identity", timestamp_free):
+                self.assertEqual(candidate.verify_archive(archive, temp_parent=directory, _host_snapshot=host), original_digest)
+
+            def substitute() -> None:
+                archive.rename(displaced)
+                archive.write_bytes(b"replacement bytes")
+
+            with mock.patch.object(candidate, "_archive_identity", timestamp_free):
+                with self.assertRaises(candidate.CandidateError) as raised:
+                    candidate.verify_archive(archive, temp_parent=directory, _host_snapshot=host, _after_pin_copy=substitute)
+            self.assertEqual(raised.exception.code, "archive-mutated")
+
+            archive.unlink()
+            displaced.rename(archive)
+
+            def mutate_same_inode() -> None:
+                with archive.open("r+b") as handle:
+                    handle.seek(0)
+                    handle.write(b"x")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+
+            with mock.patch.object(candidate, "_archive_identity", timestamp_free):
+                with self.assertRaises(candidate.CandidateError) as raised:
+                    candidate.verify_archive(archive, temp_parent=directory, _host_snapshot=host, _after_pin_copy=mutate_same_inode)
+            self.assertEqual(raised.exception.code, "archive-mutated")
+
     def test_concatenated_gzip_member_is_not_a_candidate_container(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)

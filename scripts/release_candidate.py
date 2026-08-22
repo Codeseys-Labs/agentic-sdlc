@@ -1439,6 +1439,43 @@ def _pin_archive(archive: Path, private: Path, limit: int, *, after_copy: Callab
             after_copy()
         if _archive_identity(os.fstat(source_fd)) != _archive_identity(before):
             _fail("archive-mutated")
+        # Re-fstat above can only observe a mutation of the pinned inode: a path
+        # substitution moves the admitted name onto a different object and leaves
+        # the pinned inode byte-identical, so nothing on that descriptor witnesses
+        # it. Re-resolve the admitted path and require it to still name the very
+        # object the descriptor holds. lstat matches the O_NOFOLLOW admission, so a
+        # symlink swapped in at the path is itself the miss rather than a followed
+        # target, and dev/ino identity is a timestamp-free comparison that does not
+        # depend on filesystem timestamp granularity.
+        try:
+            current = os.lstat(archive)
+        except OSError:
+            _fail("archive-mutated")
+        if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+            _fail("archive-mutated")
+        # Both checks above still miss an in-place write of the same size to the
+        # pinned inode: dev/ino/size stay equal, so only the mtime/ctime terms of
+        # _archive_identity witness it, and a filesystem whose timestamps are
+        # coarser than the write window hides them. Re-read the pinned descriptor
+        # and require the bytes to still hash to what was copied: a timestamp-free
+        # content comparison independent of clock granularity. Cost is one extra
+        # sequential read of at most max_archive_bytes per verify/run-readonly.
+        # This does not contradict Implementation Decision 9 (quoted at the publish
+        # site above): that decision forbids re-reading the ALREADY PUBLISHED
+        # archive inside build_candidate(), where a read failure could not be
+        # honestly called a clean refusal. _pin_archive runs in verify and
+        # run-readonly, before any durable product effect, so a failure here is
+        # honestly reportable as a named exit-3 refusal.
+        os.lseek(source_fd, 0, os.SEEK_SET)
+        again = hashlib.sha256()
+        seen = 0
+        while chunk := os.read(source_fd, CHUNK):
+            seen += len(chunk)
+            if seen > before.st_size:
+                _fail("archive-mutated")
+            again.update(chunk)
+        if seen != before.st_size or again.digest() != digest.digest():
+            _fail("archive-mutated")
         return pinned, digest.hexdigest()
     except CandidateError:
         raise

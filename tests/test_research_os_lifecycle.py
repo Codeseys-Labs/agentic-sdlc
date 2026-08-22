@@ -398,7 +398,7 @@ class TransactionSafetyTests(unittest.TestCase):
             with mock.patch.object(installer, "_publish_staged_file", side_effect=mark_published), mock.patch.object(
                 installer, "_inspect_absolute", side_effect=swap_after_cleanup_check
             ):
-                with self.assertRaises(Exception):
+                with self.assertRaises(installer.RecoveryConflict):
                     installer.apply_install(root, files={rel: "CANONICAL\n"})
 
             foreign = [
@@ -506,13 +506,13 @@ class TransactionSafetyTests(unittest.TestCase):
                 nonlocal swapped
                 if not swapped and Path(destination) == root / installer.MANIFEST_REL:
                     swapped = True
-                    foreign = stage.payload.with_name("foreign")
+                    foreign = stage.artifact.payload.with_name("foreign")
                     foreign.write_text("FOREIGN TEMP RACE\n", encoding="utf-8")
-                    os.replace(foreign, stage.payload)
+                    os.replace(foreign, stage.artifact.payload)
                 return real_publish(stage, destination, *args, **kwargs)
 
             with mock.patch.object(installer, "_publish_staged_file", side_effect=swap_manifest_stage):
-                with self.assertRaises(Exception):
+                with self.assertRaises(installer.RecoveryConflict):
                     installer.apply_install(root, files={rel: "CANONICAL\n"})
 
             self.assertFalse((root / installer.MANIFEST_REL).exists())

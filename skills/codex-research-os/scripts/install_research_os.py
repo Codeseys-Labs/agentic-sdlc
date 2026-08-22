@@ -2081,6 +2081,50 @@ def _link_fd(fd: int, directory_fd: int, name: str) -> None:
         raise OSError(error, os.strerror(error), name)
 
 
+_LINKAT_EMPTY_PATH_CAPABLE: bool | None = None
+
+
+def _linkat_empty_path_capable() -> bool:
+    """Probe once per process whether linkat(..., AT_EMPTY_PATH) can publish an
+    anonymous (O_TMPFILE) descriptor without CAP_DAC_READ_SEARCH.
+
+    Per man 2 linkat, AT_EMPTY_PATH normally requires CAP_DAC_READ_SEARCH; some
+    kernels relax that for a file the caller itself opened O_TMPFILE. That
+    relaxation is a property of the running kernel/process, not of the target
+    filesystem (O_TMPFILE *support* is per-filesystem and is already handled by
+    the caller's own fallback), so the result is cached for the life of the
+    process rather than re-checked per call.
+    """
+    global _LINKAT_EMPTY_PATH_CAPABLE
+    if _LINKAT_EMPTY_PATH_CAPABLE is not None:
+        return _LINKAT_EMPTY_PATH_CAPABLE
+    capable = False
+    try:
+        with tempfile.TemporaryDirectory(prefix=".research-os-linkat-probe-") as probe_dir:
+            directory_fd = os.open(probe_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                try:
+                    probe_fd = os.open(
+                        ".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=directory_fd
+                    )
+                except (AttributeError, OSError):
+                    probe_fd = None
+                if probe_fd is not None:
+                    try:
+                        _link_fd(probe_fd, directory_fd, "probe")
+                        capable = True
+                    except OSError:
+                        capable = False
+                    finally:
+                        os.close(probe_fd)
+            finally:
+                os.close(directory_fd)
+    except OSError:
+        capable = False
+    _LINKAT_EMPTY_PATH_CAPABLE = capable
+    return capable
+
+
 def _inspect_absolute(path: Path) -> ObservedLeaf:
     try:
         metadata = os.lstat(path)
@@ -2242,9 +2286,15 @@ def _stage_file(parent: Path, data: bytes, mode: int, ancestors: tuple[tuple[str
     try:
         if os.name != "nt":
             container_fd = os.open(artifact.container, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                file_fd = os.open(".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0), mode, dir_fd=container_fd)
-            except (AttributeError, OSError):
+            if _linkat_empty_path_capable():
+                try:
+                    file_fd = os.open(
+                        ".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0), mode, dir_fd=container_fd
+                    )
+                except (AttributeError, OSError):
+                    file_fd = os.open("payload", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=container_fd)
+                    named = True
+            else:
                 file_fd = os.open("payload", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=container_fd)
                 named = True
         else:
@@ -2361,7 +2411,30 @@ def _move_exact_to_backup(
             if exact_fd is not None:
                 backup_fd = _open_verified_directory(backup.container, backup.identity)
                 try:
-                    _link_fd(exact_fd, backup_fd, "witness")
+                    if _linkat_empty_path_capable():
+                        _link_fd(exact_fd, backup_fd, "witness")
+                    else:
+                        # AT_EMPTY_PATH linking is unavailable on this kernel/process; fall
+                        # back to a byte-for-byte descriptor-only copy of the fd's already
+                        # verified content (never a path lookup for the moved-away original).
+                        os.lseek(exact_fd, 0, os.SEEK_SET)
+                        witness_data = _read_fd_bytes(exact_fd)
+                        witness_fd = os.open(
+                            "witness",
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                            stat.S_IMODE(opened.st_mode),
+                            dir_fd=backup_fd,
+                        )
+                        try:
+                            written = 0
+                            while written < len(witness_data):
+                                count = os.write(witness_fd, witness_data[written:])
+                                if count <= 0:
+                                    raise OSError("short write recovering witness content")
+                                written += count
+                            os.fsync(witness_fd)
+                        finally:
+                            os.close(witness_fd)
                     os.fsync(backup_fd)
                 finally:
                     os.close(backup_fd)
