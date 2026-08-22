@@ -139,3 +139,63 @@ mechanisms will not turn the matrix green; those legs are tracked as their own s
 3. Determinism across CI runs — only the newest run's log bodies are retrievable.
 4. Whether the runner image changed between 2026-07-22 and now (the leading explanation for B1's
    flip on identical code).
+
+## Addendum 2026-08-22 — the advisory probe ran; unverified items 1 and 2 are now measured
+
+CI run 32554149554 (ubuntu leg) carried the advisory probe. Its results resolve items 1 and 2 of
+"Claims deliberately left unverified" above and leave items 3 and 4 open.
+
+- **Kernel (item 1): 6.6.141**, on ext4, with an effective capability set of zero. The zero-`CapEff`
+  reading confirms the `linkat(AT_EMPTY_PATH)` `ENOENT` this document attributes to mechanism A: the
+  probe observed that `ENOENT` directly on the runner rather than inferring it.
+- **Timestamp granularity (item 2): degenerate, at every one of the three timestamps.** Across 40
+  back-to-back creates the probe recorded exactly **1 distinct value** for btime, for ctime, and for
+  mtime, over windows of **787 µs** and **375 µs**. That bounds the quantum below at ~787 µs; it does
+  not measure it from above, so the exact tick is still unknown — only that it exceeds the whole
+  creation burst. The local dev host (kernel 6.18) resolves the same burst into ~24 µs deltas and
+  never collides, which is why B1 is green locally and red on the runner.
+- **The B1 witness collision was reproduced on the runner, not modelled: 20 of 20.** The
+  delete-and-recreate trial (create, `statx`, delete, recreate the same name, `statx`) returned an
+  **identical `(inode, btime)` pair in 20 of 20 trials**. So on this runner the `stat-v2` witness
+  carries no discriminating information at all across a same-name replacement, and a per-entry
+  content digest cannot substitute, because a byte-identical re-copy satisfies it.
+
+**Fix shape.** Because btime records CREATION time, a recorded witness can only be reproduced by a
+replacement created inside the SAME quantum as the original. So a witness is trusted only once some
+object created after it reports a strictly later birth timestamp, which proves the recorded object's
+quantum has closed and that every later creation is stamped strictly later at any granularity.
+
+Where that proof is paid matters as much as the proof. Ownership state in both lifecycles is written
+durably MANY times per command — `persist_state` arms each transaction's journal and again resolves
+it, so an N-entry install performs on the order of 2N durable writes, and the research-os scaffold
+writes per file. Blocking for the proof at each of those recording points therefore costs one full
+birth quantum per TRANSACTION, which is linear in the entry count: measured at 10, 20 and 40 waits
+for 10-, 20- and 40-entry installs under a simulated 0.25 s quantum, 2.57 s / 5.91 s / 10.05 s wall,
+extrapolating to tens of seconds on a 1-second-quantum filesystem. That is not an acceptable cost for
+a lifecycle command, so recording does not block.
+
+Instead every recording site takes ONE probe and never sleeps. On a filesystem with sub-quantum
+granularity that probe proves settlement outright and nothing is deferred at all — the common case,
+and free. When it cannot, the witness is persisted CARRYING that fact (`witness_settled: false`,
+written in the same atomic state replace as the witness it qualifies) and the command pays a single
+bounded wait for everything it deferred, once, immediately before its final state write. Re-measured
+in that shape: **one wait for 10, 20, 40 and 44 entries alike**, the wait itself ≤0.63 s under a
+simulated 1-second quantum, and a 44-entry install finishing in 2.06 s where the per-transaction
+shape extrapolated to ~44 s.
+
+A durably recorded unsettled witness is safe only because no later consumer discriminates on it:
+`entry_matches_record`, `record_authority_matches` and `classify_recovery` in the bundle installer,
+`_authority_matches` and `_recover_one` in the research-os installer, all fail CLOSED — status
+reports a conflict, uninstall and removal preserve, recovery reports and preserves — which is byte for
+byte the answer a degenerate clock already produced. An interrupted command therefore cannot leave a
+witness a later run silently trusts. Within the command that deferred them the witnesses stay
+trusted, because the marker is injected at the state-WRITE boundary and stripped again, for that
+process's own keys only, at the state-READ boundary. A host whose birth clock does not advance inside
+the bound is still refused by name.
+
+One witness keeps the inline wait: the pre-existing TARGET ROOT the research-os installer records as
+`state["target"]["identity"]`. Deferring it would require the marker to live in that stanza, and the
+fail-closed reading of an unidentifiable ROOT is to refuse the whole document — including the
+crash-recovery retry an interrupted run depends on. Its cost is a constant (one probe, and a wait only
+when the operator points at a directory created inside the current quantum, which a long-lived
+repository never is) and it does not grow with the scaffold's file count.

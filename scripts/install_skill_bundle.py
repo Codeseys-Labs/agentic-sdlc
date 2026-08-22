@@ -22,12 +22,23 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any, Iterator
+import time
+from typing import Any, Callable, Iterable, Iterator
 
 
 STATE_VERSION = 3
 V2_STATE_VERSION = 2
 IDENTITY_VERSION = "stat-v2"
+# How long ONE lifecycle command may wait for a birth-timestamp quantum to close before it reports
+# that it could not prove its recorded witnesses discriminating. A filesystem that exposes a birth
+# timestamp at all quantizes it at the kernel's coarse-clock tick (a scheduler tick, so
+# milliseconds) or, on the creation-time-bearing FAT family, tens of milliseconds; the cap is
+# generous against both and is a bound, not a sleep. It is charged per COMMAND, not per transaction
+# or per entry: recording only ever probes, and `finish_settlement` pays this once for everything a
+# command deferred. On a nanosecond-granularity host nothing defers and nothing waits at all.
+BIRTH_SETTLE_TIMEOUT_SECONDS = 3.0
+BIRTH_SETTLE_FIRST_POLL_SECONDS = 0.0005
+BIRTH_SETTLE_MAX_POLL_SECONDS = 0.05
 # Private alias map: the ONLY sanctioned in-code appearance of the retired
 # public slug, consumed exclusively by identity-migration/dedup logic.
 IDENTITY_SKILL_RENAMES = {"agentic-sdlc-orchestrator": "agentic-sdlc"}
@@ -320,8 +331,12 @@ def load_state(path: Path) -> dict[str, Any]:
     to v3 as a side effect of its own write, with no `--migrate-state` required.
     `install --migrate-state` is the EXPLICIT path for upgrading a v2 document with no other
     pending change; it is not the only path that persists v3.
-    Structural and authority validation follows before use."""
-    return load_document_state(read_state_document(path), path)
+    Structural and authority validation follows before use.
+
+    Unsettled-witness markers this same process placed are stripped back out, because within one
+    command the objects they qualify have never left its control; a marker from any other process
+    -- including this command's own pre-crash predecessor -- survives the read and fails closed."""
+    return SETTLEMENT.unmarked(load_document_state(read_state_document(path), path))
 
 
 def identity_token_valid(value: Any) -> bool:
@@ -473,6 +488,340 @@ def identity_matches(path: Path, expected: Any) -> bool:
         return stat_identity(path) == expected
     except InstallerError:
         return False
+
+
+def identity_generation(token: str) -> str:
+    """The birth-witness field of one identity token."""
+    return token.split(":", 3)[3]
+
+
+def birth_witness_order(generation: str) -> tuple[int, int]:
+    """Order one platform's birth-witness spelling.
+
+    Linux spells the witness `<tv_sec>.<tv_nsec>`; macOS on the pinned interpreter and the
+    Windows timestamp fallback spell it as an integer nanosecond count. Each spelling is only
+    ever ordered against another value of the same spelling, because a record is only ever
+    compared with a probe taken on the same host, so no cross-platform normalization is needed.
+    The pre-3.12 macOS float-seconds fallback in `stat_birth_identity` is the one spelling this
+    order cannot separate exactly (`.5` and `.05` sort alike); it is unreachable on this
+    repository's pinned 3.12 runtime, and mis-sorting there withholds settlement rather than
+    granting it, so it fails closed either way.
+    """
+    seconds, separator, fraction = generation.partition(".")
+    try:
+        return (int(seconds), int(fraction or 0)) if separator else (int(seconds), 0)
+    except ValueError as exc:
+        raise InstallerError(f"unreadable birth witness {generation!r}") from exc
+
+
+def birth_probe_token(directory: Path) -> str:
+    """Create, witness, and immediately unlink one throwaway object in `directory`."""
+    try:
+        descriptor, name = tempfile.mkstemp(prefix=".birth-probe-", dir=directory)
+    except OSError as exc:
+        raise InstallerError(
+            f"cannot witness object creation in {directory}: {exc}"
+        ) from exc
+    probe = Path(name)
+    try:
+        os.close(descriptor)
+        token = link_identity(probe)
+    except BaseException:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+        raise
+    # A probe left behind is not cosmetic: every probe directory here is either a private
+    # container, whose exactness check reads ANY extra child as foreign, or a configured
+    # collection. Refuse by name rather than let a leftover surface later as an unrelated
+    # "foreign content" or "validation failed" message about a payload nothing touched.
+    try:
+        probe.unlink()
+    except OSError as exc:
+        raise InstallerError(f"cannot retire creation probe {probe}: {exc}") from exc
+    return token
+
+
+def settlement_targets(
+    witnesses: Iterable[tuple[Path, Any]], *, probe_dir: Path
+) -> list[tuple[Path, tuple[int, int], Path]]:
+    """Resolve witnesses into `(path, birth order, directory to probe)` settlement targets.
+
+    `stat-v2` names an object by device, inode, and birth timestamp. Inodes ARE reused --
+    deterministically so on ext4 under immediate reuse -- which leaves the birth timestamp as the
+    entire discriminator, and every filesystem quantizes it: all objects created inside one
+    quantum are recorded as born at the same instant. So while a newly created object's own
+    quantum is still open, a delete-and-recreate at the same name can land on the same inode with
+    the same birth timestamp, and that foreign replacement is then byte-for-byte
+    indistinguishable from the object this lifecycle installed -- `entry_matches_record` calls it
+    owned and `uninstall` removes a tree it does not own. A per-entry content digest cannot
+    substitute, because a byte-identical re-copy satisfies it.
+
+    A target is SETTLED once some object created after it reports a strictly later birth
+    timestamp, which proves its quantum has closed: every creation from then on is stamped
+    strictly later, so any later replacement carries a different witness at ANY granularity, on a
+    coarse host exactly as on a fine one.
+    """
+    windows = platform_system() == "Windows"
+    targets: list[tuple[Path, tuple[int, int], Path]] = []
+    probe_device: int | None = None
+    for path, token in witnesses:
+        if not identity_token_valid(token):
+            raise InstallerError(f"cannot settle an invalid identity witness for {path}")
+        if windows and windows_file_identity(path, follow_symlinks=False) is not None:
+            # The Windows file-id witness is the volume serial plus the 128-bit file id, whose
+            # sequence number changes when the underlying record is reused, so a replacement
+            # already carries a different witness at any timestamp granularity and needs no
+            # settling. Where that file id is UNAVAILABLE `stat_identity` falls back to a
+            # CREATION TIMESTAMP, which is exactly the witness a same-quantum replacement
+            # reproduces -- so that case is NOT skipped, it falls through and settles like any
+            # other timestamp witness. `birth_probe_token` reaches the same fallback on the same
+            # volume, so the probe carries the comparable spelling. A volume that somehow answers
+            # in one form for the target and the other for the probe never orders as later and
+            # so refuses at the cap, which is the fail-closed direction.
+            continue
+        try:
+            metadata = os.lstat(path)
+        except OSError as exc:
+            raise InstallerError(f"cannot identify {path}: {exc}") from exc
+        if probe_device is None:
+            try:
+                probe_device = os.stat(probe_dir).st_dev
+            except OSError as exc:
+                raise InstallerError(
+                    f"cannot witness object creation in {probe_dir}: {exc}"
+                ) from exc
+        # Timestamp granularity is a property of the filesystem holding the object, so a probe
+        # only measures an object on its own device. The private staging container is on the
+        # destination's device by construction; anything else is probed where it lives.
+        directory = (
+            probe_dir
+            if metadata.st_dev == probe_device
+            else (path if stat.S_ISDIR(metadata.st_mode) else path.parent)
+        )
+        targets.append(
+            (path, birth_witness_order(identity_generation(str(token))), directory)
+        )
+    return targets
+
+
+def unsettled_target(
+    targets: Iterable[tuple[Path, tuple[int, int], Path]]
+) -> Path | None:
+    """One probe round: the first target whose birth quantum is still open, else None."""
+    probes: dict[Path, tuple[int, int]] = {}
+    for path, order, directory in targets:
+        if directory not in probes:
+            probes[directory] = birth_witness_order(
+                identity_generation(birth_probe_token(directory))
+            )
+        if probes[directory] <= order:
+            return path
+    return None
+
+
+def wait_for_settlement(
+    targets: list[tuple[Path, tuple[int, int], Path]]
+) -> None:
+    """Block until every target's birth quantum has provably closed, or refuse by name.
+
+    This is the ONE place that ever sleeps. A host whose birth timestamps do not advance at all
+    within the cap gets the refusal AGENTS.md promises ("fail closed when stable physical
+    identity ... is unavailable") rather than a witness that cannot carry the claim, which is the
+    same fail-closed answer `stat_identity` already gives a filesystem that exposes no birth
+    timestamp whatsoever. Every probe round re-probes every distinct directory, so the wall cost
+    is the SLOWEST quantum among them, never their sum.
+    """
+    if not targets:
+        return
+    deadline = time.monotonic() + BIRTH_SETTLE_TIMEOUT_SECONDS
+    delay = BIRTH_SETTLE_FIRST_POLL_SECONDS
+    while True:
+        unsettled = unsettled_target(targets)
+        if unsettled is None:
+            return
+        if time.monotonic() >= deadline:
+            raise InstallerError(
+                f"filesystem birth timestamps cannot distinguish {unsettled} from a "
+                f"replacement: no later creation was recorded within "
+                f"{BIRTH_SETTLE_TIMEOUT_SECONDS:g}s"
+            )
+        time.sleep(delay)
+        delay = min(delay * 2, BIRTH_SETTLE_MAX_POLL_SECONDS)
+
+
+def settle_identity_witnesses(
+    witnesses: Iterable[tuple[Path, Any]], *, probe_dir: Path
+) -> None:
+    """Prove settlement now, waiting up to the cap. Retained for callers outside a command scope.
+
+    The lifecycle's own recording sites do NOT use this: they call `defer_identity_witnesses`,
+    which never sleeps, so that a command pays at most one wait in total rather than one per
+    recording transaction. This spelling stays for a caller that has no command scope to defer
+    into and must therefore settle inline.
+    """
+    wait_for_settlement(settlement_targets(witnesses, probe_dir=probe_dir))
+
+
+class SettlementLedger:
+    """The single deferred birth-quantum wait one lifecycle command is allowed to pay.
+
+    The topology this exists for: ownership state here is written durably MANY times per command
+    -- `persist_state` is called once to arm each transaction's journal and again to resolve it,
+    so an N-entry install performs on the order of 2N durable writes. Settling inline at each of
+    those recording points therefore costs one full birth quantum per TRANSACTION, which is
+    linear in N: measured at 10/20/40 settle calls for 10/20/40 entries, all waiting, and
+    extrapolating to tens of seconds on a coarse-clock filesystem. That is an unacceptable
+    operator cost for a lifecycle command.
+
+    So recording does not wait. Each recording site proves settlement with ONE probe and no sleep
+    (`defer_identity_witnesses`); on a filesystem with sub-quantum granularity that succeeds
+    immediately and nothing is deferred at all. When it does not succeed the witness is enrolled
+    here and its record is persisted carrying `witness_settled: false`, and the command pays a
+    single bounded wait for every enrolled witness at the end (`finish_settlement`).
+
+    Recording an unsettled witness durably is only safe because the record CARRIES that status
+    and every later consumer refuses to discriminate on it: `entry_matches_record` and
+    `record_authority_matches` return False, `classify_recovery` returns "conflict", so status
+    reports a conflict and uninstall preserves rather than removes -- byte for byte the answer a
+    degenerate clock already gets. An interrupted command therefore cannot leave a witness a
+    later run silently trusts, because the marker is written in the SAME atomic state write as
+    the witness it qualifies, and only a successful wait ever clears it.
+
+    Within the command that deferred them the witnesses stay fully trusted, because the marker is
+    injected at the state-WRITE boundary and stripped again for this ledger's own keys at the
+    state-READ boundary. The in-memory record a transaction is working with never carries it, so
+    every mid-transaction recheck, cleanup, and recovery move behaves exactly as before. A
+    different process -- a later run, or the same command after a crash -- has an empty ledger,
+    strips nothing, and so sees the marker and fails closed.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.targets: list[tuple[Path, tuple[int, int], Path]] = []
+        self.keys: set[str] = set()
+        # Deferring is only sound when SOMETHING will finish the settlement. Outside a command
+        # scope there is no finalizer, so a deferral there would write a marker that nothing ever
+        # clears -- durable non-discriminating ownership from a run that actually succeeded.
+        self.active = False
+
+    def begin(self) -> None:
+        """Open one command's settlement scope over an empty ledger."""
+        self.reset()
+        self.active = True
+
+    @property
+    def deferred(self) -> bool:
+        return bool(self.targets)
+
+    def defer(
+        self,
+        targets: list[tuple[Path, tuple[int, int], Path]],
+        keys: Iterable[str],
+    ) -> None:
+        self.targets.extend(targets)
+        self.keys.update(keys)
+
+    def marked(self, document: dict[str, Any]) -> dict[str, Any]:
+        """A copy of one state document with this ledger's unsettled keys marked, for WRITING."""
+        if not self.keys:
+            return document
+        marked = copy.deepcopy(document)
+        for key in self.keys:
+            record = marked.get("entries", {}).get(key)
+            if isinstance(record, dict):
+                record["witness_settled"] = False
+            tx = marked.get("transactions", {}).get(key)
+            if isinstance(tx, dict):
+                tx["witness_settled"] = False
+                new_record = tx.get("new_record")
+                if isinstance(new_record, dict):
+                    new_record["witness_settled"] = False
+        return marked
+
+    def unmarked(self, document: dict[str, Any]) -> dict[str, Any]:
+        """Strip only THIS process's own markers from a document it just read back.
+
+        An in-command reload -- `recover_durable_after_failure`, the recovery retry path -- must
+        see the same trusted view the in-memory dict had, or a transaction this command is still
+        driving would classify its own staged payload as foreign and leave it for repair. A
+        marker this ledger did not place is left exactly where it is.
+        """
+        if not self.keys:
+            return document
+        for key in self.keys:
+            record = document.get("entries", {}).get(key)
+            if isinstance(record, dict):
+                record.pop("witness_settled", None)
+            tx = document.get("transactions", {}).get(key)
+            if isinstance(tx, dict):
+                tx.pop("witness_settled", None)
+                new_record = tx.get("new_record")
+                if isinstance(new_record, dict):
+                    new_record.pop("witness_settled", None)
+        return document
+
+
+SETTLEMENT = SettlementLedger()
+
+
+def witness_settlement_trusted(marker: Any) -> bool:
+    """Whether a recorded witness may be discriminated on at all.
+
+    Absent means the writer proved settlement before persisting -- the ordinary case, and the
+    only shape a document written before this marker existed can have. Anything else, `False`
+    included, is non-discriminating and fails closed.
+    """
+    return marker is None or marker is True
+
+
+def record_witness_trusted(record: dict[str, Any]) -> bool:
+    return witness_settlement_trusted(record.get("witness_settled"))
+
+
+def defer_identity_witnesses(
+    witnesses: Iterable[tuple[Path, Any]],
+    *,
+    probe_dir: Path,
+    keys: Iterable[str],
+    durable_probe_dir: Path | None = None,
+    probe: bool = True,
+) -> bool:
+    """Prove settlement with ONE probe round and no wait; enrol what is still unsettled.
+
+    Returns True when every witness is already settled, in which case nothing is enrolled and the
+    records persist clean. `probe=False` is for a read-only surface -- a dry run writes no witness
+    at all, so proving one would buy nothing and the throwaway create it needs is exactly the
+    write a preview may not make.
+
+    `durable_probe_dir` re-points the DEFERRED round. Birth-timestamp granularity belongs to the
+    filesystem, not to any one directory, so the later round only has to probe a directory on the
+    same device -- and it MUST, because the natural choice for the immediate round is the private
+    staging or backup container, which the transaction deletes as it resolves. Enrolling that
+    directory would leave the command's one wait probing a path that no longer exists.
+    """
+    if not probe:
+        return True
+    targets = settlement_targets(witnesses, probe_dir=probe_dir)
+    if not targets or unsettled_target(targets) is None:
+        return True
+    if not SETTLEMENT.active:
+        # A direct API caller -- anything not inside `one_settle_per_command` -- has no scope to
+        # defer into and nothing that would ever clear the marker, so it settles INLINE here,
+        # exactly as every caller did before deferral existed. Fail-closed by construction rather
+        # than by remembering to open a scope.
+        wait_for_settlement(targets)
+        return True
+    if durable_probe_dir is not None:
+        targets = [
+            (path, order, durable_probe_dir if directory == probe_dir else directory)
+            for path, order, directory in targets
+        ]
+    SETTLEMENT.defer(targets, keys)
+    return False
 
 
 def configured_root(entry: Entry, config: Config) -> Path:
@@ -794,9 +1143,15 @@ def fsync_tree(path: Path) -> None:
 
 
 def write_state(path: Path, state: dict[str, Any], dry_run: bool) -> None:
-    """Durably and atomically replace the state file, unless this is a dry-run."""
+    """Durably and atomically replace the state file, unless this is a dry-run.
+
+    Every witness this command deferred is marked unsettled HERE, in the same atomic replace that
+    makes the witness durable, so no crash can separate a witness from its status. The caller's
+    in-memory document is untouched: mid-command consumers keep the trusted view.
+    """
     if dry_run:
         return
+    state = SETTLEMENT.marked(state)
     durable_mkdir(path.parent)
     temporary: Path | None = None
     try:
@@ -824,6 +1179,66 @@ def persist_state(config: Config, state: dict[str, Any], candidate: dict[str, An
     write_state(config.state_path, candidate, config.dry_run)
     state.clear()
     state.update(candidate)
+
+
+def finish_settlement(config: Config, result: Result) -> Result:
+    """Pay the ONE bounded birth-quantum wait a lifecycle command is allowed, then clear markers.
+
+    This is the entire wait budget of a command, whatever its entry count: every recording site
+    only ever probed, so nothing before this point has slept. Because a probe round is O(1) in
+    wall time and the wait rounds re-probe every enrolled directory together, the wall cost is one
+    quantum rather than one per transaction.
+
+    Order matters. The wait comes first, so the flip is only ever written after settlement is
+    proven. If it cannot be proven inside the cap the markers are LEFT durable and the command
+    reports it and exits non-zero: the entries are installed but non-discriminating, which is the
+    same answer a degenerate clock has always produced -- status calls them conflicts and
+    uninstall preserves them. Silence would be the one unacceptable outcome.
+    """
+    # The ledger is module-global, so it MUST be empty when this returns however it returns. A
+    # leaked ledger would let the next command in this process strip markers it never placed,
+    # which is the one direction that fails open.
+    try:
+        if config.dry_run or not SETTLEMENT.deferred:
+            return result
+        named = ", ".join(sorted(SETTLEMENT.keys))
+        try:
+            wait_for_settlement(SETTLEMENT.targets)
+            document = read_state_document(config.state_path)
+            cleared = (
+                None
+                if document is None
+                else SETTLEMENT.unmarked(load_document_state(document, config.state_path))
+            )
+        except InstallerError as exc:
+            return Result(
+                1,
+                result.messages
+                + (f"unsettled ownership records preserved for {named}: {exc}",),
+            )
+        # Clearing before the write is what makes the write land unmarked.
+        SETTLEMENT.reset()
+        if cleared is not None:
+            write_state(config.state_path, cleared, False)
+        return result
+    finally:
+        SETTLEMENT.reset()
+
+
+def one_settle_per_command(
+    config: Config, command: Callable[[Config], Result]
+) -> Result:
+    """Run one lifecycle command inside exactly one deferred-settlement scope."""
+    SETTLEMENT.begin()
+    try:
+        result = command(config)
+    except BaseException:
+        # An interrupted command leaves its markers durable ON PURPOSE: the witnesses it wrote
+        # were never proven settled, so the next run has to fail closed on them. Only the
+        # in-process ledger is dropped, and dropping it is what makes the markers bite.
+        SETTLEMENT.reset()
+        raise
+    return finish_settlement(config, result)
 
 
 @contextmanager
@@ -949,6 +1364,10 @@ def record_authority_matches(key: str, record: dict[str, Any], config: Config) -
     entry = record_entry(record, key)
     destination = Path(key)
     assert_safe_collection(entry, destination, config)
+    # A fresh install MINTS the configured root and collection witnesses too, so an unsettled
+    # record's authority witnesses are no more discriminating than its destination witness.
+    if not record_witness_trusted(record):
+        return False
     return identity_matches(configured_root(entry, config), record.get("root_identity")) and identity_matches(
         destination.parent, record.get("collection_identity")
     )
@@ -1208,7 +1627,16 @@ def entry_matches_record(
     *,
     link_origin: Path | None = None,
 ) -> bool:
-    """Whether the on-disk entry still has the exact recorded identity."""
+    """Whether the on-disk entry still has the exact recorded identity.
+
+    A record whose witness was persisted before its birth quantum provably closed cannot answer
+    that question: a same-quantum replacement at the same name reproduces the witness exactly. So
+    an unsettled record is non-discriminating and answers False, which routes every consumer to
+    its preserve-and-report branch -- status calls it a conflict, uninstall keeps it, install
+    refuses the destination -- rather than to a removal it cannot justify.
+    """
+    if not record_witness_trusted(record):
+        return False
     mode = record.get("mode")
     if mode in {"link", "junction"}:
         try:
@@ -1356,7 +1784,16 @@ def inspect_v1_state(config: Config, state: dict[str, Any]) -> Result:
     return Result(1 if partial or entries else 0, tuple(messages))
 
 
-def upgrade_v1_record(key: str, record: dict[str, Any]) -> dict[str, Any]:
+def upgrade_v1_record(
+    key: str, record: dict[str, Any], *, probe: bool = True
+) -> dict[str, Any]:
+    """Mint a v3 record for one v1 entry.
+
+    `probe=False` is for the DRY-RUN preview, which must stay read-only: the proof is a
+    throwaway create in the configured collection, and a preview that writes nothing may not take
+    it. The preview's minted witness is discarded rather than persisted, so refusing to prove it
+    withholds nothing -- the real migration settles before it persists anything.
+    """
     destination = Path(key)
     entry = record_entry(record, key)
     collection = destination.parent
@@ -1375,15 +1812,31 @@ def upgrade_v1_record(key: str, record: dict[str, Any]) -> dict[str, Any]:
         raise InstallerError(f"cannot migrate unsafe roots for {destination}")
     if not v1_entry_matches_record(destination, record):
         raise InstallerError(f"cannot migrate changed destination {destination}")
-    return entry_record(
+    root_token = stat_identity(root)
+    collection_token = stat_identity(collection)
+    upgraded = entry_record(
         entry,
         str(record["mode"]),
-        stat_identity(root),
-        stat_identity(collection),
+        root_token,
+        collection_token,
         removable=bool(record.get("removable", True)),
         installed_digest=str(record["digest"]),
         installed_path=destination,
     )
+    # A v1 document carries no physical witness at all, so migration MINTS one for an object it
+    # did not create. That new witness must discriminate for the same reason a freshly installed
+    # one must.
+    defer_identity_witnesses(
+        (
+            (destination, upgraded["destination_identity"]),
+            (collection, collection_token),
+            (root, root_token),
+        ),
+        probe_dir=collection,
+        keys=(key,),
+        probe=probe,
+    )
+    return upgraded
 
 
 def record_physical_identity(record: dict[str, Any]) -> tuple[str, str, str, str] | None:
@@ -1523,8 +1976,13 @@ def _migrate_v1_state(config: Config) -> Result:
                 key, record
             ):
                 raise InstallerError(f"invalid v1 ownership record for {key}")
-            upgraded = upgrade_v1_record(key, record)
+            upgraded = upgrade_v1_record(key, record, probe=not config.dry_run)
             migrated_key = add_migrated_entry(migrated, key, upgraded, config)
+            # `add_migrated_entry` may land the record under a renamed key, and the unsettled
+            # marker has to travel with the record's FINAL key or the write boundary would stamp
+            # nothing. Re-enrol under it rather than trusting the pre-rename spelling.
+            if key in SETTLEMENT.keys and migrated_key != key:
+                SETTLEMENT.keys.add(migrated_key)
             messages.append(
                 f"would migrate: {Path(migrated_key)}"
                 if config.dry_run
@@ -1557,7 +2015,7 @@ def _migrate_v1_state(config: Config) -> Result:
 
 def migrate_v1_state(config: Config) -> Result:
     with installer_lock(config):
-        return _migrate_v1_state(config)
+        return one_settle_per_command(config, _migrate_v1_state)
 
 
 def marketplace_overlap(home: Path) -> bool:
@@ -1579,14 +2037,31 @@ def marketplace_overlap(home: Path) -> bool:
     return False
 
 
-def reserve_private_artifact(destination: Path, role: str) -> PrivateArtifact:
+def reserve_private_artifact(
+    destination: Path, role: str, *, settle: bool = True
+) -> PrivateArtifact:
+    """Reserve one private container whose identity a later run may have to re-verify.
+
+    A container's identity is journalled, so an interrupted transaction is recovered by a LATER
+    process comparing that witness -- which makes it the same recorded-witness surface as an
+    installed entry, and it settles INLINE by default so that a caller with no command scope of
+    its own (`scripts/ccodex_sdlc_uninstall.py` journals this identity itself) keeps a proven
+    witness. `settle=False` is for this module's own transactions, which enrol the container in
+    the command's single deferred wait instead and mark the journal unsettled meanwhile, so the
+    wait count stays independent of the entry count.
+    """
     container = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.{role}-", dir=destination.parent)
     )
     os.chmod(container, 0o700)
     fsync_directory(container)
     fsync_directory(container.parent)
-    return PrivateArtifact(container, container / "payload", stat_identity(container))
+    artifact = PrivateArtifact(container, container / "payload", stat_identity(container))
+    if settle:
+        settle_identity_witnesses(
+            ((artifact.container, artifact.identity),), probe_dir=artifact.container
+        )
+    return artifact
 
 
 def artifact_from_transaction(tx: dict[str, Any], role: str) -> PrivateArtifact | None:
@@ -1679,7 +2154,8 @@ def stage_candidate(
     root_token: str,
     collection_token: str,
 ) -> StagedCandidate:
-    artifact = reserve_private_artifact(destination, "stage")
+    artifact = reserve_private_artifact(destination, "stage", settle=False)
+    record: dict[str, Any] | None = None
     try:
         mode = create_destination(entry, artifact.payload, config)
         fsync_tree(artifact.payload)
@@ -1693,12 +2169,34 @@ def stage_candidate(
             installed_digest=installed_digest,
             installed_path=artifact.payload,
         )
+        # ONE probe round per transaction, after every object this transaction created and before
+        # any of their witnesses is persisted, and NO wait: the payload was created last, so a
+        # probe that already orders later than it proves settlement for the container, the
+        # collection, and the configured root as well. Each is still listed, because settlement is
+        # asserted per witness rather than inferred. When the probe cannot prove it, the witnesses
+        # join the command's single deferred wait and every record and journal entry naming this
+        # destination persists marked unsettled until that wait succeeds.
+        defer_identity_witnesses(
+            (
+                (artifact.payload, record["destination_identity"]),
+                (artifact.container, artifact.identity),
+                (destination.parent, collection_token),
+                (configured_root(entry, config), root_token),
+            ),
+            probe_dir=artifact.container,
+            durable_probe_dir=destination.parent,
+            keys=(str(destination),),
+        )
         if artifact_payload_status(artifact, record) != "exact":
             raise InstallerError(f"staged candidate validation failed for {destination}")
         return StagedCandidate(artifact, record)
     except Exception as exc:
         try:
-            cleanup_private_artifact(artifact)
+            # Pass the staged record when one exists so an abandoned candidate is retired instead
+            # of left for repair. `cleanup_private_artifact` still deletes only a payload that is
+            # exactly the recorded one, so a payload that changed under us is preserved exactly as
+            # it was before this argument was passed.
+            cleanup_private_artifact(artifact, record)
         except Exception as cleanup_exc:
             raise InstallerError(
                 f"cannot stage {destination}: {exc}; private artifact requires repair: {artifact.container} ({cleanup_exc})"
@@ -2099,6 +2597,12 @@ def destination_status(destination: Path, record: dict[str, Any]) -> str:
 
 def classify_recovery(tx: dict[str, Any], config: Config) -> str:
     """Classify only layouts whose witnesses and payload identities are exact."""
+    # A journal armed with a witness whose birth quantum had not provably closed cannot be
+    # recovered by comparison: that covers the private stage and backup CONTAINER witnesses, which
+    # no entry record carries, so it is asserted on the transaction itself and not inferred from
+    # the records alone. "conflict" is the fail-closed answer -- report and preserve.
+    if not witness_settlement_trusted(tx.get("witness_settled")):
+        return "conflict"
     if not transaction_authority_matches(tx, config):
         return "conflict"
     operation = tx["operation"]
@@ -2537,7 +3041,15 @@ def transactional_replace(
     except InstallerError as exc:
         raise InstallerError(f"cannot {action_name} {destination}: {exc}") from exc
     try:
-        backup = reserve_private_artifact(destination, "backup")
+        backup = reserve_private_artifact(destination, "backup", settle=False)
+        # The backup container is the newest object in this transaction, so its probe round also
+        # covers the staged payload; on failure both join the command's single deferred wait.
+        defer_identity_witnesses(
+            ((backup.container, backup.identity),),
+            probe_dir=backup.container,
+            durable_probe_dir=destination.parent,
+            keys=(key,),
+        )
     except Exception as exc:
         recover_durable_after_failure(
             config, key, ((staged.artifact, staged.record, None),)
@@ -2615,7 +3127,16 @@ def transactional_delete(
 ) -> None:
     key = str(destination)
     try:
-        backup = reserve_private_artifact(destination, "backup")
+        backup = reserve_private_artifact(destination, "backup", settle=False)
+        # A removal mints exactly one witness -- this quarantine container -- and journals it. One
+        # probe round, no wait; an unproven container marks the journal unsettled, which a later
+        # run's `classify_recovery` reads as a conflict and preserves.
+        defer_identity_witnesses(
+            ((backup.container, backup.identity),),
+            probe_dir=backup.container,
+            durable_probe_dir=destination.parent,
+            keys=(key,),
+        )
     except Exception as exc:
         raise InstallerError(f"cannot remove {destination}: {exc}") from exc
     tx = transaction_record(
@@ -2682,7 +3203,15 @@ def transactional_rename(
     except InstallerError as exc:
         raise InstallerError(f"cannot rename {old_destination}: {exc}") from exc
     try:
-        backup = reserve_private_artifact(old_destination, "backup")
+        backup = reserve_private_artifact(old_destination, "backup", settle=False)
+        # The journal for a rename lives under the NEW key, so that is the key whose record and
+        # transaction carry the unsettled marker for this container.
+        defer_identity_witnesses(
+            ((backup.container, backup.identity),),
+            probe_dir=backup.container,
+            durable_probe_dir=old_destination.parent,
+            keys=(new_key,),
+        )
     except Exception as exc:
         recover_durable_after_failure(
             config, new_key, ((staged.artifact, staged.record, None),)
@@ -2733,9 +3262,27 @@ def save_owned_entry(
     record: dict[str, Any],
 ) -> None:
     """Persist one state-only ownership change after an immediate exact recheck."""
+    destination = Path(key)
+    # Adoption records a witness for an object this lifecycle did NOT create, so the same
+    # same-quantum replacement applies: a legacy link adopted milliseconds after it appeared, then
+    # swapped inside its own birth quantum, would be recorded as owned. The probe round runs
+    # before the rechecks below so nothing here can open a window: exactness is re-asserted after
+    # it, and an unproven witness is adopted marked unsettled rather than trusted.
+    defer_identity_witnesses(
+        (
+            (destination, record.get("destination_identity")),
+            (destination.parent, record.get("collection_identity")),
+            (
+                configured_root(record_entry(record, key), config),
+                record.get("root_identity"),
+            ),
+        ),
+        probe_dir=destination.parent,
+        keys=(key,),
+    )
     if not record_authority_matches(key, record, config):
         raise InstallerError(f"root/collection identity changed: {key}")
-    if not entry_matches_record(Path(key), record):
+    if not entry_matches_record(destination, record):
         raise InstallerError(f"destination changed before adoption: {key}")
     candidate = copy.deepcopy(state)
     candidate["entries"][key] = copy.deepcopy(record)
@@ -2886,7 +3433,9 @@ def install(config: Config) -> Result:
     if config.dry_run:
         return with_operation_summary("install", _install(config))
     with installer_lock(config):
-        return with_operation_summary("install", _install(config))
+        return with_operation_summary(
+            "install", one_settle_per_command(config, _install)
+        )
 
 
 def status_summary(counts: dict[str, int]) -> str:
@@ -3184,7 +3733,9 @@ def uninstall(config: Config) -> Result:
     if config.dry_run:
         return with_operation_summary("uninstall", _uninstall(config))
     with installer_lock(config):
-        return with_operation_summary("uninstall", _uninstall(config))
+        return with_operation_summary(
+            "uninstall", one_settle_per_command(config, _uninstall)
+        )
 
 
 def self_test(config: Config) -> Result:
