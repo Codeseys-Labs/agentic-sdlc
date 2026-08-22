@@ -1220,8 +1220,8 @@ class RunReadonlyTrustBoundaryTests(unittest.TestCase):
                 manifest, source, host_policy, runtime
             )
             execution_policy, _execution_policy_raw = candidate.load_execution_policy(source)
-            _bash, bash_digest = candidate._trusted_bash(execution_policy)
-            dispatcher, dispatcher_digest = candidate._render_candidate_dispatcher(direct_root)
+            bash, bash_digest = candidate._trusted_bash(execution_policy)
+            dispatcher, dispatcher_digest = candidate._render_candidate_dispatcher(direct_root, bash)
             forged_admission = candidate._admission_record(
                 direct_root,
                 archive_digest,

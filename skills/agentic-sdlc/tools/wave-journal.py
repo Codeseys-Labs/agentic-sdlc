@@ -852,7 +852,13 @@ def _write_new_at(parent_fd: int, name: str, data: bytes) -> None:
 
 
 def _renameat2_at(parent_fd: int, source: str, destination: str, flags: int) -> None:
-    """Publish `source` onto `destination` within one directory. The namespace changes HERE."""
+    """Publish `source` onto `destination` within one directory. The namespace changes HERE.
+
+    `_publish` already refused (before staging anything) when this symbol is absent, so this repeats
+    the same probe only as a last-line defence for a caller that reached here some other way: it must
+    never be the FIRST place this capability is checked, because by the time this function runs the
+    staging successor already exists on disk and a refusal here is an admitted partial, not a clean one.
+    """
     call = getattr(_LIBC, "renameat2", None)
     if call is None:
         raise JournalError("unsupported", "Linux renameat2 is unavailable", EXIT_REFUSED)
@@ -918,7 +924,19 @@ def _publish(parent_fd: int, name: str, data: bytes, *, replace: bool, bound: di
     destroying the winner's journal (flags 0) and refusing at exit 4 with the effect named, and the
     test kills exactly that guard: drop `_RENAME_NOREPLACE` to `0` here and the same sequence silently
     overwrites the winner's journal instead of refusing.
+
+    THE CAPABILITY PREFLIGHT RUNS FIRST, BEFORE ANYTHING IS STAGED. `_renameat2_at` probes the same
+    symbol again immediately before it would call it, but by then `_write_new_at` has already admitted
+    the staging creation -- so on a host that can never have this syscall (this bundle's platform
+    doctrine names macOS explicitly; there is no fallback path here, unlike
+    `scripts/install_skill_bundle.py`'s `renameatx_np` branch), that late probe only ever fires AFTER an
+    effect, which `_report_failure` then honestly but misleadingly escalates to exit 4 effect-unknown --
+    "partial" over bytes that were never going anywhere. A syscall that will never exist is not a race
+    and not a transient fault; refusing it before the first byte is staged is what keeps the exit at the
+    documented clean 3 with zero admitted effects, which is what "unsupported" is supposed to mean.
     """
+    if getattr(_LIBC, "renameat2", None) is None:
+        raise JournalError("unsupported", "Linux renameat2 is unavailable", EXIT_REFUSED)
     staging = name + STAGING_SUFFIX
     admitted_before = len(_EFFECTS.admitted)
     try:

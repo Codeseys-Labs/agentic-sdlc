@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -1252,6 +1254,208 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertEqual(raced["state"], "blocked")
             self.assertIn("state-racy", {finding["code"] for finding in raced["findings"]})
             self.assertFalse(config.state_path.exists())
+
+
+class DispatcherInterpreterTests(unittest.TestCase):
+    """The dispatcher's shebang is a resolved pin, not a literal path.
+
+    ``assets/launchers/ccodex.in`` used to start with a hard-coded ``#!/usr/bin/bash``. macOS has
+    no such file -- it ships ``/bin/bash`` (3.2) and nothing at ``/usr/bin/bash`` -- so install
+    reported ``1 installed`` and exit 0 over a command that could never exec, and every later run
+    raised ENOENT on the INTERPRETER, which CPython reports against the SCRIPT path
+    (``No such file or directory: .../bin/ccodex``) for a file that was plainly there.
+
+    macOS cannot be executed on the Linux CI runner, so the platform half is proved by MOCKING the
+    candidate probe -- the only host-shaped input the resolver has -- and every mocked assertion
+    below is paired with the same claim measured against the unmocked probe on this host.
+    """
+
+    def config(self, root: Path) -> object:
+        runtime = root / "runtime"
+        runtime.mkdir(parents=True, exist_ok=True)
+        for name in ("ocx", "jq", "uv"):
+            path = runtime / name
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
+        return operator_tools.Config(
+            Path(__file__).parents[1],
+            root / "home",
+            root / "home" / ".local" / "bin",
+            root / "state",
+            False,
+            False,
+            runtime / "ocx",
+            runtime / "jq",
+            runtime / "uv",
+            Path(sys.executable),
+        )
+
+    def test_the_installed_shebang_is_the_resolved_interpreter_and_it_can_exec(self) -> None:
+        # Positive control for the mocked cases below: with the probe untouched, this host's own
+        # first admissible candidate is what lands in the file, and the file runs.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            resolved = operator_tools.bash_interpreter()
+
+            installed, _messages = operator_tools.install(config)
+
+            self.assertEqual(installed, 0)
+            self.assertIn(resolved, operator_tools.BASH_INTERPRETER_CANDIDATES)
+            dispatcher = config.bin_dir / "ccodex"
+            first = dispatcher.read_text(encoding="utf-8").splitlines()[0]
+            self.assertEqual(first, f"#!{resolved}")
+            self.assertTrue(resolved.is_file() and os.access(resolved, os.X_OK))
+            # The whole point: the shebang is exec-able. A wrong interpreter path fails here with
+            # FileNotFoundError against the dispatcher, which is exactly the macOS symptom.
+            completed = subprocess.run(
+                [str(dispatcher), "--help"], capture_output=True, text=True, check=False
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("usage: ccodex", completed.stdout)
+
+    def test_a_macos_shaped_host_without_usr_bin_bash_installs_a_command_that_runs(self) -> None:
+        # The macOS shape, simulated at the probe: the first candidate is absent and only the
+        # second exists. `/bin/bash` there is a real bash 3.2; here it is a link to this host's
+        # bash, which is what makes the rendered shebang executable rather than merely plausible.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            simulated = root / "darwin"
+            (simulated / "usr" / "bin").mkdir(parents=True)
+            (simulated / "bin").mkdir()
+            only = simulated / "bin" / "bash"
+            only.symlink_to(operator_tools.bash_interpreter())
+            candidates = (simulated / "usr" / "bin" / "bash", only)
+            self.assertFalse(candidates[0].exists(), "the simulated /usr/bin/bash must be absent")
+
+            with mock.patch.object(operator_tools, "BASH_INTERPRETER_CANDIDATES", candidates):
+                installed, _messages = operator_tools.install(config)
+
+            self.assertEqual(installed, 0)
+            dispatcher = config.bin_dir / "ccodex"
+            self.assertEqual(
+                dispatcher.read_text(encoding="utf-8").splitlines()[0], f"#!{only}"
+            )
+            completed = subprocess.run(
+                [str(dispatcher), "--help"], capture_output=True, text=True, check=False
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("usage: ccodex", completed.stdout)
+
+    def test_no_admissible_interpreter_refuses_by_name_at_two_before_writing_anything(self) -> None:
+        # A host with no bash at either path must REFUSE, not install a dead command and report 0.
+        # Driven through main() so the exit code is the documented one rather than an inference:
+        # OperatorToolsError -> 2, the class the sibling "pinned <tool> is not an executable file"
+        # refusals already use. The refusal names every path it probed.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            bin_dir = root / "bin"
+            bin_dir.mkdir(parents=True)
+            absent = (root / "no-usr" / "bin" / "bash", root / "no-root" / "bin" / "bash")
+            stderr = io.StringIO()
+
+            with mock.patch.object(operator_tools, "BASH_INTERPRETER_CANDIDATES", absent), \
+                    mock.patch.dict(os.environ, {"PATH": str(bin_dir)}), \
+                    contextlib.redirect_stderr(stderr):
+                code = operator_tools.main(
+                    [
+                        "install",
+                        "--home", str(home),
+                        "--bin-dir", str(bin_dir),
+                        "--state-root", str(root / "state"),
+                    ]
+                )
+
+            self.assertEqual(code, 2)
+            self.assertIn("cannot resolve a bash interpreter", stderr.getvalue())
+            for candidate in absent:
+                self.assertIn(str(candidate), stderr.getvalue())
+            self.assertFalse((bin_dir / "ccodex").exists())
+            self.assertFalse((bin_dir / "agentic-sdlc-statusline").exists())
+            self.assertFalse((root / "state" / "agentic-sdlc-operator-tools" / "state.json").exists())
+
+    def test_the_resolver_skips_a_whitespace_bearing_or_non_executable_candidate(self) -> None:
+        # A shebang cannot be quoted, so a path with a space would have its interpreter word split
+        # by the kernel; a non-executable or missing file cannot be an interpreter at all. Each is
+        # SKIPPED rather than accepted, and the admissible candidate behind it is still found.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real = operator_tools.bash_interpreter()
+            spaced_dir = root / "with space"
+            spaced_dir.mkdir()
+            spaced = spaced_dir / "bash"
+            spaced.symlink_to(real)
+            unexecutable = root / "unexecutable-bash"
+            unexecutable.write_text("#!/bin/sh\nexit 0\n")
+            unexecutable.chmod(0o644)
+            good = root / "good-bash"
+            good.symlink_to(real)
+
+            for skipped in (spaced, unexecutable, root / "absent-bash"):
+                with self.subTest(skipped=skipped.name):
+                    self.assertEqual(
+                        operator_tools.bash_interpreter((skipped, good)),
+                        good,
+                        "an inadmissible candidate must be skipped, not rendered",
+                    )
+            # Positive control: each skipped candidate IS otherwise present/reachable, so the skip
+            # comes from the rule under test and not from the path being unusable in every way.
+            self.assertTrue(spaced.is_file() and os.access(spaced, os.X_OK))
+            self.assertTrue(unexecutable.is_file())
+            with self.assertRaises(operator_tools.OperatorToolsError):
+                operator_tools.bash_interpreter((spaced, unexecutable))
+
+    def test_the_refusal_is_the_input_error_class_not_the_host_precondition_class(self) -> None:
+        # Exit 3 stays reserved for validate_bin_dir()'s PATH refusal, whose own docstring says so.
+        # A missing interpreter joins the exit-2 siblings instead of quietly widening that class.
+        with self.assertRaises(operator_tools.OperatorToolsError) as raised:
+            operator_tools.bash_interpreter((Path("/nonexistent/usr/bin/bash"),))
+
+        self.assertNotIsInstance(raised.exception, operator_tools.HostPreconditionError)
+
+    def test_an_unsubstituted_template_placeholder_refuses_instead_of_installing_it(self) -> None:
+        # The defect class the pin closes is "renders cleanly, cannot exec". A template token no
+        # renderer substitutes is the same class, so desired_files() fails closed on one.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shadow = root / "shadow-checkout"
+            (shadow / "assets" / "claude").mkdir(parents=True)
+            (shadow / "assets" / "launchers").mkdir()
+            (shadow / "scripts").mkdir()
+            (shadow / "assets" / "claude" / "statusline-command.sh").write_text("#!/bin/sh\nexit 0\n")
+            (shadow / "scripts" / "opencodex-claude.sh").write_text("#!/bin/sh\nexit 0\n")
+            template = shadow / "assets" / "launchers" / "ccodex.in"
+            runtime = root / "runtime"
+            runtime.mkdir()
+            for name in ("ocx", "jq", "uv"):
+                (runtime / name).write_text("#!/bin/sh\nexit 0\n")
+                (runtime / name).chmod(0o755)
+            config = operator_tools.Config(
+                shadow,
+                root / "home",
+                root / "home" / ".local" / "bin",
+                root / "state",
+                False,
+                False,
+                runtime / "ocx",
+                runtime / "jq",
+                runtime / "uv",
+                Path(sys.executable),
+            )
+
+            template.write_text("#!@PINNED_BASH@\nexit 0\n")
+            # Positive control first: the same shadow renders without complaint when every token
+            # present is one the installer substitutes.
+            rendered = operator_tools.desired_files(config)["ccodex"].decode()
+            self.assertEqual(rendered.splitlines()[0], f"#!{operator_tools.bash_interpreter()}")
+
+            template.write_text("#!@PINNED_BASH@\nexec @PINNED_NOT_A_REAL_TOKEN@\n")
+            with self.assertRaises(operator_tools.OperatorToolsError) as raised:
+                operator_tools.desired_files(config)
+
+            self.assertIn("unsubstituted @PINNED_placeholder", str(raised.exception))
 
 
 if __name__ == "__main__":

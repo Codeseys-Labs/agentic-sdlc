@@ -40,6 +40,7 @@ def _load(name: str, path: Path):
 # The reader is loaded for its constants and its grammar only. Its projection entry points install a
 # process-wide read-only guard that would block this harness's own writes, so every end-to-end check
 # below runs the reader as a subprocess instead.
+operator_tools = _load("recover_apply_operator_tools", ROOT / "scripts" / "install_operator_tools.py")
 reader = _load("recover_apply_reader", ROOT / "scripts" / "ccodex_sdlc.py")
 recover = _load("recover_apply_module", ROOT / "scripts" / "ccodex_sdlc_recover.py")
 bundle = _load("recover_apply_bundle", ROOT / "scripts" / "install_skill_bundle.py")
@@ -414,11 +415,16 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
 
     def make_candidate_projection(self, root: Path) -> tuple[Path, Path]:
         """Render the candidate read-only profile of the dispatcher over a stub interpreter."""
+        # Resolved through the installer, not written as a literal: `/usr/bin/bash` does not exist
+        # on macOS, so both the rendered shebang and the syntax check below have to come from the
+        # same probe the product uses.
+        interpreter = operator_tools.bash_interpreter()
         rendered = (
             LAUNCHER_TEMPLATE.read_text(encoding="utf-8")
             .replace("@CANDIDATE_READONLY_PROFILE@", "true")
             .replace("@CANONICAL_LAUNCHER@", "''")
             .replace("@CANONICAL_ROOT@", "''")
+            .replace("@PINNED_BASH@", str(interpreter))
             .replace("@PINNED_OCX@", "''")
             .replace("@PINNED_JQ@", "''")
             .replace("@PINNED_UV@", "''")
@@ -434,7 +440,7 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
         dispatcher.write_text(rendered, encoding="utf-8")
         dispatcher.chmod(0o755)
         syntax = subprocess.run(
-            ["/usr/bin/bash", "-n", str(dispatcher)], capture_output=True, text=True, check=False
+            [str(interpreter), "-n", str(dispatcher)], capture_output=True, text=True, check=False
         )
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         (projection / "scripts" / "ccodex_sdlc.py").write_text("# stub reader\n", encoding="utf-8")

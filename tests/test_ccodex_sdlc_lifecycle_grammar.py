@@ -215,11 +215,17 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
 
     def make_candidate_projection(self, root: Path) -> tuple[Path, Path]:
         """Render the candidate read-only profile of the dispatcher over a stub interpreter."""
+        # The interpreter comes from the installer's own resolver, never from a literal path: this
+        # harness used to render `#!/usr/bin/bash` and then check its syntax with `/usr/bin/bash -n`,
+        # which is a path macOS does not have -- so on macOS the test errored with FileNotFoundError
+        # against the interpreter instead of measuring the grammar it exists to measure.
+        interpreter = operator_tools.bash_interpreter()
         rendered = (
             LAUNCHER_TEMPLATE.read_text(encoding="utf-8")
             .replace("@CANDIDATE_READONLY_PROFILE@", "true")
             .replace("@CANONICAL_LAUNCHER@", "''")
             .replace("@CANONICAL_ROOT@", "''")
+            .replace("@PINNED_BASH@", str(interpreter))
             .replace("@PINNED_OCX@", "''")
             .replace("@PINNED_JQ@", "''")
             .replace("@PINNED_UV@", "''")
@@ -235,7 +241,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
         dispatcher.write_text(rendered, encoding="utf-8")
         dispatcher.chmod(0o755)
         syntax = subprocess.run(
-            ["/usr/bin/bash", "-n", str(dispatcher)], capture_output=True, text=True, check=False
+            [str(interpreter), "-n", str(dispatcher)], capture_output=True, text=True, check=False
         )
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         (projection / "scripts" / "ccodex_sdlc.py").write_text("# stub reader\n", encoding="utf-8")

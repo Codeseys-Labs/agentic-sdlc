@@ -28,6 +28,7 @@ the shell. `EnvironmentIsolationTests` holds that, and holds the stripped set ag
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import importlib.util
 import io
@@ -63,6 +64,19 @@ FAULT_ENV = "AGENTIC_SDLC_WAVE_JOURNAL_FAULT"
 # FAULT_ENV, and an inherited one turns most of this module red for a reason that has nothing to do
 # with the code under test. `EnvironmentIsolationTests` keeps this set honest against the source.
 TOOL_CONTROL_ENV = frozenset({FAULT_ENV})
+
+# The SAME probe `_publish` runs, re-expressed here rather than imported: the tool's filename has a
+# hyphen in it and cannot be imported by the family of tests that drive it as a subprocess. On POSIX it
+# stays a pure SYMBOL probe, never `sys.platform`, so it can only be false on a host that genuinely
+# lacks the syscall -- glibc 2.28+ always exports it, so this is never false on the Linux CI runner this
+# suite must stay green on. The `os.name` term is NOT a platform preference standing in for the symbol:
+# it answers the strictly earlier question of whether `ctypes.CDLL(None)` may be CALLED at all, because
+# on native Windows it may not -- 3.12's `CDLL.__init__` takes its `_os.name == "nt"` branch and
+# evaluates `'/' in name` with `name=None`, a TypeError. At module scope that would be a loader
+# traceback for this entire file on the windows CI leg instead of a named skip, so the term
+# short-circuits there and leaves the constant a plain False, which every guard below reads as "skip by
+# name". `RenameAt2CapabilityTests` below is this constant's own positive control.
+_HAS_RENAMEAT2 = os.name == "posix" and getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None) is not None
 
 T0 = "2026-08-19T02:00:00Z"
 
@@ -201,6 +215,7 @@ def plan_revision_record(**overrides: Any) -> dict[str, Any]:
     return record
 
 
+@unittest.skipUnless(_HAS_RENAMEAT2, "Linux renameat2 is unavailable")
 class _JournalTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -1507,6 +1522,87 @@ class EffectLedgerNestingTests(_JournalTestCase):
             self.assertEqual(outer2.admitted, [])
             outer2.admit("a second, independent outer context's own effect")
             self.assertEqual(outer2.admitted, ["a second, independent outer context's own effect"])
+
+
+class RenameAt2CapabilityTests(unittest.TestCase):
+    """The preflight in `_publish`, and the probe every OTHER class in this module is skipped on.
+
+    Deliberately NOT an `_JournalTestCase`: this class's whole point is to exercise the host that
+    LACKS the capability, so it must run even when `_HAS_RENAMEAT2` is false and every other class here
+    is skipped. `load_tool_in_process` hands back a fresh module object per call (a new
+    `exec_module`), so substituting its `_LIBC` here touches only this one instance -- no restoration
+    is needed and no other test's `_LIBC` is affected.
+    """
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the probe's truth is only guaranteed on Linux (glibc 2.28+)")
+    def test_the_probe_returns_non_none_on_this_linux_host(self) -> None:
+        """POSITIVE CONTROL for `_HAS_RENAMEAT2` itself: without this, every skip above would be
+        silently vacuous -- true on every host, including the ubuntu CI runner this suite must stay
+        green on -- and nothing would ever fail to reveal it.
+
+        The platform condition is the assertion's own scope, not a capability the probe is being
+        excused from: the claim is precisely "ON LINUX this symbol must exist", so it RUNS on the
+        ubuntu runner (where a vacuous skip would otherwise hide) and skips by name on macOS rather
+        than failing there for lacking a syscall macOS has never had. A control that proves the probe
+        is honest on hosts that HAVE the capability is still a control; asserting the capability
+        itself on a host without it would just be this module's own macOS red."""
+        self.assertTrue(_HAS_RENAMEAT2, "glibc 2.28+ always exports renameat2; this host is unexpected")
+        module = load_tool_in_process()
+        self.assertIsNotNone(getattr(module._LIBC, "renameat2", None))
+
+    def test_a_missing_renameat2_symbol_refuses_before_anything_is_staged(self) -> None:
+        """Simulate darwin on this Linux host by substituting the loaded module's OWN `_LIBC` with a
+        stand-in that carries no `renameat2` symbol at all -- exactly what `getattr(_LIBC, "renameat2",
+        None)` observes on macOS. The preflight in `_publish` must refuse at exit 3 `unsupported` with
+        an EMPTY ledger, never stage a successor, and never reach exit 4."""
+        module = load_tool_in_process()
+        module._LIBC = object()  # no `renameat2` attribute, same as ctypes.CDLL(None) on macOS
+        journal = self.journal_path()
+        out = io.StringIO()
+        with constructed_control_environment(), contextlib.redirect_stdout(out):
+            code = module.main(
+                ["init", "--journal", str(journal), "--at", T0, "--record", json.dumps(header_record())]
+            )
+        document = json.loads(out.getvalue())
+        self.assertEqual(code, EXIT_REFUSED)
+        self.assertEqual(code, document["exit_code"])
+        self.assertEqual(document["status"], "unsupported")
+        self.assertEqual(document["effect"], "none")
+        self.assertEqual(document["admitted_effects"], [], "the preflight must refuse before any staging effect")
+        self.assertIn("Linux renameat2 is unavailable", document["reasons"][0])
+        self.assertFalse(journal.exists(), "a clean pre-effect refusal must not create the journal")
+        self.assertFalse(
+            journal.with_name(journal.name + ".next").exists(),
+            "the preflight runs before `_write_new_at`, so no staging successor is ever created",
+        )
+
+    @unittest.skipUnless(_HAS_RENAMEAT2, "Linux renameat2 is unavailable")
+    def test_the_same_sequence_with_the_real_probe_succeeds(self) -> None:
+        """POSITIVE CONTROL for the test above: the SAME sequence, with `_LIBC` left exactly as
+        `load_tool_in_process` loaded it (the real capability on this Linux host), must succeed --
+        proving the mock is what changed the outcome, not the harness.
+
+        This is the one test in this class that needs the REAL capability, so it carries the same guard
+        the rest of the module does: on a host without the syscall the unmocked sequence is the tool's
+        HONEST exit-3 refusal, and demanding exit 0 there would be asserting the very capability the
+        mock exists to simulate. `test_a_missing_renameat2_symbol_refuses_before_anything_is_staged`
+        stays unguarded: substituting `_LIBC` is what it tests, and it passes on either profile."""
+        module = load_tool_in_process()
+        journal = self.journal_path()
+        out = io.StringIO()
+        with constructed_control_environment(), contextlib.redirect_stdout(out):
+            code = module.main(
+                ["init", "--journal", str(journal), "--at", T0, "--record", json.dumps(header_record())]
+            )
+        document = json.loads(out.getvalue())
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(document["status"], "initialized")
+        self.assertTrue(journal.exists())
+
+    def journal_path(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name) / "wave-1.journal"
 
 
 class NoClockTests(unittest.TestCase):

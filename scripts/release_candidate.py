@@ -2135,7 +2135,15 @@ def _public_witness_locator(retained: RetainedWitness | None) -> str | None:
     return retained.locator
 
 
-def _render_candidate_dispatcher(root: Path) -> tuple[Path, str]:
+def _render_candidate_dispatcher(root: Path, bash: Path) -> tuple[Path, str]:
+    """Render the read-only candidate projection over the ALREADY VERIFIED trusted interpreter.
+
+    ``bash`` is ``_trusted_bash``'s return value, so the shebang this writes is the same absolute
+    path whose uid/mode/digest that function checked against the linux-x64 execution policy, and
+    the ``bash_sha256`` recorded in the admission record therefore describes the interpreter that
+    actually runs this dispatcher. It used to be a literal in the template that nothing compared
+    against the policy, which made the pin decorative here and a dead command on macOS.
+    """
     template = root / "assets" / "launchers" / "ccodex.in"
     try:
         source = template.read_text(encoding="utf-8")
@@ -2145,6 +2153,7 @@ def _render_candidate_dispatcher(root: Path) -> tuple[Path, str]:
         source.replace("@CANDIDATE_READONLY_PROFILE@", "true")
         .replace("@CANONICAL_LAUNCHER@", "''")
         .replace("@CANONICAL_ROOT@", "''")
+        .replace("@PINNED_BASH@", str(bash))
         .replace("@PINNED_OCX@", "''")
         .replace("@PINNED_JQ@", "''")
         .replace("@PINNED_UV@", "''")
@@ -2690,8 +2699,9 @@ def run_readonly(
         _fail("execution-command")
     runtime_root = _resolve_base_runtime(host_policy) if _runtime_root is None else _runtime_root
     _validate_runtime_root(runtime_root, _runtime_license_paths(host_policy))
+    # The verified path is kept, not discarded: it is rendered into the projection's shebang below,
+    # so the interpreter this run recorded a digest for is the interpreter that runs the dispatcher.
     bash, bash_sha256 = _trusted_bash(execution_policy)
-    del bash
     limits = _mapping(host_policy["limits"], "policy-limits")
     archive_name = _archive_name(archive)
     retain_private = False
@@ -2707,7 +2717,7 @@ def run_readonly(
         root = _manual_extract(raw, manifest, members, manifest_raw, host_policy, private)
         _recompute_extracted(root, manifest)
         authored_digest, runtime_digest = _authenticate_executable_candidate(manifest, host_source, host_policy, runtime_root)
-        dispatcher, dispatcher_sha256 = _render_candidate_dispatcher(root)
+        dispatcher, dispatcher_sha256 = _render_candidate_dispatcher(root, bash)
         admission = _admission_record(
             root,
             archive_sha256,

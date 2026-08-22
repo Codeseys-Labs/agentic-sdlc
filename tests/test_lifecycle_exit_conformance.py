@@ -47,6 +47,13 @@ is paired with a run whose bytes the same comparison would have caught changing.
 
 A finding this suite cannot fix in production stays recorded at the class that hit it, prefixed
 FINDING, rather than being asserted as if it were the contract.
+
+THE ONE HOST CONDITION.  All three levels run the linux-x64-certified payload in a child under
+``-I``, so the per-verb modules' injected platform-observation seam cannot cross into them and off
+the certified platform every lifecycle verb refuses at exit 3 before any effect.  ``Plane`` reports
+that as a named skip (``payload_host_or_skip``) and only when the PRODUCT's own predicate refuses
+this host as well, so on the certified linux-x64 host the branch is unreachable and every claim below
+is proved rather than skipped (agentic-sdlc-e8a9).
 """
 
 from __future__ import annotations
@@ -57,6 +64,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import stat
 import subprocess
@@ -93,6 +101,30 @@ bundle = _load(ROOT / "scripts" / "install_skill_bundle.py", "exit_conformance_b
 operator_tools = _load(ROOT / "scripts" / "install_operator_tools.py", "exit_conformance_operator_tools")
 dar = _load(ROOT / "scripts" / "distribution_activation_receipt.py", "exit_conformance_receipts")
 recover = _load(ROOT / "scripts" / "ccodex_sdlc_recover.py", "exit_conformance_recover")
+
+#: The phrases a shipped verb's OWN platform refusal carries: install and update refuse to activate
+#: or refresh a linux-x64 CANDIDATE, recover refuses to resume a linux-x64 PLANE, and each names the
+#: one observation it refused.  Re-expressed here rather than imported so a verb that quietly stopped
+#: naming its observation stops matching instead of agreeing with itself.
+PLATFORM_REFUSAL_FRAGMENTS = ("the observed operating system is", "the observed architecture is")
+
+
+def uncertified_platform() -> str | None:
+    """The PRODUCT's own certified-platform verdict for THIS host, or ``None`` when it admits it.
+
+    Asked of ``ccodex_sdlc_recover.admit_platform``'s parameterized observation rather than of
+    ``sys.platform`` or a literal ``"Darwin"``: the certified platform is a rule the shipped verbs
+    own, so a harness that restated it would drift the moment the product widened it, and a harness
+    that read ``sys.platform`` would be asserting about the runner instead of asking the shipped
+    predicate.  On the certified linux-x64 host this returns ``None``, which is what makes every skip
+    built on it UNREACHABLE there rather than merely unlikely (agentic-sdlc-e8a9).
+    """
+    try:
+        recover.admit_platform(system=platform.system(), machine=platform.machine())
+    except recover.Refusal as refusal:
+        return str(refusal)
+    return None
+
 
 #: A host version the shipped release contract admits (floor 2.1.154, no declared incompatibility).
 #: The stub ``claude`` planted on the dispatcher's PATH prints it, which is what makes an install
@@ -605,16 +637,57 @@ class Plane:
         environment.pop("PYTHONPATH", None)
         return environment
 
+    def payload_host_or_skip(
+        self, completed: subprocess.CompletedProcess[str], driven: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Pass the child's result through, or SKIP BY NAME when it refused THIS host's platform.
+
+        Every child below runs the real linux-x64-certified payload: the installed dispatcher execs
+        the shipped reader under ``-I``, and the driver runs one shipped module's own ``main`` under
+        ``-I`` as well, so no observation this harness could inject reaches either of them -- the
+        per-verb modules take a ``Config.observed_system``/``observed_machine`` seam, and ``-I`` closes
+        every environment and ``sitecustomize`` route to it across a process boundary.  Off the
+        certified platform each lifecycle verb therefore refuses at exit 3 BEFORE any effect, which is
+        the product being correct: the exit-class claims below are about what an admitted effect
+        reports, not about a host that cannot run the payload at all, so that refusal is reported here
+        as a NAMED skip instead of as a failed exit-class claim.
+
+        Everything below must hold, which is what keeps this unreachable on the certified host: the
+        child exited exactly 3; ``uncertified_platform`` -- the PRODUCT's own predicate over the real
+        host -- refuses this host too; and ONE line of the child's stderr carries both a shipped verb's
+        platform-refusal phrase AND this host's own observation, quoted the way the product quotes it.
+        That last pairing is the positive control: a refusal about a platform this host is not, or a
+        line that merely mentions the phrase, buys no skip and stays a failure.
+        """
+        if completed.returncode != EXIT_REFUSED or uncertified_platform() is None:
+            return completed
+        named = tuple(
+            line
+            for line in completed.stderr.splitlines()
+            if any(fragment in line for fragment in PLATFORM_REFUSAL_FRAGMENTS)
+            and any(f"'{observed}'" in line for observed in (platform.system(), platform.machine()))
+        )
+        if not named:
+            return completed
+        raise unittest.SkipTest(
+            f"{driven} needs a host the linux-x64-certified payload can run on; the product's own"
+            f" certified-platform predicate refuses this host, and the child refused it by name before"
+            f" any effect: {named[0].strip()}"
+        )
+
     def dispatch(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         """Run one verb through the REAL installed ``ccodex`` dispatcher."""
         dispatcher, _stub = DISPATCHER.ensure()
-        return subprocess.run(
+        completed = subprocess.run(
             [str(dispatcher), *arguments],
             env=self.environment(),
             capture_output=True,
             text=True,
             check=False,
             timeout=600,
+        )
+        return self.payload_host_or_skip(
+            completed, f"`ccodex {' '.join(arguments[:2])}` through the installed dispatcher"
         )
 
     def drive(
@@ -634,7 +707,7 @@ class Plane:
                 "CONFORMANCE_FAULT": json.dumps(fault),
             }
         )
-        return subprocess.run(
+        completed = subprocess.run(
             [str(Path(sys.executable)), "-I", "-B", str(self.driver)],
             env=environment,
             capture_output=True,
@@ -642,6 +715,17 @@ class Plane:
             check=False,
             timeout=600,
         )
+        # A real mid-effect SIGKILL is named separately from an ordinary driven run: what it needs is
+        # not merely an admitted platform but a host whose payload REACHES the shipped installer's own
+        # transaction, because a verb that refused at phase 0 never arrives at the primitive the kill
+        # is aimed at, and "no journal was left behind" would then be true for the wrong reason.
+        driven = (
+            "the crash-honesty chain's real mid-effect SIGKILL inside the shipped installer's own"
+            f" transaction ({stem})"
+            if (fault or {}).get("kind") == "sigkill"
+            else f"the shipped {stem} module's own main(argv) under the driver"
+        )
+        return self.payload_host_or_skip(completed, driven)
 
 
 class Conformance(unittest.TestCase):

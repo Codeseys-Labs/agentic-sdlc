@@ -1,9 +1,24 @@
-#!/usr/bin/bash
+#!@PINNED_BASH@
 # ccodex — the Agentic SDLC operator dispatcher for the USE surface.
 #
 # Installed by scripts/install_operator_tools.py into an existing user-owned PATH directory.
 # @CANONICAL_ROOT@ is substituted at install time with the repository root this command was
 # installed from; @CANONICAL_LAUNCHER@ with the supervised opencodex launcher inside it.
+#
+# THE SHEBANG IS A PIN, NOT A LITERAL, because bash does not live at one absolute path on every
+# supported host: Linux ships /usr/bin/bash (with /bin/bash usually a merged-usr link to it) and
+# macOS ships only /bin/bash. A hard-coded `#!/usr/bin/bash` therefore installed a command that
+# reported `0 installed` on macOS and then failed at every later exec with ENOENT on the
+# INTERPRETER -- which CPython reports against the script path, so the operator saw
+# "no such file or directory: .../bin/ccodex" for a file that plainly existed. The installer
+# resolves the interpreter from a closed list of absolute system paths and renders it here; the
+# release-candidate bridge renders the exact digest-verified `trusted_bash.path` from
+# policy/release-candidate-execution.v1.json instead, which is why that linux-x64 pin stays a
+# candidate-surface fact rather than a daily-dispatcher one. A shebang cannot be quoted, so the
+# resolver admits no interpreter path containing whitespace.
+#
+# The grammar below is deliberately bash-3.2 compatible for the same reason: macOS carries no
+# newer bash, so a bash-4-only construct here would be a dead command on a claimed platform.
 #
 # WHY ONE DISPATCHER RATHER THAN N COMMANDS (ADR-0010). There are 36 mise tasks and most are
 # repository maintenance -- test, validate, check, secrets, self-test, mermaid:*, hooks:install.

@@ -752,7 +752,16 @@ scrub_and_restore_claude_env() {
       printf 'REFUSED: the environment policy lists are not defined; re-source session-inheritance.sh before scrubbing\n' >&2
       return 1
     }
-  local -a allowed=("${CLAUDE_INHERITED_ENV_VARS[@]}") denied=("${CLAUDE_DENIED_ENV_VARS[@]}")
+  # `${a[@]+"${a[@]}"}` RATHER THAN `"${a[@]}"`, because before bash 4.4 expanding an EMPTY array
+  # under `set -u` is an unbound-variable error, and macOS ships 3.2 and nothing newer. This exact
+  # line is where that mattered: the emptiness refusal two lines below never printed on macOS,
+  # because the copy-to-locals aborted the shell first with
+  # `CLAUDE_INHERITED_ENV_VARS[@]: unbound variable` -- a refusal replaced by a crash, in the
+  # dangerous direction, on a claimed platform. The `+` form asks whether the name is set instead
+  # of expanding it blind, so an empty array yields ZERO words on 3.2 exactly as on 5.x; `:-` would
+  # not do, since it yields one empty-string element and would silently admit "" as a policy entry.
+  local -a allowed=(${CLAUDE_INHERITED_ENV_VARS[@]+"${CLAUDE_INHERITED_ENV_VARS[@]}"}) \
+    denied=(${CLAUDE_DENIED_ENV_VARS[@]+"${CLAUDE_DENIED_ENV_VARS[@]}"})
   { [ "${#allowed[@]}" -gt 0 ] && [ "${#denied[@]}" -gt 0 ]; } \
     || {
       printf 'REFUSED: the environment policy is empty (allow=%s deny=%s); an empty allowlist drops the privacy flags and an empty denylist scrubs nothing\n' \
@@ -840,17 +849,21 @@ report_env_policy() {
       printf '  (the unprefixed credential-name grammar is not a closed word list; nothing was classified)\n' >&2
       return 1
     }
-  local -a denied=("${CLAUDE_DENIED_ENV_VARS[@]}")
+  # Same bash-3.2 guard as `scrub_and_restore_claude_env`, for the same reason and with more at
+  # stake here: this reporter has no emptiness refusal of its own, so on 3.2 an emptied list would
+  # abort the status route mid-report rather than classify nothing.
+  local -a denied=(${CLAUDE_DENIED_ENV_VARS[@]+"${CLAUDE_DENIED_ENV_VARS[@]}"})
   # One padded string, so an exact-name membership test is a single `case` rather than a nested
   # loop. Padded on BOTH sides and matched with its spaces attached: an unpadded search would let
   # CLAUDE_CODE_ACCESSIBILITY_EXTRA match CLAUDE_CODE_ACCESSIBILITY and report a denied name as
-  # inherited, which is a false statement in the dangerous direction.
-  local allowed=" ${CLAUDE_INHERITED_ENV_VARS[*]} "
+  # inherited, which is a false statement in the dangerous direction. The `[*]` join is guarded the
+  # same way; the inner expansion stays inside the outer quotes, so IFS still joins and nothing splits.
+  local allowed=" ${CLAUDE_INHERITED_ENV_VARS[*]+${CLAUDE_INHERITED_ENV_VARS[*]}} "
   # ONE `compgen` pass over both the prefix rules and the credential grammar, rather than two
   # pipelines: a name that satisfies both (`ANTHROPIC_API_KEY` does; `AWS_SECRET_ACCESS_KEY` does
   # NOT, since ACCESS_KEY is not one of the ten endings) must be reported ONCE, and a name reported
   # twice is its own false statement about the shell.
-  for name in $(compgen -v | grep -E "^(ANTHROPIC|CLAUDE|AWS)|$credential_ere" || true) "${denied[@]}"; do
+  for name in $(compgen -v | grep -E "^(ANTHROPIC|CLAUDE|AWS)|$credential_ere" || true) ${denied[@]+"${denied[@]}"}; do
     # This helper's own configuration is CLAUDE_*-named, so it shows up in the prefix sweep of
     # the very process doing the sweeping. It is launcher state, not operator environment, and
     # reporting it as "a denied variable you set" would be a false statement about the shell.

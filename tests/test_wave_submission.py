@@ -36,6 +36,7 @@ itself.
 from __future__ import annotations
 
 import ast
+import ctypes
 import hashlib
 import json
 import os
@@ -117,6 +118,18 @@ OUTPUTS = {
 #: passing `os.environ` through, so neither a control variable a future version began reading nor a
 #: fault variable a developer exported can reach a child from a shell.
 PASSTHROUGH_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "SYSTEMROOT", "TMPDIR")
+
+# `WaveFixtureCase` builds its journal fixture by RUNNING `wave-journal.py init`/`record-*` first, and
+# that publish refuses (by name, at exit 3) on a host that lacks this syscall -- so `WaveFixtureCase`
+# itself is skipped there rather than every fixture-building test failing downstream. On POSIX this is
+# a pure SYMBOL probe, never `sys.platform`, so it can only be false on a host that genuinely lacks the
+# syscall; glibc 2.28+ always exports it, so this is never false on the Linux CI runner this suite must
+# stay green on. The `os.name` term answers the strictly earlier question of whether
+# `ctypes.CDLL(None)` may be CALLED at all: on native Windows it may not (3.12's `CDLL.__init__` takes
+# its `_os.name == "nt"` branch and evaluates `'/' in name` with `name=None`, a TypeError), and at
+# module scope that would be a loader traceback for this whole file on the windows CI leg instead of a
+# named skip. `RenameAt2CapabilityTests` below is this constant's own positive control.
+_HAS_RENAMEAT2 = os.name == "posix" and getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None) is not None
 
 
 def constructed_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -453,6 +466,7 @@ class SubmissionCase(unittest.TestCase):
         return found[0]
 
 
+@unittest.skipUnless(_HAS_RENAMEAT2, "Linux renameat2 is unavailable")
 class WaveFixtureCase(SubmissionCase):
     """A real wave journal, built by RUNNING `wave-journal.py`, plus the real verdict tool over it."""
 
@@ -1204,6 +1218,27 @@ class SourceTests(unittest.TestCase):
         for schema in SCHEMA_OF_KIND.values():
             self.assertIn(f'"{schema}"', producer, f"{schema} is not sealed by the producer")
             self.assertIn(f'"{schema}"', consumer, f"{schema} is not consumed by the verdict tool")
+
+
+class RenameAt2CapabilityTests(unittest.TestCase):
+    """The capability probe `WaveFixtureCase` is skipped on. Deliberately NOT a `WaveFixtureCase`:
+    this class's whole point is to run even when `_HAS_RENAMEAT2` is false and every
+    `WaveFixtureCase` here is skipped. `wave-journal.py`'s own refusal at the missing syscall is
+    covered directly by `tests/test_wave_journal.py`'s `RenameAt2CapabilityTests`; this is only the
+    probe this module reuses to decide whether to build a journal fixture with it at all.
+    """
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the probe's truth is only guaranteed on Linux (glibc 2.28+)")
+    def test_the_probe_returns_non_none_on_this_linux_host(self) -> None:
+        """POSITIVE CONTROL: without this, `_HAS_RENAMEAT2` gating `WaveFixtureCase` above would be
+        silently vacuous -- true on every host, including the ubuntu CI runner this suite must stay
+        green on -- and nothing would ever fail to reveal it.
+
+        The platform condition is the assertion's own scope, not a capability the probe is excused
+        from: the claim is precisely "ON LINUX this symbol must exist", so it RUNS on the ubuntu runner
+        (where a vacuous skip would otherwise hide) and skips by name on macOS rather than failing
+        there for lacking a syscall macOS has never had."""
+        self.assertTrue(_HAS_RENAMEAT2, "glibc 2.28+ always exports renameat2; this host is unexpected")
 
 
 if __name__ == "__main__":

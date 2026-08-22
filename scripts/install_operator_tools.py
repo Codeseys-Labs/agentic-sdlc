@@ -30,6 +30,22 @@ LEGACY_STATE_VERSION = 1
 DESIRED_COMMANDS = ("agentic-sdlc-statusline", "ccodex")
 HISTORICAL_ALIASES = ("ocx-launch", "ocx-ultracode")
 RECOGNIZED_COMMANDS = DESIRED_COMMANDS + HISTORICAL_ALIASES
+# The dispatcher is a bash script, and bash has no single absolute path across the platforms this
+# lifecycle claims: Linux ships /usr/bin/bash (with /bin/bash usually a merged-usr link to it) and
+# macOS ships only /bin/bash. The template's shebang is therefore a pin resolved here, in probe
+# order, rather than a literal -- a hard-coded `#!/usr/bin/bash` installed a command that reported
+# `0 installed` on macOS and then failed at every exec with ENOENT on the interpreter.
+#
+# The list is CLOSED and ABSOLUTE: no PATH lookup and no environment override, so nothing a caller
+# controls can steer an installed command at an interpreter of their choosing. What this is NOT is
+# an interpreter integrity check -- the kernel re-resolves the path at every exec, so a later
+# replacement of that file is outside this lifecycle, and claiming otherwise would be a false
+# guarantee. What it does record is the binding: the resolved path is part of the installed bytes,
+# so the entry's ownership digest covers it and a rebinding surfaces as a refresh or a conflict
+# rather than silently. Digest-pinned bash ADMISSION stays where it is measured -- the linux-x64
+# release-candidate surface (`trusted_bash` in policy/release-candidate-execution.v1.json,
+# enforced by release_candidate.py `_trusted_bash`).
+BASH_INTERPRETER_CANDIDATES = (Path("/usr/bin/bash"), Path("/bin/bash"))
 
 
 class OperatorToolsError(RuntimeError):
@@ -187,6 +203,39 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
+def bash_interpreter(candidates: tuple[Path, ...] | None = None) -> Path:
+    """Return the first admissible absolute bash for the dispatcher's shebang.
+
+    A candidate is admissible when it is absolute, free of whitespace (a shebang cannot be quoted,
+    so the kernel would split the interpreter word), and an executable regular file. Nothing is
+    executed to decide this: the probe is a capability question about the host, and the answer is
+    rendered into the installed bytes.
+
+    When no candidate is admissible this raises the ordinary ``OperatorToolsError`` -- exit 2, the
+    same class as the sibling "pinned <tool> is not an executable file" refusals -- rather than the
+    ``HostPreconditionError`` exit-3 class, which stays reserved for the one raise site its own
+    docstring names. The refusal names every path it probed, and it happens in ``desired_files()``
+    before any file is written.
+
+    The probe list is read from the module at CALL time, not bound as a default argument value: a
+    default would be captured at import and the host-shape seam would be unpatchable, which is the
+    difference between testing this platform rule and testing the machine the suite happens to run
+    on.
+    """
+    candidates = BASH_INTERPRETER_CANDIDATES if candidates is None else candidates
+    for candidate in candidates:
+        text = str(candidate)
+        if not candidate.is_absolute() or any(character.isspace() for character in text):
+            continue
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    probed = ", ".join(str(candidate) for candidate in candidates) or "no candidate"
+    raise OperatorToolsError(
+        "cannot resolve a bash interpreter for the ccodex dispatcher; none of "
+        f"{probed} is an executable file on this host"
+    )
+
+
 def mise_executable(config: Config, tool: str) -> Path:
     if configured := {"ocx": config.ocx_path, "jq": config.jq_path, "uv": config.uv_path}[tool]:
         path = absolute(configured)
@@ -267,6 +316,9 @@ def desired_files(config: Config) -> dict[str, bytes]:
     for path in sources:
         if not path.is_file():
             raise OperatorToolsError(f"required operator-tools source is missing: {path}")
+    # Resolved before the pinned toolchain on purpose: it is the cheapest, purely local host fact,
+    # and it is the one that decides whether the file this function returns could ever exec at all.
+    bash = bash_interpreter()
     ocx = mise_executable(config, "ocx")
     jq = mise_executable(config, "jq")
     uv = mise_executable(config, "uv")
@@ -276,17 +328,30 @@ def desired_files(config: Config) -> dict[str, bytes]:
     # reinstall. Pinned runtime executables are deliberately absolute: daily use must not depend on
     # ambient PATH or re-evaluate repository-scoped mise. Values are shell-quoted because roots and
     # tool stores may contain spaces or quotes.
+    #
+    # @PINNED_BASH@ is the one substitution that is NOT shell-quoted, because it is the shebang: the
+    # kernel reads that line literally and a quote character would become part of the interpreter
+    # path. bash_interpreter() is what makes that safe, by admitting no whitespace-bearing path.
     dispatcher = (
         (templates / "ccodex.in")
         .read_text(encoding="utf-8")
         .replace("@CANDIDATE_READONLY_PROFILE@", "false")
         .replace("@CANONICAL_LAUNCHER@", shell_quote(str(launcher)))
         .replace("@CANONICAL_ROOT@", shell_quote(str(config.repo_root)))
+        .replace("@PINNED_BASH@", str(bash))
         .replace("@PINNED_OCX@", shell_quote(str(ocx)))
         .replace("@PINNED_JQ@", shell_quote(str(jq)))
         .replace("@PINNED_UV@", shell_quote(str(uv)))
         .replace("@PINNED_SDLC_PYTHON@", shell_quote(str(sdlc_python)))
     )
+    # An unsubstituted placeholder is exactly the defect class the shebang pin exists to close: it
+    # renders a file that installs cleanly and cannot exec. Fail closed instead of shipping it.
+    for leftover in ("@CANDIDATE_", "@CANONICAL_", "@PINNED_"):
+        if leftover in dispatcher:
+            raise OperatorToolsError(
+                f"the ccodex dispatcher template has an unsubstituted {leftover}placeholder: "
+                f"{templates / 'ccodex.in'}"
+            )
     return {
         "agentic-sdlc-statusline": statusline.read_bytes(),
         "ccodex": dispatcher.encode(),

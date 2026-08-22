@@ -44,6 +44,7 @@ producer -- goes through ONE constructed environment: an ALLOWLIST, not the ambi
 from __future__ import annotations
 
 import ast
+import ctypes
 import hashlib
 import json
 import math
@@ -123,6 +124,20 @@ EXIT_INPUT = 2
 ABSENT = "absent"
 UNREADABLE = "unreadable"
 PRESENT = "present"
+
+# `make_wave_journal` builds its fixture by RUNNING `wave-journal.py init`/`record-node`, and that
+# publish refuses (by name, at exit 3) on a host that lacks this syscall -- so every test method that
+# calls it is individually skipped there rather than failing downstream on the fixture it never got.
+# On POSIX this is a pure SYMBOL probe, never `sys.platform`, so it can only be false on a host that
+# genuinely lacks the syscall; glibc 2.28+ always exports it, so this is never false on the Linux CI
+# runner this suite must stay green on. The `os.name` term answers the strictly earlier question of
+# whether `ctypes.CDLL(None)` may be CALLED at all: on native Windows it may not (3.12's
+# `CDLL.__init__` takes its `_os.name == "nt"` branch and evaluates `'/' in name` with `name=None`, a
+# TypeError), and at module scope that would be a loader traceback for this whole file on the windows
+# CI leg instead of a named skip. `RenameAt2CapabilityTests` below is this constant's own positive
+# control.
+_HAS_RENAMEAT2 = os.name == "posix" and getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None) is not None
+_NEEDS_RENAMEAT2 = unittest.skipUnless(_HAS_RENAMEAT2, "Linux renameat2 is unavailable")
 
 #: The allowlist every spawn in this module constructs its environment from -- mirroring
 #: `test_mission_contract.py`'s `PASSTHROUGH_ENV`/`constructed_environment` exactly, because this
@@ -878,6 +893,7 @@ class AbsenceTests(ProjectionCase):
 
 
 class WaveJournalTests(ProjectionCase):
+    @_NEEDS_RENAMEAT2
     def test_a_complete_wave_journal_is_projected_and_reported_complete(self) -> None:
         journal = self.make_wave_journal(complete=True)
         document = self.document("--wave-journal", str(journal))
@@ -888,6 +904,7 @@ class WaveJournalTests(ProjectionCase):
         self.assertEqual(section["required_nodes_without_disposition"], [])
         self.assertEqual(document["bluf"], "wave wave-1: every required node carries a disposition")
 
+    @_NEEDS_RENAMEAT2
     def test_an_incomplete_wave_journal_names_the_missing_node(self) -> None:
         journal = self.make_wave_journal(complete=False)
         document = self.document("--wave-journal", str(journal))
@@ -898,6 +915,7 @@ class WaveJournalTests(ProjectionCase):
         self.assertIn("implement-b", document["bluf"])
         self.assertIn("1 required node(s) missing a disposition", document["bluf"])
 
+    @_NEEDS_RENAMEAT2
     def test_a_directory_supplied_as_the_wave_journal_is_unreadable(self) -> None:
         # POSITIVE CONTROL: a real journal at a sibling path projects fine.
         journal = self.make_wave_journal(complete=True)
@@ -908,6 +926,7 @@ class WaveJournalTests(ProjectionCase):
         self.assertEqual(section["presence"], UNREADABLE)
         self.assertIn("not a regular file", section["reason"])
 
+    @_NEEDS_RENAMEAT2
     def test_a_journal_that_is_not_json_lines_is_unreadable_not_a_crash(self) -> None:
         journal = self.make_wave_journal(complete=True)
         # POSITIVE CONTROL: the untouched journal projects fine.
@@ -926,6 +945,7 @@ class WaveJournalTests(ProjectionCase):
         self.assertEqual(section["presence"], ABSENT)
         self.assertIsNone(section["reason"])
 
+    @_NEEDS_RENAMEAT2
     def test_wave_journal_json_and_human_views_agree(self) -> None:
         journal = self.make_wave_journal(complete=False)
         document = self.document("--wave-journal", str(journal))
@@ -1824,6 +1844,7 @@ class SchemaVersionTests(SealedKindCase):
         self.assertEqual(document["status"], "projected")
         self.assertEqual(document["exit_code"], EXIT_OK)
 
+    @_NEEDS_RENAMEAT2
     def test_every_v1_artifact_section_survives_with_its_own_v1_fields(self) -> None:
         """The four original kinds are checked FIELD-FOR-FIELD on a fully populated run, because a
         rename inside one of them would be invisible to a key-set check over an all-absent document."""
@@ -1885,6 +1906,7 @@ class BlufPriorityTests(SealedKindCase):
     -- and an UNREADABLE input at any rung still outranks every PRESENT kind below it, because "I could
     not read this" is itself the most decision-relevant thing that rung has to say."""
 
+    @_NEEDS_RENAMEAT2
     def test_activation_result_outranks_everything_else(self) -> None:
         activation = self.make_activation_refused()
         journal = self.make_wave_journal(complete=False)
@@ -1896,6 +1918,7 @@ class BlufPriorityTests(SealedKindCase):
         )
         self.assertIn("activation state", document["bluf"])
 
+    @_NEEDS_RENAMEAT2
     def test_gate_outranks_runtime_assignment_and_wave_journal(self) -> None:
         journal = self.make_wave_journal(complete=False)
         report = self.make_classification(served_model="claude-opus-4-8")
@@ -1905,17 +1928,20 @@ class BlufPriorityTests(SealedKindCase):
         )
         self.assertIn("gate smoke", document["bluf"])
 
+    @_NEEDS_RENAMEAT2
     def test_runtime_assignment_outranks_wave_journal(self) -> None:
         journal = self.make_wave_journal(complete=False)
         report = self.make_classification(served_model="claude-opus-4-8")
         document = self.document("--wave-journal", str(journal), "--runtime-assignment", str(report))
         self.assertIn("runtime-assignment", document["bluf"])
 
+    @_NEEDS_RENAMEAT2
     def test_wave_journal_is_the_bluf_when_it_is_the_only_input(self) -> None:
         journal = self.make_wave_journal(complete=False)
         document = self.document("--wave-journal", str(journal))
         self.assertIn("wave wave-1", document["bluf"])
 
+    @_NEEDS_RENAMEAT2
     def test_an_unreadable_higher_priority_kind_still_outranks_a_present_lower_one(self) -> None:
         journal = self.make_wave_journal(complete=True)
         broken_activation = self.work / "broken-activation.json"
@@ -1971,6 +1997,7 @@ class BlufPriorityTests(SealedKindCase):
             ),
         ]
 
+    @_NEEDS_RENAMEAT2
     def test_the_whole_ladder_is_walked_once_from_the_bottom_up(self) -> None:
         argv: list[str] = []
         for kind, flags, fragment in self._ladder():
@@ -2114,6 +2141,7 @@ class CanonicalFormTests(ProjectionCase):
         document = json.loads(done.stdout)
         self.assertEqual(document["artifacts"]["gate"]["receipt"]["gate"], "portée réelle — π")
 
+    @_NEEDS_RENAMEAT2
     def test_human_and_json_views_derive_from_the_same_bluf(self) -> None:
         journal = self.make_wave_journal(complete=False)
         text = self.human("--wave-journal", str(journal))
@@ -2286,6 +2314,7 @@ class EnvironmentAndHostCouplingTests(ProjectionCase):
         self.assertIsInstance(env_kw.value.func, ast.Name)
         self.assertEqual(env_kw.value.func.id, "constructed_environment")
 
+    @_NEEDS_RENAMEAT2
     def test_an_unrelated_ambient_variable_does_not_change_the_projection(self) -> None:
         journal = self.make_wave_journal(complete=True)
         first = run([sys.executable, "-B", str(TOOL), "--wave-journal", str(journal), "--json"], cwd=self.work)
@@ -2304,6 +2333,7 @@ class EnvironmentAndHostCouplingTests(ProjectionCase):
         # test and the value lookup); no OTHER function may read `os.environ` directly.
         self.assertEqual(occurrences, 2, "an unexpected os.environ read means a control variable crept in")
 
+    @_NEEDS_RENAMEAT2
     def test_the_projection_does_not_depend_on_the_callers_working_directory(self) -> None:
         journal = self.make_wave_journal(complete=True)
         other_cwd = self.work / "elsewhere"
@@ -2315,6 +2345,7 @@ class EnvironmentAndHostCouplingTests(ProjectionCase):
         self.assertEqual(from_work.returncode, EXIT_OK)
         self.assertEqual(from_elsewhere.stdout, from_work.stdout)
 
+    @_NEEDS_RENAMEAT2
     def test_a_deeply_nested_tmpdir_is_tolerated(self) -> None:
         deep = self.work
         for index in range(12):
@@ -3319,6 +3350,7 @@ class HumanViewCompletenessTests(SealedKindCase):
             self.assertEqual(section["presence"], PRESENT, section.get("reason"))
             self.assert_every_field_rendered(kind, section, self.section_text(text, label))
 
+    @_NEEDS_RENAMEAT2
     def test_every_projected_field_of_the_four_original_kinds_reaches_the_human_view(self) -> None:
         journal = self.make_wave_journal(complete=False)
         report = self.make_admission()
@@ -3415,6 +3447,7 @@ class NestingCeilingTests(ProjectionCase):
         self.assertEqual(section["presence"], UNREADABLE)
         self.assertIn("nests JSON containers deeper than", section["reason"])
 
+    @_NEEDS_RENAMEAT2
     def test_the_other_twelve_inputs_keep_their_own_outcomes_beside_a_deeply_nested_one(self) -> None:
         """The independence claim itself, stated as an assertion: a hostile input costs its OWN
         section and nothing else's."""
@@ -3597,6 +3630,27 @@ class NoRegexBackslashDTests(unittest.TestCase):
     def test_no_backslash_d_appears_in_the_module_source(self) -> None:
         source = TOOL.read_text(encoding="utf-8")
         self.assertNotIn("\\d", source)
+
+
+class RenameAt2CapabilityTests(unittest.TestCase):
+    """The capability probe every `@_NEEDS_RENAMEAT2` test above is skipped by. Deliberately its own
+    plain `unittest.TestCase`: this class's whole point is to run even when `_HAS_RENAMEAT2` is false
+    and every decorated test here is skipped. `wave-journal.py`'s own refusal at the missing syscall
+    is covered directly by `tests/test_wave_journal.py`'s `RenameAt2CapabilityTests`; this is only the
+    probe this module reuses to decide whether to build a journal fixture with it at all.
+    """
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the probe's truth is only guaranteed on Linux (glibc 2.28+)")
+    def test_the_probe_returns_non_none_on_this_linux_host(self) -> None:
+        """POSITIVE CONTROL: without this, `_HAS_RENAMEAT2` gating every `@_NEEDS_RENAMEAT2` test
+        above would be silently vacuous -- true on every host, including the ubuntu CI runner this
+        suite must stay green on -- and nothing would ever fail to reveal it.
+
+        The platform condition is the assertion's own scope, not a capability the probe is excused
+        from: the claim is precisely "ON LINUX this symbol must exist", so it RUNS on the ubuntu runner
+        (where a vacuous skip would otherwise hide) and skips by name on macOS rather than failing
+        there for lacking a syscall macOS has never had."""
+        self.assertTrue(_HAS_RENAMEAT2, "glibc 2.28+ always exports renameat2; this host is unexpected")
 
 
 if __name__ == "__main__":

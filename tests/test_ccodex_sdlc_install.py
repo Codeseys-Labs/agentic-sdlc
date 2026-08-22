@@ -211,8 +211,16 @@ def build_fixture(
     receipt_overrides: dict[str, Any] | None = None,
     reseal: bool = True,
     manifest_overrides: dict[str, Any] | None = None,
+    observed_system: str = "Linux",
+    observed_machine: str = "x86_64",
 ) -> Fixture:
-    """Fabricate one complete acquisition: payload tree, manifest, sealed receipt, and Config."""
+    """Fabricate one complete acquisition: payload tree, manifest, sealed receipt, and Config.
+
+    ``observed_system``/``observed_machine`` default to the certified ``Linux``/``x86_64`` pair so
+    every fixture is host-independent: without an explicit override, ``admit_platform`` sees the
+    certified platform regardless of which real host runs this suite.  ``PlatformTest`` overrides
+    them to exercise the refusal itself.
+    """
     home = root / "operator-home"
     state_home = root / "state"
     data_home = root / "data"
@@ -279,6 +287,8 @@ def build_fixture(
         installer_state_root=installer_state_root,
         observed_host_version=host_version,
         observed_instant=instant,
+        observed_system=observed_system,
+        observed_machine=observed_machine,
     )
     return Fixture(
         root=root,
@@ -297,6 +307,45 @@ class Outcome:
     code: int
     stdout: str
     stderr: str
+
+
+#: The phrases this module's OWN platform refusal carries, one per observed axis.  Re-expressed rather
+#: than imported, so a refusal that stopped naming its observation stops matching here.
+PLATFORM_REFUSAL_FRAGMENTS = ("the observed operating system is", "the observed architecture is")
+
+
+def skip_when_a_child_refused_this_host(
+    case: unittest.TestCase, completed: subprocess.CompletedProcess[str]
+) -> None:
+    """Skip BY NAME when a child that observed the REAL platform refused this host, else return.
+
+    The end-to-end checks below run the shipped module in a child under ``-I``, which is the ONE place
+    in this suite where ``Config.observed_system``/``observed_machine`` cannot reach: the child builds
+    its configuration from its own ``default_config()``, and ``-I`` closes every environment and
+    ``sitecustomize`` route an injected observation could have taken.  Off the certified linux-x64
+    platform that child therefore refuses at exit 3 before any effect -- the product being correct --
+    so the claim "this reader dispatches this module end to end" is reported as a named skip instead of
+    a failed exit-0 assertion (agentic-sdlc-e8a9).
+
+    Positive control: the refusal must name THIS host's own observation, taken from the same
+    ``platform`` module the shipped module reads.  A refusal about a platform this host is not buys no
+    skip and stays a failure.  On the certified host no fragment matches at all, so nothing here can
+    fire on the linux-x64 runner.
+    """
+    if completed.returncode != 3:
+        return
+    axes = (
+        (PLATFORM_REFUSAL_FRAGMENTS[0], install.platform.system(), install.SUPPORTED_SYSTEM),
+        (PLATFORM_REFUSAL_FRAGMENTS[1], install.platform.machine(), install.SUPPORTED_MACHINES),
+    )
+    for fragment, observed, certified in axes:
+        if fragment not in completed.stderr:
+            continue
+        case.assertIn(f"{fragment} '{observed}'", completed.stderr, completed.stderr)
+        case.skipTest(
+            f"a child of this test observes the real platform, and the shipped module refused it by"
+            f" name: {fragment} {observed!r}, not the certified {certified!r}"
+        )
 
 
 def call_main(
@@ -370,6 +419,8 @@ class TemporaryRoot(unittest.TestCase):
             installer_state_root=fixture.installer_state_root,
             observed_host_version=HOST_VERSION,
             observed_instant=instant,
+            observed_system=fixture.config.observed_system,
+            observed_machine=fixture.config.observed_machine,
         )
 
 
@@ -716,28 +767,93 @@ class CompatibilityTest(TemporaryRoot):
 
 
 class PlatformTest(TemporaryRoot):
+    """Drives ``admit_platform`` through the injected ``Config.observed_system``/``observed_machine``
+    seam rather than mocking ``platform.system``/``platform.machine``, so the refusal is exercised
+    identically on every host this suite runs on -- including a host that IS the certified platform,
+    where mocking the real stdlib function would leave the "positive control" unable to state
+    anything about the actual host without hardcoding an assumption about it (agentic-sdlc-e8a9).
+
+    The last check is the other half of that trade: injecting both axes everywhere would leave
+    ``observe_platform``'s ``UNSUPPLIED`` fallback -- the branch that reads the real host -- uncovered
+    in-process, so that one supplies NEITHER observation and names both admissible outcomes instead of
+    asserting which host this is.
+    """
+
     def test_off_linux_refuses_by_name(self) -> None:
-        fixture = self.fixture()
-        with mock.patch.object(install.platform, "system", lambda: "Darwin"):
-            outcome = call_main(fixture)
+        fixture = self.fixture(observed_system="Darwin")
+        outcome = call_main(fixture)
         self.assertEqual(3, outcome.code)
         self.assertIn("Darwin", outcome.stderr)
         self.assertIn("certified only on Linux", outcome.stderr)
         self.assertEqual([], fixture.activation_receipts())
         self.assertFalse(fixture.destination("skills/alpha-skill").exists())
-        # Positive control: the real observation on this host admits the same fixture.
-        self.assertEqual("Linux", install.platform.system())
-        self.assertEqual(0, call_main(self.fixture(), config=None).code)
+        # Positive control: the SAME fixture with the certified observation injected admits the run,
+        # regardless of what the real host this suite executes on happens to be.
+        self.assertEqual(0, call_main(self.fixture(observed_system="Linux")).code)
 
     def test_unsupported_architecture_refuses_by_name(self) -> None:
-        fixture = self.fixture()
-        with mock.patch.object(install.platform, "machine", lambda: "aarch64"):
-            outcome = call_main(fixture)
+        fixture = self.fixture(observed_machine="aarch64")
+        outcome = call_main(fixture)
         self.assertEqual(3, outcome.code)
         self.assertIn("aarch64", outcome.stderr)
         self.assertEqual([], fixture.activation_receipts())
-        with mock.patch.object(install.platform, "machine", lambda: "x86_64"):
-            self.assertEqual(0, call_main(fixture).code)
+        # Positive control: the SAME fixture with the certified architecture injected admits the run.
+        self.assertEqual(0, call_main(self.fixture(observed_machine="x86_64")).code)
+
+    def test_the_real_host_is_refused_or_admitted_by_name_with_no_observation_supplied(self) -> None:
+        """The ``UNSUPPLIED`` fallback: nothing is injected, so ``observe_platform`` reads the host.
+
+        The two checks above inject both axes, which is exactly what makes them host-independent -- and
+        it also means neither of them exercises ``observe_platform``'s own
+        ``platform.system``/``platform.machine`` fallback in-process any more, leaving that branch
+        covered only by the subprocess end-to-end check, the one place off-Linux cannot reach
+        (agentic-sdlc-e8a9).  This drives ``main`` with the sentinel LEFT IN PLACE and admits EITHER
+        outcome, each named rather than assumed:
+
+        * a host the product certifies -- the fallback observed it, the run completes at exit 0, and one
+          activation receipt is sealed;
+        * any other host -- the product refuses at exit 3 with its OWN message about the observation it
+          actually made, and no receipt and no destination exist.
+
+        Nothing here asserts which host that is, so it states no claim about the runner; a third
+        outcome (another exit class, a refusal on a host the predicate admits, or a completed run on one
+        it refuses) fails.
+        """
+        fixture = self.fixture()
+        unsupplied = install.Config(
+            home=fixture.home,
+            state_home=fixture.state_home,
+            data_home=fixture.data_home,
+            codex_home=fixture.config.codex_home,
+            installer_state_root=fixture.installer_state_root,
+            observed_host_version=HOST_VERSION,
+            observed_instant=INSTANT,
+            # observed_system/observed_machine are deliberately NOT supplied: they keep the shipped
+            # ``UNSUPPLIED`` default, which is the branch under test.
+        )
+        self.assertIs(install.UNSUPPLIED, unsupplied.observed_system)
+        self.assertIs(install.UNSUPPLIED, unsupplied.observed_machine)
+        try:
+            admitted = install.admit_platform(unsupplied)
+        except install.Refusal as refusal:
+            expected: str | None = str(refusal)
+        else:
+            expected = None
+
+        outcome = call_main(fixture, config=unsupplied)
+        if expected is None:
+            self.assertEqual(0, outcome.code, outcome.stderr)
+            # The fallback read the host itself rather than an injected pair.
+            self.assertEqual((install.platform.system(), install.platform.machine()), admitted)
+            self.assertEqual(1, len(fixture.activation_receipts()))
+        else:
+            self.assertEqual(3, outcome.code, outcome.stderr)
+            # The product's OWN refusal text, which necessarily quotes the observation it made on
+            # whichever axis refused -- so this names the real host without restating any rule.
+            self.assertIn(install.escape_display(expected), outcome.stderr)
+            self.assertIn("refused before any effect", outcome.stderr)
+            self.assertEqual([], fixture.activation_receipts())
+            self.assertFalse(fixture.destination("skills/alpha-skill").exists())
 
 
 class AdmissionTest(TemporaryRoot):
@@ -1083,6 +1199,8 @@ class InstallThenUpdateTest(TemporaryRoot):
             installer_state_root=fixture.installer_state_root,
             observed_host_version=HOST_VERSION,
             observed_instant=instant,
+            observed_system=fixture.config.observed_system,
+            observed_machine=fixture.config.observed_machine,
         )
 
     def call_update(self, fixture: Fixture, instant: str = LATER_INSTANT) -> Outcome:
@@ -1242,6 +1360,7 @@ class DispatchContractTest(TemporaryRoot):
         )
         if completed.returncode == 3 and "host version could not be observed" in completed.stderr:
             self.skipTest("this host has no observable Claude Code version")
+        skip_when_a_child_refused_this_host(self, completed)
         self.assertEqual(0, completed.returncode, completed.stderr)
         self.assertIn("effect complete", completed.stdout)
         for relative in CLAUDE_DESTINATIONS:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -1117,6 +1118,133 @@ class SharedEnvironmentPolicyTests(unittest.TestCase):
         self.assertNotIn("planted-injected-not-a-credential", result.stdout.split("ALLOWED=")[0])
         # The allowed flag keeps its exact value, newline and all -- it is not truncated or split.
         self.assertIn(f"ALLOWED=[{value}]", result.stdout)
+
+    # ---- bash 3.2, which is the only bash macOS ships ----------------------------------------
+    #
+    # Before bash 4.4, expanding an EMPTY array under `set -u` is an unbound-variable error, so
+    # `local -a allowed=("${CLAUDE_INHERITED_ENV_VARS[@]}")` aborted the shell on macOS BEFORE the
+    # emptiness refusal below it could print REFUSED. The refusal was replaced by a crash, in the
+    # dangerous direction, on a platform this lifecycle claims -- and the empty-list test above went
+    # on passing on Linux, because bash 5 expands an empty array to zero words without complaint.
+    #
+    # No bash 5 compatibility level restores the old behavior (`BASH_COMPAT=3.2` and
+    # `shopt -s compat32` both keep the 4.4 semantics, verified on 5.3), and macOS cannot be
+    # executed on the Linux runner, so the 3.2 direction is proved over the SOURCE: every array
+    # value expansion in the shipped helper must either carry the `${a[@]+"${a[@]}"}` guard or sit
+    # after an explicit `${#a[@]}` emptiness check in the same function. A count expansion is safe
+    # on 3.2 by itself; a value expansion is not.
+
+    def unguarded_array_expansions(self, text: str) -> list[str]:
+        """Report every array VALUE expansion that bash 3.2 could refuse under ``set -u``.
+
+        Accepted forms are the `+` guard (which asks whether the name is set instead of expanding
+        it blind) and a preceding `${#name[@]}` count in the same function body, since a count is
+        never an unbound-variable error and every such site here refuses on zero before expanding.
+        """
+        # Full-line comments are blanked rather than removed, so a documented example of the very
+        # shape this looks for is not reported as code while line numbers still point at the file.
+        text = "\n".join("" if line.lstrip().startswith("#") else line for line in text.split("\n"))
+        expansion = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)\[(?P<sigil>[@*])\]\}")
+        header = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", re.MULTILINE)
+        bounds = [(match.start(), match.group("name")) for match in header.finditer(text)]
+        findings: list[str] = []
+        for match in expansion.finditer(text):
+            name, sigil = match.group("name"), match.group("sigil")
+            before = text[: match.start()]
+            guard = f"${{{name}[{sigil}]+"
+            if before.endswith(guard) or before.endswith(guard + '"'):
+                continue
+            starts = [start for start, _ in bounds if start <= match.start()]
+            body_start = max(starts) if starts else 0
+            body_name = next(
+                (owner for start, owner in bounds if start == body_start), "<top level>"
+            )
+            body = text[body_start : match.start()]
+            if f"${{#{name}[@]}}" in body:
+                continue
+            findings.append(f"{body_name}: ${{{name}[{sigil}]}} (line {before.count(chr(10)) + 1})")
+        return findings
+
+    def test_every_array_expansion_in_the_shipped_helper_is_bash_3_2_safe(self) -> None:
+        self.assertEqual(
+            self.unguarded_array_expansions(self.ASSET.read_text(encoding="utf-8")),
+            [],
+            "an unguarded array value expansion is an unbound-variable crash on macOS bash 3.2, "
+            "which replaces a REFUSED line with a dead shell",
+        )
+
+    def test_the_bash_3_2_detector_reports_an_unguarded_expansion(self) -> None:
+        # Positive control for the assertion above: an empty result proves nothing unless the same
+        # detector is shown to catch the exact shape it is looking for.
+        hostile = 'f() {\n  local -a a=("${SOME_LIST[@]}")\n}\n'
+
+        self.assertEqual(len(self.unguarded_array_expansions(hostile)), 1)
+        self.assertIn("SOME_LIST", self.unguarded_array_expansions(hostile)[0])
+        self.assertIn("f:", self.unguarded_array_expansions(hostile)[0])
+        # ...and that it accepts both admissible forms rather than everything or nothing.
+        for accepted in (
+            'f() {\n  local -a a=(${SOME_LIST[@]+"${SOME_LIST[@]}"})\n}\n',
+            'f() {\n  local s=" ${SOME_LIST[*]+${SOME_LIST[*]}} "\n}\n',
+            'f() {\n  [ "${#SOME_LIST[@]}" -gt 0 ] || return 1\n  local -a a=("${SOME_LIST[@]}")\n}\n',
+        ):
+            with self.subTest(accepted=accepted.splitlines()[1].strip()):
+                self.assertEqual(self.unguarded_array_expansions(accepted), [])
+        # A count in a DIFFERENT function does not license an unguarded expansion.
+        self.assertEqual(
+            len(
+                self.unguarded_array_expansions(
+                    'g() {\n  [ "${#SOME_LIST[@]}" -gt 0 ] || return 1\n}\n'
+                    'f() {\n  local -a a=("${SOME_LIST[@]}")\n}\n'
+                )
+            ),
+            1,
+        )
+
+    def test_the_bash_3_2_guard_expands_exactly_as_the_unguarded_form_did(self) -> None:
+        # Linux no-regression control: the guard is a set-ness test, not a value change, so on this
+        # host it must produce byte-identical words -- including an element containing a space, and
+        # including zero words for an empty array rather than one empty string.
+        result = self.run_policy(
+            'probe() { printf "n=%s" "$#"; for a in "$@"; do printf "[%s]" "$a"; done; printf "\\n"; }\n'
+            'demo=(one "two three")\n'
+            'empty=()\n'
+            'printf "PLAIN:"; probe "${demo[@]}"\n'
+            'printf "GUARD:"; probe ${demo[@]+"${demo[@]}"}\n'
+            'printf "EMPTY:"; probe ${empty[@]+"${empty[@]}"}\n'
+            'printf "STAR-PLAIN:[%s]\\n" " ${demo[*]} "\n'
+            'printf "STAR-GUARD:[%s]\\n" " ${demo[*]+${demo[*]}} "\n',
+            source=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = dict(line.split(":", 1) for line in result.stdout.splitlines())
+        self.assertEqual(lines["PLAIN"], lines["GUARD"])
+        self.assertEqual(lines["PLAIN"], "n=2[one][two three]")
+        self.assertEqual(lines["EMPTY"], "n=0")
+        self.assertEqual(lines["STAR-PLAIN"], lines["STAR-GUARD"])
+
+    def test_the_status_reporter_survives_an_emptied_policy_list(self) -> None:
+        # `report_env_policy` has no emptiness refusal of its own -- it classifies rather than
+        # decides -- so on bash 3.2 its two unguarded expansions would have aborted the status
+        # route mid-report. It must classify nothing and still exit cleanly.
+        result = self.run_policy(
+            'CLAUDE_DENIED_ENV_VARS=()\nCLAUDE_INHERITED_ENV_VARS=()\nreport_env_policy\n'
+            'printf "REPORTED:%s\\n" "$?"',
+            env={"AWS_BEARER_TOKEN_BEDROCK": "planted-bedrock-bearer-not-a-credential"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("REPORTED:0", result.stdout)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertNotIn("planted-bedrock-bearer-not-a-credential", result.stdout + result.stderr)
+        # Positive control: with the shipped lists intact the same reporter DOES classify that name,
+        # so the quiet run above is an emptied policy rather than a reporter that never speaks.
+        control = self.run_policy(
+            'report_env_policy',
+            env={"AWS_BEARER_TOKEN_BEDROCK": "planted-bedrock-bearer-not-a-credential"},
+        )
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertRegex(control.stdout, r"AWS_BEARER_TOKEN_BEDROCK\s+DENIED")
 
 
 if __name__ == "__main__":
