@@ -88,6 +88,12 @@ T5 = "2026-08-19T02:05:00Z"
 T6 = "2026-08-19T02:06:00Z"
 
 PLAN_DIGEST = "a" * 64
+#: The two digests a fan-in grant may BIND itself to, and one that is neither. All three differ from
+#: each other and from PLAN_DIGEST, so a test that compared the wrong pair fails instead of passing on
+#: a coincidence of repeated characters.
+PRESTATE_DIGEST = "b" * 64
+CANDIDATE_DIGEST = "c" * 64
+OTHER_DIGEST = "d" * 64
 MODEL = "claude-sonnet-5"
 PROVIDER = "anthropic"
 
@@ -1377,6 +1383,242 @@ class FanInTests(WaveCase):
         document = self.derive(self.accepted_args_over(steps))
         self.assertEqual(document["state"], BLOCKED)
         self.assertIn("carries no integrator node", self.reasons(document))
+
+
+class FanInBindingTests(WaveCase):
+    """Condition 5's optional binding: the digests a grant NAMES, against the ones a caller OBSERVED.
+
+    Single use, scope, and order were already derived; WHAT a grant authorized was free-form prose, so
+    one wave's grant could be replayed over another wave's bytes and nothing could refuse it. The
+    binding closes that, and the four states per digest each get a test: bound-and-equal strengthens,
+    bound-and-different refuses with both values, bound-and-unobserved is an asserted binding nobody
+    checked, and unbound is exactly the pre-binding behaviour.
+    """
+
+    def bound_args(self, **digests: str) -> dict[str, Any]:
+        """The accepted argument set whose fan-in grant BINDS the given digests, and nothing else."""
+        steps = []
+        for verb, record, at in self.journal_steps():
+            if record.get("approval_id") == FAN_IN_APPROVAL:
+                record = approval_record(**digests)
+            steps.append((verb, record, at))
+        return self.accepted_args_over(steps)
+
+    def forge_grant(self, field: str, value: Any) -> str:
+        """Put a value in the grant's binding that `wave-journal.py` refuses to record, chain intact.
+
+        The write path rejects an empty or null binding, and so does the read path, so the ONLY input
+        that reaches the composer's own shape check is a projection that tool did not write. Forging it
+        -- recomputing the chain, the digest, and the conductor's anchor -- is what tells a live check
+        apart from a decorative one.
+        """
+        projection = json.loads((self.work / "projection.json").read_text(encoding="utf-8"))
+        lines: list[bytes] = []
+        rebuilt: list[dict[str, Any]] = []
+        for index, entry in enumerate(projection["entries"]):
+            entry = {key: item for key, item in entry.items() if key != "prev_digest"}
+            if entry.get("kind") == "approval" and entry["record"].get("approval_id") == FAN_IN_APPROVAL:
+                entry["record"] = {**entry["record"], field: value}
+            entry["seq"] = index
+            if index:
+                entry["prev_digest"] = sha256_hex(lines[-1])
+            line = canonical(entry)
+            lines.append(line)
+            rebuilt.append(entry)
+        projection["entries"] = rebuilt
+        projection["journal_digest"] = sha256_hex(b"".join(lines))
+        self.journal_digest = projection["journal_digest"]
+        return str(self.store("projection-forged-grant", projection))
+
+    def test_a_digest_bound_grant_with_matching_observations_is_accepted(self) -> None:
+        args = self.bound_args(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST)
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        document = self.derive(args)
+        self.assertEqual(document["state"], ACCEPTED, self.reasons(document))
+        self.assertTrue(self.condition(document, 5)["met"])
+        evidence = document["evidence"]
+        self.assertEqual(evidence["fan_in_prestate_digest_granted"], PRESTATE_DIGEST)
+        self.assertEqual(evidence["fan_in_prestate_digest_observed"], PRESTATE_DIGEST)
+        self.assertEqual(evidence["fan_in_candidate_digest_granted"], CANDIDATE_DIGEST)
+        self.assertEqual(evidence["fan_in_candidate_digest_observed"], CANDIDATE_DIGEST)
+        # Agreement is a RECORDED fact, not an inference from two equal-looking published values: this
+        # is the field that tells a match apart from a grant that bound nothing.
+        self.assertEqual(
+            evidence["fan_in_grant_bindings_verified"], ["candidate_digest", "prestate_digest"]
+        )
+        # The residual stays with the strengthening, because the observation is the caller's own.
+        self.assertTrue(
+            any("never observed here" in residual for residual in document["residuals"]),
+            document["residuals"],
+        )
+
+    def test_a_grant_whose_prestate_disagrees_with_the_observation_refuses_condition_five(self) -> None:
+        args = self.bound_args(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST)
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        # POSITIVE CONTROL: the same journal, the same grant, and the matching observation is accepted,
+        # so what follows is about the value of one flag and nothing else.
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--fan-in-prestate-digest"] = OTHER_DIGEST
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertFalse(self.condition(document, 5)["met"])
+        reasons = self.reasons(document)
+        # BOTH values, because a reader has to know which of the two artifacts to go and look at.
+        self.assertIn(PRESTATE_DIGEST, reasons)
+        self.assertIn(OTHER_DIGEST, reasons)
+        self.assertIn("prestate_digest", reasons)
+        self.assertIn("does not authorize this fan-in", reasons)
+        # The candidate half still verified, so the two bindings are checked independently rather than
+        # as one all-or-nothing comparison.
+        self.assertEqual(document["evidence"]["fan_in_grant_bindings_verified"], ["candidate_digest"])
+
+    def test_a_grant_whose_candidate_disagrees_with_the_observation_refuses_condition_five(self) -> None:
+        """The same rule for the OTHER digest, which is what a one-sided comparison would not survive."""
+        args = self.bound_args(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST)
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--fan-in-candidate-digest"] = OTHER_DIGEST
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertFalse(self.condition(document, 5)["met"])
+        reasons = self.reasons(document)
+        self.assertIn(CANDIDATE_DIGEST, reasons)
+        self.assertIn(OTHER_DIGEST, reasons)
+        self.assertIn("candidate_digest", reasons)
+        self.assertEqual(document["evidence"]["fan_in_grant_bindings_verified"], ["prestate_digest"])
+
+    def test_a_bound_grant_whose_observations_were_never_supplied_is_unmet(self) -> None:
+        """An asserted binding nobody checked is the defect this closes, not a weaker form of closing it."""
+        args = self.bound_args(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST)
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertFalse(self.condition(document, 5)["met"])
+        reasons = self.reasons(document)
+        self.assertIn("an asserted binding nobody checked", reasons)
+        # Each unchecked binding names its own flag, so the caller learns what to supply.
+        self.assertIn("--fan-in-prestate-digest", reasons)
+        self.assertIn("--fan-in-candidate-digest", reasons)
+        self.assertEqual(document["evidence"]["fan_in_grant_bindings_verified"], [])
+        # POSITIVE CONTROL: supplying both observations over the identical evidence set is accepted.
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+
+    def test_a_legacy_grant_that_binds_nothing_derives_exactly_what_it_always_did(self) -> None:
+        """The compatibility half. Every other test in this module already uses the unbound fixture, so
+        the regression control is the rest of the file; what this adds is the evidence's own account --
+        three distinguishable nulls, none of them a claim that anything agreed.
+        """
+        document = self.derive(self.accepted_args())
+        self.assertEqual(document["state"], ACCEPTED, self.reasons(document))
+        self.assertTrue(self.condition(document, 5)["met"])
+        evidence = document["evidence"]
+        self.assertIsNone(evidence["fan_in_prestate_digest_granted"])
+        self.assertIsNone(evidence["fan_in_candidate_digest_granted"])
+        self.assertIsNone(evidence["fan_in_prestate_digest_observed"])
+        self.assertIsNone(evidence["fan_in_candidate_digest_observed"])
+        # An unbound grant is the ABSENCE of the question, never an answer to it.
+        self.assertEqual(evidence["fan_in_grant_bindings_verified"], [])
+
+    def test_an_observation_against_an_unbound_grant_is_compared_to_nothing(self) -> None:
+        """A caller who believed it was checking a binding checked nothing, and that may not read clean.
+
+        Same rule as `--wave-journal-digest` supplied with no projection to compare it against: the
+        case must never be silently indistinguishable from `not supplied` or from `matched`.
+        """
+        args = self.accepted_args()
+        # POSITIVE CONTROL: the identical legacy set with no observation supplied is accepted, so the
+        # refusal below is caused by the observation and not by the grant being unbound.
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertFalse(self.condition(document, 5)["met"])
+        reasons = self.reasons(document)
+        self.assertIn("names no prestate_digest", reasons)
+        self.assertIn("compared against nothing", reasons)
+        self.assertEqual(document["evidence"]["fan_in_grant_bindings_verified"], [])
+
+    def test_a_half_bound_grant_checks_the_half_it_binds_and_no_more(self) -> None:
+        """The two bindings are independent, so a grant may bind its candidate and leave its prestate open."""
+        args = self.bound_args(candidate_digest=CANDIDATE_DIGEST)
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        document = self.derive(args)
+        self.assertEqual(document["state"], ACCEPTED, self.reasons(document))
+        self.assertEqual(document["evidence"]["fan_in_grant_bindings_verified"], ["candidate_digest"])
+        self.assertIsNone(document["evidence"]["fan_in_prestate_digest_granted"])
+        # The unbound half stays unbound: an observation for it is still compared against nothing.
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        self.assertIn("names no prestate_digest", self.reasons(document))
+
+    def test_an_observation_with_no_readable_grant_is_named_as_such(self) -> None:
+        args = self.accepted_args()
+        args.pop("--fan-in-approval")
+        # POSITIVE CONTROL: with no observation supplied, the only condition-5 reason is the one this
+        # module already had -- so the reason below appears BECAUSE an observation was supplied.
+        control = self.derive(args)
+        self.assertEqual(control["state"], BLOCKED)
+        self.assertIn("no fan-in approval was named", self.reasons(control))
+        self.assertNotIn("compared against nothing", self.reasons(control))
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        document = self.derive(args)
+        self.assertEqual(document["state"], BLOCKED)
+        reasons = self.reasons(document)
+        self.assertIn("no fan-in grant could be read from this wave's evidence", reasons)
+        self.assertIn("compared against nothing", reasons)
+        # Both observations are still published: what the caller supplied is a fact even when there was
+        # nothing to compare it with.
+        self.assertEqual(document["evidence"]["fan_in_prestate_digest_observed"], PRESTATE_DIGEST)
+        self.assertEqual(document["evidence"]["fan_in_candidate_digest_observed"], CANDIDATE_DIGEST)
+
+    def test_an_observation_that_is_not_an_exact_sha256_is_a_grammar_error(self) -> None:
+        """Exit 2 and no document: the question could not be asked, so no state may be published."""
+        args = self.bound_args(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST)
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        # POSITIVE CONTROL: the exact digests through the same two flags derive a state.
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        for flag, good in (
+            ("--fan-in-prestate-digest", PRESTATE_DIGEST),
+            ("--fan-in-candidate-digest", CANDIDATE_DIGEST),
+        ):
+            for bad in ("", "not-hex", good.upper(), good[:-1], good + "b", "  " + good):
+                with self.subTest(flag=flag, value=bad):
+                    args[flag] = bad
+                    done = self.derive_failure(args)
+                    self.assertIn(flag, done.stderr.decode("utf-8"))
+                    self.assertIn("64 lowercase hex", done.stderr.decode("utf-8"))
+            args[flag] = good
+
+    def test_a_forged_grant_whose_binding_is_not_a_digest_is_malformed_input(self) -> None:
+        """`wave-journal.py` refuses to record an empty binding; the composer refuses to READ one.
+
+        Without this the forged empty string would be indistinguishable from an absent field, and a
+        grant that looks bound to every human reader would skip the comparison entirely.
+        """
+        args = self.bound_args(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST)
+        args["--fan-in-prestate-digest"] = PRESTATE_DIGEST
+        args["--fan-in-candidate-digest"] = CANDIDATE_DIGEST
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
+        for value in ("", None, PRESTATE_DIGEST.upper(), 7):
+            with self.subTest(value=value):
+                forged = self.forge_grant("prestate_digest", value)
+                args["--journal-projection"] = forged
+                args["--conductor-record"] = str(self.write_conductor_record())
+                done = self.derive_failure(args)
+                self.assertIn("prestate_digest", done.stderr.decode("utf-8"))
+                self.assertIn("64 lowercase hex", done.stderr.decode("utf-8"))
+        # POSITIVE CONTROL: the same forging machinery writing the EXACT digest back derives again, so
+        # the exit 2 above is about the value and not about the projection having been rebuilt.
+        args["--journal-projection"] = self.forge_grant("prestate_digest", PRESTATE_DIGEST)
+        args["--conductor-record"] = str(self.write_conductor_record())
+        self.assertEqual(self.derive(args)["state"], ACCEPTED)
 
 
 class ArtifactTests(WaveCase):

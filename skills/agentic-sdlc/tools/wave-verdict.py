@@ -92,7 +92,11 @@ are RE-DERIVED here and refused as malformed input when they disagree with the f
        review submitted by a DIFFERENT node whose role is reviewer and whose entry follows the work
        it reviewed.
     5  fan-in-authorized  the journal carries the named fan-in approval, its scope names the
-       integrator node, and the integrator's entry FOLLOWS that approval.
+       integrator node, and the integrator's entry FOLLOWS that approval. A grant that also names a
+       `prestate_digest` or `candidate_digest` is CHECKED against the prestate and candidate the
+       caller observed (`--fan-in-prestate-digest`, `--fan-in-candidate-digest`): equal digests
+       strengthen the condition, disagreeing ones refuse it with both values named, and a bound grant
+       whose observation was never supplied leaves an asserted binding nobody checked, which is unmet.
     6  gate-contract-passes  the authoritative gate receipt passes on the integrated snapshot; or,
        for a remediation wave, every focused gate passes on the same snapshot under the same pinned
        toolchain and the baseline comparison reports exact non-worsening.
@@ -165,6 +169,13 @@ RESIDUALS, STATED EXACTLY.
     integrator was skipped, cannot reach a ready state here. That is a deliberate fail-closed reading
     of "fan-in was authorized" -- the alternative would satisfy the condition vacuously, which is the
     failure mode `scripts/gate_baseline.py` exists to refuse.
+  * A grant's prestate and candidate digests are COMPARED, never observed. This module runs no
+    subprocess and hashes no tree, so `--fan-in-prestate-digest` and `--fan-in-candidate-digest` are
+    the caller's own account of what the integrator applied against and what it applied, exactly as
+    same-user as the grant they are compared with. What the comparison closes is the reuse of a grant
+    reviewed against OTHER bytes; what it cannot close is a caller that observed nothing and typed the
+    grant's own digests back. A grant naming neither digest is checked as it always was, so an
+    unbound grant is not evidence of agreement -- it is the absence of the question.
   * Reviews, the artifact manifest, the critic findings, and the conductor record are same-user
     assertions. `skills/agentic-sdlc/tools/wave-submission.py` now SEALS all four -- it closes each
     key set, refuses every shape this module would block on, and adds one `digest` -- and sealing
@@ -360,6 +371,9 @@ RESIDUALS = (
     "alone",
     "an unknown effect is derived, never bounded: this tool names the state and the last proven "
     "stage, and what the effect actually touched stays a recovery question no artifact here answers",
+    "a fan-in grant's prestate and candidate digests are compared against the caller's observations, "
+    "never observed here: this tool hashes no tree and runs no subprocess, so the comparison refuses a "
+    "grant reviewed against other bytes and cannot refuse a caller who observed nothing",
 )
 
 _TIME = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
@@ -751,6 +765,16 @@ class Assessment:
             "ended_reasons": [],
             "ended_state": None,
             "fan_in_approval": None,
+            # Condition 5's optional binding, published as three separable facts per digest: what the
+            # grant named, what the caller observed, and which of the two were actually COMPARED and
+            # agreed. The third is why a reader never has to infer agreement from two equal-looking
+            # values or from a pair of nulls: an unbound grant, an unsupplied observation, and a
+            # verified match are three distinguishable states here.
+            "fan_in_candidate_digest_granted": None,
+            "fan_in_candidate_digest_observed": None,
+            "fan_in_grant_bindings_verified": [],
+            "fan_in_prestate_digest_granted": None,
+            "fan_in_prestate_digest_observed": None,
             "integrator_nodes": [],
             "journal_digest": None,
             "last_proven_stage": None,
@@ -1231,7 +1255,120 @@ def assess_reviews(
         )
 
 
-def assess_fan_in(assessment: Assessment, journal: Journal | None, approval_id: str | None) -> None:
+#: Each optional binding a fan-in grant may carry: the journal field, the flag that supplies the
+#: observation it is compared against, and the noun a reason uses for the thing being bound.
+FAN_IN_BINDINGS: tuple[tuple[str, str, str], ...] = (
+    ("prestate_digest", "--fan-in-prestate-digest", "prestate"),
+    ("candidate_digest", "--fan-in-candidate-digest", "candidate"),
+)
+
+
+def _grant_digest(approval: dict[str, Any], field: str, approval_id: str, path: str) -> str | None:
+    """One optional binding as the grant carries it, or None when the grant binds nothing there.
+
+    ABSENT IS THE ONLY SPELLING OF UNBOUND, which is why `null` and `""` are malformed input rather
+    than a second way to say the same thing. `wave-journal.py` refuses to RECORD either, so this
+    branch is reachable only through a projection that tool did not write -- exactly the same-user
+    forger its residuals name -- and admitting a forged empty string as "unbound" would let a grant
+    that LOOKS bound skip the comparison silently.
+    """
+    if field not in approval:
+        return None
+    value = approval[field]
+    if not isinstance(value, str) or not _HEX64.match(value):
+        raise InputError(
+            f"approval {approval_id} in {path} carries a {field} of {value!r}, which is not 64 "
+            f"lowercase hex characters: wave-journal.py refuses to record one, and a grant that binds "
+            f"no {field} omits the field entirely rather than emptying it"
+        )
+    return value
+
+
+def assess_fan_in_bindings(
+    assessment: Assessment,
+    approval: dict[str, Any] | None,
+    approval_id: str | None,
+    path: str | None,
+    observed: dict[str, str | None],
+) -> None:
+    """Compare each digest a fan-in grant BINDS against the digest the caller OBSERVED.
+
+    Single-use was already enforced (`wave-journal.py` refuses a repeated `approval_id`) and scope and
+    order were already checked, but WHAT a grant authorized was free-form prose: `subject` and
+    `evidence` are unvalidated strings, so "approved for this candidate against this prestate" was
+    asserted and nothing could refuse the reuse of one wave's grant over another wave's bytes. The
+    binding is what makes that refusable, and this follows `scripts/ccodex_sdlc_recover.py`'s
+    dry-run-digest-is-the-approval design: the approval names the exact state it approves, and the act
+    it authorizes is refused when the state that is actually there re-derives to something else.
+
+    FOUR STATES PER DIGEST, EACH NAMED, NONE SILENT:
+
+      * bound and observed and EQUAL -- the condition is strengthened, and the field is published in
+        `fan_in_grant_bindings_verified` so agreement is a recorded fact rather than an inference from
+        two equal-looking values.
+      * bound and observed and DIFFERENT -- unmet, with BOTH values in the reason, because a reader
+        has to know which of the two to go and look at; a reason saying only "does not match" sends
+        them back to two artifacts to work out which one moved.
+      * bound and NOT observed -- unmet. An asserted binding nobody checked is the defect this closes,
+        not a weaker form of having closed it, and admitting it would let a grant claim a prestate
+        forever with no caller ever comparing one.
+      * NOT bound -- exactly the pre-binding behaviour, so every legacy journal derives what it always
+        derived. Supplying an observation ANYWAY is unmet rather than silent: a caller that believed it
+        was checking a binding checked nothing, and that must never read like a match (the same rule
+        `assess_wave_journal_anchor` applies to an anchor supplied with no journal to compare it to).
+    """
+    verified: list[str] = []
+    for field, flag, noun in FAN_IN_BINDINGS:
+        supplied = observed[field]
+        if approval is None or approval_id is None or path is None:
+            # No grant could be read at all -- unnamed, absent from the journal, or no projection
+            # supplied. Condition 5 is already unmet by the branch that found that out; what this adds
+            # is that the caller's own observation was compared against nothing.
+            if supplied is not None:
+                assessment.note(
+                    5,
+                    f"{flag} {supplied} was supplied, but no fan-in grant could be read from this "
+                    f"wave's evidence, so the observed {noun} was compared against nothing",
+                )
+            continue
+        granted = _grant_digest(approval, field, approval_id, path)
+        assessment.evidence[f"fan_in_{field}_granted"] = granted
+        if granted is None:
+            if supplied is not None:
+                assessment.note(
+                    5,
+                    f"the fan-in approval {approval_id} names no {field}, so the observed {noun} "
+                    f"digest {supplied} was compared against nothing: this grant binds no {noun}, and "
+                    f"an unbound grant is not evidence that it authorized these bytes",
+                )
+            continue
+        if supplied is None:
+            assessment.note(
+                5,
+                f"the fan-in approval {approval_id} binds {field} {granted}, and no {flag} was "
+                f"supplied, so the {noun} this grant names was never compared against the {noun} the "
+                "fan-in was applied to: an asserted binding nobody checked",
+            )
+            continue
+        if granted != supplied:
+            assessment.note(
+                5,
+                f"the fan-in approval {approval_id} binds {field} {granted}, but the observed {noun} "
+                f"digest is {supplied}: this grant authorized a different {noun} from the one the "
+                "fan-in was applied to, so it does not authorize this fan-in",
+            )
+            continue
+        verified.append(field)
+    assessment.evidence["fan_in_grant_bindings_verified"] = sorted(verified)
+
+
+def assess_fan_in(
+    assessment: Assessment,
+    journal: Journal | None,
+    approval_id: str | None,
+    observed_prestate: str | None = None,
+    observed_candidate: str | None = None,
+) -> None:
     """Condition 5: "fan-in was authorized".
 
     The approval is named by the conductor and CHECKED against the journal, because a wave carries
@@ -1239,8 +1376,33 @@ def assess_fan_in(assessment: Assessment, journal: Journal | None, approval_id: 
     out-of-scope workstream would authorize the merge. So the named approval must be in the journal,
     its scope must name the integrator node, and the integrator's entry must FOLLOW it: an
     authorization recorded after the mutation it authorizes is not one.
+
+    A grant may ALSO bind the exact prestate and candidate digests it authorizes, and
+    `assess_fan_in_bindings` checks those against the caller's observations. The authorization checks
+    live in `_fan_in_grant`, which RETURNS the grant it found instead of returning out of this
+    function, so the binding check has exactly ONE call site and cannot be skipped by a branch that
+    found no grant: an observation supplied against nothing is a named reason on every path.
     """
+    observed = {"prestate_digest": observed_prestate, "candidate_digest": observed_candidate}
+    for field, flag, _ in FAN_IN_BINDINGS:
+        supplied = observed[field]
+        assessment.evidence[f"fan_in_{field}_observed"] = supplied
+        if supplied is not None and not _HEX64.match(supplied):
+            raise InputError(f"{flag} {supplied!r} is not 64 lowercase hex characters")
     assessment.evidence["fan_in_approval"] = approval_id
+    approval = _fan_in_grant(assessment, journal, approval_id)
+    assess_fan_in_bindings(
+        assessment, approval, approval_id, journal.path if journal is not None else None, observed
+    )
+
+
+def _fan_in_grant(assessment: Assessment, journal: Journal | None, approval_id: str | None) -> dict[str, Any] | None:
+    """The authorization half of condition 5, returning the grant it admitted, or None.
+
+    Everything here was `assess_fan_in`'s own body before the grant gained optional digest bindings.
+    It returns rather than exits so its caller keeps one tail; a `None` return means no grant could be
+    read, which each branch has already stated as its own named reason.
+    """
     if approval_id is None:
         assessment.note(
             5,
@@ -1253,7 +1415,7 @@ def assess_fan_in(assessment: Assessment, journal: Journal | None, approval_id: 
             "no wave journal projection was supplied, so neither the fan-in approval nor the "
             "integrator node can be read",
         )
-        return
+        return None
     integrators = journal.role_nodes(ROLE_INTEGRATOR)
     assessment.evidence["integrator_nodes"] = [node["node_id"] for node in integrators]
     performed = [node for node in integrators if node["disposition"] == DISPOSITION_SUCCESS]
@@ -1271,7 +1433,7 @@ def assess_fan_in(assessment: Assessment, journal: Journal | None, approval_id: 
             + " reached no admitted-success, so no authorized fan-in happened",
         )
     if approval_id is None:
-        return
+        return None
     approval = journal.approval(approval_id)
     if approval is None:
         assessment.note(
@@ -1279,7 +1441,7 @@ def assess_fan_in(assessment: Assessment, journal: Journal | None, approval_id: 
             f"the named fan-in approval {approval_id!r} is not recorded in this journal, so the "
             "authorization is asserted rather than recorded",
         )
-        return
+        return None
     scope = approval.get("scope")
     if not isinstance(scope, list) or not all(isinstance(item, str) for item in scope):
         raise InputError(f"approval {approval_id} in {journal.path} carries a scope that is not a list of strings")
@@ -1298,6 +1460,10 @@ def assess_fan_in(assessment: Assessment, journal: Journal | None, approval_id: 
                 f"fan-in approval {approval_id} at seq {approval_seq}: an authorization recorded "
                 "after the mutation is not one",
             )
+    # The grant is returned even when a check above named a reason: its bindings are a SEPARATE fact
+    # about the same grant, and skipping them here would mean an out-of-scope grant's digests went
+    # unexamined -- one reason hiding another.
+    return approval
 
 
 def assess_gate(
@@ -1923,7 +2089,13 @@ def derive_command(args: argparse.Namespace) -> dict[str, Any]:
     assess_substitutions(assessment, journal, classifications)
     assess_artifacts(assessment, journal, manifest, args.artifact_manifest)
     assess_reviews(assessment, journal, reviews)
-    assess_fan_in(assessment, journal, args.fan_in_approval)
+    assess_fan_in(
+        assessment,
+        journal,
+        args.fan_in_approval,
+        args.fan_in_prestate_digest,
+        args.fan_in_candidate_digest,
+    )
     assess_gate(assessment, receipt, args.authoritative_gate, focused, baseline)
     assess_traceability(assessment, journal)
     assess_conductor_record(assessment, journal, conductors)
@@ -2168,6 +2340,28 @@ def main(argv: list[str] | None = None) -> int:
         dest="fan_in_approval",
         default=None,
         help="the approval_id in the journal that authorized fan-in; its scope must name the integrator node",
+    )
+    command.add_argument(
+        "--fan-in-prestate-digest",
+        dest="fan_in_prestate_digest",
+        default=None,
+        help=(
+            "the sha256 of the target prestate the fan-in was actually applied against, as the caller "
+            "observed it. Compared with the prestate_digest the named grant binds, when it binds one: "
+            "equal digests strengthen condition 5, disagreeing ones refuse it with both values named. "
+            "A grant that binds a prestate_digest and gets no observation here is an asserted binding "
+            "nobody checked, which is unmet; a grant that binds none is checked exactly as before"
+        ),
+    )
+    command.add_argument(
+        "--fan-in-candidate-digest",
+        dest="fan_in_candidate_digest",
+        default=None,
+        help=(
+            "the sha256 of the candidate the fan-in actually applied, as the caller observed it. "
+            "Compared with the candidate_digest the named grant binds under the same four rules as "
+            "--fan-in-prestate-digest. Both are the caller's own account: this tool hashes no tree"
+        ),
     )
     command.add_argument(
         "--gate-receipt",

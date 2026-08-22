@@ -86,6 +86,12 @@ T3 = "2026-08-19T02:03:00Z"
 T4 = "2026-08-19T02:04:00Z"
 T5 = "2026-08-19T02:05:00Z"
 
+#: The two exact sha256 values an approval may BIND itself to. Deliberately distinguishable from each
+#: other and from the header's `plan_digest`, so a test that compared the wrong pair would fail rather
+#: than pass on a coincidence of repeated characters.
+PRESTATE_DIGEST = "b" * 64
+CANDIDATE_DIGEST = "c" * 64
+
 
 def canonical(value: Any) -> bytes:
     """The activation family's canonical form: sorted, tight, ASCII, one trailing newline."""
@@ -623,6 +629,162 @@ class RecordSchemaTests(_JournalTestCase):
         self.assertIn("duplicate", document["reasons"][0])
 
 
+class ApprovalBindingTests(_JournalTestCase):
+    """An approval may name the exact prestate and candidate it authorizes; the shape is validated here.
+
+    This tool observes no tree, so it can only prove such a digest is WELL FORMED. Comparing it against
+    what a fan-in was really applied to is `wave-verdict.py`'s condition 5. What these tests pin is the
+    three-way partition this surface admits -- a bound field is 64 lowercase hex, an unbound one is
+    ABSENT, and everything else is a schema verdict -- plus the compatibility half: a journal written
+    before the fields existed carries neither and is accepted exactly as it always was.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.assertEqual(self.init()["__code"], EXIT_OK)
+
+    def test_an_approval_may_bind_the_prestate_and_candidate_it_authorizes(self) -> None:
+        record = approval_record(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST)
+        document, code = self.append("record-approval", record, at=T2)
+        self.assertEqual(code, EXIT_OK)
+        stored = json.loads(self.lines()[1])["record"]
+        self.assertEqual(stored["prestate_digest"], PRESTATE_DIGEST)
+        self.assertEqual(stored["candidate_digest"], CANDIDATE_DIGEST)
+        # Binding narrows what the grant claims; it authenticates nothing, and the tool's own stamp is
+        # unchanged by it.
+        self.assertIs(stored["authenticated"], False)
+        self.assertEqual(document["status"], "appended")
+        # The projection republishes both, because the verdict tool reads the projection and not the
+        # journal file: a binding the projection dropped would be a binding nobody could check.
+        projection, code = self.project()
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(
+            [(item["prestate_digest"], item["candidate_digest"]) for item in projection["approvals"]],
+            [(PRESTATE_DIGEST, CANDIDATE_DIGEST)],
+        )
+
+    def test_an_approval_that_binds_neither_digest_is_accepted_unchanged(self) -> None:
+        """The compatibility half, asserted rather than assumed: absent stays legal and stays absent.
+
+        Every other test in this module records this same unbound approval, so the regression control
+        for the whole surface is the rest of the file; what this adds is that the stored line and the
+        projection carry NO digest key at all, rather than a null one the verdict tool would then have
+        to tell apart from a real binding.
+        """
+        _, code = self.append("record-approval", approval_record(), at=T2)
+        self.assertEqual(code, EXIT_OK)
+        stored = json.loads(self.lines()[1])["record"]
+        self.assertNotIn("prestate_digest", stored)
+        self.assertNotIn("candidate_digest", stored)
+        projection, code = self.project()
+        self.assertEqual(code, EXIT_OK)
+        self.assertNotIn("prestate_digest", projection["approvals"][0])
+        self.assertNotIn("candidate_digest", projection["approvals"][0])
+
+    def test_either_binding_may_be_supplied_without_the_other(self) -> None:
+        """The two fields are independent: a grant may bind its candidate and leave its prestate open.
+
+        The alternative -- requiring them as a pair -- would forbid the honest middle case, and this
+        module has no way to tell a caller which half they ought to have observed.
+        """
+        for field, value in (("prestate_digest", PRESTATE_DIGEST), ("candidate_digest", CANDIDATE_DIGEST)):
+            with self.subTest(bound=field):
+                fresh = self.tmp / f"only-{field}.journal"
+                proc = self.run_tool(
+                    ["init", "--journal", str(fresh), "--at", T0, "--record", json.dumps(header_record())]
+                )
+                self.assertEqual(proc.returncode, EXIT_OK)
+                proc = self.run_tool(
+                    [
+                        "record-approval",
+                        "--journal",
+                        str(fresh),
+                        "--at",
+                        T2,
+                        "--record",
+                        json.dumps(approval_record(**{field: value})),
+                    ]
+                )
+                self.assertEqual(proc.returncode, EXIT_OK, self.document(proc)["reasons"])
+                stored = json.loads(fresh.read_bytes().splitlines()[1])["record"]
+                self.assertEqual(stored[field], value)
+                self.assertEqual(sorted(set(stored) & {"prestate_digest", "candidate_digest"}), [field])
+
+    def test_a_binding_that_is_not_an_exact_sha256_is_a_schema_verdict(self) -> None:
+        """Empty string, null, uppercase, short, long, and a number are each refused BY NAME.
+
+        The empty string is the one that matters most and it is why this is not written as
+        `if value and not _HEX64.match(value)`: an empty digest would then be admitted as though the
+        grant bound nothing, so a grant that LOOKS bound to a reader would silently skip the
+        comparison condition 5 exists to perform. Null is refused for the same reason -- absent is the
+        one spelling of unbound, because a second spelling means two canonical forms and two entry
+        digests for one fact.
+        """
+        rejected: list[Any] = ["", None, PRESTATE_DIGEST.upper(), "b" * 63, "b" * 65, 123, ["b" * 64], True]
+        for field in ("prestate_digest", "candidate_digest"):
+            for value in rejected:
+                with self.subTest(field=field, value=value):
+                    result, code = self.append(
+                        "record-approval", approval_record(**{field: value}), at=T2
+                    )
+                    self.assertEqual(code, EXIT_INPUT)
+                    self.assertEqual(result["effect"], "none")
+                    self.assertEqual(result["admitted_effects"], [])
+                    reason = result["reasons"][0]
+                    self.assertIn(field, reason)
+                    self.assertIn("64 lowercase hex", reason)
+                    # The refusal must say how an unbound grant IS spelled, or a caller reaches for
+                    # the empty string this test just refused.
+                    self.assertIn("OMITS", reason)
+                    self.assertEqual(len(self.lines()), 1)  # nothing was appended
+        # POSITIVE CONTROL: an exact sha256 in the same field of the same record is accepted, so the
+        # refusals above are about the VALUE and not about the field, the verb, or the fixture.
+        for field, value in (("prestate_digest", PRESTATE_DIGEST), ("candidate_digest", CANDIDATE_DIGEST)):
+            with self.subTest(accepted=field):
+                _, code = self.append(
+                    "record-approval",
+                    approval_record(approval_id=f"approval-{field.replace('_', '-')}", **{field: value}),
+                    at=T2,
+                )
+                self.assertEqual(code, EXIT_OK)
+
+    def test_an_unrecognised_neighbour_field_is_still_refused(self) -> None:
+        """The optional key set widened by exactly two names, and by no more than two.
+
+        `_exact`'s extra-key half is what keeps a typo from becoming a silently dropped fact, and
+        adding an `optional` parameter to it is exactly the change that could have opened the record to
+        anything. So a third field -- including a plausible near-miss of one of the two -- is still a
+        named refusal.
+        """
+        for field in ("prestate_sha256", "candidate", "prestatedigest", "target_digest"):
+            with self.subTest(field=field):
+                result, code = self.append("record-approval", approval_record(**{field: PRESTATE_DIGEST}), at=T2)
+                self.assertEqual(code, EXIT_INPUT)
+                self.assertIn("unrecognised", result["reasons"][0])
+                self.assertIn(field, result["reasons"][0])
+        # POSITIVE CONTROL: the two names that ARE optional pass through the same check.
+        _, code = self.append(
+            "record-approval",
+            approval_record(prestate_digest=PRESTATE_DIGEST, candidate_digest=CANDIDATE_DIGEST),
+            at=T2,
+        )
+        self.assertEqual(code, EXIT_OK)
+
+    def test_a_required_approval_field_is_still_required(self) -> None:
+        """The optional widening may not have made anything else optional."""
+        complete = approval_record(prestate_digest=PRESTATE_DIGEST)
+        for field in ("approval_id", "subject", "scope", "authority", "evidence"):
+            with self.subTest(missing=field):
+                partial = {key: value for key, value in complete.items() if key != field}
+                result, code = self.append("record-approval", partial, at=T2)
+                self.assertEqual(code, EXIT_INPUT)
+                self.assertIn("missing required field(s)", result["reasons"][0])
+                self.assertIn(field, result["reasons"][0])
+        # POSITIVE CONTROL: the complete record, bindings and all, is accepted.
+        _, code = self.append("record-approval", complete, at=T2)
+        self.assertEqual(code, EXIT_OK)
+
+
 class JournalStateTests(_JournalTestCase):
     """A refusal that depends on what the journal ALREADY says is a state refusal (3), not a schema one."""
 
@@ -851,6 +1013,35 @@ class TamperTests(_JournalTestCase):
         result, code = self.project_result()
         self.assertEqual(code, EXIT_REFUSED)
         self.assertIn("authenticated", result["reasons"][0])
+
+    def test_a_stored_approvals_binding_may_not_be_edited_into_an_empty_string(self) -> None:
+        """The last line is the chain's blind spot, so the stored-shape check is the only guard.
+
+        An editor who wants a bound grant to stop being compared does not need to delete the field --
+        emptying it would do, if an empty string read as "binds nothing". It does not: the read path
+        runs the same validator the write path did, so the projection is refused (3) rather than
+        published with a grant that looks bound and checks nothing.
+        """
+        _, code = self.append("record-approval", approval_record(prestate_digest=PRESTATE_DIGEST), at=T3)
+        self.assertEqual(code, EXIT_OK)
+        lines = self.journal.read_bytes().splitlines(keepends=True)
+        entry = json.loads(lines[-1])
+        self.assertEqual(entry["record"]["prestate_digest"], PRESTATE_DIGEST)  # the fixture starts bound
+        entry["record"]["prestate_digest"] = ""
+        lines[-1] = canonical(entry)
+        self.rewrite(lines)
+        result, code = self.project_result()
+        self.assertEqual(code, EXIT_REFUSED)
+        self.assertIn("prestate_digest", result["reasons"][0])
+        self.assertIn("64 lowercase hex", result["reasons"][0])
+        self.assertEqual(result["effect"], "none")
+        # POSITIVE CONTROL: restoring the exact digest makes the same last line projectable again, so
+        # the refusal is about the emptied value and not about having rewritten the line at all.
+        entry["record"]["prestate_digest"] = PRESTATE_DIGEST
+        lines[-1] = canonical(entry)
+        self.rewrite(lines)
+        _, code = self.project_result()
+        self.assertEqual(code, EXIT_OK)
 
     def test_a_last_line_edited_to_go_backwards_in_time_is_still_refused(self) -> None:
         """The read path checks monotonicity too, which is what narrows the last-line blind spot.

@@ -75,9 +75,25 @@ standalone scripts loaded by absolute path (this one's name has a hyphen in it a
 imported at all), and importing across them to reach a display helper would drag one tool's side
 conditions into another's.
 
+WHAT AN APPROVAL MAY BIND, AND WHAT BINDING BUYS. An approval entry may name the exact
+`prestate_digest` and `candidate_digest` it authorizes -- sha256 over the target prestate the grant
+was reviewed against and over the candidate it authorizes -- and this module validates their SHAPE
+and nothing else: 64 lowercase hex, or the field left out entirely. It observes no tree and hashes
+no candidate, so it cannot know whether either digest describes anything real; what it does is make
+the claim EXACT, so `wave-verdict.py`'s condition 5 can compare it against the prestate and
+candidate a caller actually observed and refuse a grant that names different bytes. Both fields are
+OPTIONAL and independent: a journal written before they existed carries neither, keeps exactly the
+free-form authority this module has always recorded, and stays readable, because this journal is
+append-only evidence and a rule that made old lines inadmissible would destroy the record it exists
+to keep. Absent is the one spelling of "this grant binds nothing": an explicitly null or empty
+`prestate_digest` is refused by name rather than read as unbound, because two spellings of one fact
+are two canonical forms and two digests of the same grant.
+
 WHAT THIS IS NOT. A recorded approval is a same-user assertion, not an authenticated one: every
 approval entry is stamped `"authenticated":false` by this module, and a caller may not supply that
-field. A recorded budget, retry, or plan revision is bookkeeping the conductor must choose to obey;
+field. A digest-bound approval is the same assertion made exact -- binding narrows what a grant can
+later be claimed to have authorized, and authenticates nobody. A recorded budget, retry, or plan
+revision is bookkeeping the conductor must choose to obey;
 nothing here can stop a dispatch. Concurrent appends to one journal from two processes are
 unsupported, and this is exactly what unsupported is allowed to mean here: the live file's identity
 (device, inode, size, content digest) is bound by the read the successor was built from and
@@ -413,19 +429,26 @@ def _time(value: Any, label: str) -> datetime:
         raise JournalError("invalid", f"{label} is not a real instant: {value!r} ({exc})", EXIT_INPUT) from exc
 
 
-def _exact(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+def _exact(value: Any, keys: set[str], label: str, *, optional: set[str] | None = None) -> dict[str, Any]:
     """An EXACT key set: nothing missing, nothing extra, no defaults applied.
 
     Defaults are how a record ends up meaning something the caller never said. A missing field is
     named as missing so the caller learns which one, and an unrecognised field is named too rather
     than dropped, because a typo silently ignored is a fact silently lost.
+
+    `optional` is the one narrow widening, and it widens ONLY the extra-key half: a name in it may be
+    absent or present, and every name in `keys` stays required. It exists because this journal is
+    append-only evidence -- a field added after a journal was written must leave that journal's lines
+    admissible, or the tool would refuse the record it exists to keep. It is not a defaulting
+    mechanism: an admitted optional key is still validated by the caller that named it, and an absent
+    one is left absent rather than filled in.
     """
     if not isinstance(value, dict):
         raise JournalError("invalid", f"{label} must be a JSON object, got {type(value).__name__}", EXIT_INPUT)
     missing = sorted(keys - set(value))
     if missing:
         raise JournalError("invalid", f"{label} is missing required field(s): {', '.join(missing)}", EXIT_INPUT)
-    extra = sorted(set(value) - keys)
+    extra = sorted(set(value) - keys - (optional or set()))
     if extra:
         raise JournalError("invalid", f"{label} carries unrecognised field(s): {', '.join(extra)}", EXIT_INPUT)
     return value
@@ -471,6 +494,12 @@ BUDGET_FIELDS = {"budget_id", "scope", "node_id", "unit", "limit", "consumed", "
 RETRY_FIELDS = {"node_id", "attempt", "capability", "prior_effect", "evidence", "reason"}
 PLAN_REVISION_FIELDS = {"revision_id", "from_plan_digest", "to_plan_digest", "approval", "reasons"}
 APPROVAL_FIELDS = {"approval_id", "subject", "scope", "authority", "evidence"}
+#: What an approval may bind itself to, each admissible ONLY as an exact sha256 or not at all. They
+#: are optional because this journal is append-only and every line written before they existed must
+#: stay admissible; they are independent of each other because a grant that binds its candidate and
+#: not its prestate is narrower than a free-form grant and wider than a fully bound one, and
+#: collapsing those three into two would either forbid the middle or admit it silently as the last.
+APPROVAL_DIGEST_FIELDS = ("candidate_digest", "prestate_digest")
 
 
 def _validate_assignment(value: Any) -> dict[str, Any]:
@@ -625,6 +654,15 @@ def _validate_approval(value: Any, at: str, *, stored: bool = False) -> dict[str
     A same-user record of an approval is not an authenticated approval, and the one way to keep that
     honest is to make the field unforgeable through this surface: a caller may not supply it, and
     every stored entry carries `false`.
+
+    THE TWO OPTIONAL BINDINGS ARE SHAPE-CHECKED HERE AND COMPARED NOWHERE. `prestate_digest` and
+    `candidate_digest` are admitted as exactly 64 lowercase hex characters, or left out; this module
+    observes no tree and hashes no candidate, so it can prove a digest is well-formed and never that
+    it describes anything. `wave-verdict.py`'s condition 5 is what compares a named digest against an
+    observed one. Present-but-not-a-digest is refused by name -- `null`, `""`, an uppercase or
+    short hex string, a number -- and the refusal says that absent is how an unbound grant is
+    spelled, because the alternative is a caller inventing a second spelling for "nothing here" whose
+    canonical bytes, and therefore whose entry digest, differ from the unbound grant it means.
     """
     if not stored and isinstance(value, dict) and "authenticated" in value:
         raise JournalError(
@@ -632,7 +670,12 @@ def _validate_approval(value: Any, at: str, *, stored: bool = False) -> dict[str
             "an approval record may not supply `authenticated`: this tool stamps it false, because a recorded approval is a same-user assertion and nothing here can authenticate one",
             EXIT_INPUT,
         )
-    record = _exact(value, APPROVAL_FIELDS | ({"authenticated"} if stored else set()), "an approval record")
+    record = _exact(
+        value,
+        APPROVAL_FIELDS | ({"authenticated"} if stored else set()),
+        "an approval record",
+        optional=set(APPROVAL_DIGEST_FIELDS),
+    )
     _text(record["approval_id"], "approval record approval_id", pattern=_ID)
     _text(record["subject"], "approval record subject")
     _text(record["authority"], "approval record authority")
@@ -640,6 +683,18 @@ def _validate_approval(value: Any, at: str, *, stored: bool = False) -> dict[str
     _string_list(record["evidence"], "approval record evidence")
     if not scope:
         raise JournalError("invalid", "an approval record must state its scope", EXIT_INPUT)
+    for field in APPROVAL_DIGEST_FIELDS:
+        if field not in record:
+            continue
+        supplied = record[field]
+        if not isinstance(supplied, str) or not _HEX64.match(supplied):
+            raise JournalError(
+                "invalid",
+                f"an approval record's {field} must be exactly 64 lowercase hex characters, got {supplied!r}: "
+                f"a grant that binds nothing OMITS {field} entirely, and an empty or null one is neither a "
+                "binding nor the absence of one",
+                EXIT_INPUT,
+            )
     if stored and record["authenticated"] is not False:
         raise JournalError("invalid", "a stored approval record must carry authenticated=false", EXIT_INPUT)
     return record
