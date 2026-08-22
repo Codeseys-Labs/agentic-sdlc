@@ -1,0 +1,12 @@
+{
+ "digest": "823b6c0330390e6d13ae00846352c14bdfb3b087b89e555e96ff936024f04d82",
+ "ended_reasons": [],
+ "ended_state": "completed",
+ "journal_digest": "77f4a59f7b13370c0ad722bb1461eb648074c11b245d62e3d22874d95790fe24",
+ "last_proven_stage": null,
+ "recorded_at": "2026-08-21T17:49:56Z",
+ "recorded_by": "conductor",
+ "schema": "agentic-sdlc/wave-verdict-conductor-record@1",
+ "verdict_destination": "docs/evidence/waves/f83f-w1/verdict.json",
+ "wave_id": "wave-f83f-w1"
+}

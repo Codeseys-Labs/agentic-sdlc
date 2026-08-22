@@ -1,111 +1,146 @@
 ---
 name: sdlc-rightsize
-description: Probe live routing evidence and produce a regenerable model-task map for certified dispatch.
+description: Discover eligible routes, plan bounded local evaluations, and render a Pareto model-task map.
 ---
 
-Probe and calibrate ONE target's model-routing inputs, then emit a regenerable candidate map. Scope: $ARGUMENTS
+Build or refresh ONE target's evidence-backed model-task map. Scope: $ARGUMENTS
 
-1. Load [`skills/model-tier-rightsizing/SKILL.md`](../skills/model-tier-rightsizing/SKILL.md) and its [canonical calibration](../skills/model-tier-rightsizing/references/model-routing-calibration.md). Treat the calibration as generation-specific policy and the probe as route-specific evidence; neither selects a host default, authorizes an outward operation, or replaces the authenticated harness's admission boundary.
+1. Load [`skills/model-tier-rightsizing/SKILL.md`](../skills/model-tier-rightsizing/SKILL.md), its [canonical calibration](../skills/model-tier-rightsizing/references/model-routing-calibration.md), and the [v2 map contract](../skills/model-tier-rightsizing/references/model-task-map-schema.md). The map is a recommendation, not a dispatch receipt or authorization.
 
-2. Parse arguments. The target defaults to `.`. Accept only:
-   - `--probe-only` — collect and report live probe and vocabulary evidence without classifying or writing a map;
-   - `--regenerate` — rebuild the generated JSON and Markdown companion from current admitted evidence;
-   - `--force` — permit replacement of an existing generated pair whose calibration ID, target receipt, or generated-content digest differs; it never overrides a failed probe or safety gate;
-   - `--output <json-path>` — write JSON there instead of `<target>/.agentic-sdlc/model-task-map.json`; require a `.json` suffix and write the Markdown companion at the same stem with `.md`;
-   - `--dry-run` — perform read-only discovery, vocab checks, and any explicitly selected live canaries, then print the proposed paths, map, and replacement decision without writing files, changing configuration, trusting a checkout, or dispatching workers; and
-   - `--ultra` — request consideration of the highest effort band only. It is not an override: admit it only when the exact route exposes the requested vocabulary, has the required live evidence and capacity, preserves the semantic gate, and can supply certified request-injection and identity-readback evidence. Otherwise record the lower certified choice or refuse that map cell.
+   Do not dispatch any worker while running this command: not a generic `Explore` or `Plan` agent, not a generated `ocx-*` agent, not a workflow worker, and not an inherited/default subagent. A host-visible placeholder such as `model: "haiku"` is not proof of an OCX pin and may select a real Claude model on a generic agent type. Discovery, canaries, and evaluations below are direct bounded calls through the reviewed evaluator; never delegate around missing route evidence.
 
-   Reject unknown flags, duplicate flags with conflicting values, more than one target, a target outside a readable repository, a non-`.json` `--output`, or `--force` without `--regenerate`. Do not mutate a route registry, gateway configuration, Seeds queue, worktree, trust state, or global configuration.
+2. Parse arguments. The target defaults to `.`. Accept:
 
-3. Probe the two provider planes before classifying anything.
-   - Request `GET http://127.0.0.1:10100/v1/models`, capture the complete catalog bytes, digest, timestamp, endpoint, HTTP result, and all served exact IDs. The gateway is live only if this response is parseable, authenticated where required, and contains the exact ID proposed for every gateway cell.
-   - For every gateway canary, inject one exact model ID and requested effort through the real adapter, retain immutable request-injection evidence, and correlate its `requestId` with the gateway attribution record. Source `resolved_provider` and `resolvedModel` only from that attribution record; the response body's `model` value is inadmissible because it can echo the request. Treat `routeKind: "default-provider"`, a missing correlation, empty output, malformed output, or a different resolved model as a failed canary.
-   - Apply G2 to every Muse gateway candidate: its requested ID must begin `muse/`, that exact prefixed ID must be present in the served catalog, and its correlated attribution record must not name the default provider. A bare Muse ID is a wrong-provider dispatch, not a fallback. The prefix alone never establishes catalog membership or model identity.
-   - Run one bounded native-Bedrock canary through the selected native adapter. It must inject its exact model and requested effort, return non-empty output, and provide the native adapter's identity evidence. Record `native_bedrock_live: true` only after that canary passes; otherwise record `false` and omit or fail closed every native-Bedrock map cell.
-   - Capture the effective accepted effort vocabulary for each selected surface. Never infer it from a peer route, a prompt, a settings value, or an echoed request. Keep requested effort separate from effective effort readback; record effective readback as `unavailable` when the transport cannot expose it.
+   - `--spec <json-path>` — non-interactive `rightsize-run-spec/v1`; use `-` for stdin;
+   - `--evidence <json-path>` — reuse a compatible `rightsize-evidence/v1` through the evaluator's `render` subcommand;
+   - `--probe-only` — discover and, after approval, probe selected exact routes without task qualification;
+   - `--pilot` — run the selected smoke or representative pack; pilot evidence never promotes;
+   - `--qualify` — run a target-representative pack under the qualification thresholds;
+   - `--task-pack <json-path|builtin:harness-smoke-v1>`;
+   - repeated `--source`, `--model`, and `--task-class` selections;
+   - `--attempts <n>`, `--max-calls <n>`, `--max-wall-seconds <n>`, `--max-api-equivalent-usd <amount>`, and `--expected-peak-input-tokens <n>`;
+   - `--pareto-objective <reliability|api-equivalent-cost|tokens-or-quota|wall-time>`;
+   - `--allow-usage-credits` and `--ack-target-data-egress` — explicit acknowledgements, never inferred;
+   - `--output <json-path>` — default `.agentic-sdlc/rightsize/model-task-map.json`;
+   - `--regenerate` and `--force` — `--force` requires `--regenerate` and never overrides failed evidence;
+   - `--dry-run` — discover and plan only; no model calls or output writes.
 
-4. Check vocabulary and route admission. Require every proposed `primary`, `complement`, and `fallback` exact ID to be live on its own provider plane, every proposed effort to be in that plane's observed vocabulary, and every context form to remain a requested form rather than a claimed served window. `--ultra` may select `max` only after the ultra gate in step 2 passes; a route whose top usable band is `xhigh` remains `xhigh`. Do not substitute aliases, provider-qualified aliases, bare Muse IDs, inherited settings, or a host default. A catalog-only route may appear only as an explicitly blocked candidate, never as a dispatchable primary or fallback.
+   Reject unknown flags, conflicting depth flags, duplicate conflicting values, multiple targets, a non-repository target, an output outside the target, or a non-`.json` output. Keep `--probe-only`, `--regenerate`, `--force`, `--output`, and `--dry-run` compatible with earlier invocations. Retire `--ultra`: use an exact per-route effort in `--spec`; do not translate it into a global band.
 
-5. Classify exactly these eight task classes across all six dimensions. Record the dimension values in each map entry's `classification` object, then choose a semantic tier by wrong-output consequence and gate strength rather than task prestige:
+3. Run read-only discovery first:
 
-   | `task_class` | `blast_radius` | `determinism_of_gate` | `scope_of_mutation` | `authority_proximity` | `corpus_size` | `dependency_fanout` |
-   |---|---|---|---|---|---|---|
-   | `mechanical_redo` | local/reversible | complete | one bounded artifact | none | small | none |
-   | `deterministic_gated_change` | contained/visible | compiler, test, schema, or exact diff | isolated files | low | small/medium | low |
-   | `evidence_extraction` | contained/visible | evidence coverage or schema | read-only | low | medium/large | low |
-   | `repository_discovery` | contained semantic omission | partitioned evidence inventory | read-only | low | large | medium |
-   | `semantic_implementation` | contained silent degradation | partial; immutable review required | interacting bounded change | medium | medium | medium |
-   | `semantic_review` | contained silent acceptance | explicit criteria plus independent review | immutable candidate | medium | medium | medium |
-   | `integration_reconcile` | cross-branch or contract damage | re-gate on immutable integration head | multi-component fan-in | high | large | high |
-   | `authority_or_frontier` | derail, trust, credential, data-loss, or settled-truth error | fail closed plus re-derivation | advisory only | direct | large when needed | high |
+   ```text
+   uv run --python 3.12.11 --script skills/model-tier-rightsizing/scripts/rightsize.py discover --target <target>
+   ```
 
-   Choose inside the eligible Sol/Fable, Terra/Opus, or Luna/Sonnet pair by verified transport, task fit, quota, independent perspective, and correlated-error risk. Use the cheapest certified capable-volume route only when a complete deterministic gate makes a wrong result cheap to redo. Fable is a bounded adversarial packet, never the truth-settling primary. Native Bedrock and gateway are separate route families: a success on one does not certify the other.
+   It reads the raw loopback gateway catalog, `ocx models live --json`, configured providers, the checked-in runtime policy, and a PII-stripped `claude auth status --json`. Keep these states separate:
 
-6. Emit the candidate JSON at `<target>/.agentic-sdlc/model-task-map.json` unless `--output` selects another JSON path. The JSON must use this shape; `map` has exactly the eight keys from step 5, and `provider_plane` is constrained to `gateway` or `native-bedrock`:
+   - provider registry presence;
+   - configured provider;
+   - exact live catalog member;
+   - successful route probe;
+   - locally role-qualified route;
+   - exact tuple admitted by `runtime-assignment-receipt-v1.json`.
+
+   Claude subscription passthrough is a `gateway-claude-subscription-passthrough` route using the operator's existing `claude.ai` login; it is not an OCX catalog row or a separate plane. Never read, print, copy, or persist credential, email, or organization values.
+
+4. If `--spec` did not resolve every choice, ask only environment-relevant questions. Ask at most four questions per tool call and at most four options per question. `AskUserQuestion` supplies its own free-text **Other** path; never add a duplicate Other option.
+
+   - **Sources** — multi-select among live configured OCX providers and usable Claude subscription passthrough. Do not show registry-only providers as selectable.
+   - **Models** — multi-select exact IDs or families found for the selected sources. Batch long lists into groups of four. A free-text model remains a blocked candidate until its exact route is discovered and probed.
+   - **Task classes** — present the eight classes as two four-option multi-select questions; omit a class already fixed by a selected task pack.
+   - **Depth** — probe, pilot, qualification, or reuse compatible evidence. Qualification requires an explicit target-representative pack.
+   - **Objective** — reliability, API-equivalent cost, tokens/quota, or wall time.
+   - **Budget/context** — ask for call count, wall time, API-equivalent spend, attempts, and expected peak input only when not supplied. Free text carries numeric custom values.
+   - **Effects** — if target content leaves the machine, require data-egress acknowledgement. If Fable or Claude `[1m]` may consume usage credits, require `allow_usage_credits`; `$0` is never assumed.
+   - **Replacement** — create, regenerate, or regenerate with force only when outputs already exist.
+
+   Normalize answers into one closed `rightsize-run-spec/v1`. In a non-interactive host, unresolved input fails as `question-required:<field>`; never select all providers, a host default, or a budget silently.
+
+5. Model every route as an exact tuple:
 
    ```json
    {
-     "calibration_id": "string",
-     "probe": {
-       "catalog_ts": "RFC-3339 timestamp",
-       "gateway": {
-         "endpoint": "http://127.0.0.1:10100/v1/models",
-         "live": true,
-         "catalog_sha256": "sha256"
-       },
-       "live_ids": ["exact-model-id"],
-       "effort_vocab": {
-         "gateway": ["low", "medium", "high", "xhigh"],
-         "native-bedrock": ["low", "medium", "high", "xhigh"]
-       },
-       "native_bedrock_live": true
-     },
-     "map": {
-       "task_class": {
-         "classification": {
-           "blast_radius": "string",
-           "determinism_of_gate": "string",
-           "scope_of_mutation": "string",
-           "authority_proximity": "string",
-           "corpus_size": "string",
-           "dependency_fanout": "string"
-         },
-         "provider_plane": "gateway",
-         "primary": {
-           "model": "exact-model-id",
-           "effort": "observed-effort-vocabulary-value",
-           "context": "requested-context-form"
-         },
-         "complement": "distinct bounded artifact or null",
-         "fallback": ["same-control exact route or stop"],
-         "gate": "required deterministic or independent control",
-         "kill_criteria": "conditions that stop or reduce scope"
-       }
-     }
+     "transport_surface": "claude-code-gateway",
+     "route_kind": "gateway-routed-provider",
+     "provider": "openai",
+     "auth_basis": "provider-credential",
+     "billing_basis": "api-token",
+     "requested_model_id": "gpt-5.6-luna",
+     "requested_effort": "high",
+     "requested_context_form": "base"
    }
    ```
 
-   `calibration_id` must bind the canonical calibration revision, normalized target identity, catalog digest, native canary receipt digest or explicit unavailable state, and classifier version. Do not write secrets, credentials, raw prompts, raw transcripts, or mutable local paths into either output.
+   For subscription passthrough use `route_kind: "gateway-claude-subscription-passthrough"`, `provider: "anthropic"`, `auth_basis: "operator-claude-login"`, and `billing_basis: "claude-subscription"`. Do not use aliases.
 
-7. Emit the Markdown companion alongside the JSON. It must be a human-readable rendering of the same `calibration_id`, probe facts, eight-class dimensions, selected primary/complement/fallback, gate, kill criteria, unavailable evidence, and a short regeneration command. It must link back to [`skills/model-tier-rightsizing/SKILL.md`](../skills/model-tier-rightsizing/SKILL.md) and [`references/model-routing-calibration.md`](../skills/model-tier-rightsizing/references/model-routing-calibration.md), and it must state that the map is a recommendation, not a dispatch receipt or authorization.
+6. Plan before any live call:
 
-8. Preserve idempotence. With the same normalized target, calibration revision, catalog bytes, canary receipts, classifier version, and arguments, render byte-identical JSON and Markdown. On a default run, create the absent pair only; if either output already exists, compare its generated-content digest and refuse replacement. `--regenerate` may replace an intact matching generated pair after the current probes pass. A stale probe, a changed calibration ID, a partial pair, or a user-edited/generated-digest mismatch requires `--regenerate --force`; `--force` still cannot replace an output after failed or incomplete live evidence. `--probe-only` and `--dry-run` never write.
+   ```text
+   uv run --python 3.12.11 --script skills/model-tier-rightsizing/scripts/rightsize.py plan --target <target> --spec <spec>
+   ```
 
-9. Enforce exactly these five failure modes, each fail closed with the affected route or task class named:
-   1. Gateway catalog unavailable, malformed, stale, or missing a proposed exact gateway ID.
-   2. Missing `requestId` correlation, missing attribution `resolvedModel`, `default-provider` routing, unresolved identity, or a G2 Muse prefix/catalog failure.
-   3. Native Bedrock canary failure, empty completion, missing injection evidence, or unavailable native identity evidence for a proposed native cell.
-   4. Unsupported, inferred, or unverified effort/context vocabulary, including an `--ultra` request that does not meet the ultra gate.
-   5. Unsafe output replacement, incomplete eight-class classification, missing gate/kill criteria, or any fallback that weakens the original semantic control.
+   Show the normalized routes, task pack and verifier types, exact call count, selected providers as data-egress destinations, call/time/API-equivalent-cost limits, possible subscription quota or usage-credit effects, output paths, stop conditions, and `authorization_digest`.
 
-10. Describe next steps without dispatching. A workflow looks up `task_class`, chooses the recorded route only if it remains live, and constructs one conductor-supplied `RuntimeAssignment`. Before spawn, the authenticated external harness must inject the exact requested model and effort, preserve immutable request-injection evidence, validate the canonical receipt, verify model identity/readback, and correlate the admitted receipt with spawn evidence. A map lookup, prompt prose, a requested value, a passing canary, or a generated file is never proof of injection and never authorization to spawn, mutate Seeds, merge, publish, deploy, or perform another outward operation.
+   - `--dry-run` stops here.
+   - Otherwise ask one final single-select question: **Run evaluation**, **Adjust choices**, or **Cancel**.
+   - Only **Run evaluation** authorizes the exact displayed plan. Pass its digest to `evaluate`. A changed catalog, task pack, spec, budget, target identity, or benchmark snapshot changes the digest and requires a new confirmation.
+
+7. Evaluate through the existing launcher only:
+
+   ```text
+   uv run --python 3.12.11 --script skills/model-tier-rightsizing/scripts/rightsize.py evaluate \
+     --target <target> --spec <spec> --authorization-digest <digest>
+   ```
+
+   The evaluator pins the full model, effort, and context request form; disables fallback and session persistence; uses safe mode, ordinary `dontAsk` permissions, structured output, and the task pack's closed tools. It copies fixtures into an isolated temporary workspace and never mutates the target. Bash, web, subagents, workflows, permission bypass, ambient secrets, path-escaping symlinks, and unbounded gates are forbidden.
+
+   Capture gateway attribution before each serial attempt and correlate only new records. For routed providers require raw catalog membership, intended provider, non-`default-provider` routing, and gateway-log `resolvedModel`; the response body `model` is inadmissible. A Muse candidate must use its exact `muse/` ID. For Claude passthrough require an exact `claude-*` ID, `anthropic-native` attribution, no fallback, and the checked-in unambiguous mapping; missing or ambiguous identity blocks the route. Requested effort/context never become effective readback.
+
+8. Apply the local evidence ladder:
+
+   - `catalog-only` — exact ID discovered, no live call;
+   - `route-probed` — exact route answered with verified identity;
+   - `role-qualified` — only a qualification pack may write this task-class-scoped rung.
+
+   `builtin:harness-smoke-v1` tests harness mechanics only and can never promote. Qualification requires a digest-bound target-representative pack, at least five distinct held-out tasks per selected class, three attempts per task, at least 90% accepted attempts, a 95% Wilson lower bound of at least 0.70, zero route/identity failures, and zero critical-task failures. Every `authority_or_frontier` case is critical and must pass every attempt. A new exact tuple remains production-blocked until the checked-in runtime receipt policy admits it; local qualification does not rewrite that policy.
+
+9. Compute task-class-specific Pareto fronts after hard-filtering route identity, context fit, semantic control, qualification, and runtime-policy admission. Record:
+
+   - accepted rate and 95% Wilson interval;
+   - transport/identity failure rate;
+   - input, uncached input, cache-read, cache-write, reasoning, visible-output, and total tokens;
+   - wall time, first-output latency, and steps;
+   - mean/median cost, tokens, and wall time per attempt;
+   - observed cost, tokens, and wall time per accepted result;
+   - subscription quota/usage-credit state and cost provenance.
+
+   `observed cost per accepted = compatible observed cost / accepted successes`; it is unavailable at zero successes. Claude subscription marginal cost is `null`, never `$0`; API-equivalent cost may remain useful but must be labeled. Missing dimensions are not zero and cannot establish dominance. Never merge active-agent wall time with decode-time estimates, or average `observed`, `declared`, and `mined` evidence; precedence remains `observed > declared > mined`.
+
+10. Treat context as a hard feasibility constraint. Use expected peak input plus output reserve and the policy margin. Select the smallest certified request form that fits. Keep `requested_model_id` and `requested_context_form` separate in JSON; Markdown may render the familiar `[1m]` suffix. Native 1M-base models and Muse's shared pool stay `base`. Never choose `[1m]` because it ranks higher, infer it from a family, or claim served context from a request. An uncertified `[1m]` tuple is blocked.
+
+11. Emit a fail-closed trio:
+
+   - `<stem>.json` — `model-task-map/v2` with all eight classifications, exact route registry, structured primary/complement/fallback routes, Pareto front, qualification and runtime-admission states, gates, and kill criteria;
+   - `<stem>.md` — the same recommendation and limitations for humans;
+   - `<stem>.evidence.json` — non-sensitive observed metrics, closed attribution excerpts, and digests.
+
+   Never write raw prompts, completions, transcripts, repository content, credentials, PII, secret-shaped values, or mutable absolute paths. Identical evidence renders byte-identical output. Default creation refuses existing artifacts; regeneration requires a complete valid v2 trio. A partial set, v1 artifact, stale/generated-digest mismatch, or user edit requires `--regenerate --force`; failed evidence never replaces prior outputs.
+
+   `.agentic-sdlc/rightsize/` is the one subdirectory the activation engine admits for these artifacts, and it admits any name there under closed custody: no symlink, caller-owned, not other-writable, no extended ACL, on the target's own mount. A symlinked, foreign-owned, or world-writable artifact makes activation refuse `foreign-state`. Unlike `receipts/` and `transactions/`, the trio stays visible to Git because it is a recommendation a reader may commit, so an uncommitted map leaves the worktree dirty and activation refuses until it is committed or ignored.
+
+   Rendered output is the only rightsizing state that belongs in that private root. A task pack is an operator-authored **input** carrying its own fixture tree, so it stays outside: put one at `evaluations/<pack>.json` in the target, mirroring the builtin at `skills/model-tier-rightsizing/evaluations/harness-smoke-v1.json`. Fixtures resolve against the pack's own directory and may not escape it.
+
+12. Published evidence in [`model-benchmark-evidence-2026-08-12.json`](../skills/model-tier-rightsizing/references/model-benchmark-evidence-2026-08-12.json) may nominate or order already route-probed candidates for evaluation. It cannot raise a qualification rung, fill a scale-setter slot, prove context, or grant runtime admission. The full applicability/limitation record is in [`docs/research/2026-08-12-model-rightsizing-benchmarks.md`](../docs/research/2026-08-12-model-rightsizing-benchmarks.md).
+
+13. Stop after reporting the recommendation, blocked routes, provenance, and reproduction command. Do not mutate provider configuration, gateway configuration, Seeds, worktrees, trust, global settings, or production assignments. Do not spawn, merge, publish, deploy, or perform another outward operation. **Before spawn**, the authenticated external harness still builds and validates one `RuntimeAssignment` immediately before any separately authorized worker.
 
 Examples:
 
 ```text
-/sdlc-rightsize --probe-only
-/sdlc-rightsize . --dry-run
-/sdlc-rightsize /repo --regenerate
-/sdlc-rightsize /repo --regenerate --force --output /repo/.agentic-sdlc/model-task-map.json
-/sdlc-rightsize /repo --regenerate --ultra
+/sdlc-rightsize --dry-run
+/sdlc-rightsize . --pilot --task-pack builtin:harness-smoke-v1
+/sdlc-rightsize /repo --qualify --task-pack evaluations/change-writing-v1.json
+/sdlc-rightsize /repo --spec .agentic-sdlc/rightsize/rightsize-run.json --dry-run
+/sdlc-rightsize /repo --spec .agentic-sdlc/rightsize/rightsize-run.json --regenerate --force
 ```

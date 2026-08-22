@@ -12,6 +12,37 @@ import sys
 from pathlib import Path
 
 SCHEMA = "agentic-sdlc/offline-inspect@1"
+
+# EXITS, as one derivation point (product-spec Implementation Decision 9; the machine-readable form
+# is `policy/release-candidate-acquisition.v1.json`'s `exit_codes` map). This command opens nothing
+# for writing, spawns no process, touches no network, and mutates no target, so 3 and 4 are
+# UNREACHABLE rather than merely unused: a command that can cause no effect can neither refuse
+# before one nor admit a partial one. `skills/agentic-sdlc/tools/wave-verdict.py` states the same
+# rule for the same reason.
+#
+# NOT_READY is therefore NOT 1. A completed inspection that names a refusal is this command
+# SUCCEEDING at the question it was asked, so it may not occupy the code reserved for an unexpected
+# internal failure: reporting a derived verdict and a crash at the same 1 leaves a caller unable to
+# tell them apart. It keeps a NONZERO code so an existing shell caller still sees a signal, taken
+# from OUTSIDE the reserved 0-4 block exactly as `scripts/gate_baseline.py`'s `EXIT_WORSENED` is
+# ("The comparison ran and names at least one newly-failing test. Never inside the reserved block.").
+#
+# MEASURED RESIDUAL, not a claim: 1 here is the uncaught-exception class only. Every unreadable
+# target, missing target, and permission-denied target measured on 2026-08-21 lands on 2 through
+# `InspectionError`, and a stdout that cannot receive the one result document exits 120 -- the
+# interpreter's own flush-at-exit failure, outside this table entirely. That residual is recorded
+# rather than asserted as the contract.
+#: Every inspected item was adoptable, mergeable, or skippable: preview readiness is READY.
+EXIT_READY = 0
+#: An unexpected internal failure. A stdout that cannot receive the one result document is NOT
+#: here: it exits 120 via the interpreter's flush-at-exit, per the measured residual above.
+EXIT_INTERNAL = 1
+#: The target or the command line itself is unusable, so no inspection happened.
+EXIT_INPUT = 2
+#: The inspection RAN and names at least one refusal: preview readiness is NOT_READY. Deliberately
+#: outside the reserved block, and deliberately never 0, 1, or 2.
+EXIT_NOT_READY = 5
+
 MARKER_START = "<!-- agentic-sdlc:start -->"
 MARKER_END = "<!-- agentic-sdlc:end -->"
 CANONICAL_INSTRUCTION_CONTENT = {
@@ -238,13 +269,13 @@ def inspect(target: Path) -> tuple[dict[str, object], int]:
     refusal = next((item for item in items if item["action"] == "refuse"), None)
     if refusal is None:
         readiness = {"state": "READY", "reason": "no_refusals"}
-        exit_code = 0
+        exit_code = EXIT_READY
     else:
         readiness = {
             "state": "NOT_READY",
             "reason": f"{refusal['id']}/{refusal['reason']}",
         }
-        exit_code = 1
+        exit_code = EXIT_NOT_READY
     return {
         "schema": SCHEMA,
         "target": os.path.abspath(target),
@@ -265,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         result, exit_code = inspect(arguments.target)
     except InspectionError as exc:
         print(f"fatal: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_INPUT
     json.dump(result, sys.stdout, ensure_ascii=True, separators=(",", ":"))
     sys.stdout.write("\n")
     return exit_code

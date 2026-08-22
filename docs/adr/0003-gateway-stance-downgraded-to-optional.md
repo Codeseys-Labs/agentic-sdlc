@@ -138,10 +138,59 @@ problem it looks like it solves.
   only admissible resolved-model evidence) — this ADR does not pre-clear
   that work, it only removes the subscription-passthrough branch from
   consideration.
-- **Confirmation:** `rg -ni gateway AGENTS.md README.md` returning zero hits
-  in the committed tree is the current, correct state this ADR intends to
-  preserve — a gateway is not a required component of this bundle's install
-  or gate surface, and adding one back is a decision this ADR does not make.
+- **Confirmation (rewritten; ADR-0014 amends the prior form):** this ADR's confirmation used to
+  cite `rg -ni gateway AGENTS.md README.md` returning zero hits as the state to preserve. That is
+  false since ADR-0014: the gateway is now a documented, supported one-session route (`ccodex
+  launch`, `ccodex ultracode`, `ocx:launch`, `ocx:ultracode`, etc. — note that `ccodex
+  launch-ultracode` is NOT a command; `launch-ultracode` is the launcher's own verb, reached from
+  the dispatcher as `ccodex ultracode` or `ccodex ocx launch-ultracode`), and the same grep
+  measured 51 hits across `AGENTS.md` and `README.md` on 2026-08-18 (`README.md` 38, `AGENTS.md`
+  13). Rising hit counts are expected as that documentation grows and are not a regression on
+  their own. The property this ADR actually intends to preserve is narrower and still holds:
+  **no repository gate requires a real gateway or a real `ocx` — the gateway is a described,
+  optional component, never a required part of this bundle's install or gate surface.** State it
+  that way rather than as "no gate task invokes the launcher," because one gate leaf legitimately
+  DOES execute the launcher: `test` runs `tests/test_opencodex_claude.py`, which drives
+  `scripts/opencodex-claude.sh` against stubs it writes itself. Both halves of the real property
+  are checkable, and both were executed on 2026-08-18:
+
+  1. **The gate's task graph reaches no gateway task and invokes no `ocx`.** Read from
+     `mise.toml` rather than by running mise:
+
+         uv run --python 3.12.11 python -B -c "
+         import tomllib, pathlib
+         t = tomllib.loads(pathlib.Path('mise.toml').read_text())['tasks']
+         seen, q = [], ['check']
+         while q:
+             n = q.pop(0)
+             if n in seen: continue
+             seen.append(n); q += t[n].get('depends', [])
+         run = lambda n: str(t[n].get('run', '')) + str(t[n].get('run_windows', ''))
+         print('closure:', seen)
+         print('gateway tasks:', [n for n in seen if n.startswith(('ocx:', 'operator-tools:', 'claude:'))])
+         print('mentions ocx:', [n for n in seen if 'ocx' in run(n)])
+         "
+         closure: ['check', 'validate', 'test', 'self-test', 'secrets']
+         gateway tasks: []
+         mentions ocx: []
+
+     The same script rooted at `contributor:setup`, the deprecated `setup`, and `bundle:install`
+     returns `['contributor:setup', 'bundle:install', 'hooks:install']`,
+     `['setup', 'contributor:setup', 'bundle:install', 'hooks:install']`, and
+     `['bundle:install']` — no gateway task on any of those paths either.
+
+  2. **The one gate test that executes the launcher supplies its own `ocx` and `mise`.** It
+     writes both stubs into a fixture bin directory and puts only that directory ahead of
+     `/usr/bin:/bin` in the child `PATH`, so no ambient `ocx`, mise, or listening gateway is
+     required or reachable:
+
+         rg -n 'mise = bin_dir / "mise"|ocx = bin_dir / "ocx"|"PATH": f' tests/test_opencodex_claude.py
+         119:        mise = bin_dir / "mise"
+         159:        ocx = bin_dir / "ocx"
+         229:            "PATH": f"{bin_dir}:/usr/bin:/bin",
+
+  Counting mentions of the word "gateway" confirms nothing either way. Adding a gateway
+  *requirement* remains a decision this ADR does not make.
 
 ## Reversal condition
 

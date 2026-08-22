@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 from typing import Any, Iterator
@@ -29,10 +30,36 @@ LEGACY_STATE_VERSION = 1
 DESIRED_COMMANDS = ("agentic-sdlc-statusline", "ccodex")
 HISTORICAL_ALIASES = ("ocx-launch", "ocx-ultracode")
 RECOGNIZED_COMMANDS = DESIRED_COMMANDS + HISTORICAL_ALIASES
+# The dispatcher is a bash script, and bash has no single absolute path across the platforms this
+# lifecycle claims: Linux ships /usr/bin/bash (with /bin/bash usually a merged-usr link to it) and
+# macOS ships only /bin/bash. The template's shebang is therefore a pin resolved here, in probe
+# order, rather than a literal -- a hard-coded `#!/usr/bin/bash` installed a command that reported
+# `0 installed` on macOS and then failed at every exec with ENOENT on the interpreter.
+#
+# The list is CLOSED and ABSOLUTE: no PATH lookup and no environment override, so nothing a caller
+# controls can steer an installed command at an interpreter of their choosing. What this is NOT is
+# an interpreter integrity check -- the kernel re-resolves the path at every exec, so a later
+# replacement of that file is outside this lifecycle, and claiming otherwise would be a false
+# guarantee. What it does record is the binding: the resolved path is part of the installed bytes,
+# so the entry's ownership digest covers it and a rebinding surfaces as a refresh or a conflict
+# rather than silently. Digest-pinned bash ADMISSION stays where it is measured -- the linux-x64
+# release-candidate surface (`trusted_bash` in policy/release-candidate-execution.v1.json,
+# enforced by release_candidate.py `_trusted_bash`).
+BASH_INTERPRETER_CANDIDATES = (Path("/usr/bin/bash"), Path("/bin/bash"))
 
 
 class OperatorToolsError(RuntimeError):
     pass
+
+
+class HostPreconditionError(OperatorToolsError):
+    """A fact about the HOST (not the caller's argv) blocks the requested lifecycle action.
+
+    Decision 9 reserves 2 for a grammar/schema/input error and 3 for a clean refusal before
+    effect. `bin_dir` being absent from PATH is nothing the caller typed wrong -- it is a
+    fact about this host's shell -- so it is one derivation point away from every other
+    `OperatorToolsError` (main()'s `except` clauses below), which stay 2.
+    """
 
 
 @dataclass(frozen=True)
@@ -43,6 +70,12 @@ class Config:
     state_root: Path
     dry_run: bool = False
     require_path: bool = True
+    ocx_path: Path | None = None
+    jq_path: Path | None = None
+    uv_path: Path | None = None
+    # Test-only seam for the interpreter rendered into the `ccodex sdlc` route. Production
+    # installations leave this unset and resolve it through the already-bound uv executable.
+    sdlc_python_path: Path | None = None
 
     @property
     def state_path(self) -> Path:
@@ -149,7 +182,7 @@ def validate_bin_dir(config: Config) -> None:
     if bin_dir == Path(bin_dir.anchor) or bin_dir == config.repo_root or config.repo_root in bin_dir.parents:
         raise OperatorToolsError(f"unsafe operator-tools bin directory: {bin_dir}")
     if config.require_path and os.path.normcase(str(bin_dir)) not in path_entries():
-        raise OperatorToolsError(
+        raise HostPreconditionError(
             f"operator-tools bin directory is not on PATH: {bin_dir}; {path_guidance(bin_dir)}"
         )
     current = bin_dir
@@ -170,6 +203,111 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
+def bash_interpreter(candidates: tuple[Path, ...] | None = None) -> Path:
+    """Return the first admissible absolute bash for the dispatcher's shebang.
+
+    A candidate is admissible when it is absolute, free of whitespace (a shebang cannot be quoted,
+    so the kernel would split the interpreter word), and an executable regular file. Nothing is
+    executed to decide this: the probe is a capability question about the host, and the answer is
+    rendered into the installed bytes.
+
+    When no candidate is admissible this raises the ordinary ``OperatorToolsError`` -- exit 2, the
+    same class as the sibling "pinned <tool> is not an executable file" refusals -- rather than the
+    ``HostPreconditionError`` exit-3 class, which stays reserved for the one raise site its own
+    docstring names. The refusal names every path it probed, and it happens in ``desired_files()``
+    before any file is written.
+
+    The probe list is read from the module at CALL time, not bound as a default argument value: a
+    default would be captured at import and the host-shape seam would be unpatchable, which is the
+    difference between testing this platform rule and testing the machine the suite happens to run
+    on.
+    """
+    candidates = BASH_INTERPRETER_CANDIDATES if candidates is None else candidates
+    for candidate in candidates:
+        text = str(candidate)
+        if not candidate.is_absolute() or any(character.isspace() for character in text):
+            continue
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    probed = ", ".join(str(candidate) for candidate in candidates) or "no candidate"
+    raise OperatorToolsError(
+        "cannot resolve a bash interpreter for the ccodex dispatcher; none of "
+        f"{probed} is an executable file on this host"
+    )
+
+
+def mise_executable(config: Config, tool: str) -> Path:
+    if configured := {"ocx": config.ocx_path, "jq": config.jq_path, "uv": config.uv_path}[tool]:
+        path = absolute(configured)
+    else:
+        try:
+            value = subprocess.run(
+                ["mise", "-C", str(config.repo_root), "which", tool],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise OperatorToolsError(
+                f"cannot resolve the pinned {tool}; run `mise --locked install` in {config.repo_root}"
+            ) from exc
+        path = absolute(Path(value))
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise OperatorToolsError(f"pinned {tool} is not an executable file: {path}")
+    return path
+
+
+def sdlc_python_executable(config: Config, uv: Path) -> Path:
+    """Resolve and verify the exact uv-managed interpreter for read-only SDLC inspection.
+
+    The returned absolute executable is rendered into the dispatcher so daily reads never need
+    to invoke uv or select an interpreter from the caller's PATH. `sdlc_python_path` is an
+    injection seam for isolated tests; it is still subjected to the same exact-version check.
+    """
+    if config.sdlc_python_path is not None:
+        candidate = absolute(config.sdlc_python_path)
+    else:
+        try:
+            resolved = subprocess.run(
+                [
+                    str(uv),
+                    "python",
+                    "find",
+                    "--managed-python",
+                    "--no-config",
+                    "--no-project",
+                    "--offline",
+                    "--no-python-downloads",
+                    "3.12.11",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise OperatorToolsError(
+                "cannot resolve uv-managed Python 3.12.11; run `mise --locked install` in "
+                f"{config.repo_root}"
+            ) from exc
+        candidate = absolute(Path(resolved))
+    if not candidate.is_file() or not os.access(candidate, os.X_OK):
+        raise OperatorToolsError(f"uv-managed Python 3.12.11 is not an executable file: {candidate}")
+    try:
+        observed = subprocess.run(
+            [str(candidate), "-I", "-B", "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise OperatorToolsError(f"cannot execute uv-managed Python 3.12.11: {candidate}") from exc
+    if observed != "3.12.11":
+        raise OperatorToolsError(
+            f"uv-managed Python must be exactly 3.12.11, got {observed or 'no version'}: {candidate}"
+        )
+    return candidate
+
+
 def desired_files(config: Config) -> dict[str, bytes]:
     statusline = config.repo_root / "assets" / "claude" / "statusline-command.sh"
     launcher = config.repo_root / "scripts" / "opencodex-claude.sh"
@@ -178,16 +316,42 @@ def desired_files(config: Config) -> dict[str, bytes]:
     for path in sources:
         if not path.is_file():
             raise OperatorToolsError(f"required operator-tools source is missing: {path}")
+    # Resolved before the pinned toolchain on purpose: it is the cheapest, purely local host fact,
+    # and it is the one that decides whether the file this function returns could ever exec at all.
+    bash = bash_interpreter()
+    ocx = mise_executable(config, "ocx")
+    jq = mise_executable(config, "jq")
+    uv = mise_executable(config, "uv")
+    sdlc_python = sdlc_python_executable(config, uv)
     # The dispatcher resolves its root at run time from AGENTIC_SDLC_ROOT, falling back to this
-    # install-time value, so a clone that later moves to a managed path can be pointed at with an
-    # environment variable instead of a reinstall. The path is shell-quoted because a repo root
-    # containing a space or a quote would otherwise produce a script that does not parse.
+    # install-time value, so a clone that later moves to a managed path can be pointed at without a
+    # reinstall. Pinned runtime executables are deliberately absolute: daily use must not depend on
+    # ambient PATH or re-evaluate repository-scoped mise. Values are shell-quoted because roots and
+    # tool stores may contain spaces or quotes.
+    #
+    # @PINNED_BASH@ is the one substitution that is NOT shell-quoted, because it is the shebang: the
+    # kernel reads that line literally and a quote character would become part of the interpreter
+    # path. bash_interpreter() is what makes that safe, by admitting no whitespace-bearing path.
     dispatcher = (
         (templates / "ccodex.in")
         .read_text(encoding="utf-8")
+        .replace("@CANDIDATE_READONLY_PROFILE@", "false")
         .replace("@CANONICAL_LAUNCHER@", shell_quote(str(launcher)))
         .replace("@CANONICAL_ROOT@", shell_quote(str(config.repo_root)))
+        .replace("@PINNED_BASH@", str(bash))
+        .replace("@PINNED_OCX@", shell_quote(str(ocx)))
+        .replace("@PINNED_JQ@", shell_quote(str(jq)))
+        .replace("@PINNED_UV@", shell_quote(str(uv)))
+        .replace("@PINNED_SDLC_PYTHON@", shell_quote(str(sdlc_python)))
     )
+    # An unsubstituted placeholder is exactly the defect class the shebang pin exists to close: it
+    # renders a file that installs cleanly and cannot exec. Fail closed instead of shipping it.
+    for leftover in ("@CANDIDATE_", "@CANONICAL_", "@PINNED_"):
+        if leftover in dispatcher:
+            raise OperatorToolsError(
+                f"the ccodex dispatcher template has an unsubstituted {leftover}placeholder: "
+                f"{templates / 'ccodex.in'}"
+            )
     return {
         "agentic-sdlc-statusline": statusline.read_bytes(),
         "ccodex": dispatcher.encode(),
@@ -410,7 +574,6 @@ def commit_pending(config: Config, state: dict[str, object]) -> None:
 
 
 def _install(config: Config) -> tuple[int, list[str]]:
-    validate_bin_dir(config)
     desired = desired_files(config)
     state = load_state(config.state_path, config)
     messages: list[str] = []
@@ -464,6 +627,11 @@ def _install(config: Config) -> tuple[int, list[str]]:
 
 
 def install(config: Config) -> tuple[int, list[str]]:
+    # validate_bin_dir() runs BEFORE the lock is even taken, so a host precondition refusal
+    # never creates the lock file or its parent directories -- lifecycle_lock() itself is an
+    # effect (durable_mkdir + O_CREAT), and admitting it before the precondition check would
+    # make the "before any effect" refusal untrue.
+    validate_bin_dir(config)
     with lifecycle_lock(config):
         return _install(config)
 
@@ -523,7 +691,6 @@ def _status(config: Config) -> tuple[int, list[str]]:
 
 
 def _retire_aliases(config: Config) -> tuple[int, list[str]]:
-    validate_bin_dir(config)
     state = load_state(config.state_path, config)
     messages: list[str] = []
     if state.get("pending") is not None:
@@ -572,6 +739,8 @@ def _retire_aliases(config: Config) -> tuple[int, list[str]]:
 
 
 def retire_aliases(config: Config) -> tuple[int, list[str]]:
+    # See install()'s comment: the precondition check must precede lifecycle_lock() itself.
+    validate_bin_dir(config)
     with lifecycle_lock(config):
         return _retire_aliases(config)
 
@@ -582,6 +751,221 @@ def state_snapshot(path: Path) -> tuple[bool, bytes | None]:
     if path.is_symlink() or not path.is_file():
         raise OperatorToolsError(f"operator-tools state must be a regular file: {path}")
     return True, path.read_bytes()
+
+
+def _readonly_json_document(content: bytes, path: Path) -> dict[str, object]:
+    """Decode one ownership document without duplicate-key or non-finite ambiguity."""
+    def reject_duplicate(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> object:
+        raise ValueError(f"non-finite JSON value {value!r}")
+
+    try:
+        value = json.loads(
+            content.decode("utf-8"), object_pairs_hook=reject_duplicate, parse_constant=reject_constant
+        )
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        # Parser diagnostics can include document keys and values.  The read-only report is an
+        # external surface, so keep that untrusted state body out of it.
+        raise OperatorToolsError("operator-tools state is malformed") from exc
+    if not isinstance(value, dict):
+        raise OperatorToolsError("operator-tools state is malformed")
+    return value
+
+
+def _readonly_read_file(path: Path) -> tuple[str, bytes | None, str | None]:
+    """Read a regular file once and reject a changed inode/metadata witness as racy."""
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return "absent", None, None
+    except OSError:
+        return "unreadable", None, None
+    if stat.S_ISLNK(before.st_mode):
+        return "symlinked", None, None
+    if not stat.S_ISREG(before.st_mode):
+        return "unsupported", None, None
+    try:
+        content = path.read_bytes()
+        after = os.lstat(path)
+    except OSError:
+        return "unreadable", None, None
+    witness_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    witness_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    if witness_before != witness_after:
+        return "racy", None, None
+    return "present", content, None
+
+
+def _readonly_entry_state(path: Path, digest: str) -> tuple[str, str | None]:
+    observed, content, detail = _readonly_read_file(path)
+    if observed == "absent":
+        return "absent", None
+    if observed in {"symlinked", "unsupported", "unreadable", "racy"}:
+        return observed, detail
+    assert content is not None
+    return ("owned", None) if digest_bytes(content) == digest else ("modified", None)
+
+
+def _readonly_finding(code: str, message: str, path: Path) -> dict[str, str]:
+    return {"code": code, "component": "operator-tools", "message": message, "path": str(path)}
+
+
+def readonly_projection(config: Config) -> dict[str, object]:
+    """Return a pure, structured operator-tools observation.
+
+    This deliberately does not call the legacy lifecycle's status or pending-recovery helpers.
+    It neither acquires a lock nor normalizes/migrates/writes a state document.  Malformed and
+    racy evidence is preserved as a typed finding so the caller can remain read-only.
+    """
+    state_path = config.state_path
+    findings: list[dict[str, str]] = []
+    entries: list[dict[str, str]] = []
+    recovery: list[dict[str, str]] = []
+    observed, content, _detail = _readonly_read_file(state_path)
+    state: dict[str, object] | None = None
+    projection_state = "absent"
+
+    if observed == "present":
+        assert content is not None
+        try:
+            state = _readonly_json_document(content, state_path)
+        except OperatorToolsError:
+            findings.append(_readonly_finding("state-malformed", "operator-tools state is malformed", state_path))
+            projection_state = "unreadable"
+    elif observed != "absent":
+        code = f"state-{observed}"
+        findings.append(_readonly_finding(code, f"operator-tools state is {observed}", state_path))
+        projection_state = "unreadable" if observed == "unreadable" else "blocked"
+
+    records: dict[str, object] = {}
+    pending: object = None
+    if state is not None:
+        if set(state) != {"version", "entries", "pending"}:
+            findings.append(_readonly_finding("state-malformed", "operator-tools state has an unknown field", state_path))
+            projection_state = "unreadable"
+        elif state.get("version") != STATE_VERSION:
+            findings.append(
+                _readonly_finding(
+                    "state-unsupported",
+                    "operator-tools state version is not readable without migration",
+                    state_path,
+                )
+            )
+            projection_state = "blocked"
+        elif not isinstance(state.get("entries"), dict):
+            findings.append(_readonly_finding("state-malformed", "operator-tools entries are not an object", state_path))
+            projection_state = "unreadable"
+        else:
+            records = state["entries"]
+            pending = state["pending"]
+            for key, record in records.items():
+                if (
+                    not isinstance(key, str)
+                    or not valid_record(record, key)
+                    or Path(key).parent != config.bin_dir
+                    or Path(key).name not in RECOGNIZED_COMMANDS
+                ):
+                    findings.append(
+                        _readonly_finding("state-malformed", "operator-tools ownership record is invalid", state_path)
+                    )
+                    projection_state = "unreadable"
+                    records = {}
+                    break
+            if projection_state != "unreadable" and pending is not None:
+                try:
+                    validate_pending(config, {"version": STATE_VERSION, "entries": records, "pending": pending})
+                except OperatorToolsError:
+                    findings.append(
+                        _readonly_finding(
+                            "pending-invalid", "operator-tools pending transition is malformed", state_path
+                        )
+                    )
+                    projection_state = "blocked"
+                else:
+                    assert isinstance(pending, dict)
+                    recovery.append(
+                        {
+                            "action": "lifecycle-dry-run",
+                            "component": "operator-tools",
+                            "path": str(config.bin_dir / Path(pending["path"]).name),
+                            "state": "pending",
+                        }
+                    )
+                    findings.append(
+                        _readonly_finding(
+                            "pending-recovery",
+                            "operator-tools has an interrupted lifecycle transition; only a lifecycle dry run may propose recovery",
+                            state_path,
+                        )
+                    )
+                    projection_state = "blocked"
+
+    for name in DESIRED_COMMANDS:
+        path = config.bin_dir / name
+        record = records.get(str(path))
+        if isinstance(record, dict):
+            entry_state, _detail = _readonly_entry_state(path, str(record["digest"]))
+            entries.append({"name": name, "path": str(path), "state": entry_state})
+            if entry_state != "owned":
+                code = "owned-entry-racy" if entry_state == "racy" else "owned-entry-conflict"
+                findings.append(_readonly_finding(code, f"owned operator command is {entry_state}", path))
+                if projection_state not in {"blocked", "unreadable"}:
+                    projection_state = "degraded"
+        else:
+            observed, _content, _detail = _readonly_read_file(path)
+            entry_state = "foreign" if observed == "present" else observed
+            entries.append({"name": name, "path": str(path), "state": entry_state})
+            if entry_state != "absent":
+                findings.append(_readonly_finding("foreign-entry", f"unowned operator command is {entry_state}", path))
+                if projection_state not in {"blocked", "unreadable"}:
+                    projection_state = "degraded"
+
+    # Historical aliases are lifecycle evidence when an ownership record or a real file remains,
+    # but fresh installs deliberately neither create nor require them.  Keep their established
+    # status semantics: an unowned or missing historical alias is retained as information, while
+    # a changed owned alias is a conflict.
+    for name in HISTORICAL_ALIASES:
+        path = config.bin_dir / name
+        record = records.get(str(path))
+        if isinstance(record, dict):
+            entry_state, _detail = _readonly_entry_state(path, str(record["digest"]))
+            if entry_state == "absent":
+                # A retained historical ownership record is not a requirement to recreate the
+                # alias.  Match status: preserve the fact internally without reporting it as an
+                # absent command in this public projection.
+                continue
+            entries.append({"name": name, "path": str(path), "state": entry_state})
+            if entry_state != "owned" and entry_state != "absent":
+                code = "owned-entry-racy" if entry_state == "racy" else "owned-entry-conflict"
+                findings.append(_readonly_finding(code, f"owned historical alias is {entry_state}", path))
+                if projection_state not in {"blocked", "unreadable"}:
+                    projection_state = "degraded"
+            continue
+        observed, _content, _detail = _readonly_read_file(path)
+        if observed == "absent":
+            continue
+        entry_state = "foreign" if observed == "present" else observed
+        entries.append({"name": name, "path": str(path), "state": entry_state})
+
+    if projection_state == "absent" and records:
+        desired_entries = [entry for entry in entries if entry["name"] in DESIRED_COMMANDS]
+        projection_state = "healthy" if all(entry["state"] == "owned" for entry in desired_entries) else "degraded"
+    elif projection_state == "absent" and any(entry["state"] != "absent" for entry in entries):
+        projection_state = "degraded"
+    return {
+        "entries": entries,
+        "findings": findings,
+        "recovery": recovery,
+        "state": projection_state,
+        "state_paths": [str(state_path)],
+    }
 
 
 def status(config: Config) -> tuple[int, list[str]]:
@@ -598,7 +982,6 @@ def status(config: Config) -> tuple[int, list[str]]:
 
 
 def _uninstall(config: Config) -> tuple[int, list[str]]:
-    validate_bin_dir(config)
     state = load_state(config.state_path, config)
     messages: list[str] = []
     if state.get("pending") is not None:
@@ -632,6 +1015,8 @@ def _uninstall(config: Config) -> tuple[int, list[str]]:
 
 
 def uninstall(config: Config) -> tuple[int, list[str]]:
+    # See install()'s comment: the precondition check must precede lifecycle_lock() itself.
+    validate_bin_dir(config)
     with lifecycle_lock(config):
         return _uninstall(config)
 
@@ -711,6 +1096,12 @@ def main(argv: list[str] | None = None) -> int:
                 "retire-aliases": retire_aliases,
                 "uninstall": uninstall,
             }[args.command](config)
+        except HostPreconditionError as exc:
+            # Decision 9's clean-refusal-before-effect class: this exact exception type is
+            # raised only from validate_bin_dir(), before any of the four verbs above has
+            # written anything, so no effect boundary is crossed by reporting it here.
+            print(f"fatal: {exc}", file=sys.stderr)
+            return 3
         except OperatorToolsError as exc:
             print(f"fatal: {exc}", file=sys.stderr)
             return 2

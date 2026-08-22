@@ -1,0 +1,19 @@
+{
+ "schema": "agentic-sdlc/runtime-served-record@1",
+ "node": "ws-f83f-fan-in",
+ "requested": {
+  "model_id": "claude-fable-5",
+  "effort": "medium",
+  "context_form": "base"
+ },
+ "served": {
+  "identity_status": "unavailable",
+  "identity_source": "adapter_response_readback",
+  "identity_basis": "unambiguous_exact_id_mapping",
+  "request_injection_status": "verified",
+  "provider": "anthropic",
+  "model_id": "claude-fable-5",
+  "effort_readback_status": "unavailable",
+  "context_readback_status": "unavailable"
+ }
+}

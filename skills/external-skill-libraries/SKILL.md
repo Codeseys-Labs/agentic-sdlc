@@ -70,13 +70,13 @@ instruction to run the installer:
 
 ## The three libraries, honestly costed
 
-| Library | Surface | Channel | Front door |
+| Library | Surface | Channel | Front door(s) |
 |---|---|---|---|
-| `mattpocock` | 25 skills | plugin (namespaced) | `claude plugins install mattpocock-skills` |
+| `mattpocock` | 25 skills | plugin (namespaced), **or** flat via the CLI door | **two doors, split by prerequisite.** `claude plugins install mattpocock-skills` needs an **authenticated** Claude Code session; `npx -y skills@latest add mattpocock/skills --global --agent claude-code --skill '*' --yes` needs none |
 | `ecc` | 284 declared / 280 measured skills, 67 agents, 94 commands | flat `~/.claude/skills/` | `npx -y -p ecc-universal ecc install --target claude --profile full` |
-| `hyperresearch` | 17 skills + 14 agents, rendered | flat, `hyperresearch`-prefixed | `uv tool install hyperresearch` |
+| `hyperresearch` | 17 skills + 16 agents, rendered | flat, `hyperresearch`-prefixed | `uv tool install hyperresearch` |
 
-**ECC's surface is the headline.** Against this bundle's 10 skills, 284 entries is a ~28×
+**ECC's surface is the headline.** Against this bundle's 12 skills, 284 entries is a ~24×
 multiplication of what a selector must reason over, in exchange for a firing rate nobody has
 measured for any individual entry. It writes flat into `~/.claude/skills/<skill-name>/` — the
 same namespace this bundle's entries occupy — so every name is a first-writer-wins claim. It is
@@ -102,20 +102,59 @@ it would write; `list` prints that command. Against the resolved `full` profile 
 file operations: 280 flat skill names, 67 agents, 94 commands, 122 rules files, 170 scripts.
 `--profile` accepts six narrower profiles (`ecc catalog profiles --json`) for a smaller surface.
 
-**mattpocock is cheap by an order of magnitude** — 25 versioned entries through an official
-marketplace plugin, already listed, so there is no `marketplace add` step to run first.
-Because a plugin is namespaced it cannot *lose* a name; its failure mode is the opposite one,
-duplication, which upstream names itself: "Pick one — installing both leaves you with every
-skill twice." Its editable npm front door (`npx skills@latest add mattpocock/skills`) is
-deliberately **not** wired for installing — that is the channel that competes for flat names,
-and it prompts interactively. When that channel already holds the names, `migrate` is the route:
-see below.
+**mattpocock is cheap by an order of magnitude** — 25 versioned entries — and it has **two
+legitimate front doors that differ in prerequisite, not in payload**. Because the plugin door is
+namespaced it cannot *lose* a name; its failure mode is the opposite one, duplication, which
+upstream names itself: "Pick one — installing both leaves you with every skill twice."
+
+- **The marketplace door needs an authenticated Claude Code session, and upstream does not say
+  so.** Its README calls the official marketplace already listed, so there is no `marketplace
+  add` step — true only once a session is logged in and that marketplace has registered.
+  Executed 2026-08-20 on a logged-out Claude Code 2.1.238: `claude plugin marketplace list`
+  prints "No marketplaces configured" at exit 0 and `claude plugins install mattpocock-skills`
+  fails not-found-in-any-configured-marketplace. The bundle's own task behaved correctly there —
+  real command, real exit code, install reported FAILED, no false success — but a not-found is a
+  dead-end-looking message for a library that is not a dead end. So `list` and `install` read the
+  marketplace state offline from `~/.claude/plugins/known_marketplaces.json`, keep the
+  marketplace door **primary** whenever at least one marketplace is configured (a missing
+  `claude` binary is reported by its own front-door-tool line, not by this check),
+  and otherwise print the prerequisite plus a `DIRECTED:` line naming the other door. When the
+  door fails with none configured, the failure hint names **both** halves: the
+  authenticated-session prerequisite and the exact alternative command.
+- **The `skills` CLI door needs no Claude session at all**, and both its runners come from tools
+  this repo already pins (`npx` from node, `bunx` from bun), so it adds no prerequisite. Its
+  grammar was read off the CLI itself — `npx -y skills@latest --help`, CLI 1.5.23 — not a README:
+  `add <package>` with `-g/--global`, `-a/--agent <agents>`, `-s/--skill <skills>` ("use `'*'` for
+  all skills"), `-y/--yes`. There is no per-subcommand help; `add --help` reprints the same page.
+  Those three scoping flags are what make it noninteractive, and `--agent claude-code` is the
+  same one-host scope the removal front door uses.
+- **That door is printed, never invoked by this tool.** It writes flat names the operator owns
+  into `~/.claude/skills/`, so it is governed by the **flat-channel** collision rules, not the
+  plugin-channel ones the precheck applied. Running it from here would install behind a precheck
+  that never looked at its namespace — the silent loss this module exists to prevent — so the
+  operator runs it deliberately. When that channel already holds the names, `migrate` is the
+  route instead: see below.
 
 **hyperresearch is not a skill library at all.** It is a CLI that *renders* skills and agents
 into a home or a project. Installing the tool writes no skills; its own `hyperresearch
 install` verb does (`--global` for the home). Every name it writes is `hyperresearch`-prefixed,
 so its collision surface against this bundle is structurally empty rather than merely
-observed to be empty. Its rendered agent files carry static `model:` frontmatter, which this
+observed to be empty.
+
+**Its 16 agent files are a recorded set, not a live enumeration, and that distinction bit once.**
+This front door exposes no verb that lists what it renders — `hyperresearch --help` at 0.10.0
+offers install/setup/init/status/… and nothing else, and `install --help` has no `--dry-run` — so
+the expected set can only be recorded from an executed install (`hyperresearch install --global`,
+then list `~/.claude/agents`; 16 files, v0.10.0, 2026-08-20). The list here stood at 14 against
+that **same** upstream version, missing `hyperresearch-browser-fetcher` and
+`hyperresearch-cite-checker`, so `status` reported a truthful `14/14` while understating the real
+selection surface by two files. Two things now catch the next drift instead: the set is pinned in
+`tests/test_external_libraries.py` against the version it was recorded from, so a change fails a
+named test rather than nothing; and `status` reports any further `hyperresearch`-prefixed agent
+file the recorded set does not name, so a home wider than the record says so on the operator's own
+machine. Re-record both sides together — never reconcile by editing one.
+
+Its rendered agent files carry static `model:` frontmatter, which this
 repo's validator rejects for agent files — a reason never to vendor its output, not a reason
 to refuse to run its renderer in a home, where this repository's validator has no
 jurisdiction.
@@ -223,6 +262,40 @@ went red on a clean machine. Reading a nonzero dry-run exit as "the tool broke" 
 A real `--yes` install with a missing front door still exits nonzero — that half is asserted
 separately so the fix cannot decay into blanket leniency.
 
+## A library with no front door: the ported class (pstack)
+
+Everything above is the **front-door class**: a library reachable because it publishes its own
+installable front door, which `install_external_libraries.py` invokes without copying a byte.
+Some libraries worth onboarding have no such front door at all — nothing for that script to
+invoke — and forcing one into the closed catalog above would misdescribe what actually happens.
+`docs/adr/0029-ported-libraries-are-a-second-external-library-catalog-class.md` names that
+second class **ported libraries**, and refines rather than supersedes ADR-0009: the closed
+three-row catalog, its mechanism, and its boundaries above are unchanged by it.
+
+`pstack` (`github.com/cursor/plugins/tree/main/pstack`, a Cursor-native workflow plugin) is the
+first, and so far only, ported-class member. It has no Claude Code front door — no marketplace
+plugin, no npm or PyPI package targeting this host — so onboarding it means executing
+`references/porting-a-foreign-plugin.md`, the recipe this skill already ships, against a
+**pristine read of upstream HEAD** (never against a working copy a prior port has already
+modified — that recipe's own checklist item 9), with the exact upstream commit read **recorded**
+as a pin per ADR-0029. The ported result lands in the operator's own plugin tree, under the
+operator's own ownership, registered through a local marketplace the operator points at their
+own checkout — never inside this repository; where the executed 2026-08-19 port landed is
+recorded in `docs/progress/2026-08-19-pstack-claude-code-port.md`. Re-porting on a later
+upstream change is a fresh recipe run against the new pristine HEAD with a new recorded pin,
+never a channel update, because there is no channel to subscribe to.
+
+The same three boundaries this skill applies to the front-door class apply here, unchanged:
+**no vendoring** (the ported plugin's files stay in the operator's home; nothing from
+`cursor/plugins` is copied into this repository, and no `NOTICE` entry is owed for it — this
+skill's own section and the recipe re-express the pattern in this bundle's own words rather
+than quoting the ported plugin's files); **name collision** is the operator's own, resolved in
+their own plugin tree by their own host's install/upgrade behavior, not by this skill's
+precheck, which only reasons about `install_external_libraries.py`'s destinations; **no
+installer-task automation** — ADR-0029 creates none, so there is no `libraries:*` verb, no
+`mise` task, and no addition to the closed catalog above for the ported class or for pstack
+specifically. Automating a port is a separate, not-yet-made decision.
+
 ## Standing boundaries
 
 - **This bundle never vendors upstream bytes.** No file from any library is copied into this
@@ -253,3 +326,9 @@ separately so the fix cannot decay into blanket leniency.
   decision and its evidence.
 - `docs/adr/0002-mise-is-the-single-front-door.md` — the prerequisite rule these front doors
   must not raise.
+- `references/porting-a-foreign-plugin.md` — the recipe the ported class points at: manifest
+  relocation, primitive substitution, the pristine-HEAD-only evidence rule, and what porting
+  deliberately does not make safe.
+- `docs/adr/0029-ported-libraries-are-a-second-external-library-catalog-class.md` — the
+  ported-class decision, pstack as its first member, and why it refines rather than
+  supersedes ADR-0009.

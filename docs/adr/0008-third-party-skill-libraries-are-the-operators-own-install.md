@@ -49,8 +49,8 @@ authoritative statement of *what* it writes is the installer's own enumeration �
 `agents/claude/*.md`, `commands/*.md`, and `agents/codex/*.toml`. Read that function
 rather than trusting a count here: the count moves with the tree, and a frozen number
 in this record is stale the next time a skill lands. Measured at this record's date, it
-resolves to 10 skills across two planes plus 7 Claude role agents, 7 Codex role TOMLs,
-and 4 commands — 38 entries. `bundle:status` reports every entry `ok:` with zero
+resolves to 12 skills across two planes plus 7 Claude role agents, 7 Codex role TOMLs,
+and 5 commands — 43 entries. `bundle:status` reports every entry `ok:` with zero
 `conflict`/`foreign`/`missing`/`drift`, and zero foreign files appear anywhere in the
 install (`docs/research/2026-08-06-clean-install-verification.md` records the same
 shape at an earlier, smaller skill count). The installer has **no network path at
@@ -87,7 +87,7 @@ The three libraries, with the facts that matter:
 2. **Vendor under a project prefix (`skills/sdlc-<capability>/`).** Rejected as a
    general answer. The prefix genuinely defeats collision, and the earlier memos were
    right about that much — but it does not touch the selection-surface cost, which is
-   the binding constraint at 282 candidate entries against 9 incumbents, and it does
+   the binding constraint at 282 candidate entries against 12 incumbents, and it does
    not touch the static-model-pin rejection for rendered agent content. A prefix
    solves the third problem of three.
 3. **Add a mise task or an installer flag that fetches and installs a library on
@@ -136,8 +136,8 @@ The three libraries, with the facts that matter:
      `skills/agentic-sdlc/references/skill-authoring.md:89-94` (Gate 2) asks whether
      the corpus has room for one more entry on the selection surface and whether that
      entry's share of attention tracks its share of the sessions it fires in. Against
-     **9 incumbent skills, 282 foreign entries is a catastrophic selection-surface
-     failure** — a 31× multiplication of the surface a selector must reason over, in
+     **12 incumbent skills, 282 foreign entries is a catastrophic selection-surface
+     failure** — a ~24× multiplication of the surface a selector must reason over, in
      exchange for a firing rate that is unmeasured for every one of them. Gate 3
      (`:96-99`, trigger existence today) disposes of the rest: a capability with no
      live trigger in this repository is not ready to be a skill. Gate 1 (`:80-87`,
@@ -216,7 +216,7 @@ item 1 must be re-decided for it in a new record rather than quietly extended. R
 about selection surface or name collision.
 
 **Toward admitting a subset.** If this bundle's own corpus grows to the point where a
-foreign catalog's entries would be a small fraction rather than a 31× multiplication
+foreign catalog's entries would be a small fraction rather than a ~24× multiplication
 of the selection surface, reason 1's arithmetic changes and the proportionality
 argument must be recomputed against the tree at that time — not read off the numbers
 in this record, which go stale by design.

@@ -25,7 +25,13 @@ disagree, verify against the artifact — `npm view <pkg> bin`, the package's ow
 - **Front door:** `claude plugins install mattpocock-skills`
 - **Evidence:** README, "Installation (30-second setup)" → "Claude Code". The same section
   states it is already in Claude Code's official marketplace — "there's nothing to add
-  first" — so there is deliberately **no** `marketplace add` step to run.
+  first" — true only once **at least one marketplace is configured**, which in practice means
+  an authenticated Claude Code session with that marketplace already registered. Executed
+  2026-08-20 on a logged-out Claude Code 2.1.238: `claude plugin marketplace list` prints "No
+  marketplaces configured" at exit 0, and this door is not reachable from that state.
+- **Second front door, printed by this tool but never invoked:**
+  `npx -y skills@latest add mattpocock/skills --global --agent claude-code --skill '*' --yes`
+  (the `bunx` variant drops npm's `-y`).
 - **Uninstall:** `claude plugins uninstall mattpocock-skills`
 - **Version:** 1.2.3 in both `package.json` and `.claude-plugin/plugin.json`; the repo's own
   `check-plugin-version` script keeps the two in sync.
@@ -141,7 +147,7 @@ disagree, verify against the artifact — `npm view <pkg> bin`, the package's ow
 - **Version:** 0.10.0 on PyPI. `requires-python >=3.11,<3.14` — 3.14 is explicitly not
   supported yet.
 - **Licence:** MIT (`license_expression: MIT`), Jordan Gibbs.
-- **Surface:** 17 skills and 14 agent files when installed globally. Installing the *tool*
+- **Surface:** 17 skills and 16 agent files when installed globally. Installing the *tool*
   writes none of them.
 - **It is a renderer, not a library.** The CLI's own `install` verb does the writing:
   - `hyperresearch install [PATH]` — per-project: vault init, `CLAUDE.md` injection, hooks.

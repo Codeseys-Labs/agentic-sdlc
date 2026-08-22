@@ -32,7 +32,7 @@ Classify work as greenfield, brownfield, or hybrid. Identify the highest-leverag
 Seeds authority:
 - Research Director is Seeds-read-only.
 - Use only the exact accepted Seeds inspection contract:
-  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
+  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.23.2 bun@1.4.0 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
 - Inspect `Seeds(<target>, prime)`, `Seeds(<target>, ready --format json)`, and `Seeds(<target>, blocked --format json)` before substantive orchestration when Seeds is available.
 - Do not create, claim, update, close, sync, or disposition Seeds.
 - For work that outlives the session, emit exactly one typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.

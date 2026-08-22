@@ -22,7 +22,12 @@ Keep four facts separate (from `model-routing-calibration.md`):
 Codex/ccodex path. It requests a larger upstream context window after dispatch.
 It does not name a different upstream model, does not prove an upstream 1M
 window was granted, does not increase intelligence, and does not satisfy an
-effort or capability claim on its own. The sibling receipt field
+effort or capability claim on its own. **OCX Ultracode Workflow is a distinct
+request-form policy:** every explicit `agent()` `model` ID must carry `[1m]`.
+The exact marked model/effort/context tuple must be certified, admitted, and
+readable before the call; otherwise stop before dispatch and return one
+`SeedProposal`. Never remove the marker, select a base form, or retry an
+unsuffixed form in that mode. The sibling receipt field
 `requested_context_form` is the request; `context_readback_status` remains
 `unavailable` unless transport telemetry independently exposes effective context
 behaviour. Never copy `requested_context_form: "[1m]"` into a readback field.
@@ -56,8 +61,8 @@ From `policy/runtime-assignment-normative-contract-v1.json`
 | `gpt-5.6-terra` | yes | **yes** | same |
 | `gpt-5.6-luna` | yes | **yes** | same |
 | `claude-fable-5` | yes | **no** | exact Claude `[1m]` forms were not separately certified |
-| `claude-opus-4-8` | yes | **no** | keep Claude work to compact packets / immutable deltas |
-| `claude-sonnet-5` | yes | **no** | until those forms pass |
+| `claude-opus-4-8` | yes | **no** | outside OCX Ultracode Workflow, compact packets / immutable deltas; inside it, stop before dispatch |
+| `claude-sonnet-5` | yes | **no** | until those forms pass; never remove `[1m]` to dispatch in OCX Ultracode Workflow |
 | `muse-spark-1.1` / `1.2` / `1.2-contributor` | no entry | **no** | Muse has no `[1m]` and no effort channel (`reasoning.effort` not exposed); see calibration §Muse two routes |
 
 A `RuntimeAssignment` with `requested_context_form: "[1m]"` for a Claude
@@ -82,9 +87,17 @@ encode the wire string.
 
 ## 3. When to use `[1m]` — and when not to
 
-Use `[1m]` **only** for a GPT assignment that will carry a transcript-,
-corpus-, or repository-heavy payload and is on a certified GPT route. The
-calibration's concrete triggers:
+Outside OCX Ultracode Workflow mode, use `[1m]` **only** for a GPT assignment
+that will carry a transcript-, corpus-, or repository-heavy payload and is on
+a certified GPT route. The calibration's concrete triggers:
+
+In OCX Ultracode Workflow mode, **every** explicit `agent()` model ID is
+instead the exact marked request form. Do not infer that an unmarked model is
+allowed because its prompt is small: certification, active-catalog admission,
+and request/identity evidence decide whether it may run. An uncertified or
+unsupported marked form, including a namespaced model whose active adapter has
+not admitted `muse/muse-spark-1.2[1m]` as an exact tuple, stops before dispatch
+and returns one `SeedProposal`; it does not reopen the base form.
 
 - **Frame / Plan** that consumes repository-wide evidence (`sol xhigh [1m]`)
 - **Discover** with repository-wide readers (`terra xhigh [1m]`)
@@ -173,9 +186,14 @@ Typical shape that fails:
 
 ```js
 // ANTI-PATTERN — embeds ~80k of calibration plus inventories into every call
-const merged = await agent(`You are the synthesizer. Inventories:\n${JSON.stringify(inventories, null, 2)}\nTaxonomy A:\n${JSON.stringify(taxonomies[0], null, 2)}\n...`, { model: 'gpt-5.6-sol', effort: 'xhigh' })
+const merged = await agent(`You are the synthesizer. Inventories:\n${JSON.stringify(inventories, null, 2)}\nTaxonomy A:\n${JSON.stringify(taxonomies[0], null, 2)}\n...`, { model: 'gpt-5.6-sol[1m]', effort: 'xhigh' })
 // → Prompt is too long
 ```
+
+The marked form does not excuse the oversized prompt. In OCX Ultracode Workflow
+mode it is required only after its tuple clears certification/admission/readback;
+if it does not, return a `SeedProposal` before this call rather than use
+`gpt-5.6-sol` without `[1m]`.
 
 `[1m]` does not fix this by itself:
 
@@ -208,7 +226,7 @@ await agent(
    Use targeted search: locate each symbol before reading its file region;
    cap any single file read to ~80 lines. Write the artifact to
    work/taxonomy.json and reply with its path + 3-line summary.`,
-  { model: 'gpt-5.6-terra', effort: 'xhigh', schema: TAXONOMY_SCHEMA }
+  { model: 'gpt-5.6-terra[1m]', effort: 'xhigh', schema: TAXONOMY_SCHEMA }
 )
 ```
 
@@ -241,7 +259,7 @@ await agent(`Inventories (digests only):
 ${taxonomyInputs}
 
 Design a 6-dimension task taxonomy ... Return TAXONOMY_SCHEMA.`,
-  { model: 'gpt-5.6-sol', effort: 'xhigh', schema: TAXONOMY_SCHEMA })
+  { model: 'gpt-5.6-sol[1m]', effort: 'xhigh', schema: TAXONOMY_SCHEMA })
 ```
 
 ### 6.3 Bound the corpus explicitly
@@ -263,24 +281,29 @@ unbounded JSON blob. Each stage's schema is its own budget enforcement:
 If a synthesis needs to merge two prior taxonomies, pass only the fields the
 synthesizer needs, not `JSON.stringify(entirePriorResults, null, 2)`.
 
-### 6.5 Apply `[1m]` narrowly, on the right lane
+### 6.5 Keep the OCX Ultracode request form exact
 
-After the brief is disciplined, add `[1m]` only to the GPT worker that
-legitimately needs a repository-wide context:
+After the brief is disciplined, an OCX Ultracode Workflow still uses `[1m]`
+on **every** explicit model ID. This example shows the certified GPT route:
 
 ```js
-// Only the repo-wide discovery/research worker gets [1m], and only on GPT
+// OCX Ultracode Workflow uses the certified marked model request form.
 await agent(repoWideDiscoveryPrompt, {
-  model: 'gpt-5.6-terra',
+  model: 'gpt-5.6-terra[1m]',
   effort: 'xhigh',
-  // requested_context_form: "[1m]" — expressed via the harness's context form,
-  // not by inventing a new model string
 })
+
+// The receipt records the corresponding requested_context_form: "[1m]".
+// If that exact marked tuple is not certified/admitted/readable, return a
+// SeedProposal before calling agent(); do not retry with gpt-5.6-terra.
 ```
 
-Stay within `certified_context_forms_by_model`. A request for `claude-*`
-with `[1m]` will be rejected by `receipt_admission.py`; a request for `muse/*`
-with `[1m]` has no defined behaviour.
+Stay within the exact certified tuple set. A request for `claude-*` with
+`[1m]` will currently be rejected by `receipt_admission.py`; a request for
+`muse/*[1m]` has no admitted syntax or tuple in the current policy. In OCX
+Ultracode Workflow mode, both are a stop-before-dispatch `SeedProposal`, not a
+reason to remove `[1m]`. Outside that mode, use the canonical policy for a
+compact base-form route.
 
 ### 6.6 Scale effort and width with the failure, not the prestige
 
@@ -295,8 +318,18 @@ with `[1m]` has no defined behaviour.
 
 Originally grounded in the installed `2.10.2` source, then rechecked against the active
 `2.11.1` package under its mise install root on 2026-08-09 (the docs site is not shipped in
-the npm package). These levers affect token pressure
-independent of `[1m]`.
+the npm package). Re-checked on 2026-08-19 by diffing the published `2.28.0` tarball against
+`2.11.1`, for the `2.11.1 → 2.28.0` pin bump: every mechanism named in this section survives
+under the same names and file paths, and exactly one constant moved —
+`AUTO_COMPACT_WINDOW_DEFAULT`, from `350_000` to `829_800` (§7.2, and it changes the injected-slot
+`[1m]` floor). Read the version attribution on each number below literally. A figure that came from
+the opencodex **source** is current for `2.28.0`. A figure that came from anywhere else is not: the
+live-gateway catalog counts and per-model windows in §7.4 and any response-body behavior are still
+`2.11.1` measurements, because the live gateway on this host was still `2.11.1` when the diff was
+read, and the elided bundle's char/token size in §7.1 is a Claude Code artifact size measured on
+2026-08-09 rather than a gateway constant at all. The `2.28.0` qualification canary is what
+re-measures the gateway half; until it runs, do not restate one as a `2.28.0` observation. These
+levers affect token pressure independent of `[1m]`.
 
 ### 7.1 `blockedSkills` elision — automatic ~136k saving on routed models
 
@@ -328,9 +361,10 @@ independent of `[1m]`.
 ### 7.2 `autoContext` / `autoCompactWindow` — the real per-model floor
 
 - `src/claude/context-windows.ts` owns the mechanism:
-  `AUTO_COMPACT_WINDOW_DEFAULT = 350_000`, `AUTO_CONTEXT_FLOOR = 200_000`,
-  `ONE_MILLION = 1_000_000`, accepted range `100_000–1_000_000` verified against the
-  Claude Code 2.1.207 binary.
+  `AUTO_COMPACT_WINDOW_DEFAULT = 829_800` in `2.28.0` — it was `350_000` through `2.11.1`, and
+  this is the one constant the version diff moved — plus `AUTO_CONTEXT_FLOOR = 200_000`,
+  `ONE_MILLION = 1_000_000`, and the accepted range `100_000–1_000_000` (unchanged, verified
+  against the Claude Code 2.1.207 binary).
 - `resolveAutoContext(claudeCode, envOverride) → {enabled, compactWindow}`.
   Disabled when `claudeCode.autoContext === false` **or** when legacy
   `maxContextTokens` is set — both `MAX_CONTEXT_TOKENS` and `DISABLE_COMPACT` then
@@ -341,6 +375,14 @@ independent of `[1m]`.
   is the safety property: marking a model whose real window is **below** the compact
   window would put the compaction safety net **behind** the real API limit
   (mid-session 400s).
+- **What the raised default changes.** The predicate is the same; its second branch now demands
+  far more. With `autoContext` on and no explicit compact window, an injected slot is marked only
+  at `window >= 829_800`, where `2.11.1` marked from `350_000`. A 372k sol/terra/luna route was
+  marked under the old default and is **not** marked under the new one. So a sub-1M `[1m]` mark is
+  now an explicit floor decision — either the host sets `--compact-window` at or below the route's
+  real window on purpose, or that route stops being marked — and a workflow that assumed the
+  marking would appear on its own gets an unmarked slot with no error. The `window >= 1M` branch is
+  untouched: a genuinely 1M model still marks regardless of the default.
 - `effectiveModelEnv()` injects `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and the tier
   slots `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_OPUS/SONNET/FABLE/HAIKU_MODEL` with
   `withOneMillionMarker()` applied. The persistent write surface is
@@ -354,14 +396,19 @@ independent of `[1m]`.
   if `shouldMarkOneMillion(authoritativeWindow, AUTO_CONTEXT_OFF)` — i.e. **without**
   the main-session auto-context pairing. A 372k route is **not** marked there unless
   its window is genuinely ≥1M (the #854 defect guard).
-- **Alive today:** this operator's live config is untouched — `ocx claude config
-  status` shows `autoContext: true`, `autoCompactWindow: null` (default 350k),
-  provider blocks have `modelContextWindows` absent, no `claudeCode` block. The
-  adopted floor in `docs/research/2026-08-07-context-window-accommodation.md` §8 is
-  **272000** (smallest real window in the selected set); it will be applied via
-  `ocx claude config set --compact-window 272000` as a gateway-side persistent
-  setting, not a per-shell export. Do **not** describe `[1m]` as the per-model
-  floor — the floor is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` via `min(believed window, env)`.
+- **Alive on this host, re-read 2026-08-20** (`ocx config show --json`, read-only, 2.28.0 CLI
+  against the same config file): the adopted floor from
+  `docs/research/2026-08-07-context-window-accommodation.md` §8 **has been applied**.
+  `claudeCode.autoCompactWindow` is explicitly `272000` — the smallest real window in the selected
+  set — so this host's pairing floor is 272000 and **not** the raised 829_800 default, and an
+  explicit setting is what keeps a 372k route markable. `claudeCode` also carries `smallFastModel`
+  and `authModeMigratedAt`; `claudeCode.autoContext` is absent, i.e. default-on. Two providers are
+  configured (`openai`, the default, and `muse`), and the `muse` block **does** carry a
+  `modelContextWindows` map. An earlier revision of this bullet said the live config was untouched
+  with `autoCompactWindow: null` and no `claudeCode` block; that was true on 2026-08-09 and is
+  false now, which is why the read is dated and re-runnable rather than asserted. Do **not**
+  describe `[1m]` as the per-model floor — the floor is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` via
+  `min(believed window, env)`.
 
 ### 7.3 Reasoning effort — `ultra` is not a context lever
 
@@ -382,6 +429,14 @@ independent of `[1m]`.
   and `ocx claude config status` carry the real per-model map (`contextWindow`:
   sol/terra/luna 372k, 5.5 272k, 5.4 1M, 5.3-codex-spark 100k, mini/muse absent).
   The calibration table — not discovery — is the source of truth.
+- **Version attribution.** Those entry counts and per-model numbers are `2.11.1` live-catalog
+  measurements from 2026-08-09; the `2.28.0` canary re-measures them, and the catalog also has five
+  more registry providers available to add (`chutes`, `featherless`, `nous`, `novita`,
+  `xiaomi-mimo`), so expect the counts to move. What the `2.28.0` source re-verified is the RULE
+  that produces them: the Anthropic-shaped list still emits `claude-ocx-*` ids through the same
+  codec, and an entry carries the `[1m]` mark and a non-null window only when its **authoritative**
+  window is `>= 1e6`. So the shape is current and the counts are dated. A `null` window is the
+  rule's ordinary output, not a defect, and catalog discovery is still not a window source.
 
 ## 8. Checklist for Workflow authors
 
@@ -397,11 +452,19 @@ Before dispatching a `Workflow()`:
       cap, not "read everything."
 - [ ] Handoffs between stages pass digests or typed schema outputs, not
       transcripts.
-- [ ] `[1m]` appears only on `gpt-5.6-sol` / `terra` / `luna` workers that are
-      repository- or transcript-heavy, and the `RuntimeAssignment` records
-      `requested_context_form: "[1m]"` alongside a valid `requested_effort`.
+- [ ] In OCX Ultracode Workflow mode, every explicit `agent()` `model` ID ends
+      with `[1m]`, and its exact marked model/effort/context tuple is certified,
+      admitted, and readable before the call. An unsupported model form produces
+      one stop-before-dispatch `SeedProposal`, never an unsuffixed retry.
+- [ ] Outside OCX Ultracode Workflow mode, `[1m]` appears only on
+      repository- or transcript-heavy certified GPT workers, and the
+      `RuntimeAssignment` records `requested_context_form: "[1m]"` alongside a
+      valid `requested_effort`.
 - [ ] The session floor is still 272000 unless the session is genuinely
-      single-model on a larger window and the raise is documented.
+      single-model on a larger window and the raise is documented. That floor is an
+      EXPLICIT `claudeCode.autoCompactWindow`, not the default — opencodex `2.28.0`
+      defaults to 829_800, which would put the compaction net far behind a 372k route
+      and drop its injected-slot `[1m]` mark (§7.2).
 - [ ] Output budgets on shared-pool (`muse`) sessions are set explicitly
       (above ~600 + expected output, well below 1048576).
 
@@ -417,6 +480,17 @@ Before synthesising across prior stage outputs:
 1. **Classify** the failure: is the prompt too long because it carries a
    corpus, because it carries prior transcripts, or because the output schema
    itself is huge? The fix differs.
+   - An **HTTP 413** carrying the error type `input_admission_refused` (new in 2.28.0; a live
+     2.11.1 gateway never emits it) is its own class, not a transport fault: opencodex estimates
+     the inbound token count and refuses **locally**, before any provider request, when the
+     estimate exceeds the route's ceiling × 2.5. Such an attempt carries no upstream evidence —
+     no provider request was dispatched, and the attribution log records the refusal itself, not
+     a serve. Other 413s exist (local buffer/body limits, and Anthropic's own `request_too_large`
+     upstream on the passthrough route), so match the error type, never the bare status. Treat the
+     preflight class as "this prompt does not fit this route" and go to step 2 or 3; a retry
+     against the same route and prompt refuses identically. `rightsize.py: identity_evidence` classifies it under that name so a 413 is never
+     read as a provider or model fault, and a 413 mixed with any other non-200 stays the generic
+     `transport-status` rather than being renamed after the 413.
 2. **Re-brief** to remove the corpus from the prompt (section 6.1) and re-run
    the single stage with `resumeFromRunId` — unchanged prefixes replay from
    cache.

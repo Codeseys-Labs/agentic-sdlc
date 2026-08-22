@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-08-07
 - **Deciders:** operator (question and decision), agent (executed evidence and mechanism)
-- **Relates to:** `scripts/bootstrap-agentic-sdlc.sh`, `docs/research/2026-08-07-clone-free-install.md`, `docs/adr/0002-mise-is-the-single-front-door.md`, `README.md`
+- **Relates to:** `scripts/bootstrap-agentic-sdlc.sh`, `docs/research/2026-08-07-clone-free-install.md`, `docs/plans/2026-08-14T163833Z-Install-UX.md`, `docs/adr/0002-mise-is-the-single-front-door.md`, `README.md`
 
 ## Context
 
@@ -144,6 +144,25 @@ introducing a third.
   on both the first and second attempt. That is a container-image gap, not the
   npm ordering bug ADR-era `depends` already fixed; npm 10.8.1 installed cleanly
   in the first pass.
+
+## 2026-08-14 prospective release-artifact amendment
+
+The operator has selected a second distribution shape that is different from the remote-task
+mechanism rejected here: a versioned, self-contained GitHub release archive installed with
+`mise use -g github:Codeseys-Labs/agentic-sdlc`. The GitHub backend installs one release artifact;
+it does not import this repository's `[tools]` table. The archive must therefore carry `ccodex`,
+the authored bundle payload, and its private runtime dependencies, resolve its distribution root
+relative to its executable, and copy explicitly activated host entries so pruning an old mise
+version cannot break them. Host-plane activation remains a separate collision-checked operation.
+The managed checkout remains the contribution, customization, gates, and release-building path.
+
+This is a prospective amendment, not a claim that the reversal has shipped. The repository has no
+GitHub release or tag for mise to resolve, the current dispatcher still points into a checkout, and
+current bundle activation still uses checkout-backed links. ADR-0011 therefore remains the current
+install decision until the archive builder, release workflow, copy activation, clean-host tests,
+and first release exist. At that point a new ADR must supersede this one rather than editing away
+its executed evidence. The exact proposed UX and implementation order are recorded in
+[`docs/plans/2026-08-14T163833Z-Install-UX.md`](../plans/2026-08-14T163833Z-Install-UX.md).
 
 ## Reversal condition
 

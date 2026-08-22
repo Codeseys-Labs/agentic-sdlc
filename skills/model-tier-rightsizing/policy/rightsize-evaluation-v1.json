@@ -1,0 +1,81 @@
+{
+  "schema_version": "rightsize-evaluation-policy/v1",
+  "run_spec_schema_version": "rightsize-run-spec/v1",
+  "output_schema_version": "model-task-map/v2",
+  "evidence_schema_version": "rightsize-evidence/v1",
+  "route_kinds": [
+    "gateway-routed-provider",
+    "gateway-claude-subscription-passthrough"
+  ],
+  "auth_bases": [
+    "provider-credential",
+    "provider-oauth",
+    "operator-claude-login",
+    "local"
+  ],
+  "billing_bases": [
+    "api-token",
+    "provider-subscription",
+    "claude-subscription",
+    "local",
+    "unavailable"
+  ],
+  "evaluation_depths": ["probe", "pilot", "qualification"],
+  "pareto_objectives": [
+    "reliability",
+    "api-equivalent-cost",
+    "tokens-or-quota",
+    "wall-time"
+  ],
+  "task_classes": [
+    "mechanical_redo",
+    "deterministic_gated_change",
+    "evidence_extraction",
+    "repository_discovery",
+    "semantic_implementation",
+    "semantic_review",
+    "integration_reconcile",
+    "authority_or_frontier"
+  ],
+  "allowed_efforts": ["low", "medium", "high", "xhigh", "max"],
+  "allowed_context_forms": ["base", "[1m]"],
+  "allowed_model_tools": ["Read", "Glob", "Grep", "Edit", "Write"],
+  "verifier_types": ["exact", "schema", "finding-coverage", "file-diff"],
+  "budget_limits": {
+    "max_calls": 1000,
+    "max_wall_seconds": 86400,
+    "max_api_equivalent_usd": 10000
+  },
+  "context": {
+    "safety_margin_ratio": 0.1,
+    "claude_declared_base_tokens": {
+      "claude-fable-5": 1000000,
+      "claude-opus-4-8": 1000000,
+      "claude-sonnet-5": 1000000
+    },
+    "extended_context_tokens": 1000000
+  },
+  "qualification": {
+    "minimum_distinct_tasks": 5,
+    "minimum_attempts_per_task": 3,
+    "minimum_accepted_rate": 0.9,
+    "minimum_wilson_lower_bound": 0.7,
+    "confidence_z": 1.959963984540054,
+    "maximum_route_or_identity_failures": 0,
+    "critical_tasks_require_all_attempts": true
+  },
+  "promotion": {
+    "pilot_may_promote": false,
+    "qualification_requires_target_representative_pack": true,
+    "runtime_policy_admission_remains_separate": true,
+    "mined_evidence_may_promote": false
+  },
+  "claude_usage_credit_acknowledgement_required_for": {
+    "model_prefixes": ["claude-fable-"],
+    "context_forms": ["[1m]"]
+  },
+  "replacement": {
+    "artifact_count": 3,
+    "force_cannot_override_failed_evidence": true
+  }
+}

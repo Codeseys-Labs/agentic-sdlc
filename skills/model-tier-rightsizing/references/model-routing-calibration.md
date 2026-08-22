@@ -53,12 +53,18 @@ promoted into that conclusion.
 
 ## Exact dispatch and requested effort
 
-Every dispatching Workflow consumer must receive an exact bare ID certified by the active
-transport. It must stop before dispatch when that certification or adapter readback is
-unresolved; a provider-neutral static role definition does not select a model. Bare Claude
-tier aliases are unsafe in the current path because settings expand them to
-provider-qualified IDs that ccodex rejects. This calibration does not change settings,
-trust, or configuration.
+Every dispatching Workflow consumer must receive an exact model request form certified by the
+active transport. It must stop before dispatch when that certification or adapter readback is
+unresolved; a provider-neutral static role definition does not select a model. **For an OCX
+Ultracode Workflow, every explicit `model` passed to `agent()` is the exact `[1m]` request
+form.** The exact `[1m]` model/effort/context tuple must be certified, admitted in the active
+served catalog, and readable through required immutable request and identity evidence before the
+call. An uncertified, unadmitted, unreadable, or ambiguous exact form must stop before dispatch
+and return one `SeedProposal`; base/unsuffixed syntax is never a fallback. Preserve a provider prefix in the
+marked form — for example, the syntax is `muse/muse-spark-1.2[1m]`, but it is not currently
+certified or admitted and therefore must stop before dispatch. Bare Claude tier aliases are unsafe in the current path
+because settings expand them to provider-qualified IDs that ccodex rejects. This calibration does
+not change settings, trust, or configuration.
 
 | Consequence lane | Eligible primary exact IDs | Selection condition | Requested effort | Complement | Required gate or control |
 |---|---|---|---|---|---|
@@ -130,10 +136,13 @@ not prove an upstream 1M context window, and does not increase intelligence.
 
 Base-model readback also does not prove compaction or context handling occurred. Verify
 that behavior through client telemetry and a representative task that actually reaches the
-compaction boundary. Use `[1m]` only for transcript-, corpus-, or repository-heavy GPT
-assignments; otherwise prefer bounded disk-backed artifacts. Exact Claude `[1m]` forms
-were not separately certified, so keep Claude work to compact packets and immutable deltas
-until those request forms pass.
+compaction boundary. Outside OCX Ultracode Workflow mode, use `[1m]` only for
+transcript-, corpus-, or repository-heavy GPT assignments and otherwise prefer bounded
+disk-backed artifacts. In OCX Ultracode Workflow mode, the marker is mandatory on **every**
+explicit `agent()` model request instead: an uncertified Claude or Muse `[1m]` tuple stops before
+dispatch rather than reverting to an unsuffixed compact packet. At this calibration date, the
+listed policy certifies `[1m]` tuples only for the GPT primary IDs. Exact Claude `[1m]` forms
+were not separately certified and remain unadmitted until those request forms pass.
 
 ## Context windows
 
@@ -208,6 +217,16 @@ The gateway can. Therefore:
 - An over-window request can surface as an opaque upstream refusal rather than a recoverable
   one, because a gateway that rewrites the upstream error text defeats wording-matched
   automatic compact-and-retry. Manual compaction is then the only recovery.
+- One over-window case is **not** upstream at all and must not be recorded as one. A 413 whose
+  error type is `input_admission_refused` (new in `2.28.0`; a live `2.11.1` gateway never emits
+  it) is opencodex's own input-admission preflight — an inbound token estimate above the route's
+  ceiling × 2.5, refused locally before any provider request — so the attempt reaches no
+  upstream: its attribution record exists but correlates to no provider serve. Other 413s exist,
+  local (buffer and body-size limits) and upstream (Anthropic's own `request_too_large` on the
+  passthrough route), so match the error type, never the bare status. `rightsize.py:
+  identity_evidence` names the preflight class distinctly from a generic `transport-status`, and
+  it is still fail-closed: no receipt, no admitted result. The remedy for the preflight class is
+  a smaller packet or a larger-window route, never a retry against the same route and prompt.
 - A window at or below the client's documented minimum floor cannot be matched by the floor
   variable at all. Keep such routes to bounded packets.
 
@@ -234,6 +253,16 @@ for both the 5.6 family and `gpt-5.5`, and because the client applies `min(belie
 env)`, a smaller model such as `gpt-5.3-codex-spark` stays accounted at its own 100000 rather
 than being pulled up to the floor.
 
+**The default has moved away from the floor, so the floor must be set explicitly.** opencodex
+`2.28.0` raises `AUTO_COMPACT_WINDOW_DEFAULT` to **829800** (it was 350000 through `2.11.1`). An
+unset compact window therefore now sits far behind every window in the selected set — the exact
+truncation-instead-of-compaction failure the 272000 choice exists to avoid — and it also drops the
+injected-slot extended-context mark from any sub-1M route, because marking a window below the
+compact window is what the predicate refuses. Read on this host 2026-08-20 with a read-only
+`ocx config show --json`: `claudeCode.autoCompactWindow` **is** explicitly `272000`, so the
+adopted floor is applied here rather than merely documented, and `autoContext` is absent
+(default-on). Treat an absent explicit value on any other host as 829800, not as 272000.
+
 **This floor under-uses `gpt-5.4` and the muse models by design.** Both carry roughly 1M, so a
 272000 floor leaves most of their window unreachable. That is the accepted cost of one process-
 wide value serving a mixed set, not an oversight. The pressure valve is the deliberate
@@ -245,12 +274,14 @@ The proactive-compaction percentage is **85** as an opinionated default (amended
 was deliberately left unset pending measurement). It is one-directional — it can only compact
 earlier, and a value above the (undocumented) default is silently ignored — so 85 is safe before
 measurement: if 85 > default it is a no-op, if 85 < default it compacts at
-~0.85×272000≈231200 (`assets/claude/session-inheritance.sh` and both `scripts/*-claude.sh` export
+~0.85×272000≈231200 (`assets/claude/session-inheritance.sh`, which `scripts/muse-claude.sh`
+sources, and `scripts/opencodex-claude.sh` directly, export
 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` only when the operator has not already set it). An installer
 overrides it per environment with `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>` before
 `ccodex launch` — that value wins, because each launcher sets 85 only when the variable is unset.
 (`ccodex` sets it directly: ADR-0014 removed the environment scrub it used to be
-capture-then-restored across. `scripts/muse-claude.sh` still scrubs and restores.) The measurement
+capture-then-restored across. `scripts/muse-claude.sh` still scrubs and restores, through the
+shared helper rather than a private copy since 2026-08-18.) The measurement
 procedure that would settle the true default remains recorded in the research memo cited below;
 until run, 85 is an opinionated safety margin rather than a settled measurement, and must not
 be read as a verified optimum.
@@ -290,9 +321,13 @@ rounded figure is both wrong and changes whether the extended-context marking pr
 And because the pool is shared, recording the window without also setting the output ceiling
 reintroduces the starvation hazard above.
 
-This is a documented step, not an applied one: no such map is configured, so a reader must treat
-it as a deliberate action requiring the operator's own authorization rather than as current
-state.
+This was recorded as a documented step rather than an applied one, and on this host that has
+changed: read 2026-08-20 with a read-only `ocx config show --json`, the `muse` provider block
+carries exactly this map, all three entries at 1048576. Two things follow. Applying it anywhere
+else is still a deliberate mutation requiring the operator's own authorization — one host's
+configuration is not a default. And the second condition above is live rather than hypothetical
+here: the map is set, so the output ceiling has to be set alongside it or the shared-pool
+starvation hazard is a present risk, not a future one.
 
 ### Requested context form is a request, never proof of the served window
 
@@ -393,6 +428,20 @@ qualification canary (`docs/research/2026-08-07-opencodex-qualification-canary.m
 C1 and C2) against one live gateway deployment, and each replaces a rule that looked safe and
 was not.
 
+**Version attribution, because the pin moved from `2.11.1` to `2.28.0`.** Both rules were measured
+against a live `2.11.1` gateway on 2026-08-07. A 2026-08-19 diff of the published `2.28.0` tarball
+against `2.11.1` re-verified the machine surface they read, so the FIELDS and the alarm are current:
+`ocx observe logs --jsonl` still emits the same per-request fields (`requestId`, `requestedModel`,
+`resolvedModel`, `provider`, `status`, `routeDecision.selected`), `routeKind` still carries the same
+union including `default-provider`, the served `GET /v1/models` catalog keeps its shape, and the
+exit codes the wrapper branches on are unchanged. What the diff could NOT verify is any behavior
+that requires a live gateway to observe — the response body's alias echo and model relabel, the
+dated-snapshot suppression, and effective-context behavior — because the live gateway on this host
+was still serving `2.11.1` when the diff was read; the restart that would move it is an explicit
+operator step, not part of a pin bump. Those remain `2.11.1` observations, and the `2.28.0`
+qualification canary is what re-measures them. Do not restate one as current merely because the
+pin advanced.
+
 1. **Catalog membership, not a provider-prefix convention.** The canary requested
    `anthropic/claude-opus-5` and bare `claude-opus-5` and got *identical* behavior: neither was
    refused by the router. Both were classified `routeKind: "default-provider"` and forwarded
@@ -445,7 +494,8 @@ G1–G7) — and the decision record `docs/adr/0007-muse-spark-direct-route.md` 
 predates the two-route decision; its title and Decision are authoritative).
 
 **Why the gateway route is primary.** It has a per-request attribution channel that is observed
-**independently of the request string**, and its independence is *proved* rather than assumed:
+**independently of the request string**, and its independence is *proved* rather than assumed
+(the body-echo divergence below is a `2.11.1` observation — see the version attribution above):
 for `muse/muse-spark-1.2` the response body echoes `muse/muse-spark-1.2` while the log records
 `resolvedModel: muse-spark-1.2`. Because a second channel disagrees with the body, the log is
 demonstrably not a replay of the request — the same alias-echo divergence the canary found. The
@@ -488,7 +538,16 @@ sources: `ocx provider list` reads the config file, while the running gateway's 
 `GET /v1/models` reads the process catalog. `scripts/opencodex-claude.sh status` performs that
 comparison and reports **NOT-LIVE** for any configured-but-unserved provider; `configure` prints
 the required sequence after a successful mutation. Confirm liveness before dispatching —
-`provider add` succeeding is not evidence of it. Related caveats: `ocx provider test` reads
+`provider add` succeeding is not evidence of it. By opencodex `2.28.0` (absent in `2.11.1`) the sync half can be
+**catalog-only**: with the Codex integration off, or an external `model_provider` owning
+`config.toml`, it reports a `CodexSyncResult` status of `catalog-only` and leaves `config.toml`,
+the journal, and history untouched (the catalog and models-cache files under `~/.codex` may
+still refresh). That changes the blast radius of the sync, not G1 — the restart is still required, the
+window still fails open, and a sync that WOULD rewrite `~/.codex` still needs its own explicit
+approval. Note too that the wrapper admits a not-yet-configured provider by NAME against the
+registry roster it pins, so a name it has never heard of is refused rather than admitted by
+absence; `2.28.0` added `chutes`, `featherless`, `nous`, `novita`, and `xiaomi-mimo` to that
+roster. Related caveats: `ocx provider test` reads
 liveness rather than configuration (a failure means "not live", not "not configured"), and
 `provider add` performs **no adapter validation**, so a mistyped adapter is stored silently and
 must be verified against a live request (**G7**).
@@ -697,6 +756,78 @@ above — it can never manufacture eligibility for a `catalog-only` route. **A b
 never fills a scale-setter slot**: only a locally observed, role-qualified route may occupy
 one, per the Frontier-tier doctrine in `SKILL.md`.
 
+### Bounded local evaluator (2026-08-12 amendment)
+
+`/sdlc-rightsize` now delegates deterministic discovery, normalization, measurement, and rendering
+to `scripts/rightsize.py`. This is a measurement surface, not a worker launcher. It accepts two
+current route kinds:
+
+- `gateway-routed-provider`: an exact live OCX catalog ID with provider-owned auth and billing;
+- `gateway-claude-subscription-passthrough`: an exact non-alias Claude ID carried through the same
+  loopback gateway using the operator's existing `claude.ai` login.
+
+The older `gateway | native-bedrock` `provider_plane` abstraction is retired from the generated
+map. It incorrectly merged auth, billing, discovery source, effort vocabulary, and identity
+strength. Every route now records transport, route kind, provider, auth basis, billing basis,
+exact model ID, requested effort, and requested context form. A configured provider is not a live
+provider; a registry provider is neither. Claude passthrough is deliberately absent from the OCX
+provider catalog and uses the checked-in exact-ID set plus `anthropic-native` attribution. Its
+requested effort may be admitted by a checked-in exact tuple, but no route-specific effort
+vocabulary is called observed unless the transport reports one.
+
+A live evaluation has two phases. `plan` canonicalizes `rightsize-run-spec/v1` and emits an
+authorization digest over target identity, raw catalog, selected routes, task pack, benchmark
+snapshot, attempts, budgets, egress class, output, and stop conditions. Only a separate explicit
+approval permits `evaluate` with that exact digest. A changed input invalidates approval. The
+evaluator never changes provider/gateway configuration, trust, global settings, queues, or the
+real target and never dispatches an agent role.
+
+The bundled `harness-smoke-v1` pack is a pilot and cannot promote. A qualification pack must be
+explicitly target-representative, bind immutable or hidden expected results, provide at least five
+distinct held-out tasks per selected class, and run at least three attempts per task. Promotion
+requires all of:
+
+- accepted rate at least `0.90`;
+- two-sided 95% Wilson lower bound at least `0.70`;
+- zero transport or identity failures;
+- zero failures on tasks marked critical;
+- the normal gate/independent-control predicate for the class.
+
+Every `authority_or_frontier` task is critical. These are minimum admission observations, not a
+universal sample-size sufficiency claim; high-variance work should require more tasks. A newly
+role-qualified route is still production-blocked until `runtime-assignment-receipt-v1.json`
+admits the exact model/effort/context tuple. Evaluation never rewrites that policy.
+
+For each task class, context and semantic controls are hard filters. A measured Pareto front
+compares compatible local pilot or qualification evidence; a separately named dispatch front then
+hard-filters for task-class `role-qualified` evidence and checked-in runtime admission. A measured
+primary may remain explicitly non-dispatchable. Among survivors, Pareto comparison maximizes the
+local success lower bound and minimizes route/identity failure plus the selected cost, token/quota,
+or wall-time measure. Missing data makes candidates incomparable on that dimension; it is never
+zero. Preserve mean and median separately, and compute observed per-accepted economics only from
+compatible local attempts:
+
+```text
+sum(observed attempt cost|tokens|wall time) / accepted successes
+```
+
+The value is unavailable when accepted successes are zero. Subscription marginal cost is `null`,
+not `$0`; API-equivalent cost, quota consumption, and possible usage credits are separate facts.
+Published benchmark data in `model-benchmark-evidence-2026-08-12.json` remains `mined` and may
+order which candidate to measure first. It never enters local metrics or promotes a rung.
+
+Context admission uses expected peak input plus task output reserve and a 10% safety margin. Select
+the smallest certified exact form that fits. Keep `requested_model_id` and
+`requested_context_form` separate even when Markdown renders `[1m]` as a suffix. A provider's
+native million-token base form and Muse's 1,048,576-token shared pool remain `base`; a `[1m]`
+request requires an exact certified tuple and never proves served capacity or compaction.
+
+Regenerate the v2 trio when target identity, route catalog, effort/context metadata, task pack,
+benchmark snapshot, price provenance, evaluator/policy revision, or local measurements change.
+Failed evaluation does not replace a prior map. A complete valid trio may regenerate; partial,
+v1, stale-digest, or user-edited output requires `--regenerate --force`, which still cannot
+bypass failed route evidence.
+
 ## Promotion ladder for a topology or role-substitution change (A0–A6)
 
 Before promoting a change to how models are assigned across roles — adding a new pair
@@ -748,17 +879,22 @@ fan-in; humans authorize outward actions.
 
 | Phase | Eligible primary exact IDs | Selection condition | Requested effort and context | Complement | Gate or control |
 |---|---|---|---|---|---|
-| Frame | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory frame; choose Fable only as the certified bounded adversarial assumptions packet. | Sol `high`; `xhigh` at trust or authority boundaries; `[1m]` only for transcript or repository-heavy frames; Fable `max` bounded packet | The non-selected member re-derives or attacks multiplier assumptions. | Re-derive; conductor adjudicates the recommendation. |
-| Discover | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for dense mapping; choose Opus when an immutable semantic candidate needs independent review. | Terra `xhigh`; `[1m]` for repository-wide readers; Opus `high`, `xhigh` | The non-selected member checks citations and omissions. | Partitioned scope and evidence inventory. |
-| Research | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for synthesis; choose Opus for a certified semantic review of the evidence packet. | Terra `xhigh`, `max`; `[1m]` only for long corpora; Opus `high`, `xhigh` | Luna/Sonnet can extract; Sol analyzes load-bearing unknowns. | Conductor adjudicates unknown disposition. |
-| Plan | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory plan; choose Fable only to attack certified bounded multiplier assumptions. | Sol `xhigh`; `[1m]` when repository-wide evidence is consumed; Fable `max` bounded packet | The non-selected member returns the plan or counterexample artifact. | Advisory plan; conductor alone mutates Seeds. |
-| Act, contained | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to implement interacting constraints; choose Opus to review immutable candidate decisions. | Terra `xhigh`; `max` for interacting constraints; Opus `high`, `xhigh` | The non-selected member produces candidate or review. | Unsuffixed unless artifact-heavy. |
-| Act, deterministic-gated | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the member with verified transport and independent evidence when the deterministic gate remains complete. | `high`, `xhigh` | The non-selected member checks stable evidence. | Unsuffixed by default; same deterministic gate. |
-| Review, semantic | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Opus for semantic review; choose Terra to reproduce and classify an immutable candidate. | Opus `high`, `xhigh`; Terra `xhigh`, `max`; Claude `[1m]` only after exact route certification | The non-selected member supplies review or reproduction. | Immutable candidate and acceptance criteria. |
+| Frame | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory frame; choose Fable only as the certified bounded adversarial assumptions packet. | Sol `high`; `xhigh` at trust or authority boundaries; Fable `max` bounded packet | The non-selected member re-derives or attacks multiplier assumptions. | Re-derive; conductor adjudicates the recommendation. |
+| Discover | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for dense mapping; choose Opus when an immutable semantic candidate needs independent review. | Terra `xhigh`; Opus `high`, `xhigh` | The non-selected member checks citations and omissions. | Partitioned scope and evidence inventory. |
+| Research | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra for synthesis; choose Opus for a certified semantic review of the evidence packet. | Terra `xhigh`, `max`; Opus `high`, `xhigh` | Luna/Sonnet can extract; Sol analyzes load-bearing unknowns. | Conductor adjudicates unknown disposition. |
+| Plan | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for the advisory plan; choose Fable only to attack certified bounded multiplier assumptions. | Sol `xhigh`; Fable `max` bounded packet | The non-selected member returns the plan or counterexample artifact. | Advisory plan; conductor alone mutates Seeds. |
+| Act, contained | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to implement interacting constraints; choose Opus to review immutable candidate decisions. | Terra `xhigh`; `max` for interacting constraints; Opus `high`, `xhigh` | The non-selected member produces candidate or review. | Exact `[1m]` is mandatory only in OCX Ultracode Workflow mode. |
+| Act, deterministic-gated | `gpt-5.6-luna` or `claude-sonnet-5` | Choose the member with verified transport and independent evidence when the deterministic gate remains complete. | `high`, `xhigh` | The non-selected member checks stable evidence. | Exact `[1m]` is mandatory only in OCX Ultracode Workflow mode; same deterministic gate. |
+| Review, semantic | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Opus for semantic review; choose Terra to reproduce and classify an immutable candidate. | Opus `high`, `xhigh`; Terra `xhigh`, `max` | The non-selected member supplies review or reproduction. | Immutable candidate and acceptance criteria. |
 | Review, trust or authority | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for authority analysis; choose Fable only to search a certified bounded counterexample packet. | Sol `xhigh`; Fable `max` bounded packet | The non-selected member supplies authority analysis or counterexamples. | Advisory analysis; conductor adjudicates. |
 | Reconcile | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to reconcile semantic evidence; choose Opus to review the immutable reconciliation candidate. | Terra `xhigh`; Opus `high`, `xhigh` | Sonnet validates evidence links. | Conductor alone records Seeds mutations. |
 | Integrate | `gpt-5.6-terra` or `claude-opus-4-8` | Choose Terra to integrate; choose Opus to review fan-in semantics after the integration head is immutable. | Terra `max`; Opus `high`, `xhigh` | Luna re-runs gates; the non-selected judgment member reviews or integrates. | Authorized integrator only; re-gate on integration head. |
 | Ship recommendation | `gpt-5.6-sol` or `claude-fable-5` | Choose Sol for promotion analysis; choose Fable only as a certified bounded adversarial receipt packet. | Sol `xhigh`; Fable `xhigh`, `max` bounded packet | Luna/Sonnet validate receipts. | Human separately authorizes outward action. |
+
+The context column describes non-Ultracode route selection. For an OCX Ultracode Workflow,
+every explicit `agent()` `model` argument instead carries the exact `[1m]` form and dispatch
+stops if that marked tuple is not certified, admitted, and readable; no phase row permits an
+unsuffixed fallback.
 
 ## Approved roadmap family lanes
 

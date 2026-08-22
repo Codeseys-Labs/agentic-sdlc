@@ -3,11 +3,58 @@
 
 Provenance: this pattern is ported from a TypeScript `node:test` suite in a sibling
 project's dynamic-workflow engine (a fail-closed worktree isolation test file for its
-agent-dispatch layer). The target repository's test suite is Python `unittest`, and
-nothing here is executable — it is a specification a future implementer turns into real
-Python tests once this repo has (or adopts) worktree-isolated agent dispatch. Treat each
-entry below as a test case shape, not as authorization that the described behavior already
-exists here.
+agent-dispatch layer). The target repository's test suite is Python `unittest`.
+
+This file stays a test-design contract rather than a test runner, but it is no longer wholly
+unimplemented here, and the split is load-bearing: reading it as "all specification" and
+reading it as "all covered" are both wrong.
+
+**The git-substrate half is executable and green.** `tests/test_worktree_failclosed.py`
+(7 cases) plants git-level preconditions against a throwaway fixture repository and issues
+the `commands/sdlc-wave.md` recipe in the same form, defaulting the base to HEAD —
+`git worktree add` into `<repo>/.worktrees/<seed-id>-<slug>` with `-b work/<seed-id>-<slug>` —
+then asserts the substrate refuses and that the fixture's worktree and branch lists come back
+byte-identical to their pre-attempt state.
+
+**The agent-dispatch half has no implementation here.** Every entry that needs a
+caller-controlled hook, a cancellation token, a deadline, a typed error object, a lifecycle
+event stream, or a dispatch spy needs a worktree-isolated *dispatcher* to plant a violation
+against, and this bundle ships none — it delegates fan-out to the host's own subagent tool.
+That is why `skills/agentic-sdlc/SKILL.md`'s one-line summary of this file ("A future
+implementer's spec, not evidence that this repo already runs isolated dispatch") remains
+exactly true as written: it is scoped to isolated *dispatch*, and dispatch is precisely the
+uncovered half. The existing tests prove the substrate the runbook stands on is fail-closed
+and restorable; they prove nothing about whether a dispatcher refuses instead of silently
+running the agent in the shared checkout. That silent downgrade — the single failure mode
+"Why this pattern exists" names below — has no executable coverage in this repository.
+
+Coverage entry by entry, as of this pass. Re-derive it rather than trusting it: running the
+suite verbosely prints each test's own first docstring line.
+
+| This file's entry | Executable here? | Where, or why not |
+| --- | --- | --- |
+| General shape 1 — throwaway fixture, never the enclosing checkout | yes | `setUp` builds a `tempfile.TemporaryDirectory` fixture repo, and the suite's `git()` helper strips every `GIT_*` variable so the checkout running the tests cannot leak in |
+| General shape 2 — plant the exact precondition | partly | occupied branch, occupied target path, stale registration, and a dirty index/worktree are planted; non-git directory, throwing hook, abort signal, and timeout are not |
+| General shape 3 — refusal carries a stable typed error identity | no | the tests assert git's exit status and, in one case, a specific git message (`already registered`); there is no typed error code to assert here because there is no dispatcher to own one |
+| General shape 4 — the agent never ran, and never saw the shared checkout path | no | needs a dispatch spy; no dispatcher, no spy |
+| General shape 5 — cleanup left no orphan | yes | `test_a` (byte-identical worktree and branch lists after the refusal), `test_b` (pins the *fail-open* case where git strands the isolation branch, then proves the runbook's documented recovery restores that state), `test_e` (prune before the path is reusable), `test_f` (the two cleanup refusals) |
+| General shape 6 — tear the fixture down even when assertions fail | yes | `addCleanup(self.tmp.cleanup)` |
+| Failure mode 1 — occupied isolation branch | partly | `test_a` executes it at the git level; the non-recoverable flag, the refused agent/label identity, the zero-dispatch assertions, and the lifecycle-pair assertions are not executed |
+| Failure mode 2 — non-git working directory | no | not planted anywhere in the suite |
+| Failure mode 3 — throwing observer on the acquisition path | no | no acquisition path here accepts a caller-supplied hook |
+| Failure mode 4 — mid-flight abort | no | nothing here honours a cancellation token |
+| Failure mode 5 — timeout | no | there is no per-call deadline to expire |
+| Redaction sub-pattern | no | needs the error-message, structured-details, and log-sink surfaces a dispatcher would expose |
+| Pair-completeness sub-pattern | no | no start/end lifecycle events are emitted here to pair |
+| Control — satisfiable isolation still runs, into the documented substrate | partly | `test_c` proves the add succeeds into `<repo>/.worktrees/<id>` carrying the branch point's content with a clean status and none of the caller's dirt, and `test_d` proves that path stays invisible to the workspace with an unignored control showing the gitlink the ignore rule prevents; neither proves an agent was dispatched there, and teardown-when-the-agent-finishes is not asserted — only the explicit removal paths in `test_e` and `test_f` are |
+| Control — no isolation requested, nothing changes | no | there is no isolation opt-in here to omit |
+| Notes — `tempfile` plus `subprocess.run` fixture with paired cleanup | yes | `init_fixture` plus `addCleanup` |
+| Notes — slug helper kept in sync with the production derivation | no | the tests use literal branch names; nothing derives a slug here yet, so the drift hazard the note describes has not arrived |
+| Notes — recording stub with a `calls` list | no | there is nothing to record |
+| Notes — cooperative-cancellation analog | no | see failure mode 4 |
+
+Treat every `no`, and every unexecuted assertion inside a `partly`, as a test case shape —
+not as authorization that the described behavior already exists here.
 
 ## Why this pattern exists
 

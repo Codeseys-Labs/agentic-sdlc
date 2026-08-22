@@ -23,7 +23,27 @@ import install_operator_tools as operator_tools
 class ManageClaudeStatuslineTests(unittest.TestCase):
     def setup_environment(self, root: Path) -> tuple[object, Path, Path]:
         home = root / "home"; bin_dir = home / ".local" / "bin"; state = root / "state"
-        config = operator_tools.Config(ROOT, home, bin_dir, state, require_path=False)
+        # Stub ocx/jq/uv directly rather than resolving them through mise (the pattern
+        # tests/test_operator_tools.py already uses): this test module exercises the
+        # statusline lifecycle, not mise's own tool resolution, and a worktree whose
+        # mise.toml has not itself been explicitly trusted must not silently gate every
+        # test in this file on that unrelated precondition.
+        runtime = root / "runtime"; runtime.mkdir(parents=True, exist_ok=True)
+        for name in ("ocx", "jq", "uv"):
+            path = runtime / name
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
+        config = operator_tools.Config(
+            ROOT,
+            home,
+            bin_dir,
+            state,
+            require_path=False,
+            ocx_path=runtime / "ocx",
+            jq_path=runtime / "jq",
+            uv_path=runtime / "uv",
+            sdlc_python_path=Path(sys.executable),
+        )
         self.assertEqual(operator_tools.install(config)[0], 0)
         settings = home / ".claude" / "settings.json"
         return config, settings, state
@@ -115,7 +135,10 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
             finally:
                 manage.atomic_json = original_atomic_json
 
-            self.assertEqual(manage.status(config, settings, state)[0], 1)
+            # Decision 9: a completed status read that OBSERVES a pending-recovery state is
+            # still an answered query, not an internal failure -- 0, with the state named in
+            # the message (agentic-sdlc-d0a4, SP-6).
+            self.assertEqual(manage.status(config, settings, state)[0], 0)
             self.assertIn("recovery pending", manage.status(config, settings, state)[1][0])
             with self.assertRaisesRegex(manage.StatuslineError, "already exists"):
                 manage.activate(config, settings, state, False)
@@ -141,8 +164,12 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
             finally:
                 manage.remove_durable = original_remove
 
-            self.assertEqual(manage.status(config, settings, state)[0], 1)
-            self.assertEqual(manage.deactivate(config, settings, state, False)[0], 1)
+            # Same Decision 9 rule as above, applied to the other two of the five states this
+            # module distinguishes: "recovery pending" (first status call, receipt still
+            # pending) and "not managed" (deactivate(), once the receipt has been recovered
+            # away, has nothing further to do -- that IS the requested end state).
+            self.assertEqual(manage.status(config, settings, state)[0], 0)
+            self.assertEqual(manage.deactivate(config, settings, state, False)[0], 0)
             self.assertFalse(manage.receipt_path(state).exists())
             self.assertEqual(manage.status(config, settings, state)[1], [f"statusline inactive: {settings}"])
 
@@ -189,9 +216,112 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
             manage.atomic_json(manage.receipt_path(state), pending, 0o600)
 
             code, messages = manage.status(config, settings, state)
-            self.assertEqual(code, 1)
+            self.assertEqual(code, 0)
             self.assertIn("recovery pending", messages[0])
             self.assertEqual(json.loads(manage.receipt_path(state).read_text())["phase"], "pending")
+
+    def test_status_inactive_is_zero_not_one(self) -> None:
+        # decision9-conformance-survey SP-6 / agentic-sdlc-d0a4: a host that has simply never
+        # activated the statusline is an ordinary answered query, not a failure.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config, settings, state = self.setup_environment(root)
+
+            code, messages = manage.status(config, settings, state)
+            self.assertEqual(code, 0)
+            self.assertNotEqual(code, 1)
+            self.assertEqual(messages, [f"statusline inactive: {settings}"])
+
+    def test_status_unmanaged_is_zero_not_one(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config, settings, state = self.setup_environment(root)
+            settings.parent.mkdir(parents=True)
+            settings.write_text(json.dumps({"statusLine": {"command": "/foreign"}}))
+
+            code, messages = manage.status(config, settings, state)
+            self.assertEqual(code, 0)
+            self.assertNotEqual(code, 1)
+            self.assertEqual(messages, [f"unmanaged statusline: {settings}"])
+
+    def test_status_conflict_is_zero_not_one(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config, settings, state = self.setup_environment(root)
+            manage.activate(config, settings, state, False)
+            value = json.loads(settings.read_text())
+            value["statusLine"]["command"] = "/operator-edit"
+            settings.write_text(json.dumps(value))
+
+            code, messages = manage.status(config, settings, state)
+            self.assertEqual(code, 0)
+            self.assertNotEqual(code, 1)
+            self.assertEqual(messages, [f"statusline conflict: {settings}"])
+
+    def test_status_active_positive_control_stays_zero(self) -> None:
+        # Positive control shared by the four tests above: the pre-existing "active" state was
+        # already 0 and must stay 0 -- this fix distinguishes states in the message, not by
+        # making every exit code identical regardless of what happened.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config, settings, state = self.setup_environment(root)
+            manage.activate(config, settings, state, False)
+
+            code, messages = manage.status(config, settings, state)
+            self.assertEqual(code, 0)
+            self.assertEqual(messages, [f"statusline active: {settings} -> {manage.managed_values(operator_tools.exact_owned_statusline(config))['command']}"])
+
+    def test_real_status_failure_still_exits_nonzero(self) -> None:
+        # Negative control for the whole fix: a GENUINE read failure (unreadable settings) must
+        # not be swept into the same 0 the five observed states now share.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config, settings, state = self.setup_environment(root)
+            settings.parent.mkdir(parents=True)
+            settings.write_text("not json")
+
+            with self.assertRaisesRegex(manage.StatuslineError, "cannot read Claude settings"):
+                manage.status(config, settings, state)
+
+    def test_main_cli_reports_inactive_status_at_exit_zero(self) -> None:
+        # End-to-end through main(), the entrypoint an operator actually runs.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config, settings, state = self.setup_environment(root)
+            code = manage.main(
+                [
+                    "status",
+                    "--home",
+                    str(config.home),
+                    "--bin-dir",
+                    str(config.bin_dir),
+                    "--state-root",
+                    str(state),
+                ]
+            )
+            self.assertEqual(code, 0)
+
+    def test_main_cli_reports_a_genuine_read_failure_at_exit_refused(self) -> None:
+        # End-to-end through main(): a StatuslineError-raising vector (corrupt settings.json,
+        # the same vector test_real_status_failure_still_exits_nonzero raises at the function
+        # level) must reach main()'s own `except (StatuslineError, ...)` handler and come out
+        # as EXIT_REFUSED (2) -- not EXIT_OK. This pins the whole nonzero path end-to-end
+        # through the real CLI, rather than only at the function `manage.status()` returns
+        # from, so a `main()` that swallowed the exception and returned 0 for it would be
+        # caught here even though `test_real_status_failure_still_exits_nonzero` only proves
+        # the exception is raised, not what the CLI entrypoint does with it.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); config, settings, state = self.setup_environment(root)
+            settings.parent.mkdir(parents=True, exist_ok=True)
+            settings.write_text("not json")
+
+            code = manage.main(
+                [
+                    "status",
+                    "--home",
+                    str(config.home),
+                    "--bin-dir",
+                    str(config.bin_dir),
+                    "--state-root",
+                    str(state),
+                ]
+            )
+            self.assertEqual(code, manage.EXIT_REFUSED)
+            self.assertNotEqual(code, manage.EXIT_OK)
 
 
 if __name__ == "__main__":

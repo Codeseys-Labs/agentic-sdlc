@@ -18,8 +18,8 @@ ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "check-agentic-sdlc-prereqs.sh"
 BASH = None if os.name == "nt" else shutil.which("bash")
 EXACT_RUNTIMES = [
-    "node@22.22.3",
-    "bun@1.3.10",
+    "node@22.23.2",
+    "bun@1.4.0",
     "npm:@os-eco/seeds-cli@0.5.15",
 ]
 SHIPPED_TEXT_SUFFIXES = frozenset({".json", ".md", ".mjs", ".ps1", ".py", ".sh", ".toml", ".yaml", ".yml"})
@@ -575,7 +575,7 @@ class ExactRuntimeWrapperTests(unittest.TestCase):
             self.bin / "mise",
             f"#!{sys.executable}\n"
             "import sys\n"
-            f"print({str(self.node_root)!r}) if sys.argv[1:] == ['--no-config', 'where', 'node@22.22.3'] else sys.exit(2)\n",
+            f"print({str(self.node_root)!r}) if sys.argv[1:] == ['--no-config', 'where', 'node@22.23.2'] else sys.exit(2)\n",
         )
         self._write_executable(self.bin / "git", "#!/bin/sh\nexit 0\n")
 
@@ -672,6 +672,66 @@ class ExactRuntimeWrapperTests(unittest.TestCase):
             self.calls_read(),
         )
 
+    def test_help_exits_zero_without_running_the_check(self) -> None:
+        # Positive control for test_unknown_argument_is_a_grammar_error: a query that IS
+        # recognized reaches 0, not 2, and never starts the exact-node front door.
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "--help"],
+            cwd=self.target,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+        self.assertNotIn("ok:", result.stdout)
+        self.assertNotIn("locked Seeds", result.stdout)
+        self.assertEqual(self.calls_read(), [])
+
+    def test_unknown_argument_is_a_grammar_error(self) -> None:
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "--zzz-not-a-flag"],
+            cwd=self.target,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("unknown argument", result.stderr)
+        self.assertEqual(self.calls_read(), [])
+
+    def test_completed_check_naming_a_missing_prerequisite_is_not_the_internal_failure_code(self) -> None:
+        # The negative half: a completed, read-only check that names a MISSING prerequisite
+        # must not collide with Decision 9's unexpected-internal-failure code (1).
+        result = subprocess.run(
+            [BASH, str(SCRIPT)],
+            cwd=self.target,
+            env=self.environment(AGENTIC_SDLC_LAUNCHER=str(self.root / "no-such-launcher.mjs")),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertNotEqual(result.returncode, 1)
+        self.assertIn("MISSING: installed flagship Seeds launcher", result.stderr)
+
+    def test_completed_check_with_nothing_missing_stays_zero(self) -> None:
+        # Positive control for the previous test: the same code path (missing == 0 branch)
+        # still answers 0 when nothing is actually missing, so the mapping distinguishes two
+        # real states rather than just banning the number 1.
+        result = subprocess.run(
+            [BASH, str(SCRIPT)],
+            cwd=self.target,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("locked Seeds 0.5.15 active receipt", result.stdout)
+
 
 @unittest.skip("replaced by receipt-based installed launcher fixtures")
 class PreflightCapabilityTests(unittest.TestCase):
@@ -683,7 +743,7 @@ class PreflightCapabilityTests(unittest.TestCase):
         self.bin_dir = self.temp / "ambient-bin"
         self.bin_dir.mkdir()
         self.exact_root = self.temp / "mise installs" / "npm-os-eco-seeds-cli" / "0.5.15"
-        self.exact_bun_root = self.temp / "mise installs" / "bun" / "1.3.10"
+        self.exact_bun_root = self.temp / "mise installs" / "bun" / "1.4.0"
         (self.exact_bun_root).mkdir(parents=True)
         (self.exact_root / "bin").mkdir(parents=True)
         self.target = self.temp / "target repo with spaces ;$&[]"
@@ -810,7 +870,7 @@ class PreflightCapabilityTests(unittest.TestCase):
                 if "where" in argv:
                     if mode == "windows-paths" and argv[-1].startswith("npm:"):
                         print(r"C:\\Mise\\Installs\\Seeds")
-                    elif argv[-1] == "bun@1.3.10":
+                    elif argv[-1] == "bun@1.4.0":
                         print({str(self.exact_bun_root)!r})
                     else:
                         print(root)
@@ -1378,7 +1438,7 @@ class SeedsDocumentationContractTests(unittest.TestCase):
                         "command /opt/seeds/bin/sd claim",
                         "exec ./tools/sd update",
                         "env MODE=test ./tools/sd close",
-                        "mise exec node@22.22.3 -- sd sync",
+                        "mise exec node@22.23.2 -- sd sync",
                         "& sd.exe create",
                         r"& 'C:\\Seeds\\sd.cmd' claim",
                         "Start-Process sd.exe -ArgumentList update",

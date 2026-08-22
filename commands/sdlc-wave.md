@@ -13,12 +13,22 @@ Run ONE implementation wave of the agentic-sdlc loop. Scope: $ARGUMENTS
    file ownership (cap 3-5). Broad architecture / CI / shared-contract changes get
    their own serial wave.
 3. Create one worktree per write-capable worker, in-workspace under the gitignored
-   `.worktrees/` substrate the loaded skill's `references/seeds-worktrees.md` owns:
+   `.worktrees/` substrate the loaded skill's `references/seeds-worktrees.md` owns. Before the
+   `add`, run the read-only custody preflight the loaded skill's `tools/worktree-custody-preflight.py`
+   owns — it now covers destination existence (the destination itself must be absent or an
+   empty directory), is free of a symlink/mount-crossing/special-node component, and is neither
+   an active nor a drifted git worktree registration, and stops (exit 2 or 3) before anything is
+   created:
+   `uv run --python 3.12.11 <installed-skill>/tools/worktree-custody-preflight.py --target <repo> --custody .worktrees/<seed-id>-<slug>`
+   Verify the branch is not already occupied before running the `add` below — branch occupancy
+   is a separate resource the preflight does not read:
+   `git -C <repo> show-ref --verify --quiet refs/heads/work/<seed-id>-<slug> && echo "refuse: branch occupied"`
+   Then:
    `git -C <repo> worktree add <repo>/.worktrees/<seed-id>-<slug> -b work/<seed-id>-<slug> <base>`
-   Verify the target path does not exist before running this: git creates the `-b` branch
-   before checking the path, so a refusal on an occupied path strands an orphan branch
-   (executable proof: `tests/test_worktree_failclosed.py`). If that happens, delete the
-   stranded branch (`git branch -d work/<seed-id>-<slug>`) before retrying. The full
+   Git still creates the `-b` branch before checking the destination path, so if the preflight's
+   own result and the on-disk state have diverged since it ran, a refusal there still strands an
+   orphan branch (executable proof: `tests/test_worktree_failclosed.py`). If that happens,
+   delete the stranded branch (`git branch -d work/<seed-id>-<slug>`) before retrying. The full
    create/gate/review/integrate/reconcile/clean-up lifecycle, with the refusal and recovery
    case for each step, lives in the loaded skill's `references/worktree-lifecycle.md`; follow
    it there rather than improvising the remaining steps.

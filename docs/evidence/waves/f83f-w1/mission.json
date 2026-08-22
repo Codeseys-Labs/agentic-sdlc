@@ -1,0 +1,45 @@
+{
+ "authority": {
+  "admitted_classes": [
+   "read-only-advisory",
+   "owned-worktree-write",
+   "authorized-fan-in"
+  ],
+  "ceiling": "authorized-fan-in"
+ },
+ "completion_contract": {
+  "success_criteria": [
+   "missing manifest exits 2, empty stdout, no Traceback on stderr",
+   "mise run check passes on the integrated snapshot"
+  ],
+  "terminal_criteria": [
+   "seed closed or reclassified with evidence"
+  ]
+ },
+ "constraints": [
+  "move the read inside the try whose except already claims OSError (docs/plans/decision9-conformance-survey.md SP-8)",
+  "mutation tests both directions"
+ ],
+ "digest": "7d34179bf6f8231de4d6ffa509f8e43dbc21a16da4d4300f672dc9fe7593a995",
+ "mission_id": "mission-f83f-sp8",
+ "objective": "close seed agentic-sdlc-f83f: instruction-generator.py exits 2 without a traceback for a supplied-but-missing manifest",
+ "revision": 1,
+ "schema": "agentic-sdlc/mission-contract@1",
+ "scope": {
+  "in_scope": [
+   "skills/agentic-sdlc/tools/instruction-generator.py",
+   "tests/test_instruction_generator.py"
+  ],
+  "non_goals": [
+   "the other decision9 child seeds"
+  ]
+ },
+ "stated_at": "2026-08-21T16:57:11Z",
+ "stop_conditions": [
+  "authority-expansion-required",
+  "hard-stop-drift",
+  "scope-change-required",
+  "unknown-or-partial-effect"
+ ],
+ "supersedes": null
+}

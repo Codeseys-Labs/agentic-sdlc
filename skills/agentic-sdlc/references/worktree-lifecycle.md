@@ -34,12 +34,43 @@ The conductor creates the worktree and hands it to exactly one write-capable wor
 writers in one tree is not a smaller version of this pattern; it is the failure this pattern
 exists to prevent.
 
+**Run the custody preflight before `worktree add`.** The prose preconditions below only ever
+checked existence and branch occupancy; they never checked that the destination is free of a
+symlink, a mount crossing, or a special node, and they never distinguished an active registration
+from a drifted one (a predecessor's `rm -rf` that left the entry registered). `tools/worktree-custody-preflight.py`
+is the executable form of exactly those seven checks (including destination existence itself —
+absent, or an existing but empty directory), extracted read-only from `activation-planner.py`'s
+own custody primitive:
+
 ```sh
 REPO=$(git -C <repo> rev-parse --show-toplevel)
-BR="work/<seed-id>-<slug>"
-WT="$REPO/.worktrees/<seed-id>-<slug>"
+CUSTODY=".worktrees/<seed-id>-<slug>"
+uv run --python 3.12.11 <installed-skill>/tools/worktree-custody-preflight.py \
+  --target "$REPO" --custody "$CUSTODY" || { echo "refuse: custody preflight named a check above"; exit 1; }
+```
 
-# Preconditions, both of them, before the add.
+It exits 0 when every check is met, 2 when `--target`/`--custody` themselves could not be asked
+about (a grammar error, or a supplied-but-missing `--target`), and 3 when at least one check
+names a clean refusal — always BEFORE the `worktree add` below, since this tool never runs one
+itself and changes nothing on disk. Its sealed result names which of `custody-spelling`,
+`custody-root`, `path-integrity`, `destination-vacancy`, `mount-containment`,
+`registration-occupied`, or `registration-drifted` refused, and any check it could not evaluate
+because an earlier one already refused is reported `unevaluated`, never folded into a false `met`.
+It does **not** replace the branch-occupancy precondition below — branch occupancy is the one
+remaining separate resource this preflight does not read, since a claimed custody DIRECTORY and a
+claimed BRANCH NAME are two different git objects that can each be free or occupied independently
+— and it does not replace Step 6's registered-but-vanished recovery for a **later** drift that
+happens after this preflight ran and before the `add` executes; it closes the gap that nothing
+executable checked custody safety at all.
+
+```sh
+BR="work/<seed-id>-<slug>"
+WT="$REPO/$CUSTODY"
+
+# Preconditions, both of them, before the add. The first now mirrors what the preflight above
+# already checked (`destination-vacancy`) — keep it as a same-process, no-git-subprocess guard
+# against a TOCTOU window between that preflight run and this exact `add`, not as the primary
+# check. The second is the one check the preflight never performs: a different resource.
 test -e "$WT" && { echo "refuse: target path occupied"; exit 1; }
 git -C "$REPO" show-ref --verify --quiet "refs/heads/$BR" \
   && { echo "refuse: branch occupied"; exit 1; }
@@ -276,6 +307,8 @@ a harness-side cleanup must not reach into `.worktrees/`.
 
 ## Pointers
 
+- `tools/worktree-custody-preflight.py` — the executable Step 1 preflight above: read-only,
+  seven named checks, Decision 9 exits 0/2/3, no `git worktree add` of its own.
 - `references/seeds-worktrees.md` — the canonical substrate statement, wave selection, the
   Seeds execution contract, config propagation into new worktrees, and salvage rules.
 - `references/worktree-integration.md` — the four fan-in hazards and squash-scope discipline

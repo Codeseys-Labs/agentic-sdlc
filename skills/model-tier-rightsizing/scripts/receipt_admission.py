@@ -3,10 +3,17 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Validate one RuntimeAssignment receipt for internal canonical consistency only."""
+"""Validate one RuntimeAssignment receipt for internal canonical consistency only.
+
+With no arguments, reads one JSON receipt document from stdin and prints one canonical
+verdict document to stdout. That stdin-document path is this tool's only action; it takes no
+positional or required arguments, so `--help` and an unrecognized argument are the only two
+ways to reach this module without providing a document.
+"""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -868,22 +875,49 @@ def receipt_errors(receipt: Any, policy: dict[str, Any]) -> list[str]:
     return errors
 
 
-def main() -> int:
+# EXITS, as one derivation point (product-spec Implementation Decision 9). The three values
+# below predate this front door and are unchanged by it: this fix only adds a 0-class `--help`
+# query and a 2-class unknown-argument refusal, both reached and returned by argparse itself
+# before stdin is ever read.
+#: The receipt parsed and every check passed; the canonical digest was printed.
+EXIT_OK = 0
+#: The receipt parsed but failed a named consistency check; existing behaviour, unchanged here.
+EXIT_VALIDATION_FAILED = 1
+#: The policy or receipt document could not even be parsed, or the command line was unusable
+#: (an unrecognized argument). Nothing beyond that document was written.
+EXIT_INPUT = 2
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="receipt_admission.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Grammar first: `--help` prints usage and exits 0 without touching stdin; an unrecognized
+    # argument prints usage on stderr and exits 2 (EXIT_INPUT) — both are argparse's own exit,
+    # reached before the line below ever runs. No arguments is the ordinary, documented case:
+    # parsing an empty argv succeeds and falls straight through to the stdin-document action.
+    _build_parser().parse_args(argv)
+
     try:
         policy = parse_no_duplicate_members(POLICY_PATH.read_text(encoding="utf-8"))
         receipt = parse_no_duplicate_members(sys.stdin.read())
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(canonical_json({"errors": [str(exc)], "status": "invalid"}))
-        return 2
+        return EXIT_INPUT
 
     errors = receipt_errors(receipt, policy)
     if errors:
         print(canonical_json({"errors": errors, "status": "invalid"}))
-        return 1
+        return EXIT_VALIDATION_FAILED
 
     digest = sha256_json(receipt)
     print(canonical_json({"digest_sha256": digest, "status": "validated"}))
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
