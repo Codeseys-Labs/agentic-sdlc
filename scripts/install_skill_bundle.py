@@ -1181,7 +1181,7 @@ def persist_state(config: Config, state: dict[str, Any], candidate: dict[str, An
     state.update(candidate)
 
 
-def finish_settlement(config: Config, result: Result) -> Result:
+def pay_deferred_settlement(config: Config) -> None:
     """Pay the ONE bounded birth-quantum wait a lifecycle command is allowed, then clear markers.
 
     This is the entire wait budget of a command, whatever its entry count: every recording site
@@ -1190,7 +1190,28 @@ def finish_settlement(config: Config, result: Result) -> Result:
     quantum rather than one per transaction.
 
     Order matters. The wait comes first, so the flip is only ever written after settlement is
-    proven. If it cannot be proven inside the cap the markers are LEFT durable and the command
+    proven. `wait_for_settlement` raising is what leaves the markers durable, and the caller turns
+    that into a named non-zero report.
+    """
+    if config.dry_run or not SETTLEMENT.deferred:
+        return
+    wait_for_settlement(SETTLEMENT.targets)
+    document = read_state_document(config.state_path)
+    cleared = (
+        None
+        if document is None
+        else SETTLEMENT.unmarked(load_document_state(document, config.state_path))
+    )
+    # Clearing before the write is what makes the write land unmarked.
+    SETTLEMENT.reset()
+    if cleared is not None:
+        write_state(config.state_path, cleared, False)
+
+
+def finish_settlement(config: Config, result: Result) -> Result:
+    """Settle what this command deferred, or report the refusal and exit non-zero.
+
+    If settlement cannot be proven inside the cap the markers are LEFT durable and the command
     reports it and exits non-zero: the entries are installed but non-discriminating, which is the
     same answer a degenerate clock has always produced -- status calls them conflicts and
     uninstall preserves them. Silence would be the one unacceptable outcome.
@@ -1199,28 +1220,43 @@ def finish_settlement(config: Config, result: Result) -> Result:
     # leaked ledger would let the next command in this process strip markers it never placed,
     # which is the one direction that fails open.
     try:
-        if config.dry_run or not SETTLEMENT.deferred:
-            return result
         named = ", ".join(sorted(SETTLEMENT.keys))
         try:
-            wait_for_settlement(SETTLEMENT.targets)
-            document = read_state_document(config.state_path)
-            cleared = (
-                None
-                if document is None
-                else SETTLEMENT.unmarked(load_document_state(document, config.state_path))
-            )
+            pay_deferred_settlement(config)
         except InstallerError as exc:
             return Result(
                 1,
                 result.messages
                 + (f"unsettled ownership records preserved for {named}: {exc}",),
             )
-        # Clearing before the write is what makes the write land unmarked.
-        SETTLEMENT.reset()
-        if cleared is not None:
-            write_state(config.state_path, cleared, False)
         return result
+    finally:
+        SETTLEMENT.reset()
+
+
+def settle_after_failure(config: Config) -> None:
+    """Pay the settlement a FAILING command still owes, best effort, before it re-raises.
+
+    Paying here rests on exactly the same ground as paying it on the success path: the witnesses
+    were minted by this command, the state lock is still held, and nothing outside this process is
+    supported in mutating a managed path meanwhile. So this widens no window at all -- it just
+    stops discarding a debt the command can still settle.
+
+    Leaving them unproven was the one shape that could never converge. Nothing else in the
+    lifecycle can clear a marker a dead command left behind, so an interrupted install's own
+    journal became permanently unrecoverable and its owned entries permanently unremovable on a
+    coarse-clock host, while the entries it created stayed on disk either way. The protection was
+    never bought.
+
+    Best effort by construction: the original failure is the one the operator has to see, so every
+    outcome here is swallowed and the markers simply stay durable when the debt cannot be paid.
+    `resolve_inherited_settlement` is the second line of defence, for the hard kill that never
+    reaches this path at all.
+    """
+    try:
+        pay_deferred_settlement(config)
+    except BaseException:
+        pass
     finally:
         SETTLEMENT.reset()
 
@@ -1233,12 +1269,164 @@ def one_settle_per_command(
     try:
         result = command(config)
     except BaseException:
-        # An interrupted command leaves its markers durable ON PURPOSE: the witnesses it wrote
-        # were never proven settled, so the next run has to fail closed on them. Only the
-        # in-process ledger is dropped, and dropping it is what makes the markers bite.
-        SETTLEMENT.reset()
+        settle_after_failure(config)
         raise
     return finish_settlement(config, result)
+
+
+def record_identity_tokens(value: Any) -> Iterator[str]:
+    """Every identity witness nested anywhere in one owned record or journal entry.
+
+    A `witness_settled` marker names a KEY, not a witness, so resolving it means proving
+    settlement for every object that key's record names: the destination, the configured root and
+    collection, and for a journal entry the private stage and backup containers plus both sides of
+    a rename. Walking the document keeps that faithful when a record grows a field, where a
+    hand-listed set would silently stop covering one.
+    """
+    if isinstance(value, str):
+        if identity_token_valid(value):
+            yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from record_identity_tokens(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from record_identity_tokens(item)
+
+
+def inherited_settlement_targets(
+    config: Config, state: dict[str, Any]
+) -> tuple[list[tuple[Path, tuple[int, int], Path]], set[str]]:
+    """Targets that re-prove settlement for markers a PREVIOUS process left durable.
+
+    Only the NEWEST witness under a key is enrolled. Settlement is the claim "this birth quantum
+    has closed", and a probe strictly later than the newest of a key's witnesses is strictly later
+    than all of them, so one target per device answers for the whole record.
+
+    The probe directory is a live one -- the destination's collection and the configured roots --
+    never the recorded object itself, because a marker has to be resolvable for a destination that
+    is absent, staged, or already replaced. Birth-timestamp granularity belongs to the filesystem
+    rather than to any one object, so a probe anywhere on the same device carries the proof;
+    `settlement_targets` re-points anything on another device to where it lives and skips the
+    Windows file-id witnesses that need no settling at all.
+
+    Only the TRANSACTION journal is in scope. An OWNED-ENTRY marker is left exactly where it is,
+    because the question it answers is the ownership-deletion one and that one must keep failing
+    closed: `entry_matches_record` and `record_authority_matches` answer False, so status calls the
+    entry a conflict and uninstall preserves it. `state_with_transaction` pops the entry record
+    when it arms a journal, so an interrupted transaction never has one to resolve anyway.
+
+    A key whose witnesses cannot be located on any live directory is left OUT, marker intact.
+    Proving nothing is the fail-closed answer.
+    """
+    targets: list[tuple[Path, tuple[int, int], Path]] = []
+    keys: set[str] = set()
+    for key, value in sorted((state.get("transactions") or {}).items()):
+        if not isinstance(value, dict) or witness_settlement_trusted(
+            value.get("witness_settled")
+        ):
+            continue
+        tokens = set(record_identity_tokens(value))
+        if not tokens:
+            continue
+        destination = value.get("destination")
+        candidates = [Path(key).parent]
+        if isinstance(destination, str):
+            candidates.append(Path(destination).parent)
+        candidates.extend((config.home, config.codex_home))
+        probe_dirs = [
+            directory
+            for directory in dict.fromkeys(candidates)
+            if directory.is_dir() and not directory.is_symlink()
+        ]
+        if not probe_dirs:
+            continue
+        try:
+            newest = max(
+                tokens,
+                key=lambda token: birth_witness_order(identity_generation(token)),
+            )
+            resolved = settlement_targets(
+                ((directory, newest) for directory in probe_dirs),
+                probe_dir=probe_dirs[0],
+            )
+        except InstallerError:
+            continue
+        targets.extend(resolved)
+        keys.add(key)
+    return targets, keys
+
+
+def without_settlement_markers(
+    document: dict[str, Any], keys: Iterable[str]
+) -> dict[str, Any]:
+    """A copy of one state document with the named journals' inherited markers stripped.
+
+    The journal's nested records go with it, because they are what `resolved_state` promotes into
+    the owned entry when recovery finishes: leaving the marker on them would resolve the
+    transaction into a durable record no later ownership decision could ever trust, which is the
+    dead end this whole path exists to remove.
+    """
+    cleared = copy.deepcopy(document)
+    for key in keys:
+        value = cleared.get("transactions", {}).get(key)
+        if not isinstance(value, dict):
+            continue
+        value.pop("witness_settled", None)
+        for nested in ("old_record", "new_record"):
+            inner = value.get(nested)
+            if isinstance(inner, dict):
+                inner.pop("witness_settled", None)
+    return cleared
+
+
+def resolve_inherited_settlement(
+    config: Config, state: dict[str, Any]
+) -> tuple[list[str], bool]:
+    """Prove the settlement a previous process could not, so an interrupted transaction converges.
+
+    This separates the two questions the settlement gate conflated. "Is this witness discriminating
+    enough to justify REMOVING or REPLACING something?" is correctly answered NO for an unsettled
+    witness, and `entry_matches_record`, `record_authority_matches` and `classify_recovery` all
+    still answer it that way -- nothing here relaxes one of them, and an owned-entry marker is left
+    untouched so status still reports a conflict and uninstall still preserves. But "may this
+    lifecycle finish or roll back the TRANSACTION it already started?" is a different question, and
+    refusing it forever is not fail-closed at all: it trades the documented idempotent-recovery
+    guarantee for a protection that was never bought, because the interrupted state, its private
+    stage and its backup all simply stay on disk.
+
+    Settlement is RE-PROVABLE, which is what makes converging safe. A probe taken now proves the
+    recorded witness's birth quantum closed before now, so every creation from here on is stamped
+    strictly later and can never collide with it. The only object that can still reproduce the
+    witness is one created INSIDE that original quantum -- within one filesystem tick of the dead
+    command's own create, while it still held this lock. Waiting longer does not widen that window,
+    because the window is bounded by the quantum and not by when the probe is taken; it is the
+    same interval the success path already accepts under "concurrent external mutation of managed
+    paths during a write command is unsupported", extended by at most one tick past the crash.
+
+    What is NOT re-provable stays refused. A host whose birth timestamps never advance exhausts
+    the cap, the markers stay durable, and every consumer keeps failing closed exactly as it does
+    today -- so the degenerate filesystem that seed 249d exists for is unchanged.
+
+    A read-only surface resolves nothing: a settle proves itself by CREATING an object, and status
+    and every `--dry-run` may not write. Their report of a conflict is honest, because a witness
+    the next write command has not yet proven is not yet proven.
+    """
+    if config.dry_run:
+        return [], False
+    targets, keys = inherited_settlement_targets(config, state)
+    if not targets:
+        return [], False
+    named = ", ".join(sorted(keys))
+    try:
+        wait_for_settlement(targets)
+    except InstallerError as exc:
+        return [f"unsettled ownership records preserved for {named}: {exc}"], True
+    cleared = without_settlement_markers(state, keys)
+    write_state(config.state_path, cleared, False)
+    state.clear()
+    state.update(cleared)
+    return [f"settled interrupted lifecycle state: {named}"], False
 
 
 @contextmanager
@@ -1934,6 +2122,7 @@ def _migrate_v1_state(config: Config) -> Result:
             return Result(0, ("state is already current",))
         normalized = load_state(config.state_path)
         validate_state(config, normalized)
+        resolve_inherited_settlement(config, normalized)
         recover_transactions(config, normalized, read_only=config.dry_run)
         rename_messages = apply_identity_renames(config, normalized)
         if current.get("version") == STATE_VERSION and not rename_messages:
@@ -3295,7 +3484,12 @@ def _install(config: Config) -> Result:
     if state.get("version") == 1:
         return inspect_v1_state(config, state)
     validate_state(config, state)
-    messages, partial = recover_transactions(config, state, read_only=config.dry_run)
+    messages, partial = resolve_inherited_settlement(config, state)
+    recovered, recovery_partial = recover_transactions(
+        config, state, read_only=config.dry_run
+    )
+    messages.extend(recovered)
+    partial = partial or recovery_partial
     claude_blocked = config.agent in {"all", "claude"} and marketplace_overlap(config.home)
     if claude_blocked:
         partial = True
@@ -3687,7 +3881,12 @@ def _uninstall(config: Config) -> Result:
     if state.get("version") == 1:
         return inspect_v1_state(config, state)
     validate_state(config, state)
-    messages, partial = recover_transactions(config, state, read_only=config.dry_run)
+    messages, partial = resolve_inherited_settlement(config, state)
+    recovered, recovery_partial = recover_transactions(
+        config, state, read_only=config.dry_run
+    )
+    messages.extend(recovered)
+    partial = partial or recovery_partial
     for key in list(state["entries"]):
         record = state["entries"].get(key)
         if record is None:

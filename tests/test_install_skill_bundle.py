@@ -2610,8 +2610,9 @@ class InstallSkillBundleTests(unittest.TestCase):
     # repeated an identical (inode, btime) pair in 20 of 20 delete-recreate trials. A per-entry
     # content digest cannot substitute, because a byte-identical re-copy satisfies it.
     #
-    # Every test below therefore forces its own birth-clock granularity through the
-    # `stat_birth_identity` seam instead of trusting this host's. A simulated clock can only be
+    # The coarse arms below force their birth-clock granularity through the
+    # `stat_birth_identity` seam; the 1ns arm of the coarse-and-native tests is a deliberate
+    # native passthrough that trusts this host's real clock. A simulated clock can only be
     # made COARSER than the real one -- a test cannot invent discrimination the host does not
     # have -- which is exactly the direction that matters, because coarseness is the defect.
 
@@ -2626,15 +2627,29 @@ class InstallSkillBundleTests(unittest.TestCase):
         """
         real = installer.stat_birth_identity
         quantum_ns = None if quantum_seconds is None else max(1, int(quantum_seconds * 10**9))
-        # Anchor the quantum's boundaries to the moment this clock is installed rather than to
-        # the epoch. That is what makes these tests deterministic in BOTH directions: any
-        # operation sequence shorter than the quantum provably lands inside the FIRST quantum,
-        # so an unsettled witness is always reproducible and a settled one is always strictly
-        # older than the replacement. Epoch-anchored boundaries would leave both outcomes to
-        # wherever the host's clock happened to sit when the test started.
-        origin = time.time_ns()
+        # Anchor the grid on the FIRST REAL BIRTH VALUE this clock observes, never on a wall-clock
+        # reading. That is what makes these tests deterministic in BOTH directions: any operation
+        # sequence shorter than the quantum provably lands inside ONE bucket, so an unsettled
+        # witness is always reproducible and a settled one is always strictly older than the
+        # replacement.
+        #
+        # A `time.time_ns()` origin is NOT equivalent, and the difference is measured rather than
+        # theoretical. A filesystem stamps btime on a clock tick, so an object created microseconds
+        # AFTER the sample can report a btime BEFORE it; Python's `//` floors that value into the
+        # bucket one quantum EARLIER and reports the object a whole quantum older than a sibling
+        # the filesystem stamped identically. On a fine-btime host the effect is rare rather than
+        # absent -- measured at roughly 1 failure in 55 native runs of this module -- and on the
+        # coarse-btime host these tests model it is intermittent, and CI run 32565128438 failed the
+        # sibling module's own POSITIVE CONTROL that way, with two witnesses exactly one 3600s
+        # quantum apart and an identical fractional part on both sides.
+        #
+        # An observed birth value cannot split one of the filesystem's own quanta, and a value
+        # below the anchor is clamped UP into the first bucket rather than floored below it,
+        # because looking OLDER is what grants settlement and this helper exists to withhold it.
+        anchor: int | None = None
 
         def simulated(path: Path, *, follow_symlinks: bool = True) -> str | None:
+            nonlocal anchor
             value = real(path, follow_symlinks=follow_symlinks)
             if value is None:
                 return None
@@ -2642,7 +2657,9 @@ class InstallSkillBundleTests(unittest.TestCase):
                 return "1700000000.0"
             seconds, _, nanoseconds = value.partition(".")
             total = int(seconds) * 10**9 + int(nanoseconds or 0)
-            total = origin + ((total - origin) // quantum_ns) * quantum_ns
+            if anchor is None:
+                anchor = total
+            total = anchor + max(0, (total - anchor) // quantum_ns) * quantum_ns
             return f"{total // 10**9}.{total % 10**9}"
 
         with mock.patch.object(installer, "stat_birth_identity", simulated):
@@ -2877,6 +2894,266 @@ class InstallSkillBundleTests(unittest.TestCase):
 
             self.assertTrue(destination.is_symlink())
             self.assertEqual(os.readlink(destination), str(entry.source))
+
+    def hard_killed_armed_journal(
+        self, config: installer.Config, entry: installer.Entry
+    ) -> Path:
+        """A durable armed journal marked unsettled, as a HARD-KILLED command would leave it.
+
+        `one_settle_per_command` pays the deferred wait even when the command raises, so an
+        in-process failure leaves nothing unproven. SIGKILL, a power cut and an OOM kill reach no
+        handler at all, so the marker survives with no ledger anywhere that could clear it -- and
+        the marker is written in the same atomic replace as the witness it qualifies, which is
+        exactly the shape reconstructed here.
+        """
+        destination, _ = self.create_armed_create_transaction(config, entry)
+        key = str(destination)
+        document = json.loads(config.state_path.read_text(encoding="utf-8"))
+        document["transactions"][key]["witness_settled"] = False
+        document["transactions"][key]["new_record"]["witness_settled"] = False
+        config.state_path.write_text(json.dumps(document), encoding="utf-8")
+        # Precondition, so this can never silently stop exercising the marker it exists for.
+        self.assertIs(
+            installer.load_state(config.state_path)["transactions"][key]["witness_settled"],
+            False,
+        )
+        return destination
+
+    def test_hard_killed_journal_recovers_and_is_idempotent_under_a_coarse_clock(
+        self,
+    ) -> None:
+        """Convergence: an interrupted transaction no later run can prove was never recoverable.
+
+        Settlement is RE-PROVABLE -- a probe now proves the recorded quantum closed before now --
+        so `resolve_inherited_settlement` pays one bounded wait and the journal becomes exactly as
+        trustworthy as one written on a fine-grained host. Without it the shipped behaviour was a
+        permanent `interrupted conflict` on every run forever, which is the positive control below.
+        """
+        with self.simulated_birth_clock(0.5):
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.make_repo(root)
+                entry = self.only_entry(root)
+                config = self.tree_config(root)
+                destination = self.hard_killed_armed_journal(config, entry)
+                key = str(destination)
+                stage = Path(
+                    installer.load_state(config.state_path)["transactions"][key][
+                        "stage_container"
+                    ]
+                )
+
+                # Positive control FIRST, because recovery consumes the journal: with the inherited
+                # marker left unresolved the same journal is the shipped permanent conflict.
+                with mock.patch.object(
+                    installer,
+                    "resolve_inherited_settlement",
+                    lambda config, state: ([], False),
+                ):
+                    stuck = self.install_only(config, entry)
+                self.assertEqual(stuck.exit_code, 1)
+                self.assertIn(f"interrupted conflict: {key}", stuck.messages)
+                self.assertTrue(stage.is_dir())
+                self.assertIs(
+                    installer.load_state(config.state_path)["transactions"][key][
+                        "witness_settled"
+                    ],
+                    False,
+                )
+
+                recovered = self.install_only(config, entry)
+
+                self.assertEqual(recovered.exit_code, 0)
+                self.assertIn(f"settled interrupted lifecycle state: {key}", recovered.messages)
+                self.assertIn(f"recovered: {key}", recovered.messages)
+                self.assertFalse(stage.exists())
+                state = installer.load_state(config.state_path)
+                self.assertEqual(state["transactions"], {})
+                # The resolved record must carry no marker, or the transaction would have converged
+                # into an entry no later ownership decision could ever trust.
+                self.assertNotIn("witness_settled", state["entries"][key])
+                self.assertTrue(
+                    installer.entry_matches_record(destination, state["entries"][key])
+                )
+
+                # Idempotent: a re-run is a clean owned refresh with no journal left behind and no
+                # marker reintroduced. A copy-mode entry is re-copied by design, so the record's
+                # physical witness legitimately changes; what must not change is its trustedness.
+                again = self.install_only(config, entry)
+                self.assertEqual(again.exit_code, 0)
+                self.assertIn(f"refreshed: {key}", again.messages)
+                repeated = installer.load_state(config.state_path)
+                self.assertEqual(repeated["transactions"], {})
+                self.assertNotIn("witness_settled", repeated["entries"][key])
+                self.assertEqual(
+                    repeated["entries"][key]["digest"], state["entries"][key]["digest"]
+                )
+                # And the converged entry is genuinely owned: uninstall removes it.
+                self.assertEqual(self.uninstall_only(config, entry).exit_code, 0)
+                self.assertFalse(installer.path_present(destination))
+
+    def test_hard_killed_journal_is_preserved_when_settlement_stays_unprovable(self) -> None:
+        """The degenerate host converges on nothing, which is still the fail-closed answer.
+
+        Re-proving is the whole mechanism, so a clock that never advances must leave the marker
+        durable and the journal refused -- byte for byte the answer seed 249d shipped.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            entry = self.only_entry(root)
+            config = self.tree_config(root)
+            # The journal is armed on THIS host's clock, because staging outside a command scope
+            # settles inline and a clock that never advances could not produce one at all.
+            destination = self.hard_killed_armed_journal(config, entry)
+            key = str(destination)
+            stage = Path(
+                installer.load_state(config.state_path)["transactions"][key][
+                    "stage_container"
+                ]
+            )
+
+            with self.simulated_birth_clock(None):
+                with mock.patch.object(installer, "BIRTH_SETTLE_TIMEOUT_SECONDS", 0.05):
+                    refused = self.install_only(config, entry)
+
+                    self.assertEqual(refused.exit_code, 1)
+                    self.assertTrue(
+                        any(
+                            message.startswith(
+                                f"unsettled ownership records preserved for {key}: "
+                            )
+                            for message in refused.messages
+                        ),
+                        refused.messages,
+                    )
+                    self.assertIn(f"interrupted conflict: {key}", refused.messages)
+                    self.assertTrue(stage.is_dir())
+                    self.assertIs(
+                        installer.load_state(config.state_path)["transactions"][key][
+                            "witness_settled"
+                        ],
+                        False,
+                    )
+
+    def test_inherited_resolution_never_clears_an_owned_entry_marker(self) -> None:
+        """The scope line: recovery may converge, an ownership DELETION may not.
+
+        A journal marker is a question about finishing this lifecycle's own transaction. An owned
+        record's marker is the ownership-deletion question seed 249d exists for, so a write command
+        must leave it exactly where it is -- and uninstall must still preserve rather than remove.
+        """
+        with self.simulated_birth_clock(0.5):
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                config, entry, destination = self.install_replaceable_tree(root)
+                key = str(destination)
+                document = json.loads(config.state_path.read_text(encoding="utf-8"))
+                document["entries"][key]["witness_settled"] = False
+                config.state_path.write_text(json.dumps(document), encoding="utf-8")
+
+                targets, keys = installer.inherited_settlement_targets(
+                    config, installer.load_state(config.state_path)
+                )
+                self.assertEqual((targets, keys), ([], set()))
+
+                # Positive control: the SAME marker on the JOURNAL half IS enrolled, so the empty
+                # answer above comes from the scope line and not from an inert helper.
+                journal = copy.deepcopy(installer.load_state(config.state_path))
+                journal["transactions"][key] = {
+                    "witness_settled": False,
+                    "destination": key,
+                    **journal["entries"][key],
+                }
+                enrolled_targets, enrolled_keys = installer.inherited_settlement_targets(
+                    config, journal
+                )
+                self.assertEqual(enrolled_keys, {key})
+                self.assertTrue(enrolled_targets)
+
+                kept = self.uninstall_only(config, entry)
+
+                self.assertEqual(kept.exit_code, 1)
+                self.assertNotIn(f"removed: {key}", kept.messages)
+                self.assertTrue(destination.is_dir())
+                self.assertIs(
+                    installer.load_state(config.state_path)["entries"][key][
+                        "witness_settled"
+                    ],
+                    False,
+                )
+                # Positive control: the same record without the marker is removed, so the refusal
+                # above comes from the marker and not from the tree's own identity.
+                document["entries"][key].pop("witness_settled")
+                config.state_path.write_text(json.dumps(document), encoding="utf-8")
+                self.assertEqual(self.uninstall_only(config, entry).exit_code, 0)
+                self.assertFalse(installer.path_present(destination))
+
+    def test_a_failed_command_still_pays_the_settlement_it_deferred(self) -> None:
+        """A failing command owes its deferred wait and still holds the lock, so it pays it.
+
+        Refusing to pay bought nothing: the entries it created stay on disk either way, and the
+        marker it left behind could never be cleared by anything, so a crashed install's owned
+        entry was permanently unremovable on a coarse-clock host. The `pay=False` leg is the
+        shipped behaviour and the control.
+        """
+        for pay in (True, False):
+            with self.subTest(pay=pay):
+                with self.simulated_birth_clock(0.5):
+                    with tempfile.TemporaryDirectory() as temp:
+                        root = Path(temp)
+                        self.make_repo(root)
+                        config = self.tree_config(root)
+                        original = installer.create_destination
+                        calls = 0
+
+                        def fail_second(
+                            entry: installer.Entry,
+                            destination: Path,
+                            current: installer.Config,
+                        ) -> str:
+                            nonlocal calls
+                            calls += 1
+                            if calls == 2:
+                                raise OSError("disk full")
+                            return original(entry, destination, current)
+
+                        with contextlib.ExitStack() as stack:
+                            stack.enter_context(
+                                mock.patch.object(
+                                    installer,
+                                    "create_destination",
+                                    side_effect=fail_second,
+                                )
+                            )
+                            if not pay:
+                                # The shipped behaviour exactly: drop the in-process ledger and
+                                # discard the debt. Dropping the ledger matters -- leaking it would
+                                # let the NEXT command strip markers it never placed.
+                                stack.enter_context(
+                                    mock.patch.object(
+                                        installer,
+                                        "settle_after_failure",
+                                        lambda config: installer.SETTLEMENT.reset(),
+                                    )
+                                )
+                            with self.assertRaisesRegex(
+                                installer.InstallerError, "cannot install"
+                            ):
+                                installer.install(config)
+
+                        destination = config.home / ".claude" / "skills" / "example"
+                        record = installer.load_state(config.state_path)["entries"][
+                            str(destination)
+                        ]
+                        if pay:
+                            self.assertNotIn("witness_settled", record)
+                            self.assertEqual(installer.uninstall(config).exit_code, 0)
+                            self.assertFalse(installer.path_present(destination))
+                        else:
+                            self.assertIs(record["witness_settled"], False)
+                            self.assertEqual(installer.uninstall(config).exit_code, 1)
+                            self.assertTrue(destination.is_dir())
 
     def test_settle_refuses_within_its_bound_when_timestamps_never_advance(self) -> None:
         self.assertGreater(installer.BIRTH_SETTLE_TIMEOUT_SECONDS, 0)

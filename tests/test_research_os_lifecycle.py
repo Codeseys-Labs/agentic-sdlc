@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import copy
 import errno
 import hashlib
 import importlib.util
@@ -809,8 +810,9 @@ class BirthWitnessSettlementTests(unittest.TestCase):
     ext4) saw ONE distinct btime across 40 back-to-back creates and repeated an identical
     (inode, btime) pair in 20 of 20 delete-recreate trials. Its generated content is
     deterministic, so a byte-identical replacement at a new inode also satisfies the digest and
-    only the physical witness can refuse it. Granularity is forced through the `_linux_statx`
-    seam in every test here, never inherited from this host."""
+    only the physical witness can refuse it. The coarse arms force granularity through the
+    `_linux_statx` seam; the 1ns arm of the coarse-and-native tests is a deliberate native
+    passthrough that inherits this host's real granularity by design."""
 
     maxDiff = None
 
@@ -818,16 +820,29 @@ class BirthWitnessSettlementTests(unittest.TestCase):
     def simulated_birth_clock(self, quantum_seconds: float | None):
         """Force the installer's birth-timestamp source to a chosen granularity.
 
-        A float truncates every birth timestamp to that quantum; `None` freezes it. The quantum's
-        boundaries are anchored to the moment this clock is installed, so any operation sequence
-        shorter than the quantum provably lands inside the FIRST quantum -- which makes both
-        directions deterministic instead of leaving them to where the host's clock happens to
-        sit. A simulated clock can only be made coarser than the real one, and coarseness is the
-        defect.
+        A float truncates every birth timestamp to that quantum; `None` freezes it. Any operation
+        sequence shorter than the quantum provably lands inside ONE bucket, which makes both
+        directions deterministic instead of leaving them to where the host's clock happens to sit.
+        A simulated clock can only be made coarser than the real one, and coarseness is the defect.
+
+        The grid is anchored on the FIRST REAL BIRTH VALUE this clock observes, never on a
+        wall-clock reading. A filesystem stamps btime on a clock tick, so an object created
+        microseconds AFTER a `time.time_ns()` sample can report a btime BEFORE it, and Python's
+        `//` then floors that value into the bucket one quantum EARLIER -- reporting the object a
+        whole quantum older than a sibling the filesystem stamped identically. That is a fine-clock
+        assumption: rare on a host whose btime is finer than the sampling gap (measured at roughly
+        1 failure in 55 native runs of the sibling module on such a host), intermittent on
+        a host whose btime is coarse, which is exactly the host this class models. Measured: CI run
+        32565128438 failed this class's own POSITIVE CONTROL with two witnesses exactly one 3600s
+        quantum apart and an identical fractional part on both sides.
+
+        An observed birth value cannot split one of the filesystem's own quanta, and a value below
+        the anchor is clamped UP into the first bucket rather than floored below it, because looking
+        OLDER is what grants settlement and this helper exists to withhold it.
         """
         real = installer._linux_statx
         quantum_ns = None if quantum_seconds is None else max(1, int(quantum_seconds * 10**9))
-        origin = time.time_ns()
+        anchor: int | None = None
 
         class _Btime:
             def __init__(self, seconds: int, nanoseconds: int) -> None:
@@ -843,13 +858,16 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                 return getattr(self._source, name)
 
         def simulated(path: bytes, *, descriptor: int = -100, flags: int = 0):
+            nonlocal anchor
             result = real(path, descriptor=descriptor, flags=flags)
             if result is None:
                 return None
             if quantum_ns is None:
                 return _Simulated(result, _Btime(1700000000, 0))
             total = result.stx_btime.tv_sec * 10**9 + result.stx_btime.tv_nsec
-            total = origin + ((total - origin) // quantum_ns) * quantum_ns
+            if anchor is None:
+                anchor = total
+            total = anchor + max(0, (total - anchor) // quantum_ns) * quantum_ns
             return _Simulated(result, _Btime(total // 10**9, total % 10**9))
 
         with mock.patch.object(installer, "_linux_statx", simulated):
@@ -1219,6 +1237,217 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                     else:
                         self.assertEqual(removal[rel], "removed")
                         self.assertFalse((root / rel).exists())
+
+    def arm_hard_killed_journal(self, root: Path, rel: str, files: dict[str, str]) -> None:
+        """Arm a journal, then die WITHOUT paying the deferred settlement, as a SIGKILL does.
+
+        `apply_install` pays the wait it deferred even when the run raises, so an in-process failure
+        leaves nothing unproven. A SIGKILL, an OOM kill and a power cut reach no handler, so the
+        marker survives with no ledger anywhere that could clear it. Reducing `_settle_after_failure`
+        to the shipped behaviour -- drop the in-process ledger, discard the debt -- for the duration
+        of the crashing run is what reproduces that, and it doubles as the positive control for the
+        debt payment itself.
+        """
+        real_persist = installer._persist_candidate
+        interrupted = False
+
+        def crash_after_commit(path, state, candidate, target, identity):
+            nonlocal interrupted
+            result = real_persist(path, state, candidate, target, identity)
+            if (
+                not interrupted
+                and rel in candidate.get("transactions", {})
+                and candidate["transactions"][rel]["phase"] == "committed"
+            ):
+                interrupted = True
+                raise OSError("simulated hard kill after durable ownership commit")
+            return result
+
+        with mock.patch.object(
+            installer, "_persist_candidate", side_effect=crash_after_commit
+        ):
+            with mock.patch.object(
+                installer,
+                "_settle_after_failure",
+                lambda root: installer._SETTLEMENT.reset(),
+            ):
+                with self.assertRaises(OSError):
+                    installer.apply_install(root, files=files)
+
+    def test_hard_killed_journal_recovers_and_is_idempotent_under_a_coarse_clock(
+        self,
+    ) -> None:
+        """Convergence: an interrupted transaction no later run can prove was never recoverable.
+
+        Settlement is RE-PROVABLE -- a probe now proves the recorded quantum closed before now --
+        so `_resolve_inherited_settlement` pays one bounded wait and the journal becomes exactly as
+        trustworthy as one written on a fine-grained host. Without it the shipped behaviour was the
+        CI error verbatim, on every run forever, which is the positive control below.
+        """
+        rel = "research/status.md"
+        files = {rel: "CANONICAL\n"}
+        with self.simulated_birth_clock(0.25):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                self.arm_hard_killed_journal(root, rel, files)
+                state_path = expected_state_path(state_root, root)
+                document = json.loads(state_path.read_text(encoding="utf-8"))
+                # Precondition, so this can never silently stop exercising the marker.
+                self.assertIs(document["transactions"][rel]["witness_settled"], False)
+
+                # Positive control FIRST, because recovery consumes the journal.
+                with mock.patch.object(
+                    installer, "_resolve_inherited_settlement", lambda *a, **k: None
+                ):
+                    with self.assertRaisesRegex(
+                        installer.RecoveryConflict,
+                        "interrupted transaction carries an unsettled birth witness",
+                    ):
+                        installer.apply_install(root, files=files)
+
+                first = installer.apply_install(root, files=files)
+                tree_after_first = read_tree(root)
+                settled = json.loads(state_path.read_text(encoding="utf-8"))
+                second = installer.apply_install(root, files=files)
+
+                self.assertEqual(first[rel], "unchanged")
+                self.assertEqual(second, first)
+                self.assertEqual(read_tree(root), tree_after_first)
+                self.assertEqual(settled["transactions"], {})
+                # The converged record must carry no marker, or the transaction would have resolved
+                # into an entry no later ownership decision could ever trust.
+                self.assertNotIn("witness_settled", settled["entries"][rel])
+                self.assertEqual(
+                    json.loads(state_path.read_text(encoding="utf-8")), settled
+                )
+
+    def test_an_unprovable_inherited_marker_is_left_durable(self) -> None:
+        """The degenerate host converges on nothing, which is still the fail-closed answer.
+
+        Re-proving is the whole mechanism, so a wait that exhausts its cap must leave the marker
+        exactly where it is and write nothing -- after which `_recover_one` refuses the journal by
+        name, which the recovery test's positive control shows end to end. The refusal is asserted
+        at the seam rather than through a frozen clock because a frozen clock also re-stamps
+        `target.identity`, and `_validate_state` would then refuse the document before any of this
+        was reached.
+        """
+        rel = "research/status.md"
+        files = {rel: "CANONICAL\n"}
+        with self.simulated_birth_clock(0.25):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                self.arm_hard_killed_journal(root, rel, files)
+                state_path = expected_state_path(state_root, root)
+                identity = installer._path_identity(root)
+                state, _ = installer._load_state(state_path, root, identity)
+                self.assertIs(state["transactions"][rel]["witness_settled"], False)
+                before = state_path.read_bytes()
+
+                with mock.patch.object(
+                    installer,
+                    "_wait_for_settlement",
+                    side_effect=installer.ResearchOSError(
+                        "no later creation was recorded"
+                    ),
+                ):
+                    installer._resolve_inherited_settlement(
+                        root, state_path, state, identity
+                    )
+
+                self.assertEqual(state_path.read_bytes(), before)
+                self.assertIs(state["transactions"][rel]["witness_settled"], False)
+
+                # Positive control: with the wait allowed to succeed the SAME call clears the
+                # marker and persists it, so the refusal above comes from the cap and not from an
+                # inert resolver.
+                installer._resolve_inherited_settlement(root, state_path, state, identity)
+                self.assertNotIn("witness_settled", state["transactions"][rel])
+                self.assertNotIn(
+                    "witness_settled",
+                    json.loads(state_path.read_text(encoding="utf-8"))["transactions"][rel],
+                )
+
+    def test_inherited_resolution_never_clears_an_owned_record_marker(self) -> None:
+        """The scope line: recovery may converge, an ownership DELETION may not.
+
+        A journal marker is a question about finishing this installer's own transaction. An owned
+        record's marker is the ownership-deletion question seed 249d exists for, so nothing here
+        may clear it -- `test_an_unsettled_record_is_non_discriminating_and_never_removed` asserts
+        the end-to-end consequence, and this asserts the enrolment that would defeat it.
+        """
+        rel = "research/status.md"
+        with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+            root = Path(directory)
+            installer.apply_install(root, files={rel: "CANONICAL\n"})
+            state_path = expected_state_path(state_root, root)
+            document = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["transactions"], {})
+
+            for marked in ("entries", "manifest"):
+                with self.subTest(marked=marked):
+                    poisoned = copy.deepcopy(document)
+                    if marked == "entries":
+                        poisoned["entries"][rel]["witness_settled"] = False
+                    else:
+                        poisoned["manifest"]["witness_settled"] = False
+
+                    self.assertEqual(
+                        installer._inherited_settlement_targets(root, poisoned),
+                        ([], set()),
+                    )
+
+            # Positive control: the SAME marker on the journal half IS enrolled, so the empty
+            # answers above come from the scope line and not from an inert helper.
+            journal = copy.deepcopy(document)
+            journal["transactions"][rel] = {"witness_settled": False, **document["entries"][rel]}
+            targets, keys = installer._inherited_settlement_targets(root, journal)
+            self.assertEqual(keys, {rel})
+            self.assertTrue(targets)
+
+    def test_a_failed_run_still_pays_the_settlement_it_deferred(self) -> None:
+        """A failing run owes its deferred wait and still holds the lock, so it pays it.
+
+        Refusing to pay bought nothing -- the files it wrote stay on disk either way -- and the
+        marker it left could never be cleared by anything, so an interrupted run's journal was
+        permanently unrecoverable and its leaves permanently foreign on a coarse-clock host.
+        """
+        rel = "research/status.md"
+        files = {rel: "CANONICAL\n"}
+        with self.simulated_birth_clock(0.25):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                real_persist = installer._persist_candidate
+                interrupted = False
+
+                def crash_after_commit(path, state, candidate, target, identity):
+                    nonlocal interrupted
+                    result = real_persist(path, state, candidate, target, identity)
+                    if (
+                        not interrupted
+                        and rel in candidate.get("transactions", {})
+                        and candidate["transactions"][rel]["phase"] == "committed"
+                    ):
+                        interrupted = True
+                        raise OSError("simulated crash after durable ownership commit")
+                    return result
+
+                with mock.patch.object(
+                    installer, "_persist_candidate", side_effect=crash_after_commit
+                ):
+                    with self.assertRaises(OSError):
+                        installer.apply_install(root, files=files)
+
+                document = json.loads(
+                    expected_state_path(state_root, root).read_text(encoding="utf-8")
+                )
+                self.assertIn(rel, document["transactions"])
+                for record in installer._settlement_records(document, rel):
+                    self.assertNotIn("witness_settled", record)
+                # The debt was paid, so the next run needs no inherited resolution at all.
+                self.assertEqual(
+                    installer._inherited_settlement_targets(root, document), ([], set())
+                )
+                self.assertEqual(installer.apply_install(root, files=files)[rel], "unchanged")
 
     def test_a_probe_that_cannot_be_retired_refuses_by_name(self) -> None:
         """Killing test for the probe-unlink guard: a leftover probe must never be swallowed.

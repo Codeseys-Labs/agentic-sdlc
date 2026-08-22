@@ -199,3 +199,108 @@ fail-closed reading of an unidentifiable ROOT is to refuse the whole document �
 crash-recovery retry an interrupted run depends on. Its cost is a constant (one probe, and a wait only
 when the operator points at a directory created inside the current quantum, which a long-lived
 repository never is) and it does not grow with the scaffold's file count.
+
+## Addendum 2026-08-22 (second) — the settlement fix regressed recovery, and why
+
+The fix above went in as `374eec6` and turned the ubuntu leg from green to `failures=8, errors=1`
+(run 32565128438). Seed of record for the repair: `agentic-sdlc-249d-recovery`. The paragraph above
+that says recovery "reports and preserves" on an unsettled witness described the shipped behaviour
+accurately and was the defect: **it is not fail-closed, it is non-convergent.**
+
+### The named root cause
+
+`research_os_installer_lifecycle.RecoveryConflict: interrupted transaction carries an unsettled
+birth witness: research/status.md`, raised at `install_research_os.py` `_recover_one`, reached from
+`_recover_transactions` <- `_apply_locked` <- `apply_install`. Its sibling is `classify_recovery` in
+`install_skill_bundle.py`, which returns `"conflict"` on the same test.
+
+The gate conflated two different questions:
+
+1. *Is this witness discriminating enough to justify REMOVING or REPLACING something?* Correctly
+   answered **no** for an unsettled witness. This is the whole point of the settlement work.
+2. *May this lifecycle finish or roll back the TRANSACTION it already started?* A different
+   question. Refusing it buys nothing — the interrupted state, its private stage and its backup all
+   stay on disk either way — and it costs the documented idempotent-recovery guarantee. On a
+   coarse-clock host an interrupted install could never converge, on any later run, forever.
+
+Nothing in the shipped design could ever clear a marker, either. Only the writing command's own
+`finish_settlement` cleared one, so a marker that reached disk was a permanent dead end: the journal
+was unrecoverable and, separately, an owned entry a crashed install had recorded was permanently
+unremovable.
+
+### Why re-proving settlement is safe, and how far the window actually extends
+
+Settlement is **re-provable**. A probe taken now proves the recorded witness's birth quantum closed
+before now, so every creation from here on is stamped strictly later and can never collide with it.
+The only object that can still reproduce the witness is one created INSIDE that original quantum —
+within one filesystem tick of the dead command's own create, while it still held the state lock.
+
+Waiting longer does not widen that window, because the window is bounded by the QUANTUM and not by
+when the probe is taken. It is therefore the same interval the success path already accepts under
+AGENTS.md's "concurrent external mutation of managed paths during a write command is unsupported",
+extended by at most one tick past the crash.
+
+### The two mechanisms, and the line between them
+
+- **A failing command pays the settlement it deferred** (`settle_after_failure`,
+  `_settle_after_failure`). This widens nothing at all: the witnesses were minted by that command,
+  it still holds the lock, and the debt is paid on exactly the same ground as on the success path.
+  It is best effort and swallows its own outcome, because the original failure is the one the
+  operator must see.
+- **A write command re-proves an inherited marker before recovery reads it**
+  (`resolve_inherited_settlement`, `_resolve_inherited_settlement`), for the hard kill that reaches
+  no handler. Enrolment is an OPEN, MARKED JOURNAL and never a bare owned record. The bundle's
+  `state_with_transaction` pops the entry record when it arms a journal, so there is none to reach;
+  the research-os installer additionally reaches the record its transaction has already committed,
+  because `_recover_one`'s `committed` phase re-verifies exactly that record, and a journal marker
+  is proof the same interrupted run held that key in its ledger.
+
+An owned record marked with **no open transaction beside it** is question 1, and it is left exactly
+where it is: `entry_matches_record`, `record_authority_matches` and `_authority_matches` still
+answer False, status still reports a conflict, uninstall and removal still preserve. A host whose
+birth clock never advances exhausts the cap, the markers stay durable, and everything keeps failing
+closed — so the degenerate filesystem this work exists for is unchanged. Read-only surfaces resolve
+nothing, because a settle proves itself by CREATING an object.
+
+### The test harness had its own fine-clock assumption
+
+CI also failed the settlement suite's own POSITIVE CONTROL
+(`test_same_quantum_witness_cannot_discriminate_a_reused_inode`) with two witnesses exactly one
+3600 s quantum apart and an identical fractional part. Both modules' `simulated_birth_clock` helpers
+anchored their grid on `origin = time.time_ns()` and floored with Python's `//`. A filesystem stamps
+btime on a clock tick, so an object created microseconds AFTER that sample can report a btime BEFORE
+it, land in bucket −1, and be reported a whole quantum older than a sibling the filesystem stamped
+identically. Invisible on a fine-btime host; intermittent on the coarse-btime host the tests model.
+Both helpers now anchor on the first REAL BIRTH VALUE observed and clamp a value below the anchor UP
+into the first bucket, because looking older is what grants settlement and the helper exists to
+withhold it. No assertion was weakened.
+
+### Evidence
+
+Reproduced and verified with a coarse-clock lever that patches `stat_birth_identity` and
+`_linux_statx` on the loaded test modules, so the deferral-and-marker path runs on a fine-clock
+development host. At a 1-second quantum both modules are fully green (111 and 49 tests); natively
+both are green, `install_skill_bundle.py self-test` passes and `validate_bundle.py` reports 0
+errors / 0 warnings. Neutralizing the four seams above at runtime reproduces the CI set exactly —
+`failures=6, errors=1` over the seven product-visible results, including the verbatim
+`RecoveryConflict` message. Under a coarse clock a byte-identical replacement carrying the measured
+reused-inode witness is still refused and preserved (`exit 1`, `conflict:`), and with both settlement
+seams neutralized the same probe removes it (`exit 0`, `removed:`) — the control for question 1.
+
+### The ninth CI result is not this regression
+
+`test_seeds_launcher.test_bootstrap_rejects_nested_dirty_and_untracked_distribution_trees` was red
+in the same run and `374eec6` cannot reach it. `tests/test_seeds_launcher.py` mentions neither
+installer, neither `birth`/`btime` nor `witness_settled` (grep: 0 hits), so no birth-witness code
+runs in its process at all; it passes 3/3 natively here; and its fixture builds a self-contained
+temp-dir git repo from three test-authored files rather than reading the checkout.
+
+What it actually is: `seeds-launcher.mjs` `gitDistribution()` checks cleanliness (index-tree vs HEAD
+tree, then per-file content hash vs the indexed blob) BEFORE it checks untracked/ignored, and the
+test got the cleanliness message where it expected the untracked one. So the fixture's
+`git restore mise.toml` exited 0 (it runs with `check=True`) yet left that file's bytes not matching
+its indexed blob on the runner. That comparison is pure content hashing with no timestamp or
+stat-cache involvement, so it is not clock-sensitive. Open environmental delta: git 2.43.0 locally
+versus 2.52.0 on the runner. Highest-value next probe: dump `git status --porcelain` and
+`git diff --stat` from the fixture immediately after that restore, under 2.52.0. Not fixed here;
+it needs its own seed.

@@ -1627,33 +1627,13 @@ class _SettlementLedger:
         self.targets.extend(targets)
         self.keys.update(keys)
 
-    def _records(self, document: dict[str, Any], key: str) -> Iterator[dict[str, Any]]:
-        # This walks a document that has NOT been validated yet, because stripping has to precede
-        # validation. Every level is therefore shape-checked rather than assumed, so a malformed
-        # document still reaches `_validate_state`'s named refusal instead of raising here.
-        for collection, name in (("entries", key), ("manifest", None)):
-            container = document.get(collection)
-            if name is None:
-                if collection == "manifest" and key == _MANIFEST_TRANSACTION_KEY and isinstance(container, dict):
-                    yield container
-                continue
-            if isinstance(container, dict) and isinstance(container.get(name), dict):
-                yield container[name]
-        transactions = document.get("transactions")
-        tx = transactions.get(key) if isinstance(transactions, dict) else None
-        if isinstance(tx, dict):
-            yield tx
-            for field in ("new_record", "old_record", "authority_record"):
-                if isinstance(tx.get(field), dict):
-                    yield tx[field]
-
     def marked(self, document: dict[str, Any]) -> dict[str, Any]:
         """A copy of one state document with this ledger's unsettled keys marked, for WRITING."""
         if not self.keys:
             return document
         marked = copy.deepcopy(document)
         for key in self.keys:
-            for record in self._records(marked, key):
+            for record in _settlement_records(marked, key):
                 record["witness_settled"] = False
         return marked
 
@@ -1667,9 +1647,55 @@ class _SettlementLedger:
         if not self.keys or not isinstance(document, dict):
             return document
         for key in self.keys:
-            for record in self._records(document, key):
+            for record in _settlement_records(document, key):
                 record.pop("witness_settled", None)
         return document
+
+
+def _settlement_records(document: dict[str, Any], key: str) -> Iterator[dict[str, Any]]:
+    """Every record in one state document that a `witness_settled` marker for `key` qualifies.
+
+    This walks a document that has NOT been validated yet, because stripping has to precede
+    validation. Every level is therefore shape-checked rather than assumed, so a malformed
+    document still reaches `_validate_state`'s named refusal instead of raising here.
+    """
+    for collection, name in (("entries", key), ("manifest", None)):
+        container = document.get(collection)
+        if name is None:
+            if collection == "manifest" and key == _MANIFEST_TRANSACTION_KEY and isinstance(container, dict):
+                yield container
+            continue
+        if isinstance(container, dict) and isinstance(container.get(name), dict):
+            yield container[name]
+    transactions = document.get("transactions")
+    tx = transactions.get(key) if isinstance(transactions, dict) else None
+    if isinstance(tx, dict):
+        yield tx
+        for field in ("new_record", "old_record", "authority_record"):
+            if isinstance(tx.get(field), dict):
+                yield tx[field]
+
+
+def _open_marked_transaction(document: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """The transaction at `key` when it is open AND carries an unsettled-witness marker.
+
+    This is the whole enrolment rule for resolving an inherited marker, and it is what keeps
+    recovery's question separate from ownership's. A marker on the JOURNAL is proof that the run
+    which armed it held `key` in its ledger, so every record `_settlement_records` reaches under
+    that key -- including the owned record the transaction has already committed, which
+    `_recover_one` re-verifies in its `committed` phase -- belongs to that same interrupted run and
+    is part of the transaction this installer must now finish or roll back.
+
+    An owned record marked with NO open transaction is the ownership-deletion question seed 249d
+    exists for, and it is never enrolled. The two cannot be confused: a marked owned record is
+    non-discriminating, so `_plan_install` calls the leaf unowned and arms no transaction on it at
+    all, which is why an unmarked journal beside a marked record is not a reachable state.
+    """
+    transactions = document.get("transactions")
+    tx = transactions.get(key) if isinstance(transactions, dict) else None
+    if not isinstance(tx, dict) or _witness_settlement_trusted(tx.get("witness_settled")):
+        return None
+    return tx
 
 
 _SETTLEMENT = _SettlementLedger()
@@ -3284,6 +3310,10 @@ def _apply_locked(
             # does not grow with the scaffold's file count, which is the property the deferral
             # exists to protect.
             _settle_identity_witnesses(((root, root_identity),), probe_dir=root)
+            # Then re-prove whatever a PREVIOUS run left unproven, before recovery or planning
+            # consults it. A hard kill never reaches `apply_install`'s debt payment, so this is the
+            # only path by which a marker from a dead run can ever be cleared.
+            _resolve_inherited_settlement(root, state_path, state, root_identity)
         _recover_transactions(root, root_fd, state_path, state, root_identity, read_only=dry_run)
         if state["transactions"]:
             if not dry_run:
@@ -3319,6 +3349,113 @@ def _apply_locked(
             os.close(root_fd)
 
 
+def _record_identity_tokens(value: Any) -> Iterator[str]:
+    """Every identity witness nested anywhere in one owned record or journal entry.
+
+    A `witness_settled` marker names a KEY, not a witness, so resolving it means proving settlement
+    for every object that key's records name: the leaf, its recorded ancestors, and for a journal
+    entry the private stage and backup containers. Walking the record keeps that faithful when a
+    record grows a field, where a hand-listed set would silently stop covering one.
+    """
+    if isinstance(value, str):
+        if _identity_token_valid(value):
+            yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _record_identity_tokens(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _record_identity_tokens(item)
+
+
+def _inherited_settlement_targets(
+    root: Path, state: dict[str, Any]
+) -> tuple[list[tuple[Path, tuple[int, int], Path]], set[str]]:
+    """Targets that re-prove settlement for markers a PREVIOUS run left durable.
+
+    Only the NEWEST witness under a key is enrolled: settlement is the claim "this birth quantum
+    has closed", and a probe strictly later than the newest of a key's witnesses is strictly later
+    than all of them. The probe directory is the target ROOT rather than any recorded object,
+    because a marker has to be resolvable for a leaf that is absent, staged, or already replaced,
+    and birth-timestamp granularity belongs to the filesystem rather than to any one object.
+
+    Enrolment is `_open_marked_transaction`: an OPEN, MARKED journal, never a bare owned record.
+    An `entries` leaf or manifest record marked with no transaction beside it is the
+    ownership-deletion question seed 249d exists for, and it is left exactly where it is so
+    `_authority_matches` keeps answering False, planning keeps calling the leaf unowned, and removal
+    keeps skipping it as modified.
+
+    A key whose witnesses cannot be ordered is left out with its marker intact, because proving
+    nothing is the fail-closed answer.
+    """
+    targets: list[tuple[Path, tuple[int, int], Path]] = []
+    keys: set[str] = set()
+    for key in sorted(state.get("transactions") or {}):
+        if _open_marked_transaction(state, key) is None:
+            continue
+        records = list(_settlement_records(state, key))
+        tokens = {
+            token for record in records for token in _record_identity_tokens(record)
+        }
+        if not tokens:
+            continue
+        try:
+            newest = max(
+                tokens,
+                key=lambda token: _birth_witness_order(_identity_generation(token)),
+            )
+            resolved = _settlement_targets(((root, newest),), probe_dir=root)
+        except ResearchOSError:
+            continue
+        targets.extend(resolved)
+        keys.add(key)
+    return targets, keys
+
+
+def _resolve_inherited_settlement(
+    root: Path, state_path: Path, state: dict[str, Any], root_identity: str
+) -> None:
+    """Prove the settlement a previous run could not, so an interrupted transaction converges.
+
+    This separates the two questions the settlement gate conflated. "Is this witness discriminating
+    enough to justify REMOVING or REPLACING something?" is correctly answered NO for an unsettled
+    witness, and `_authority_matches` still answers it that way -- nothing here relaxes it, and a
+    marked owned record with no open transaction beside it is left untouched, so planning still
+    calls the leaf unowned and removal still skips it. But "may this installer finish or roll back
+    the TRANSACTION it already started, whose own committed record `_recover_one` re-verifies?" is a
+    different question, and refusing it forever is not fail-closed at all: it trades
+    the documented idempotent-recovery guarantee for a protection that was never bought, because
+    the interrupted state, its private stage and its backup all simply stay on disk.
+
+    Settlement is RE-PROVABLE, which is what makes converging safe. A probe taken now proves the
+    recorded witness's birth quantum closed before now, so every creation from here on is stamped
+    strictly later and can never collide with it. The only object that can still reproduce the
+    witness is one created INSIDE that original quantum -- within one filesystem tick of the dead
+    run's own create, while it still held this lock. Waiting longer does not widen that window,
+    because the window is bounded by the quantum and not by when the probe is taken.
+
+    What is NOT re-provable stays refused: a host whose birth timestamps never advance exhausts the
+    cap, the markers stay durable, and `_authority_matches` and `_recover_one` keep failing closed
+    by name. This function is therefore silent on failure by design -- the named refusal belongs to
+    the consumer that actually declines to act, not to a preparatory step.
+
+    A dry run resolves nothing: a settle proves itself by CREATING an object, and a preview may not
+    write. Its report of a foreign leaf is honest, because a witness the next real run has not yet
+    proven is not yet proven.
+    """
+    targets, keys = _inherited_settlement_targets(root, state)
+    if not targets:
+        return
+    try:
+        _wait_for_settlement(targets)
+    except ResearchOSError:
+        return
+    for key in keys:
+        for record in _settlement_records(state, key):
+            record.pop("witness_settled", None)
+    _write_state(state_path, state, root, root_identity)
+
+
 def _finish_settlement(root: Path, root_identity: str) -> None:
     """Pay the ONE bounded birth-quantum wait an `apply` run is allowed, then clear its markers.
 
@@ -3350,6 +3487,32 @@ def _finish_settlement(root: Path, root_identity: str) -> None:
         _SETTLEMENT.reset()
 
 
+def _settle_after_failure(root: Path) -> None:
+    """Pay the settlement a FAILING run still owes, best effort, before it re-raises.
+
+    Paying here rests on exactly the same ground as paying it on the success path: the witnesses
+    were minted by this run, the state lock is still held, and nothing outside this process is
+    supported in mutating a managed path meanwhile. So this widens no window at all -- it just stops
+    discarding a debt the run can still settle.
+
+    Leaving them unproven was the one shape that could never converge. Nothing else clears a marker
+    a dead run left behind, so its journal became permanently unrecoverable and its owned leaves
+    permanently foreign on a coarse-clock host, while the files it wrote stayed on disk either way.
+    The protection was never bought.
+
+    Best effort by construction: the original failure is the one the caller has to see, so every
+    outcome here is swallowed and the markers simply stay durable when the debt cannot be paid.
+    `_resolve_inherited_settlement` is the second line of defence, for the hard kill that never
+    reaches this path at all.
+    """
+    try:
+        _finish_settlement(root, _path_identity(root))
+    except BaseException:
+        pass
+    finally:
+        _SETTLEMENT.reset()
+
+
 def apply_install(
     root: Path,
     *,
@@ -3363,15 +3526,12 @@ def apply_install(
         return _apply_locked(root, files, normalised, force=force, dry_run=True)
     state_path = _state_path(root)
     with _state_lock(state_path):
-        # One deferred-settlement scope per run. An interrupted run leaves its markers durable ON
-        # PURPOSE: the witnesses it wrote were never proven settled, so the next run must fail
-        # closed on them. Only the in-process ledger is dropped, and dropping it is what makes the
-        # markers bite.
+        # One deferred-settlement scope per run.
         _SETTLEMENT.begin()
         try:
             actions = _apply_locked(root, files, normalised, force=force, dry_run=False)
         except BaseException:
-            _SETTLEMENT.reset()
+            _settle_after_failure(root)
             raise
         _finish_settlement(root, _path_identity(root))
         return actions
