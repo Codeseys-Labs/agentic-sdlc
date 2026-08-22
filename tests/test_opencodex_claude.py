@@ -39,6 +39,9 @@ class OpenCodexClaudeTests(unittest.TestCase):
         selected_settings_mode: int | None = None,
         selected_settings_directory: bool = False,
         remove_selected_settings_before_open: bool = False,
+        hostile_path_jq: bool = False,
+        bound_jq_refuses_default_provider_read: bool = False,
+        bound_jq_missing: bool = False,
         global_session_entries: bool = False,
         preset_isolated_settings: object | None = None,
         preset_isolated_projects: bool = False,
@@ -191,22 +194,69 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "exit 22\n"
         )
         curl.chmod(0o755)
+        # THE `jq` ON PATH IS NOT THE ONE THE LAUNCHER USES, and since 2026-08-21 that is the point
+        # rather than an accident. `scripts/opencodex-claude.sh` resolves jq from exactly two
+        # admitted routes -- `$AGENTIC_SDLC_JQ`, then `mise -C <root> exec -- jq` -- and never from
+        # PATH (ADR-0020). So this symlink stays planted as AMBIENT state the launcher must ignore,
+        # the mise stub above serves the pinned route from `$TEST_REAL_JQ`, and a test that needs to
+        # OBSERVE the tool binds it through `$AGENTIC_SDLC_JQ` below.
         jq = shutil.which("jq")
         if jq:
             jq_command = bin_dir / "jq"
-            if remove_selected_settings_before_open:
+            if hostile_path_jq:
+                # A DIFFERENT jq at the head of PATH: it records that it ran, then answers `clean`
+                # to every program, which is the shape that would silently suppress every settings
+                # refusal in the launcher. Nothing here may ever invoke it.
                 jq_command.write_text(
                     "#!/bin/sh\n"
-                    'if [ "${1:-}" = --version ]; then\n'
-                    '  count=0; [ ! -f "$OCX_TEST_JQ_COUNT" ] || read -r count < "$OCX_TEST_JQ_COUNT"\n'
-                    '  count=$((count + 1)); printf "%s\\n" "$count" > "$OCX_TEST_JQ_COUNT"\n'
-                    '  [ "$count" -ne 2 ] || rm -f -- "$OCX_TEST_SELECTED_SETTINGS"\n'
-                    'fi\n'
-                    'exec "$TEST_REAL_JQ" "$@"\n'
+                    'printf "invoked <%s>\\n" "$*" >> "$OCX_TEST_HOSTILE_JQ_MARKER"\n'
+                    'if [ "${1:-}" = --version ]; then printf "jq-1.8.2\\n"; exit 0; fi\n'
+                    'printf "clean\\n"\n'
+                    "exit 0\n"
                 )
                 jq_command.chmod(0o755)
+                # The SAME stub under a second, non-`jq` name. A test that binds `AGENTIC_SDLC_JQ`
+                # to the bare name `jq` would recurse into the shell function until bash dies, so
+                # the bare-name channel is demonstrated with a name that would resolve through
+                # ambient PATH to a real executable instead of back into this file.
+                shim = bin_dir / "jq-shim"
+                shim.write_text(jq_command.read_text())
+                shim.chmod(0o755)
             else:
                 jq_command.symlink_to(jq)
+        # THE TWO OBSERVABLE STUBS BELOW ARE BOUND AS THE EXACT jq (`$AGENTIC_SDLC_JQ`, the
+        # operator-tools binding), never planted on PATH: PATH is not a resolution channel any more,
+        # so a stub left there would simply never be reached and the state each fixture exists to
+        # create would never be entered. Both forward everything they do not intercept to the real
+        # jq, so the classification under test stays the real one.
+        #
+        # This one refuses exactly ONE of the reads `status` makes -- the configured-default lookup,
+        # identified by its program text rather than by a call number, so the fixture does not rot
+        # when a jq call is added elsewhere. That leaves the comparison genuinely half-complete,
+        # which is the only state that can produce the false NOT-LIVE the default-provider read is
+        # fail-closed to prevent.
+        if bound_jq_refuses_default_provider_read:
+            partial_jq = bin_dir / "bound-partial-jq"
+            partial_jq.write_text(
+                "#!/bin/sh\n"
+                'case " $* " in *isDefault*) exit 127 ;; esac\n'
+                'exec "$TEST_REAL_JQ" "$@"\n'
+            )
+            partial_jq.chmod(0o755)
+        # And this one counts availability probes and deletes the selected settings file on the
+        # second, which is what opens the window between the readability check and the open.
+        if remove_selected_settings_before_open:
+            counting_jq = bin_dir / "bound-counting-jq"
+            counting_jq.write_text(
+                "#!/bin/sh\n"
+                'if [ "${1:-}" = --version ]; then\n'
+                '  count=0; [ ! -f "$OCX_TEST_JQ_COUNT" ] || read -r count < "$OCX_TEST_JQ_COUNT"\n'
+                '  count=$((count + 1)); printf "%s\\n" "$count" > "$OCX_TEST_JQ_COUNT"\n'
+                '  [ "$count" -ne 2 ] || rm -f -- "$OCX_TEST_SELECTED_SETTINGS"\n'
+                'fi\n'
+                'exec "$TEST_REAL_JQ" "$@"\n'
+            )
+            counting_jq.chmod(0o755)
         claude = bin_dir / "claude"
         # Records the environment it actually received, so the ADR-0010 env policy can be
         # asserted per class against the REAL child environment rather than against the script's
@@ -223,6 +273,8 @@ class OpenCodexClaudeTests(unittest.TestCase):
         # forwards that one route instead of only recording it.
         self.env_log = root / "child-env.txt"
         self.argv_log = root / "child-argv.txt"
+        # Absent unless the hostile PATH `jq` above actually ran, which is the assertion.
+        self.hostile_jq_marker = root / "hostile-jq-invoked.txt"
         env = {
             "HOME": str(root / "home"),
             "XDG_STATE_HOME": str(root / "state"),
@@ -239,6 +291,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "OCX_TEST_ARGV_LOG": str(self.argv_log),
             "OCX_TEST_SELECTED_SETTINGS": str(self.selected_settings),
             "OCX_TEST_JQ_COUNT": str(root / "jq-count"),
+            "OCX_TEST_HOSTILE_JQ_MARKER": str(self.hostile_jq_marker),
             "SUBSCRIPTION_STATUS": json.dumps(subscription_status if subscription_status is not None else {
                 "enabled": True, "authMode": "auto", "markerMode": "subscription",
                 "authModeOrigin": "auto-present", "admissionKeyActive": False,
@@ -256,6 +309,14 @@ class OpenCodexClaudeTests(unittest.TestCase):
             # deliberately has no jq on it.
             "TEST_REAL_JQ": shutil.which("jq") or "jq",
         }
+        if remove_selected_settings_before_open:
+            env["AGENTIC_SDLC_JQ"] = str(bin_dir / "bound-counting-jq")
+        if bound_jq_refuses_default_provider_read:
+            env["AGENTIC_SDLC_JQ"] = str(bin_dir / "bound-partial-jq")
+        if bound_jq_missing:
+            # The bound exact executable is gone (a retired toolchain, a moved install) while a
+            # perfectly good jq stays on PATH. Neither route may borrow the other's copy.
+            env["AGENTIC_SDLC_JQ"] = str(bin_dir / "no-such-bound-jq")
         if parent_env:
             env.update(parent_env)
         # Kept so a test can launch a SECOND time against the same home and state root, which
@@ -2116,10 +2177,206 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertIn("REFUSED", result.stderr)
         self.assertNotIn("approved opencodex configuration route", result.stdout)
 
+    # --- jq is an EXACT execution dependency at a trust boundary (ADR-0020) ----------------
+    #
+    # THE DEFECT (agentic-sdlc-6f9d, CodeRabbit on PR #4, fixed 2026-08-21). The resolver read
+    # `${AGENTIC_SDLC_JQ:-$(type -P jq)}` and reached the pinned route only when PATH had no jq at
+    # all, so a source-checkout launch classified settings documents, a provider config, and a
+    # gateway catalog with whatever binary the caller's PATH named first. ADR-0020's compliance rule
+    # is explicit -- "a readiness-dependent executable is never selected from ambient PATH without an
+    # admitted exact identity" -- and this dependency decides REFUSALS next to credentials, so a
+    # substituted jq that answers `clean` is a silent bypass of every settings check in the file.
+    #
+    # The first two tests below plant a hostile jq at the HEAD of PATH while the pinned route
+    # resolves normally. Neither asserts a spelling of the resolver; both assert the two facts that
+    # matter -- the hostile binary never ran, and the verdict came from the admitted route. The two
+    # after them close the same substitution reached through the binding itself.
+
+    # EVERY ONE OF THE FOUR TESTS BELOW ASSERTS THAT A HOSTILE STUB DID NOT RUN, and the fixture
+    # only plants that stub when the host has a real jq to serve the pinned route with. Without the
+    # skip, `assertFalse(marker.exists())` on a jq-less host passes against a stub that was never
+    # written -- the vacuous-negative shape recorded in `host-dependent-tests-hide-clean-machine-
+    # failures`. The skip states the dependency instead of silently reporting a pass.
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_a_different_jq_on_path_is_never_used_for_the_settings_trust_boundary(self) -> None:
+        result, log = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            hostile_path_jq=True,
+        )
+
+        # The verdict came from the admitted route: the hostile stub answers `clean` to every
+        # program it is handed, so a launch that consulted it would have passed this document.
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("CLAUDE_CODE_USE_BEDROCK", result.stderr)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "a jq at the head of PATH was executed for a trust-boundary parse: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_a_different_jq_on_path_is_never_used_for_the_live_catalog_comparison(self) -> None:
+        # The same substitution reached through `status` rather than through a refusal: these are the
+        # readers that parse the provider config and the RUNNING gateway's catalog.
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [
+                {"name": "openai", "isDefault": True},
+                {"name": "muse", "isDefault": False},
+            ]},
+            catalog_json={"data": [{"id": "gpt-5.6-terra"}]},
+            hostile_path_jq=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Real jq sees muse configured and absent from the catalog. The hostile stub's `clean`
+        # collapses both lists to one identical name and reports every provider live.
+        self.assertIn("NOT-LIVE", result.stdout)
+        self.assertIn("muse", result.stdout)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "a jq at the head of PATH was executed for a catalog parse: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+
+    # REMOVING THE PATH ROUTE MAKES HAND-SETTING $AGENTIC_SDLC_JQ THE NATURAL OPERATOR REMEDY, so
+    # the variable is now the highest-priority channel with nothing behind it. Both routes above are
+    # exact by construction; the binding is exact only if it is CHECKED. An unvalidated binding
+    # re-opens the whole defect one level up: a bare `gojq` resolves through ambient PATH, a bare
+    # `jq` re-enters the shell function until bash core-dumps -- and that death lands inside
+    # `offending="$(bypassing_settings_document_and_key)"`, where any nonzero exit reads as "every
+    # document was read and held nothing". The suppression is therefore silent in both shapes.
+    #
+    # A lowercase `resolved_jq` in the environment is the same problem from the other side: it is
+    # the resolver's own cache variable, so an inherited value is a third route that outranks both
+    # admitted ones without ever being validated.
+    #
+    # Neither test spells the resolver. Both assert the two facts that matter -- the stub never ran,
+    # and the refusal the hostile `clean` would have suppressed still fired.
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_a_bare_name_binding_is_never_resolved_from_ambient_path(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            hostile_path_jq=True,
+            parent_env={"AGENTIC_SDLC_JQ": "jq-shim"},
+        )
+
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "a bare-name binding was resolved from PATH: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_an_inherited_resolved_jq_variable_is_not_an_admitted_route(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            hostile_path_jq=True,
+            parent_env={"resolved_jq": "jq-shim"},
+        )
+
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "an inherited resolved_jq preempted the admitted routes: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+
+    # THE OTHER HALF OF THE FIX, and the reason a one-line resolution change was reverted once:
+    # taking PATH away is only safe if every consumer that guards a refusal fails CLOSED when the
+    # admitted route genuinely cannot run. AGENTS.md is unambiguous that an uncheckable explicit
+    # `--settings` value stops the launch at exit 3, and a persistent document that carries a
+    # routing switch must not become invisible because the tool that reads it is gone.
+    #
+    # Both of these bind a BROKEN exact jq while leaving a perfectly good one on PATH, so each run
+    # proves two things at once: the surface refuses, and the ambient copy is not quietly borrowed
+    # as a fallback (ADR-0020 decision 4 -- no silent substitution).
+
+    def test_an_explicit_settings_value_is_refused_when_no_admitted_jq_route_runs(self) -> None:
+        selected_name = "explicit-settings-OCX_PATH_SECRET.json"
+
+        result, log = self.run_launcher(
+            "launch", "--settings", selected_name,
+            selected_settings_raw='{"env":{}}',
+            selected_settings_name=selected_name,
+            bound_jq_missing=True,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("could not be checked", result.stderr)
+        self.assertIn("jq", result.stderr)
+        # The unverifiable path is still never echoed, on the same rule as every other refusal here.
+        self.assertNotIn("OCX_PATH_SECRET", result.stdout + result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_a_persistent_settings_document_is_refused_when_no_admitted_jq_route_runs(self) -> None:
+        # The document channel, which is the one an operator forgets: it is read on every launch,
+        # and this one really does carry a routing switch. Reporting it as clean because jq could not
+        # run would print a gateway banner over traffic that went to Bedrock instead.
+        result, log = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            bound_jq_missing=True,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("could not be checked", result.stderr)
+        self.assertIn("settings.json", result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_a_configure_mutation_names_the_tool_when_no_admitted_jq_route_runs(self) -> None:
+        # `refuse_missing_jq` had no test at all, and its text NAMES routes and fix commands -- the
+        # class of sentence that rots without anything failing. Two things are pinned here: the
+        # classification (a MISSING TOOL, never an unclassifiable provider, which is the misdirection
+        # the status-4 split was introduced to end) and the two routes it points at.
+        result, log = self.run_launcher(
+            "configure", "account", "add-key", "muse",
+            config={"providers": {"muse": {"baseUrl": "https://api.meta.ai/v1"}}},
+            bound_jq_missing=True,
+            stdin="",
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("MISSING TOOL", result.stderr)
+        self.assertIn("AGENTIC_SDLC_JQ", result.stderr)
+        self.assertIn("operator-tools:install", result.stderr)
+        self.assertNotIn("anthropic-or-unclassifiable-provider", result.stderr)
+        self.assertNotIn("approved opencodex configuration route", result.stdout)
+        # Classification legitimately reads the provider config, and nothing else may have run.
+        self.assertOnlyReadOnlyOcxRoutes(log, "<ocx><config><show><--json>")
+
+    def test_status_reports_unknown_rather_than_a_false_not_live_when_a_read_fails(self) -> None:
+        # The catalog comparison is a DISPLAY, so its honest degrade is `unknown` rather than a
+        # refusal -- but `unknown` and a false alarm are not the same degrade. The default provider
+        # serves BARE model ids, so it is never in the `<name>/` set the live catalog yields; if the
+        # default-provider read is swallowed instead of propagated, the default provider itself is
+        # reported NOT-LIVE, which is exactly the wrong verdict this section exists to avoid.
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [
+                {"name": "openai", "isDefault": True},
+                {"name": "muse", "isDefault": False},
+            ]},
+            catalog_json={"data": [{"id": "muse/muse-spark-1.2"}, {"id": "gpt-5.6-terra"}]},
+            bound_jq_refuses_default_provider_read=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unknown", result.stdout)
+        self.assertNotIn("NOT-LIVE", result.stdout)
+
     def test_the_jq_resolver_does_not_recurse_into_itself(self) -> None:
         # The resolver is a shell function NAMED `jq`, so probing with `command -v jq` would find
-        # the function and recurse until the shell died. `type -P` searches PATH only. This is the
-        # same shadowing class that let a stale `ccodex` shell function hide the installed binary.
+        # the function and recurse until the shell died -- the same shadowing class that let a stale
+        # `ccodex` shell function hide the installed binary. Since the ADR-0020 fix the resolver
+        # probes no NAME at all (`$AGENTIC_SDLC_JQ`, else the pinned mise route), so the hazard is
+        # closed by construction rather than by choosing `type -P` over `command -v`; this stays as
+        # the guard that a future resolver does not reintroduce a name lookup.
         self.run_launcher("status", config={"providers": {}})
         result = subprocess.run(
             [BASH, str(SCRIPT), "status"],

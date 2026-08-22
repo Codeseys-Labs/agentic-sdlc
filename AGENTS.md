@@ -343,7 +343,19 @@ reported as required or absent.
 the distribution checkout and directly execute the absolute `ocx` path bound by the last explicit
 `operator-tools:install`; the same install binds `jq` and `uv` for catalog/config and Python-backed
 routes, so ordinary installed use does not invoke repository-scoped mise or substitute caller-PATH
-copies. Claude Code therefore starts in the caller's physical current workspace. A reviewed toolchain refresh requires a
+copies. A DIRECT source-checkout launch carries no such binding and therefore resolves `jq` through
+the pinned `mise -C <root> exec -- jq` route: no `jq` NAME is ever looked up, and `$AGENTIC_SDLC_JQ`
+is admitted only as an absolute path or the literal pinned sentinel, so a bare or relative binding
+is refused instead of resolved through ambient PATH. That `jq` classifies
+the settings documents a refusal depends on and reads a provider config and gateway catalog adjacent
+to credentials, so under ADR-0020 it is an exact dependency, and a substituted copy answering
+`clean` would suppress every settings refusal. The residual is stated rather than hidden: that
+pinned route locates `mise` itself on PATH, because mise is the documented sole bootstrap
+prerequisite and is not itself pinned, so a substituted `mise` still governs this parse exactly as
+it governs `ocx`. A bound-but-broken `$AGENTIC_SDLC_JQ` does not fall
+back to the pin either — the surface that needed it blocks by name (exit 3 for a launch refusal,
+`unknown` for the advisory catalog comparison), and rebinding stays an explicit
+`operator-tools:install`. Claude Code therefore starts in the caller's physical current workspace. A reviewed toolchain refresh requires a
 separate explicit operator-tools reinstall; ordinary commands never silently re-resolve, install, or
 update tools. They use the operator's own `~/.claude` — configuration, plugins, agents, and login —
 which is what lets Claude Code present its existing session to the gateway. `ocx claude` therefore

@@ -90,6 +90,10 @@
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# The jq route is resolved once per process and cached HERE, so it is initialized here too: a
+# lowercase `resolved_jq` inherited from the environment would otherwise be a third, unadmitted
+# route that outranks both admitted ones.
+resolved_jq=""
 caller_working_dir="$(pwd -P)"
 # No isolated config root any more (ADR-0014): `launch` uses the operator's own ~/.claude, which
 # is what lets Claude Code present its existing login to the gateway. assets/claude/
@@ -393,24 +397,68 @@ launch_ocx_claude() {
   "$executable" claude "$@"
 }
 
-# An installed ccodex injects the exact jq executable bound during operator-tools installation.
-# Direct source-checkout use accepts an ambient jq first and otherwise retains the repository's
-# pinned mise fallback. `type -P` searches PATH only; `command -v jq` would find this function.
+# TWO ADMITTED ROUTES, IN THIS ORDER, AND NO jq NAME IS EVER RESOLVED FROM AMBIENT PATH.
+#
+#   1. $AGENTIC_SDLC_JQ -- the exact executable operator-tools bound at install time (see
+#      assets/launchers/ccodex.in, which exports it). Highest, because it IS the reviewed binding.
+#      Admitted only as an ABSOLUTE path or the literal pinned sentinel; see the guard below.
+#   2. the repository's pinned route, `mise -C "$root" exec -- jq` (mise.toml, jq = 1.8.2).
+#
+# RESIDUAL, STATED RATHER THAN HIDDEN: the pinned route locates `mise` itself on ambient PATH,
+# because mise is this repository's documented sole bootstrap prerequisite and is not itself
+# pinned -- a substituted `mise` therefore still governs this parse, exactly as it governs `ocx()`,
+# `require_ocx`, and `launch_ocx_claude`. What this resolver closes is the jq-specific channel: no
+# jq NAME is looked up, and the pin is not skipped in favour of an ambient copy.
+#
+# UNTIL 2026-08-21 THIS PREFERRED `$(type -P jq)` OVER THE PIN and only reached the pinned route
+# when PATH had none, so a source-checkout launch parsed trust-relevant JSON with whatever binary
+# the caller's PATH happened to name. That is the substitution ADR-0020 forbids -- "a
+# readiness-dependent executable is never selected from ambient PATH without an admitted exact
+# identity" -- and this is a trust boundary, not a convenience: this jq classifies the settings
+# documents that decide whether a launch is refused, and it reads a provider config and a gateway
+# catalog that sit next to credentials. A caller-supplied `jq` that answers `clean` suppresses
+# every settings refusal in this file. So no jq NAME is ever resolved: the binding is used as an
+# exact absolute path or the pinned route is taken, which also retires the `command -v jq`
+# recursion hazard the old probe existed to dodge.
+#
+# NO SILENT SUBSTITUTION EITHER WAY (ADR-0020 decision 4). A bound-but-broken $AGENTIC_SDLC_JQ does
+# NOT quietly fall back to the pinned route, and an unresolvable pinned route does NOT fall back to
+# anything: the surface that needed jq blocks with a named reason, and refreshing the binding stays
+# an explicit `operator-tools:install` lifecycle step.
 jq() {
   if [ -z "${resolved_jq:-}" ]; then
-    resolved_jq="${AGENTIC_SDLC_JQ:-$(type -P jq 2>/dev/null || true)}"
-    [ -n "$resolved_jq" ] || resolved_jq="mise"
+    resolved_jq="${AGENTIC_SDLC_JQ:-mise}"
+    # AN ADMITTED EXACT IDENTITY IS AN ABSOLUTE PATH (install_operator_tools.py binds one:
+    # "pinned runtime executables are deliberately absolute") or the pinned sentinel. A bare NAME
+    # is neither: `AGENTIC_SDLC_JQ=gojq` sends this trust-boundary parse straight back through
+    # ambient PATH, and `AGENTIC_SDLC_JQ=jq` re-enters THIS function until the shell dies -- a
+    # death that `$(bypassing_settings_document_and_key)` reads as `clean`. A relative path
+    # resolves against the caller-controlled launch directory. Each becomes the unadmitted
+    # sentinel, so every consumer takes its own named fail-closed branch.
+    case "$resolved_jq" in
+      mise|/*) ;;
+      *) resolved_jq=unadmitted ;;
+    esac
   fi
-  if [ "$resolved_jq" = mise ]; then
-    mise -C "$root" exec -- jq "$@"
-  else
-    "$resolved_jq" "$@"
-  fi
+  case "$resolved_jq" in
+    mise) mise -C "$root" exec -- jq "$@" ;;
+    unadmitted) return 127 ;;
+    *) "$resolved_jq" "$@" ;;
+  esac
 }
 
-# True when jq is usable at all, by either route. Callers use this instead of `command -v jq`,
-# which now always succeeds (the function above shadows it) and so no longer answers the
-# question. A host with neither a PATH jq nor a resolvable pinned one still degrades honestly.
+# True only when the RESOLVED route above actually executes jq. Callers use this instead of
+# `command -v jq`, which now always succeeds (the function above shadows it) and so no longer
+# answers the question -- and instead of any name probe, which would answer a different question
+# than "does the admitted binary run here".
+#
+# DELIBERATELY UNCACHED, on ADR-0020 decision 2: configuration is not execution proof, so each
+# consumer re-verifies at the moment it needs the tool rather than trusting one earlier answer.
+# That also keeps the check honest across a mid-run change to the bound executable.
+#
+# A false answer means the admitted route is absent, unresolvable, not executable, or quarantined.
+# Every consumer below then either REFUSES BY NAME or degrades to an explicitly `unknown` display;
+# none of them may read it as "nothing to report".
 jq_available() {
   jq --version >/dev/null 2>&1
 }
@@ -518,8 +566,10 @@ gateway_half_up() {
 # and attempts against the wrong upstream. That is the canary's C1/C5 fail-open condition
 # reached through configuration drift rather than through a typo.
 #
-# Both readers degrade to silence rather than to a false verdict: no jq, no curl, or an
-# unparseable payload yields "unknown", never "live" and never "NOT-LIVE".
+# Both readers degrade to silence rather than to a false verdict: an unrunnable admitted jq route,
+# no curl, or an unparseable payload yields "unknown", never "live" and never "NOT-LIVE". This is a
+# DISPLAY, so a named `unknown` is the honest degrade here rather than a refusal -- and `cmd_status`
+# prints that reason out loud, because an operator who reads nothing reads it as agreement.
 
 configured_provider_names() {
   jq_available || return 1
@@ -549,6 +599,19 @@ live_provider_names() {
   printf '%s\n' "$catalog" | sed -n 's|^\([^/][^/]*\)/.*|\1|p' | sort -u
 }
 
+# The configured DEFAULT provider's name. Exit 1 when it cannot be read at all, and that status is
+# load-bearing rather than cosmetic: the default provider serves BARE model ids, so it never appears
+# in the `<name>/` set live_provider_names builds, and a silently-empty default name therefore
+# reports the default provider itself as NOT-LIVE -- the exact false alarm this comparison exists to
+# avoid. An empty STRING with exit 0 is a different fact (no default is configured) and is kept.
+# This is why the read is not wrapped in `|| true` any more: swallowing an unavailable jq or a failed
+# provider read here degraded the comparison to a WRONG verdict instead of to `unknown`.
+default_provider_name() {
+  jq_available || return 1
+  ocx provider list --json 2>/dev/null \
+    | jq -r '(.configured // []) | map(select(.isDefault == true)) | (first | .name) // ""' 2>/dev/null
+}
+
 # Prints one `<name>` per configured-but-not-served provider. Exit 1 means the comparison could
 # not be made (missing tool, gateway down, unparseable payload) -- deliberately distinct from
 # exit 0 with no output, which means every configured provider is live.
@@ -557,9 +620,7 @@ not_live_providers() {
   configured="$(configured_provider_names)" || return 1
   [ -n "$configured" ] || return 1
   live="$(live_provider_names "$port")" || return 1
-  default_name="$(jq_available \
-    && ocx provider list --json 2>/dev/null \
-      | jq -r '(.configured // []) | map(select(.isDefault == true)) | (first | .name) // ""' 2>/dev/null || true)"
+  default_name="$(default_provider_name)" || return 1
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     [ "$name" = "$default_name" ] && continue
@@ -1070,8 +1131,12 @@ settings_document_bypassing_key_name() {
   if [ ! -f "$settings" ] || [ ! -r "$settings" ]; then
     printf 'unreadable:not a readable regular file'; return 0
   fi
+  # FAIL CLOSED: an existing document this host cannot classify is `unreadable:`, never `clean`.
+  # `launch` turns that into a refusal and `status` prints UNKNOWN, which is the whole point of the
+  # three-outcome contract above -- a document that carries a routing switch must not become
+  # invisible because the tool that reads it is missing.
   if ! jq_available; then
-    printf 'unreadable:jq is unavailable, so this document cannot be inspected'; return 0
+    printf 'unreadable:the admitted jq route could not be run, so this document cannot be inspected'; return 0
   fi
   local found="" status=0
   found="$(settings_bypass_classification < "$settings" 2>/dev/null)" || status=$?
@@ -1160,7 +1225,18 @@ bypassing_settings_document_and_key() {
 # which one the caller meant without guessing from secret-bearing text.
 settings_argument_bypassing_key_name() {
   local value="$1" found="" status=0
-  if [ -n "$value" ] && jq_available; then
+  if [ -n "$value" ]; then
+    # FAIL CLOSED BY NAME, not through the `invalid` door. Without jq neither form can be
+    # classified, and the old guard just skipped the inline attempt: an inline JSON object then fell
+    # through to the file branch, missed there too, and was reported as "not a valid JSON object or
+    # a readable settings file" -- a refusal (so never a bypass) that blamed the operator's value
+    # for this host's missing tool. ADR-0020 decision 3 wants the blocked surface to produce NAMED
+    # diagnostic evidence, so the reason is the tool. The `-e` file test below deliberately does not
+    # run first: a value that is BOTH unparseable and not a path must not be probed as a filename.
+    if ! jq_available; then
+      printf 'value\tunreadable:the admitted jq route could not be run, so this value cannot be inspected'
+      return 0
+    fi
     found="$(printf '%s' "$value" | settings_bypass_classification 2>/dev/null)" || status=$?
     if [ "$status" -eq 0 ]; then
       [ "$found" = clean ] && return 1
@@ -1174,8 +1250,12 @@ settings_argument_bypassing_key_name() {
       printf 'file\tunreadable:not a readable regular file'
       return 0
     fi
+    # Re-probed here rather than trusted from the check above, and that is not redundant: the file
+    # was `-r` a moment ago and the tool answered a moment ago, and neither fact survives into the
+    # open below. test_selected_settings_path_is_redacted_when_the_file_disappears_before_open
+    # exercises exactly this window.
     if ! jq_available; then
-      printf 'file\tunreadable:jq is unavailable, so this file cannot be inspected'
+      printf 'file\tunreadable:the admitted jq route could not be run, so this file cannot be inspected'
       return 0
     fi
     status=0
@@ -1516,8 +1596,9 @@ cmd_status() {
   local stale stale_status=0
   stale="$(not_live_providers "${port:-}")" || stale_status=$?
   if [ "$stale_status" -ne 0 ]; then
-    printf '  unknown : could not compare (gateway down, or jq/curl unavailable). A configured\n'
-    printf '            provider is NOT proven live by appearing in the list above.\n'
+    printf '  unknown : could not compare (gateway down, or curl or the admitted jq route could not\n'
+    printf '            be run). A configured provider is NOT proven live by appearing in the list\n'
+    printf '            above.\n'
   elif [ -z "$stale" ]; then
     printf '  ok      : every configured provider is served by the running gateway\n'
   else
@@ -1715,19 +1796,27 @@ provider_allowed_for_mutation() {
 # A tool this host cannot resolve is not a policy refusal, so it does not borrow the
 # subscription-boundary notice. It names the tool, the reason it is normally present, and the fix.
 refuse_missing_jq() {
-  printf '\nREFUSED: cannot classify this provider because `jq` is unavailable on this host.\n\n' >&2
+  printf '\nREFUSED: cannot classify this provider because no admitted `jq` route runs on this host.\n\n' >&2
   cat >&2 <<EOF
 This is a MISSING TOOL, not a rejected provider. Classification decides whether a configure
 mutation targets a non-Anthropic provider (admitted) or an Anthropic one (refused under
 ADR-0003), and it cannot be decided without reading the provider config.
 
-\`jq\` is pinned by this repository (mise.toml, jq = 1.8.2) and is normally resolved through it,
-so seeing this means neither a PATH \`jq\` nor the pinned copy could be reached. Fix either:
+Exactly two routes are admitted, and a \`jq\` merely present on PATH is deliberately NOT one of
+them (ADR-0020: an execution dependency at a trust boundary is exact or it is refused). Seeing
+this means neither admitted route ran. They are, in this order, the exact copy an
+operator-tools install bound and this checkout's pinned copy (mise.toml, jq = 1.8.2):
 
-  mise -C $root --locked install     # resolve the pinned toolchain
-  # or install jq through your own package manager
+  \$AGENTIC_SDLC_JQ
+  mise -C $root exec -- jq
 
-Then re-run the same command. Nothing was changed.
+Fix whichever applies -- rebind the installed executables, or resolve the pin in this checkout:
+
+  mise run operator-tools:install
+  mise -C $root --locked install
+
+Installing jq with your own package manager does NOT satisfy either route. Then re-run the same
+command. Nothing was changed.
 EOF
   exit 3
 }

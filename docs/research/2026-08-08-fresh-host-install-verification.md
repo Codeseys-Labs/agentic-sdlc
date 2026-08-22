@@ -161,6 +161,19 @@ now prints `about to run an approved opencodex configuration route (account add-
 persists (`apiKey: <set, 48 chars>`). With mise *also* absent, `require_ocx` catches it first with
 its own accurate message, so `refuse_missing_jq` is correctly unreachable in that case.
 
+> **The PATH-first half of that resolver was superseded on 2026-08-21 (seed `agentic-sdlc-6f9d`).**
+> Preferring an ambient `jq` over the pin is the substitution ADR-0020 forbids, and this `jq`
+> classifies settings documents that decide refusals: `scripts/opencodex-claude.sh` now resolves
+> `$AGENTIC_SDLC_JQ` — admitted only as an absolute path or the literal pinned sentinel — and then
+> the pinned `mise -C "$root" exec -- jq`. The `type -P` detail above is therefore historical: no
+> **jq** NAME is looked up any more, which closes the same recursion hazard by construction, and a
+> bare or relative binding is refused rather than resolved. **Residual, stated rather than hidden:**
+> the pinned route locates `mise` itself on ambient PATH, because mise is this repository's
+> documented sole bootstrap prerequisite and is not itself pinned — a substituted `mise` therefore
+> still governs this parse, exactly as it governs `ocx()` and `launch_ocx_claude`. The status-4 /
+> `refuse_missing_jq` half of this entry stands, with its message rewritten to name the two
+> admitted routes instead of a PATH copy.
+
 **Why the suite never caught it, which is the more transferable finding.**
 `tests/test_opencodex_claude.py:107-109` symlinks the *host's* `jq` into the stub bin dir, so
 every test in the file ran with `jq` present. The suite agreed with the developer's machine and
