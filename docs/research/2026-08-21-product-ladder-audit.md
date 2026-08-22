@@ -126,3 +126,16 @@ Not a ladder seed: its description is a verbatim copy of `agentic-sdlc-product-s
 | `f3e0` | keep open (umbrella) | Verbatim copy of `agentic-sdlc-product-spec.md`; correct successor container until Slice 9 closes |
 
 Disposition authority for the conductor's write: spec Implementation Decision 88 (`spec:430-433`) and `research/repository-truth-reconciliation-2026-08-15.md:117-120` — classify, preserve history, delete nothing; per `agentic-sdlc-5dff`, closure travels through the admitted status-plus-description transition pointing at the successor, with stale `blockedBy`/`blocks` edges retained as history.
+
+---
+
+## Addendum (2026-08-22, conductor)
+
+This audit is a dated snapshot; findings above are not rewritten. Since it was recorded, three
+of its dispositions have shipped: the g1 Workflow entry kind landed through the existing bundle
+lifecycle (seed `agentic-sdlc-g1`, `workflows/` collection), the p3 remainder's worktree-custody
+preflight landed as `skills/agentic-sdlc/tools/worktree-custody-preflight.py` (seed
+`agentic-sdlc-f103`), and the d4 remainder's grant binding landed as optional
+prestate/candidate digests on approval records checked by verdict condition 5 (seed
+`agentic-sdlc-efe8`) — so the "free-form" characterizations at lines 50 and 118 describe the
+pre-2026-08-22 state. The queue's closed seeds carry the landing evidence.
