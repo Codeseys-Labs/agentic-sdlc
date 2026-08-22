@@ -1703,6 +1703,15 @@ class AcquisitionEngineGrammarTests(unittest.TestCase):
             self.assertFalse((case / "poison-state").exists())
 
 
+class _StopAfterStagedCopy(Exception):
+    """Ends the real `_stage_candidate` at its first step after the archive copy.
+
+    It is raised from inside the engine's own `_open_dir_at`, so the copy runs exactly as
+    production runs it — including where production sources the admitted digest — and the
+    inflation, admission and extraction that need a genuine candidate archive never start.
+    """
+
+
 class AcquisitionEngineLifecycleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -2798,6 +2807,299 @@ class AcquisitionEngineLifecycleTests(unittest.TestCase):
                     if receipt_inode is not None:
                         self.assertEqual(receipt_path.stat().st_ino, receipt_inode)
 
+    def _exact_receipt_crash_window(
+        self, case: Path, *, nonce: str
+    ) -> tuple[SimpleNamespace, str, str, Path, Path, Path]:
+        """Leave apply's exact receipt on disk with the journal still at `published`.
+
+        That is the ONE durable state that reaches recover finish's "make these exact bytes
+        durable in place" branch, so it is the state a forgery of those bytes has to be
+        attacked from. The clean version of this window is already covered above: at
+        `receipt-before-receipted` an untouched receipt recovers to exit 0 on the same inode.
+        """
+        arguments, operation, archive_sha = self._records(case)
+        output = io.BytesIO()
+        errors = io.BytesIO()
+        stdout = SimpleNamespace(
+            buffer=output, write=lambda text: output.write(text.encode("utf-8"))
+        )
+        stderr = SimpleNamespace(
+            buffer=errors, write=lambda text: errors.write(text.encode("utf-8"))
+        )
+
+        def receipt_fault(point: str) -> None:
+            if point == "receipt-before-receipted":
+                raise RuntimeError("receipt crash")
+
+        trust = ROOT / "policy" / "release-candidate.v1.json"
+        with (
+            mock.patch.object(
+                self.engine,
+                "_trust_root",
+                return_value=(trust, hashlib.sha256(trust.read_bytes()).hexdigest()),
+            ),
+            mock.patch.object(
+                self.engine, "_stage_candidate", side_effect=self._fake_stage
+            ),
+            mock.patch.object(self.engine, "_TEST_RECEIPT_HOOK", receipt_fault),
+            mock.patch.object(self.engine.sys, "stdout", stdout),
+            mock.patch.object(self.engine.sys, "stderr", stderr),
+        ):
+            self.assertEqual(
+                self.engine.apply_hardened(
+                    arguments,
+                    self.candidate,
+                    self.policy,
+                    self.validator,
+                    self.source_root,
+                ),
+                4,
+            )
+        diagnostic = json.loads(errors.getvalue())
+        self.assertEqual(diagnostic["last_proven_phase"], "published")
+        journal_path = (
+            case
+            / "state"
+            / "agentic-sdlc"
+            / "acquisition"
+            / "journals"
+            / f"{operation}.json"
+        )
+        receipt_path = self._receipt(case, archive_sha)
+        self.assertTrue(receipt_path.is_file())
+        plan_raw = arguments.plan.read_bytes()
+        plan = json.loads(plan_raw)
+        journal_raw = journal_path.read_bytes()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        grant = {
+            "archive_absolute_path": plan["archive_absolute_path"],
+            "archive_sha256": plan["archive_sha256"],
+            "archive_size_bytes": plan["archive_size_bytes"],
+            "decision": "finish",
+            "effects_sha256": plan["effects_sha256"],
+            "expires_at": (now + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "issued_at": (now - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "journal_absolute_physical_path": str(journal_path),
+            "journal_sha256": hashlib.sha256(journal_raw).hexdigest(),
+            "nonce": nonce,
+            "operation_id": operation,
+            "original_effects": list(self.engine.EFFECTS),
+            "plan_sha256": hashlib.sha256(plan_raw).hexdigest(),
+            "record_sha256": "",
+            "same_user_uid": os.geteuid(),
+            "schema_version": "release-candidate-acquisition-recover-finish-grant/v1",
+            "trust_root_absolute_path": plan["trust_root_absolute_path"],
+            "trust_root_sha256": plan["trust_root_sha256"],
+            "xdg_data_home_absolute_path": plan["xdg_data_home_absolute_path"],
+            "xdg_data_prestate_sha256": plan["xdg_data_prestate_sha256"],
+            "xdg_state_home_absolute_path": plan["xdg_state_home_absolute_path"],
+            "xdg_state_prestate_sha256": plan["xdg_state_prestate_sha256"],
+        }
+        recovery_grant = case / "receipt-readback-grant.json"
+        recovery_grant.write_bytes(record_bytes(grant))
+        recovery_grant.chmod(0o600)
+        return (
+            SimpleNamespace(
+                journal_locator=diagnostic["journal_locator"],
+                grant=recovery_grant,
+                xdg_state_home=case / "state",
+            ),
+            operation,
+            archive_sha,
+            receipt_path,
+            journal_path,
+            case
+            / "data"
+            / "agentic-sdlc"
+            / "acquisition"
+            / "candidates"
+            / archive_sha
+            / "root",
+        )
+
+    @staticmethod
+    def _forged_same_length_receipt(raw: bytes) -> bytes:
+        """A different receipt of identical length: canonical, resealed, journal digest kept.
+
+        Keeping `journal_sha256` is the point. It is the only field the readback used to
+        compare, so a forgery that preserves it passed while every other field — the
+        `archive_sha256` this receipt exists to assert above all — was the attacker's.
+        """
+        record = json.loads(raw)
+        assert record["archive_sha256"] != "f" * 64
+        record["archive_sha256"] = "f" * 64
+        forged = record_bytes(record)
+        assert len(forged) == len(raw) and forged != raw
+        return forged
+
+    def _recover_finish_with_receipt_racer(
+        self,
+        engine,
+        finish_args: SimpleNamespace,
+        receipt_path: Path,
+        private_root: Path,
+        *,
+        real_identity: bool,
+    ) -> SimpleNamespace:
+        """Recover the receipt window with a racer inside `_sync_existing_at`'s blind spot.
+
+        The racer fires immediately after the `receipt-existing` read the caller compares
+        against, which is exactly where a same-UID writer would land: `_sync_existing_at`
+        then opens the file fresh, takes its `before` stat AFTER the write, and fsyncs the
+        forgery. No timestamp term is involved on either arm, which is why both are run.
+        """
+        codes: list[str] = []
+        real_fail = engine._fail
+        real_read_at = engine._read_at
+        forged: dict[str, object] = {}
+
+        def recording_fail(code: str, exit_code: int = 3, **evidence: object) -> None:
+            codes.append(code)
+            real_fail(code, exit_code, **evidence)
+
+        def racing_read_at(parent, name, limit, code, **keywords):
+            raw = real_read_at(parent, name, limit, code, **keywords)
+            if code == "receipt-existing":
+                replacement = self._forged_same_length_receipt(raw)
+                descriptor = os.open(receipt_path, os.O_WRONLY)
+                try:
+                    os.pwrite(descriptor, replacement, 0)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                forged["raw"] = replacement
+                forged["inode"] = receipt_path.stat().st_ino
+            return raw
+
+        output = io.BytesIO()
+        errors = io.BytesIO()
+        stdout = SimpleNamespace(
+            buffer=output, write=lambda text: output.write(text.encode("utf-8"))
+        )
+        stderr = SimpleNamespace(
+            buffer=errors, write=lambda text: errors.write(text.encode("utf-8"))
+        )
+        with (
+            mock.patch.object(
+                engine,
+                "_identity",
+                engine._identity if real_identity else self._timestamp_free_identity,
+            ),
+            mock.patch.object(engine, "_fail", recording_fail),
+            mock.patch.object(engine, "_read_at", racing_read_at),
+            mock.patch.object(self.candidate, "validate_manifest"),
+            mock.patch.object(engine.sys, "stdout", stdout),
+            mock.patch.object(engine.sys, "stderr", stderr),
+        ):
+            result = engine.recover_finish_hardened(
+                finish_args,
+                self.candidate,
+                self.policy,
+                self.validator,
+                private_root,
+            )
+        return SimpleNamespace(
+            result=result,
+            codes=codes,
+            forged=forged,
+            stdout=output.getvalue(),
+            stderr=errors.getvalue(),
+        )
+
+    def test_receipt_readback_refuses_a_forged_pre_fsync_receipt_on_either_clock(
+        self,
+    ) -> None:
+        for real_identity in (False, True):
+            with (
+                self.subTest(real_identity=real_identity),
+                tempfile.TemporaryDirectory(dir=ROOT) as raw,
+            ):
+                case = Path(raw)
+                (
+                    finish_args,
+                    _operation,
+                    archive_sha,
+                    receipt_path,
+                    journal_path,
+                    private_root,
+                ) = self._exact_receipt_crash_window(
+                    case, nonce="c" * 64 if real_identity else "d" * 64
+                )
+                admitted_receipt = receipt_path.read_bytes()
+                inode = receipt_path.stat().st_ino
+                run = self._recover_finish_with_receipt_racer(
+                    self.engine,
+                    finish_args,
+                    receipt_path,
+                    private_root,
+                    real_identity=real_identity,
+                )
+                self.assertEqual(run.result, 4)
+                self.assertEqual(run.codes, ["receipt-readback"])
+                self.assertEqual(run.stdout, b"")
+                self.assertEqual(
+                    json.loads(run.stderr)["classification"], "unavailable"
+                )
+                # The forgery really did land, in place, on the same immutable receipt.
+                self.assertEqual(receipt_path.read_bytes(), run.forged["raw"])
+                self.assertNotEqual(run.forged["raw"], admitted_receipt)
+                self.assertEqual(
+                    (run.forged["inode"], receipt_path.stat().st_ino), (inode, inode)
+                )
+                self.assertEqual(json.loads(run.forged["raw"])["archive_sha256"], "f" * 64)
+                # Refused BEFORE the terminal transition, so nothing claims a complete effect.
+                self.assertEqual(json.loads(run.stderr)["effect_state"], "unknown")
+                self.assertEqual(
+                    json.loads(journal_path.read_bytes())["entries"][-1]["phase"],
+                    "receipted",
+                )
+                self.assertEqual(archive_sha, json.loads(admitted_receipt)["archive_sha256"])
+
+        # Positive control: the FULL-byte comparison is what refuses, not the harness and not
+        # a clock. Neutralized in a scratch copy of the engine, the same forgery is fsynced by
+        # the engine itself and returned as a complete effect — the accepted verdict this
+        # closes — while the one field the readback used to compare still agrees.
+        guard = "if receipt_raw_readback != receipt_raw:"
+        source = ENGINE_PATH.read_text(encoding="utf-8")
+        self.assertIn(guard, source)
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            (
+                finish_args,
+                _operation,
+                _archive_sha,
+                receipt_path,
+                journal_path,
+                private_root,
+            ) = self._exact_receipt_crash_window(case, nonce="e" * 64)
+            admitted_receipt = receipt_path.read_bytes()
+            scratch = case / "release_candidate_acquisition_without_the_readback.py"
+            scratch.write_text(
+                source.replace(guard, "if False:  # readback neutralized"),
+                encoding="utf-8",
+            )
+            neutralized = load_module(
+                "release_candidate_acquisition_readback_neutralized_under_test", scratch
+            )
+            run = self._recover_finish_with_receipt_racer(
+                neutralized,
+                finish_args,
+                receipt_path,
+                private_root,
+                real_identity=True,
+            )
+            self.assertEqual((run.result, run.codes), (0, []))
+            durable = json.loads(receipt_path.read_bytes())
+            self.assertEqual(durable["archive_sha256"], "f" * 64)
+            self.assertEqual(
+                durable["journal_sha256"],
+                json.loads(admitted_receipt)["journal_sha256"],
+            )
+            self.assertEqual(
+                json.loads(journal_path.read_bytes())["entries"][-1]["phase"],
+                "installed-unselected",
+            )
+
     def test_recovery_inspect_is_read_only_and_separately_granted_private_finish_advances_staged(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             case = Path(raw)
@@ -3062,6 +3364,318 @@ class AcquisitionEngineLifecycleTests(unittest.TestCase):
                 ).exists()
             )
 
+    # `_identity` witnesses a same-inode same-length in-place write ONLY through its
+    # mtime/ctime terms, so on a host whose filesystem timestamp granularity is coarser
+    # than the write window it witnesses nothing at all. Nothing in this test measures any
+    # host's granularity and no claim about one is made: quantizing those terms away is a
+    # deliberate WORST CASE, and expressing it as a mock is what makes the assertions below
+    # granularity-independent on every host, including this one. Every refusal must come
+    # from a check that reads no clock, and every acceptance must be an acceptance that
+    # removing the clock cannot manufacture.
+    @staticmethod
+    def _timestamp_free_identity(item: os.stat_result) -> tuple[int, int, int]:
+        return item.st_dev, item.st_ino, item.st_size
+
+    @staticmethod
+    def _same_length_other_bytes(raw: bytes) -> bytes:
+        """Different content, identical length, derived from whatever was admitted."""
+        return bytes(byte ^ 0xFF for byte in raw)
+
+    def _apply_over_real_staging_copy(
+        self,
+        engine,
+        case: Path,
+        attack,
+        *,
+        real_identity: bool = False,
+    ) -> SimpleNamespace:
+        """Drive `apply_hardened` through the production copy-and-verify seam.
+
+        The rest of `_stage_candidate` (a clean-source snapshot, gzip inflation, tar
+        admission, manual extraction) is what this class deliberately stands in for, but
+        `_copy_fd_at` is the ONE place the pinned archive descriptor is read a second time
+        after the last recheck, and those re-read bytes are the ones written to the stage
+        and then published, so the real `_stage_candidate` is entered here and runs up to
+        its first post-copy step. `attack` races the copy at `data-after-journal`, the
+        checkpoint immediately before the stage directory is created.
+        """
+        arguments, _operation, archive_sha = self._records(case)
+        archive = Path(
+            json.loads(arguments.plan.read_bytes())["archive_absolute_path"]
+        )
+        admitted = archive.read_bytes()
+        self.assertEqual(hashlib.sha256(admitted).hexdigest(), archive_sha)
+        codes: list[str] = []
+        real_fail = engine._fail
+
+        def recording_fail(code: str, exit_code: int = 3, **evidence: object) -> None:
+            # The exit-4 diagnostic record carries no failure code by design, so the named
+            # refusal is captured here instead of being inferred from the exit code alone.
+            codes.append(code)
+            real_fail(code, exit_code, **evidence)
+
+        real_open_dir_at = engine._open_dir_at
+        real_stage_candidate = engine._stage_candidate
+
+        def stop_after_copy(parent_fd, name, display_path, **keywords):
+            if name == ".admission":
+                raise _StopAfterStagedCopy
+            return real_open_dir_at(parent_fd, name, display_path, **keywords)
+
+        def staging(stage, archive_fd, archive_item, plan, candidate, source_root):
+            # PRODUCTION must supply the digest the guard compares against, never this
+            # harness: a wiring regression that keeps the keyword-only argument but sources
+            # it from a live re-read of the mutable archive path is tautological, and a
+            # harness that hands the value over itself is structurally unable to see that.
+            # So enter the real `_stage_candidate` and stop it at its first step after the
+            # copy — opening the private `.admission` scratch directory — then stand in only
+            # for the inflation, admission and extraction this class does not perform.
+            with mock.patch.object(engine, "_open_dir_at", stop_after_copy):
+                try:
+                    real_stage_candidate(
+                        stage, archive_fd, archive_item, plan, candidate, source_root
+                    )
+                except _StopAfterStagedCopy:
+                    pass
+            return self._fake_stage(
+                stage, archive_fd, archive_item, plan, candidate, source_root
+            )
+
+        def race(point: str) -> None:
+            if point == "data-after-journal":
+                attack(archive)
+
+        out = io.BytesIO()
+        errors = io.BytesIO()
+        stdout = SimpleNamespace(
+            buffer=out, write=lambda text: out.write(text.encode("utf-8"))
+        )
+        stderr = SimpleNamespace(
+            buffer=errors, write=lambda text: errors.write(text.encode("utf-8"))
+        )
+        trust = ROOT / "policy" / "release-candidate.v1.json"
+        with (
+            mock.patch.object(
+                engine,
+                "_identity",
+                engine._identity if real_identity else self._timestamp_free_identity,
+            ),
+            mock.patch.object(engine, "_fail", recording_fail),
+            mock.patch.object(
+                engine,
+                "_trust_root",
+                return_value=(
+                    trust,
+                    hashlib.sha256(trust.read_bytes()).hexdigest(),
+                ),
+            ),
+            mock.patch.object(engine, "_stage_candidate", side_effect=staging),
+            mock.patch.object(engine, "_TEST_RACE_HOOK", race),
+            mock.patch.object(engine.sys, "stdout", stdout),
+            mock.patch.object(engine.sys, "stderr", stderr),
+        ):
+            result = engine.apply_hardened(
+                arguments,
+                self.candidate,
+                self.policy,
+                self.validator,
+                self.source_root,
+            )
+        return SimpleNamespace(
+            result=result,
+            codes=codes,
+            archive_sha=archive_sha,
+            admitted=admitted,
+            stdout=out.getvalue(),
+            stderr=errors.getvalue(),
+        )
+
+    @staticmethod
+    def _published(case: Path, archive_sha: str) -> Path:
+        return (
+            case
+            / "data"
+            / "agentic-sdlc"
+            / "acquisition"
+            / "candidates"
+            / archive_sha
+            / "candidate.tar.gz"
+        )
+
+    @staticmethod
+    def _receipt(case: Path, archive_sha: str) -> Path:
+        return (
+            case
+            / "state"
+            / "agentic-sdlc"
+            / "acquisition"
+            / "receipts"
+            / f"{archive_sha}.json"
+        )
+
+    def test_archive_content_recheck_refuses_a_same_inode_mutation_with_no_timestamp_signal(
+        self,
+    ) -> None:
+        def mutate_same_inode(archive: Path) -> None:
+            tampered = self._same_length_other_bytes(archive.read_bytes())
+            fd = os.open(archive, os.O_WRONLY)
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, tampered)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            self.assertEqual(archive.read_bytes(), tampered)
+
+        # Control: dropping the timestamp terms must not by itself refuse an untouched
+        # archive, so the refusal below is the attack rather than the mock, and the copy
+        # this method performs for real must accept the admitted bytes.
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            run = self._apply_over_real_staging_copy(
+                self.engine, case, lambda _archive: None
+            )
+            self.assertEqual((run.result, run.codes, run.stderr), (0, [], b""))
+            self.assertIn(
+                f"archive-sha256={run.archive_sha}".encode("ascii"), run.stdout
+            )
+            self.assertIn(b"effect-state=complete", run.stdout)
+            self.assertEqual(
+                self._published(case, run.archive_sha).read_bytes(), run.admitted
+            )
+
+        # The attack: dev, ino and size all stay equal across it, so only a content
+        # comparison can witness it. Without one this reached exit 0, published the
+        # substituted bytes under the admitted digest, and sealed an immutable receipt
+        # asserting that digest — an accepted verdict over bytes nobody authorized.
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            run = self._apply_over_real_staging_copy(
+                self.engine, case, mutate_same_inode
+            )
+            self.assertEqual(run.result, 4)
+            self.assertEqual(run.codes, ["archive-mutated"])
+            self.assertEqual(run.stdout, b"")
+            diagnostic = json.loads(run.stderr)
+            self.assertEqual(diagnostic["effect_state"], "unknown")
+            self.assertEqual(diagnostic["last_proven_phase"], "opened")
+            self.assertFalse(self._published(case, run.archive_sha).exists())
+            self.assertFalse(self._receipt(case, run.archive_sha).exists())
+
+        # The same attack on a host that does record the write is refused for the same
+        # reason and by the same code, so the two hosts are not two behaviours.
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            run = self._apply_over_real_staging_copy(
+                self.engine, case, mutate_same_inode, real_identity=True
+            )
+            self.assertEqual(run.result, 4)
+            self.assertEqual(run.codes, ["archive-mutated"])
+            self.assertFalse(self._published(case, run.archive_sha).exists())
+            self.assertFalse(self._receipt(case, run.archive_sha).exists())
+
+        # Positive control: the guard, not the harness, is what refuses. Neutralizing the
+        # content comparison in a scratch copy of the engine must let the same attack reach
+        # a complete, receipted, tampered install. A comparison whose text has moved fails
+        # the assertion below loudly rather than degrading into a silent no-op replacement.
+        guard = "if digest.hexdigest() != expected_sha256:"
+        source = ENGINE_PATH.read_text(encoding="utf-8")
+        self.assertIn(guard, source)
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            scratch = case / "release_candidate_acquisition_without_the_guard.py"
+            scratch.write_text(
+                source.replace(guard, "if False:  # guard neutralized"),
+                encoding="utf-8",
+            )
+            neutralized = load_module(
+                "release_candidate_acquisition_neutralized_under_test", scratch
+            )
+            run = self._apply_over_real_staging_copy(
+                neutralized, case, mutate_same_inode
+            )
+            self.assertEqual((run.result, run.codes, run.stderr), (0, [], b""))
+            published = self._published(case, run.archive_sha).read_bytes()
+            self.assertEqual(
+                published, self._same_length_other_bytes(run.admitted)
+            )
+            self.assertNotEqual(
+                hashlib.sha256(published).hexdigest(), run.archive_sha
+            )
+            self.assertTrue(self._receipt(case, run.archive_sha).exists())
+
+    def test_archive_path_substitution_is_timestamp_free_before_and_inert_after(
+        self,
+    ) -> None:
+        def substitute(archive: Path) -> None:
+            # Equal length on purpose: only the dev/ino terms may witness this.
+            replacement = self._same_length_other_bytes(archive.read_bytes())
+            archive.rename(archive.with_name("held-archive.tar.gz"))
+            archive.write_bytes(replacement)
+            archive.chmod(0o600)
+
+        # Before the last recheck, a substitution is caught by the dev/ino half of
+        # `_identity`, which needs no clock: the refusal survives the timestamp terms being
+        # mocked away, and it lands at exit 2 before any target effect.
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            arguments, _operation, _archive_sha = self._records(case)
+            fired = False
+
+            def archive_race(point: str, path: Path, _fd: int) -> None:
+                nonlocal fired
+                if point == "external-after-open:archive-path" and not fired:
+                    fired = True
+                    substitute(path)
+
+            trust = ROOT / "policy" / "release-candidate.v1.json"
+            with (
+                mock.patch.object(
+                    self.engine, "_identity", self._timestamp_free_identity
+                ),
+                mock.patch.object(
+                    self.engine, "_TEST_EXTERNAL_RACE_HOOK", archive_race
+                ),
+                mock.patch.object(
+                    self.engine,
+                    "_trust_root",
+                    return_value=(
+                        trust,
+                        hashlib.sha256(trust.read_bytes()).hexdigest(),
+                    ),
+                ),
+            ):
+                with self.assertRaises(self.engine.AcquisitionFailure) as raised:
+                    self.engine.apply_hardened(
+                        arguments,
+                        self.candidate,
+                        self.policy,
+                        self.validator,
+                        self.source_root,
+                    )
+            self.assertTrue(fired)
+            self.assertEqual(raised.exception.code, "archive-path-race")
+            self.assertEqual(raised.exception.exit_code, 2)
+            self.assertFalse((case / "state" / "agentic-sdlc").exists())
+            self.assertFalse((case / "data" / "agentic-sdlc").exists())
+
+        # After the last recheck the substitution is inert rather than refused, and that is
+        # the load-bearing difference from `release_candidate.py::_pin_archive`, which must
+        # re-resolve its admitted path because its own output IS that path's digest. Here
+        # the descriptor holds the admitted inode, so the copy consumes the admitted bytes
+        # and the substituted name never reaches the stage. Asserting the acceptance keeps
+        # the fd-custody property from silently regressing into a path re-open.
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            case = Path(raw)
+            run = self._apply_over_real_staging_copy(self.engine, case, substitute)
+            self.assertEqual((run.result, run.codes, run.stderr), (0, [], b""))
+            self.assertIn(b"effect-state=complete", run.stdout)
+            published = self._published(case, run.archive_sha).read_bytes()
+            self.assertEqual(published, run.admitted)
+            self.assertEqual(
+                hashlib.sha256(published).hexdigest(), run.archive_sha
+            )
+
 
 @unittest.skipUnless(
     sys.platform == "linux" and os.uname().machine in {"x86_64", "amd64"},
@@ -3189,6 +3803,31 @@ class AcquisitionGenuineEndToEndTests(unittest.TestCase):
             )
             policy, runtime_validator, source_root = engine._load_policy(candidate)
             self.assertEqual(source_root, repository)
+            # Everything below runs the REAL `_stage_candidate`, so this is where the
+            # digest the staging copy is checked against can be observed as production
+            # supplies it. Presence of the keyword-only argument is not the property worth
+            # locking — a wiring change that keeps it but hands over some other digest
+            # would still be a regression, so record the VALUE of every one received.
+            staged_expectations: list[str] = []
+            real_copy_fd_at = engine._copy_fd_at
+
+            def recording_copy_fd_at(
+                source_fd, expected, destination, name, *, expected_sha256
+            ):
+                staged_expectations.append(expected_sha256)
+                real_copy_fd_at(
+                    source_fd,
+                    expected,
+                    destination,
+                    name,
+                    expected_sha256=expected_sha256,
+                )
+
+            copy_spy = mock.patch.object(
+                engine, "_copy_fd_at", recording_copy_fd_at
+            )
+            copy_spy.start()
+            self.addCleanup(copy_spy.stop)
             admitted_source = candidate.admit_source(repository)
             output_dir = case / "output"; output_dir.mkdir(mode=0o700)
             before_build = source_evidence(admitted_source)
@@ -3315,6 +3954,10 @@ class AcquisitionGenuineEndToEndTests(unittest.TestCase):
                 engine.inspect(SimpleNamespace(plan=plan_path), candidate, policy, runtime_validator, source_root)
             self.assertEqual(raised.exception.exit_code, 3)
             phases.append("tamper-refusal")
+            # One real staging copy happened in this canary — the crashed apply's — and the
+            # recovery from `staged` re-publishes the already-staged tree rather than copying
+            # again, so the exact list locks the value AND proves the spy was not vacuous.
+            self.assertEqual(staged_expectations, [plan["archive_sha256"]])
             self.assertFalse(marker.exists())
             for path in ("poison-home", "poison-data", "poison-state", "poison-tmp", "poison-python-home", "poison-uv", "poison-mise"):
                 self.assertFalse((case / path).exists())

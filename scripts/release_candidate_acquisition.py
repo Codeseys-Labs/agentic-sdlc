@@ -488,7 +488,7 @@ def _rename_noreplace_at(source: DirPin, source_name: str, destination: DirPin, 
         _sync_fd(destination.fd, "rename-destination-sync", partial=partial)
 
 
-def _copy_fd_at(source_fd: int, expected: os.stat_result, destination: DirPin, name: str) -> None:
+def _copy_fd_at(source_fd: int, expected: os.stat_result, destination: DirPin, name: str, *, expected_sha256: str) -> None:
     fd = None
     try:
         fd = os.open(
@@ -499,8 +499,10 @@ def _copy_fd_at(source_fd: int, expected: os.stat_result, destination: DirPin, n
         )
         os.lseek(source_fd, 0, os.SEEK_SET)
         total = 0
+        digest = hashlib.sha256()
         while chunk := os.read(source_fd, 1024 * 1024):
             total += len(chunk)
+            digest.update(chunk)
             offset = 0
             while offset < len(chunk):
                 written = os.write(fd, chunk[offset:])
@@ -508,6 +510,37 @@ def _copy_fd_at(source_fd: int, expected: os.stat_result, destination: DirPin, n
                     raise OSError(errno.EIO, "short write")
                 offset += written
         if total != expected.st_size or _identity(os.fstat(source_fd)) != _identity(expected):
+            _fail("archive-mutated", 4, classification="unavailable")
+        # The check above misses an in-place write of the SAME size to the pinned
+        # inode: dev/ino/size all stay equal, so only the mtime/ctime terms of
+        # `_identity` witness it, and on a host whose filesystem timestamp
+        # granularity is coarser than the write window they witness nothing at all.
+        # That class of host is not hypothetical — quantizing those two terms to one
+        # second reproduces an observed CI failure of the sibling check in
+        # `release_candidate.py` exactly (docs/research/2026-08-22-ci-red-forensics.md,
+        # mechanism B2) — but that document leaves the runner's real granularity
+        # deliberately unverified, and the advisory CI probe that reports such a fact is
+        # not something this code can consult, so the control below is chosen to hold on
+        # EVERY host rather than because any host was measured.  Do not restate it as a
+        # property of one runner.  `_recheck_external_file` cannot help either: it compares
+        # the same identity terms.  So compare CONTENT instead.  The digest above is
+        # taken over exactly the bytes written to `name`, and `expected_sha256` is the
+        # archive digest the operator's plan/grant already admitted, so this is a
+        # timestamp-free content comparison that no clock granularity can defeat, and
+        # it is strictly stronger than re-reading the descriptor afterwards (a racer
+        # that restores the original bytes after the copy cannot survive it).  On an
+        # already-open descriptor the check above is now defense in depth rather than
+        # an independent control — its dev/ino terms cannot change under a held fd and
+        # its size term is subsumed here — so do not reorder or retighten it on the
+        # strength of this one.  What this proves is the bytes this copy WROTE: the
+        # staged file is re-opened BY PATH for inflation (`_stage_candidate`) and
+        # published by directory rename, and neither of those compares it to
+        # `archive_sha256` again, so a later substitution of the staged copy is a
+        # separate open window rather than something this guard closes.  The same CLASS
+        # was closed in `release_candidate.py::_pin_archive`, there by re-reading the
+        # pinned descriptor and comparing digests rather than by hashing the write.
+        # Cost is nothing extra: the digest rides the copy that already happens.
+        if digest.hexdigest() != expected_sha256:
             _fail("archive-mutated", 4, classification="unavailable")
         os.fsync(fd)
         _recheck_dir(destination, "stage-copy-race", partial=True)
@@ -938,6 +971,57 @@ def _archive_pin(path: Path, limit: int) -> tuple[ExternalFilePin, str]:
 
 
 def _identity(item: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Physical identity plus the two timestamp terms, and what those terms cannot prove.
+
+    dev/ino/size are timestamp-free and settle substitution: a racer who moves the admitted
+    name onto another object, or who changes a file's length, misses on them no matter what
+    the clock does.  `st_mtime_ns`/`st_ctime_ns` are the ONLY terms that witness an in-place
+    write of the SAME length to the SAME inode, and they are not a control on a host whose
+    filesystem timestamp granularity is coarser than the write window: a same-size mutation
+    inside one quantum leaves this whole tuple equal.  That class of host is not hypothetical
+    — quantizing these two terms to one second reproduces an observed CI failure of the
+    sibling check in `release_candidate.py` exactly (docs/research/2026-08-22-ci-red-forensics.md,
+    mechanism B2) — but that document leaves the runner's real granularity deliberately
+    unverified, and the advisory CI probe that reports such a fact is not something this code
+    can consult, so read the rule as unconditional rather than as a claim about any one
+    runner, and do not restate it as one.  Treat every same-size
+    same-inode conclusion drawn from `_identity` alone as unproven, and close it with content
+    instead.  Where each consumer's content is closed, and where it is NOT:
+
+    * Every whole-file reader — `_read_external_bytes` (plan, grant, trust root through
+      `_read_record`/`_trust_root`), `_read_at`, `_read_root_at` — reads into memory ONCE and
+      every downstream decision runs on that in-memory copy: schema validation, `_sha_bytes`,
+      authority binding, nonce consumption, `routed_raw != journal_raw`.  A later on-disk
+      mutation cannot substitute bytes into a decision already made from bytes already held,
+      so `_recheck_external_file` on those pins asserts liveness of the admitted name rather
+      than integrity of the consumed bytes.
+    * The archive pin is the ONE consumer that reads its descriptor a second time after the
+      last recheck, in `_copy_fd_at`, and those re-read bytes are what gets WRITTEN to the
+      stage.  That write is closed by digest against the admitted `archive_sha256` inside
+      `_copy_fd_at` itself, never by this tuple.  It is not closed any further downstream:
+      `_stage_candidate` re-opens `<stage>/candidate.tar.gz` BY PATH for
+      `candidate._inflate_gzip`, and apply publishes that same file by directory rename, and
+      neither compares it to `archive_sha256` again — so the staged copy between the guard and
+      the publish is an open window, tracked as its own seed, not something this tuple or that
+      digest covers.
+    * `_sync_existing_at` is the one consumer whose `_identity` terms prove nothing at all,
+      by construction and with no clock involved: it opens the receipt fresh and takes
+      `before` AFTER any racer's write, so it has no pre-mutation baseline, and the bytes it
+      makes durable are not bound to the bytes the caller compared at the `receipt-conflict`
+      check.  What closes that branch is the `receipt-readback` step immediately after it,
+      which compares the durable receipt's FULL bytes to the receipt this recovery
+      reconstructed; do not weaken that comparison back to one field.
+    * `_write_root_no_replace` / `_write_first_bootstrap` compare a name-resolved stat to the
+      descriptor of a record this process just wrote; substitution misses on dev/ino.  For the
+      journal that is backed by a real digest readback in the SAME run (`_load_journal_at`).
+      For apply's receipt it is not: nothing in the writing run reads that file back, so its
+      integrity rests on a LATER run's `_installed_exact`, i.e. after this run's verdict.  That
+      gap is tracked as its own seed; do not read this bullet as covering it.
+    * `_tree_sha_fd` hashes each staged file it inventories, so its `_identity` use is a race
+      tripwire over an already-hashed stream; the resulting `candidate_root_sha256` is what
+      `_installed_exact` re-derives and compares against the terminal journal entry, alongside
+      re-reading the installed archive against the admitted digest — again on a later run.
+    """
     return item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns
 
 
@@ -1661,7 +1745,17 @@ def _tree_sha_fd(root: DirPin, *, partial: bool) -> str:
 
 
 def _stage_candidate(stage: DirPin, archive_fd: int, archive_item: os.stat_result, plan: Mapping[str, object], candidate, source_root: Path) -> tuple[str, str]:
-    _copy_fd_at(archive_fd, archive_item, stage, "candidate.tar.gz")
+    # The admitted digest travels with the plan (apply) or with the recovery grant's
+    # replayed plan fields (recover finish), and both call sites have already required
+    # the pinned descriptor's own digest to equal it before any effect started.  Passing
+    # it here is what lets the copy prove the bytes it consumed are those bytes.
+    _copy_fd_at(
+        archive_fd,
+        archive_item,
+        stage,
+        "candidate.tar.gz",
+        expected_sha256=str(plan["archive_sha256"]),
+    )
     private, _created = _open_dir_at(
         stage.fd, ".admission", stage.display_path, create=True, partial=True
     )
@@ -2862,19 +2956,40 @@ def _finish_private_hardened(
                     recorded_at=str(entries[-1]["recorded_at"]),
                 )
             )
-            receipt_raw = _read_at(
+            # The receipt this recovery would itself write, rebuilt from the same inputs
+            # the branch above used: the receipted entry's `recorded_at` IS the
+            # `installed_at` that receipt carries, on both entry paths into this phase.
+            receipt_raw = _receipt_raw(
+                archive_sha=str(grant["archive_sha256"]),
+                candidate_root=(
+                    data.path
+                    / "agentic-sdlc"
+                    / "acquisition"
+                    / "candidates"
+                    / str(grant["archive_sha256"])
+                    / "root"
+                ),
+                operation=operation,
+                plan_sha=str(journal["plan_sha256"]),
+                terminal_raw=terminal_raw,
+                installed_at=str(entries[-1]["recorded_at"]),
+            )
+            receipt_raw_readback = _read_at(
                 receipts,
                 f"{grant['archive_sha256']}.json",
                 int(policy["limits"]["max_receipt_bytes"]),
                 "receipt-readback",
                 partial=True,
             )
-            receipt = _strict_object(
-                receipt_raw,
-                int(policy["limits"]["max_receipt_bytes"]),
-                "receipt-readback",
-            )
-            if receipt.get("journal_sha256") != _sha_bytes(terminal_raw):
+            # FULL bytes, not one field.  `_sync_existing_at` makes durable whatever the
+            # receipt holds when it runs, and its `_identity` terms take their baseline
+            # AFTER any racer's write, so an in-place same-length forgery that preserved
+            # `journal_sha256` was fsynced by this engine and returned exit 0 with every
+            # other field — `archive_sha256` included — belonging to the attacker.  No
+            # clock granularity is involved either way.  This is the last point in the
+            # run that can witness it, so require the durable bytes to be exactly the
+            # bytes this recovery reconstructed rather than merely to agree on one field.
+            if receipt_raw_readback != receipt_raw:
                 _fail("receipt-readback", 4, classification="unavailable")
             locator = _persist_journal_at(
                 journals, operation, terminal_raw, initial=False, partial=True
