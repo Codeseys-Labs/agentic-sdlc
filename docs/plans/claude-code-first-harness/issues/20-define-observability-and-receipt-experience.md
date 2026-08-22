@@ -166,7 +166,7 @@ purpose, transmitted data classes, call count, observed token or byte measure wh
 external retention boundary, and approval digest. It contains no credential, account identity,
 private URL, prompt, model output, source body, or reversible encoding. Declared egress and
 observed transport evidence remain separate: a declaration is not proof that a call occurred,
-while observed undeclared or mismatched egress is an incident and cannot be normalized into the
+while observed undeclared or mismatched egress is an incident and cannot be included in the
 approved total.
 
 Human status and any supported host statusline keep `Main` and `Agents` visually distinct while

@@ -143,14 +143,14 @@ substitute for the tested binary.
 
 ## Sources
 
-[1] https://code.claude.com/docs/en/setup
-[2] https://downloads.claude.ai/claude-code-releases/stable
-[3] https://downloads.claude.ai/claude-code-releases/latest
-[4] https://github.com/anthropics/claude-code/releases/tag/v2.1.233
-[5] https://code.claude.com/docs/en/workflows
-[6] https://github.com/anthropics/claude-code/releases/tag/v2.1.154
-[7] https://code.claude.com/docs/en/feature-availability
-[8] https://code.claude.com/docs/en/llm-gateway
-[9] https://registry.npmjs.org/@anthropic-ai%2Fclaude-code
-[10] https://github.com/anthropics/claude-code/releases/tag/v2.1.224
-[11] https://github.com/anthropics/claude-code
+[1]: https://code.claude.com/docs/en/setup
+[2]: https://downloads.claude.ai/claude-code-releases/stable
+[3]: https://downloads.claude.ai/claude-code-releases/latest
+[4]: https://github.com/anthropics/claude-code/releases/tag/v2.1.233
+[5]: https://code.claude.com/docs/en/workflows
+[6]: https://github.com/anthropics/claude-code/releases/tag/v2.1.154
+[7]: https://code.claude.com/docs/en/feature-availability
+[8]: https://code.claude.com/docs/en/llm-gateway
+[9]: https://registry.npmjs.org/@anthropic-ai%2Fclaude-code
+[10]: https://github.com/anthropics/claude-code/releases/tag/v2.1.224
+[11]: https://github.com/anthropics/claude-code

@@ -44,7 +44,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_install_status_uninstall_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             installed = operator_tools.install(config)
             checked = operator_tools.status(config)
 
@@ -92,7 +93,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_modified_owned_historical_alias_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             path = self.seed_owned_historical_alias(config)
             path.write_text("modified\n")
 
@@ -106,7 +108,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_foreign_historical_alias_is_ignored_by_install_and_preserved_on_retirement(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             config.bin_dir.mkdir(parents=True)
             path = config.bin_dir / "ocx-launch"
             path.write_text("foreign\n")
@@ -121,7 +124,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_unchanged_owned_historical_alias_requires_explicit_retirement(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             path = self.seed_owned_historical_alias(config)
 
             self.assertEqual(operator_tools.install(config)[0], 0)
@@ -137,7 +141,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_adopted_historical_alias_is_never_retired(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             path = self.seed_owned_historical_alias(config, removable="false")
 
             retired = operator_tools.retire_aliases(config)
@@ -148,8 +153,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_status_is_read_only_on_a_never_installed_home(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
-
+            root = Path(temp)
+            config = self.config(root)
             code, messages = operator_tools.status(config)
 
             self.assertEqual(code, 1)
@@ -241,7 +246,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_install_commit_failure_is_recovered(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             original_write_state = operator_tools.write_state
             writes = 0
 
@@ -266,7 +272,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_uninstall_commit_failure_is_recovered(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             original_write_state = operator_tools.write_state
             writes = 0
@@ -290,7 +297,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_pending_conflict_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             content = self.historical_alias_content(config)
             path = config.bin_dir / "ocx-launch"
             record = {"path": str(path), "digest": operator_tools.digest_bytes(content), "removable": "true"}
@@ -306,7 +314,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_ccodex_dispatcher_is_installed_and_resolves_its_repo_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             body = dispatcher.read_text()
@@ -328,7 +337,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_ccodex_binds_the_pinned_ocx_and_jq_paths_at_install_time(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             body = (config.bin_dir / "ccodex").read_text()
             self.assertIn(f"installed_ocx='{config.ocx_path}'", body)
@@ -400,7 +410,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_operator_tools_rejects_a_missing_pinned_runtime_before_install(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             config.ocx_path.unlink()
 
             with self.assertRaisesRegex(
@@ -413,7 +424,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_operator_tools_refreshes_an_owned_dispatcher_when_a_binding_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             first = operator_tools.install(config)
             old_body = (config.bin_dir / "ccodex").read_text()
             replacement = root / "runtime" / "replacement ocx"
@@ -445,7 +457,8 @@ class OperatorToolsTests(unittest.TestCase):
         # The use surface is not the maintenance surface. Shipping `check`/`test`/`validate` on an
         # operator's PATH would present repo upkeep as a product feature.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             body = (config.bin_dir / "ccodex").read_text()
             # Assert on the dispatch arms, not on the whole file: the header PROSE names the
@@ -471,7 +484,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_ccodex_reports_a_missing_repository_root_by_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
 
             result = subprocess.run(
@@ -486,7 +500,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_ccodex_rejects_an_unknown_verb_without_running_anything(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
 
             for arguments in (["not-a-command"], ["ocx", "not-a-verb"], ["bundle", "reinstall"]):
@@ -605,7 +620,8 @@ class OperatorToolsTests(unittest.TestCase):
         # with "unknown ccodex ocx verb: --help". All eight forms are asserted together because
         # the defect was a per-route inconsistency, not a single wrong branch.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -643,7 +659,8 @@ class OperatorToolsTests(unittest.TestCase):
         # surviving in the three routes that fix did not touch. Found while writing the README
         # command reference, by running every documented verb rather than reading the source.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -670,7 +687,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_verb_help_is_the_verbs_own_text_not_the_top_level_usage(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
 
@@ -687,7 +705,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_the_forwarding_separator_reaches_claude_code_through_the_dispatcher(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
 
@@ -712,7 +731,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_dispatcher_launches_claude_in_the_callers_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
             workspace = root / "caller workspace"
@@ -737,7 +757,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_every_direct_ocx_route_names_a_stale_install_binding(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
             config.ocx_path.unlink()
@@ -759,7 +780,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_jq_routes_name_a_stale_install_binding_without_path_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
             config.jq_path.unlink()
@@ -782,7 +804,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_python_route_uses_the_install_bound_uv_in_the_callers_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
             workspace = root / "python caller workspace"
@@ -804,7 +827,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_python_route_names_a_stale_install_bound_uv_without_path_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
             config.uv_path.unlink()
@@ -824,7 +848,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_dispatcher_yolo_is_available_on_launch_and_ultracode(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
 
@@ -852,7 +877,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_dispatcher_routes_ensure_in_short_and_long_forms(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -872,7 +898,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_set_fast_model_forwards_one_exact_value_without_launching(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -896,7 +923,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_set_fast_model_bare_invocation_selects_from_claude_families_and_live_ocx(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -930,7 +958,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_set_fast_model_selector_can_clear_and_cancel_without_a_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -955,7 +984,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_set_fast_model_selector_fails_closed_when_live_catalog_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
             environment["STUB_OCX_MODELS_FAIL"] = "1"
@@ -971,7 +1001,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_set_fast_model_refuses_extra_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -990,7 +1021,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_set_fast_model_help_is_side_effect_free(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             dispatcher = config.bin_dir / "ccodex"
             environment = self.stub_environment(root, config.bin_dir)
@@ -1013,8 +1045,8 @@ class OperatorToolsTests(unittest.TestCase):
         # `unmanaged` for a nonexistent file sent an operator hunting for a conflict to
         # resolve. A missing file is `absent`, and the report names the install command.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
-
+            root = Path(temp)
+            config = self.config(root)
             code, messages = operator_tools.status(config)
 
             self.assertEqual(code, 1)
@@ -1031,7 +1063,8 @@ class OperatorToolsTests(unittest.TestCase):
         # The distinction has to cut both ways: a file that IS there but is not owned is a
         # real conflict for the operator to resolve, and must not be softened to `absent`.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             config.bin_dir.mkdir(parents=True)
             (config.bin_dir / "ocx-launch").write_text("foreign\n")
 
@@ -1048,7 +1081,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_v1_state_with_historical_alias_remains_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             path = self.seed_owned_historical_alias(config)
             state = operator_tools.load_state(config.state_path, config)
             state.pop("pending")
@@ -1062,7 +1096,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_retire_aliases_dry_run_preserves_file_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); mutable = self.config(root)
+            root = Path(temp)
+            mutable = self.config(root)
             path = self.seed_owned_historical_alias(mutable)
             before = mutable.state_path.read_bytes()
             dry_run = self.config(root, dry_run=True)
@@ -1076,7 +1111,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_status_detects_ownership_state_change_during_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             operator_tools.install(config)
             before_lock = config.lock_path.stat() if config.lock_path.exists() else None
             original = operator_tools._status
@@ -1103,7 +1139,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_status_reports_pending_without_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             content = self.historical_alias_content(config)
             path = config.bin_dir / "ocx-launch"
             record = {"path": str(path), "digest": operator_tools.digest_bytes(content), "removable": "true"}
@@ -1118,7 +1155,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_readonly_projection_preserves_pending_evidence_without_a_lock_or_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             path = config.bin_dir / "ccodex"
             record = {
                 "path": str(path),
@@ -1149,7 +1187,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_readonly_projection_keeps_absent_historical_aliases_optional(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             self.assertEqual(operator_tools.install(config)[0], 0)
 
             projection = operator_tools.readonly_projection(config)
@@ -1163,7 +1202,8 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_readonly_projection_reports_present_historical_aliases_without_making_them_required(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             self.assertEqual(operator_tools.install(config)[0], 0)
             alias = self.seed_owned_historical_alias(config)
 
@@ -1187,7 +1227,8 @@ class OperatorToolsTests(unittest.TestCase):
         if not hasattr(os, "symlink"):
             self.skipTest("symlinks are required")
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); config = self.config(root)
+            root = Path(temp)
+            config = self.config(root)
             external = root / "external-state"
             external.write_text("{}")
             config.state_path.parent.mkdir(parents=True)

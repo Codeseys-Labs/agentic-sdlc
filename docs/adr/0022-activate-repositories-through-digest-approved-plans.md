@@ -72,7 +72,7 @@ the current runbook deterministic or authorize repository writes, trust changes,
 - Assessment and plan commands make no target or user-configuration mutation.
 - Apply consumes the exact reviewed plan digest and refuses changed prestate.
 - Foreign guidance, tracker state, toolchain files, hooks, CI, and user work are preserved by default.
-- Remediation-ready never appears as gate-passing or normal delivery ready.
+- Remediation-ready never appears as gate-passing or ready for normal delivery.
 
 ## Reversal condition
 
