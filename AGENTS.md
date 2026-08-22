@@ -67,6 +67,17 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   dispatch; `model-tier-rightsizing` itself remains a skill, not a slash command. Other hosts
   invoke the flagship skill with the same intents. Global installation and per-repository
   activation are separate lifecycle planes.
+- `workflows/` — Claude Code Dynamic Workflow documents, installed as ordinary owned bytes into
+  `<claude-home>/.claude/workflows/` by the same lifecycle that owns skills, agents, and commands:
+  same ownership records, staging, refresh, migration, and modified/foreign preservation. Codex
+  owns no record of them. Installing, refreshing, adopting, or removing one never runs it, never
+  enables it, and never reloads a host — enabling or executing the real overlay is a separately
+  authorized user-configuration effect. The shipped `sdlc-wave-scout` is a read-only two-stage
+  scout that proposes a wave graph and refuses before dispatch until the conductor supplies a
+  resolved `RuntimeAssignment` per stage, because the distributed bytes carry no model or effort
+  pin. Adding one = adding `workflows/<name>.js` whose first line is `// workflow: <name>`; the
+  validator checks that pairing, the lowercase-slug name, module-free parseability, the absence of
+  a static model/effort pin, and the absence of user-specific paths.
 
 ## Working on THIS repo
 

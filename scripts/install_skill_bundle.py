@@ -31,6 +31,21 @@ IDENTITY_VERSION = "stat-v2"
 # Private alias map: the ONLY sanctioned in-code appearance of the retired
 # public slug, consumed exclusively by identity-migration/dedup logic.
 IDENTITY_SKILL_RENAMES = {"agentic-sdlc-orchestrator": "agentic-sdlc"}
+# Every payload kind this lifecycle owns, mapped to the collection directory it lands in under
+# the configured agent root. This table IS the entry-kind surface: discovery, staging, refresh,
+# retarget, adoption, recovery, status, uninstall, and rename are all kind-agnostic and read it
+# rather than branching per kind, so a kind is added here and nowhere else.
+COLLECTION_FOR_KIND = {
+    "skill": "skills",
+    "agent": "agents",
+    "command": "commands",
+    "workflow": "workflows",
+}
+# Kinds only Claude Code discovers. A Codex plane owns no record of them.
+CLAUDE_ONLY_KINDS = frozenset({"command", "workflow"})
+# The kinds a v1 ownership document could have been written by. v1 predates the workflow kind, so
+# no v1-era writer could have produced one; admitting it would accept a record no writer wrote.
+V1_KINDS = frozenset({"skill", "agent", "command"})
 
 
 class LinuxStatxTimestamp(ctypes.Structure):
@@ -468,6 +483,20 @@ def agent_root(entry: Entry, config: Config) -> Path:
     return config.home / ".claude" if entry.agent == "claude" else config.codex_home
 
 
+def entry_collection(kind: Any) -> str | None:
+    """Map one owned payload kind to its destination collection, or None if unsupported.
+
+    `workflow` is a Claude Code Dynamic Workflow document that lands in
+    `<claude-home>/.claude/workflows/`. The lifecycle owns its bytes, its digest, and its
+    ownership record — nothing more. Installing, refreshing, retargeting, adopting, or removing a
+    workflow never runs it, never enables it, never reloads a host, and never grants it any
+    authority: enabling or executing the real host overlay is a separately authorized
+    user-configuration effect. That is why the workflow kind needs no execution machinery here and
+    reuses the same transactions as every other kind.
+    """
+    return COLLECTION_FOR_KIND.get(kind) if isinstance(kind, str) else None
+
+
 def record_entry(record: dict[str, Any], key: str) -> Entry:
     return Entry(
         record["agent"],
@@ -478,8 +507,16 @@ def record_entry(record: dict[str, Any], key: str) -> Entry:
 
 
 def destination_is_configured(key: str, record: dict[str, Any], config: Config) -> bool:
-    """Return whether a record targets the currently configured agent home spelling."""
-    expected = destination_for(record_entry(record, key), config)
+    """Return whether a record targets the currently configured agent home spelling.
+
+    A record whose kind has no destination on its own plane has no configured destination either,
+    so it answers False rather than raising: `validate_owned_entries` already refuses such a
+    record with a named error, and this predicate must stay a predicate for the read-only callers.
+    """
+    try:
+        expected = destination_for(record_entry(record, key), config)
+    except InstallerError:
+        return False
     return os.path.normcase(os.path.abspath(key)) == os.path.normcase(os.path.abspath(expected))
 
 
@@ -493,15 +530,23 @@ def record_structure_valid(key: str, record: dict[str, Any]) -> bool:
         and bool(source_value)
         and Path(source_value).is_absolute()
     )
+    # `collection is not None` is the kind test, and it comes first on purpose: a malformed
+    # document can carry an unhashable `kind` (a JSON list or object), and a bare `in` against a
+    # set or dict raises TypeError on one. Short-circuiting through the isinstance-guarded lookup
+    # keeps that a refused record rather than a traceback.
+    collection = entry_collection(kind)
+    # `isinstance(agent, str)` guards the SAME unhashable-value hazard as the kind path above, one
+    # line below it: a malformed document can carry an unhashable `agent` (a JSON list or object)
+    # exactly as it can an unhashable `kind`, and a bare `agent in {...}` raises TypeError on one.
     identity_valid = (
-        agent in {"claude", "codex"}
-        and kind in {"skill", "agent", "command"}
-        and not (agent == "codex" and kind == "command")
+        isinstance(agent, str)
+        and agent in {"claude", "codex"}
+        and collection is not None
+        and not (agent == "codex" and kind in CLAUDE_ONLY_KINDS)
         and isinstance(name, str)
         and name not in {"", ".", ".."}
         and Path(name).name == name
     )
-    collection = {"skill": "skills", "agent": "agents", "command": "commands"}.get(kind)
     destination = Path(key)
     destination_valid = (
         identity_valid
@@ -649,10 +694,7 @@ def validate_transactions(config: Config, state: dict[str, Any]) -> dict[str, di
             )
         reference_valid = (
             isinstance(reference_record, dict)
-            and destination.parent.name
-            == {"skill": "skills", "agent": "agents", "command": "commands"}.get(
-                reference_record.get("kind")
-            )
+            and destination.parent.name == entry_collection(reference_record.get("kind"))
         )
         if not records_valid or not artifacts_valid or not reference_valid:
             raise InstallerError(f"invalid transaction record for {key}")
@@ -839,12 +881,19 @@ def discover_entries(repo_root: Path) -> list[Entry]:
         entries.append(Entry("claude", "command", source.name, source))
     for source in sorted((repo_root / "agents" / "codex").glob("*.toml")):
         entries.append(Entry("codex", "agent", source.name, source))
+    # Workflow documents are Claude-only bytes; installing one never runs or enables it.
+    for source in sorted((repo_root / "workflows").glob("*.js")):
+        entries.append(Entry("claude", "workflow", source.name, source))
     return entries
 
 
 def destination_for(entry: Entry, config: Config) -> Path:
     root = agent_root(entry, config)
-    collection = {"skill": "skills", "agent": "agents", "command": "commands"}[entry.kind]
+    collection = entry_collection(entry.kind)
+    if collection is None:
+        raise InstallerError(f"unsupported entry kind: {entry.kind}")
+    if entry.agent == "codex" and entry.kind in CLAUDE_ONLY_KINDS:
+        raise InstallerError(f"{entry.kind} entries have no Codex destination: {entry.name}")
     return root / collection / entry.name
 
 
@@ -1185,14 +1234,22 @@ def v1_record_structure_valid(key: str, record: dict[str, Any]) -> bool:
     agent = record.get("agent")
     kind = record.get("kind")
     name = record.get("name", Path(key).name)
-    collection = {"skill": "skills", "agent": "agents", "command": "commands"}.get(kind)
+    # A v1 document predates the workflow kind, so the v1 reader admits only the three kinds a
+    # v1-era writer could have produced; a v1 record naming `workflow` was written by nothing this
+    # lifecycle shipped. The isinstance guard comes first because a malformed document can carry an
+    # unhashable kind, and a bare `in` against a frozenset raises TypeError on one.
+    collection = entry_collection(kind) if isinstance(kind, str) and kind in V1_KINDS else None
     destination = Path(key)
     source = record.get("source")
     digest_value = record.get("digest")
+    # `isinstance(agent, str)` guards the SAME unhashable-value hazard as the kind guard one line
+    # above it: an unhashable `agent` (a JSON list or object) raises TypeError on a bare
+    # `agent in {...}`, exactly as an unhashable `kind` does.
     return bool(
-        agent in {"claude", "codex"}
-        and kind in {"skill", "agent", "command"}
-        and not (agent == "codex" and kind == "command")
+        isinstance(agent, str)
+        and agent in {"claude", "codex"}
+        and collection is not None
+        and not (agent == "codex" and kind in CLAUDE_ONLY_KINDS)
         and isinstance(name, str)
         and name not in {"", ".", ".."}
         and Path(name).name == name

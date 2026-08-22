@@ -49,6 +49,11 @@ class InstallSkillBundleTests(unittest.TestCase):
         (root / "agents" / "codex" / "research" / "excluded.toml").write_text("excluded")
         (root / "commands").mkdir()
         (root / "commands" / "command.md").write_text("command")
+        (root / "workflows").mkdir()
+        (root / "workflows" / "wave.js").write_text("// workflow: wave\n")
+        # Only `workflows/*.js` is a payload. A sibling of another suffix must stay undiscovered
+        # rather than be installed into the workflow collection under a name no host reads.
+        (root / "workflows" / "notes.md").write_text("not a workflow")
 
     def only_entry(self, root: Path, agent: str = "claude") -> installer.Entry:
         return next(
@@ -105,6 +110,7 @@ class InstallSkillBundleTests(unittest.TestCase):
                     ("claude", "agent", "role.md"),
                     ("claude", "command", "command.md"),
                     ("codex", "agent", "role.toml"),
+                    ("claude", "workflow", "wave.js"),
                 ],
             )
 

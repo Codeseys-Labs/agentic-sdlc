@@ -24,7 +24,35 @@ import yaml
 SECRET_PATTERN = re.compile(
     r"AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA|OPENSSH) PRIVATE KEY|amazon\.com/[a-z]|\.a2z\.com|aws\.dev/"
 )
-TEXT_SUFFIXES = {".md", ".mjs", ".sh", ".ps1", ".toml", ".json", ".yml", ".yaml", ".py"}
+# `.js` is here because the workflow overlay payload ships in that suffix; without it a workflow
+# document would be the one authored tree the secret-shaped-string scan below never reads.
+TEXT_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".ps1", ".toml", ".json", ".yml", ".yaml", ".py"}
+# The workflow overlay's authored shape. A workflow's installed name is its identity — it becomes
+# the namespaced command a host exposes — so the stem stays a portable lowercase slug and the file
+# restates it in a required header line, which is what keeps the declared name and the stem from
+# drifting. This is a bundle-local authoring convention, not a claim about a host's file schema.
+WORKFLOW_STEM_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+WORKFLOW_HEADER_PREFIX = "// workflow: "
+# A workflow script cannot load modules in its documented runtime, so shipping one that tries is
+# shipping a document that cannot run.
+WORKFLOW_MODULE_LOAD_PATTERN = re.compile(r"\brequire\s*\(|\bimport\s*\(|^[ \t]*import[ \t]", re.MULTILINE)
+# A provider-neutral role carries no static model or effort pin; the conductor injects the exact
+# requested values at dispatch. A quoted literal in either slot is that forbidden pin.
+WORKFLOW_ROUTE_PIN_PATTERN = re.compile(r"\b(?:model|effort)[ \t]*:[ \t]*['\"`]")
+# A user-specific home root is host-specific state, never distributable payload. `~` and `$HOME`
+# stay legal because they name whichever user runs the host rather than one named account.
+WORKFLOW_USER_PATH_PATTERN = re.compile(
+    r"/home/[A-Za-z0-9._-]+/|/Users/[A-Za-z0-9._-]+/|[A-Za-z]:\\+Users\\+"
+)
+# Compile-only parse probe. A workflow document is an async function body — the documented shape
+# uses top-level `await` and a terminal `return`, neither of which parses as a standalone script —
+# so it is compiled through the AsyncFunction constructor and never called.
+WORKFLOW_PARSE_PROBE = (
+    "const fs = require('fs');"
+    "const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;"
+    "try { new AsyncFunction(fs.readFileSync(process.argv[1], 'utf8')); }"
+    "catch (error) { process.stderr.write(String((error && error.message) || error)); process.exit(1); }"
+)
 REQUIRED_TASKS = {
     "bundle:install",
     "bundle:status",
@@ -725,6 +753,62 @@ def validate_skills(root: Path, result: Validation) -> None:
         for reference in sorted(set(re.findall(r"\breferences/[A-Za-z0-9._-]+\.md", text))):
             if not (skill.parent / reference).is_file():
                 result.error(f"{directory}: missing {reference}")
+
+
+def validate_workflows(root: Path, result: Validation) -> None:
+    """Check the shape of every workflow overlay document the bundle ships.
+
+    These are the shape rules that make sense for a document the lifecycle owns as BYTES: it must
+    be discoverable by the installer, self-declare the name it will be installed under, parse in
+    the runtime shape it will be handed to, load no modules, pin no model or effort, and name no
+    user-specific path. Nothing here executes a workflow or asserts that a host will accept one;
+    enabling the real overlay stays a separately authorized user-configuration effect.
+    """
+    directory = root / "workflows"
+    if not directory.is_dir():
+        return
+    node = shutil.which("node")
+    for path in sorted(directory.iterdir()):
+        label = path.relative_to(root).as_posix()
+        if path.is_symlink() or not path.is_file():
+            result.error(f"{label}: workflows/ holds regular workflow documents only")
+            continue
+        if path.suffix != ".js":
+            # The installer discovers `workflows/*.js`. Anything else here would ship in the
+            # payload and never be installed, which is dead weight that reads as a shipped entry.
+            result.error(f"{label}: workflow documents must use the .js suffix")
+            continue
+        stem = path.stem
+        if not WORKFLOW_STEM_PATTERN.fullmatch(stem):
+            result.error(f"{label}: workflow name must be a lowercase slug")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            result.error(f"{label}: workflow document is unreadable: {exc}")
+            continue
+        first_line = text.split("\n", 1)[0].rstrip("\r")
+        if not first_line.startswith(WORKFLOW_HEADER_PREFIX):
+            result.error(f"{label}: missing a leading '{WORKFLOW_HEADER_PREFIX}<name>' header")
+        elif first_line[len(WORKFLOW_HEADER_PREFIX) :].strip() != stem:
+            result.error(f"{label}: declared workflow name does not match the file name")
+        if WORKFLOW_MODULE_LOAD_PATTERN.search(text):
+            result.error(f"{label}: a workflow document must not load modules")
+        if WORKFLOW_ROUTE_PIN_PATTERN.search(text):
+            result.error(f"{label}: static model or effort pins are forbidden")
+        if WORKFLOW_USER_PATH_PATTERN.search(text):
+            result.error(f"{label}: user-specific paths are forbidden")
+        if node:
+            completed = subprocess.run(
+                [node, "-e", WORKFLOW_PARSE_PROBE, str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode:
+                # Control characters in a child's message would otherwise be replayed straight
+                # into the rendered error line.
+                detail = completed.stderr.strip().encode("unicode_escape").decode("ascii")
+                result.error(f"{label} does not parse: {detail}")
 
 
 def validate_python(root: Path, result: Validation) -> None:
@@ -2334,7 +2418,7 @@ def validate_release_candidate_policy(root: Path, result: Validation) -> None:
             ):
                 result.error(f"{relative}: payload allowlist must be sorted, closed, and non-overlapping")
             required_files = {"LICENSE", "NOTICE"}
-            required_trees = {"agents", "assets", "commands", "policy", "scripts", "skills"}
+            required_trees = {"agents", "assets", "commands", "policy", "scripts", "skills", "workflows"}
             if not required_files.issubset(files) or not required_trees.issubset(trees):
                 result.error(f"{relative}: minimal authored payload roots are missing")
 
@@ -3811,6 +3895,7 @@ def validate_policy(root: Path, result: Validation) -> None:
 def validate(root: Path) -> Validation:
     result = Validation()
     validate_skills(root, result)
+    validate_workflows(root, result)
     validate_python(root, result)
     validate_release_contract(root, result)
     validate_release_candidate_policy(root, result)
