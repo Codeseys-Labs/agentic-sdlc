@@ -27,10 +27,13 @@ Effective readback is separate from immutable request injection. Record
 exposed, or `unavailable` when the transport cannot expose effective effort or context behavior. Never copy requested values into resolved or
 readback fields, and never require impossible effective readback after request injection and
 model identity are verified. Prompt prose does not enforce a model or effort; an assignment
-carried in a prompt is an audit copy only. `[1m]` is independent: use only a
-transport-certified exact form for context-heavy work, and never infer intelligence, upstream
-context capacity, compaction, or effort compliance from its request or base-ID readback. A
-recommendation, gate, or route never authorizes an outward action.
+carried in a prompt is an audit copy only. In an OCX Ultracode Workflow, every explicit
+`agent()` `model` ID must use its exact certified/admitted/readable `[1m]` request form; an
+unsupported form stops before dispatch and returns one `SeedProposal`, never an unsuffixed
+fallback. Outside that mode, use `[1m]` only as a transport-certified exact form for context-heavy
+work. In either mode, never infer intelligence, upstream context capacity, compaction, or effort
+compliance from its request or base-ID readback. A recommendation, gate, or route never
+authorizes an outward action.
 
 Context footprint is a second scheduling axis alongside model tier: a route's admitted
 context, compaction behavior, and inheritance across fresh-versus-forked agents constrain

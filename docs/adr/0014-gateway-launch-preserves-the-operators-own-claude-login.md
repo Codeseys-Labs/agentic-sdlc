@@ -77,8 +77,8 @@ login`, which establishes that passthrough requires no credential onboarded into
    single-native-model spelling is dead weight. `ocx:claude-subscription` is removed from
    `mise.toml` and from the validator's task inventory.
 
-4. **Keep two checks, for billing honesty rather than prohibition.** `launch` refuses (exit 3)
-   when the route would not actually be used:
+4. **Keep route-integrity checks, for billing honesty rather than prohibition.** `launch` refuses
+   (exit 3) when the route would not actually be used:
    - a provider-routing key — `CLAUDE_CODE_USE_BEDROCK`/`USE_VERTEX`/`USE_FOUNDRY`,
      `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL` —
      exported OR present in the global `settings.json` `env` block, or an `apiKeyHelper` there.
@@ -99,12 +99,40 @@ login`, which establishes that passthrough requires no credential onboarded into
    through 2026 has been unilateral and has reversed direction more than once. This record is
    evidence, not authorization, and it grants no authority for any outward effect.
 
+### 2026-08-13 amendment — selected settings are the third route-integrity channel
+
+Claude Code 2.1.229 was measured with two loopback listeners: the process environment named the
+local gateway listener while an explicit inline `--settings` object set
+`env.ANTHROPIC_BASE_URL` to the other listener. Every request reached the selected-settings
+listener. Decision item 4 therefore has a third current check: ordinary launch validates every
+`--settings <file-or-json>` and `--settings=<file-or-json>` occurrence before gateway startup. The
+value must be one JSON object or a readable file containing one, and it must not contain the same
+provider-routing, base-URL, helper, or Console-key blockers above. Accepted argv remains unchanged;
+settings bytes and paths are inspected but never printed, copied, or persisted. A later literal
+`--` ends Claude's option parsing and therefore the scan, as a separate two-listener probe confirmed.
+
+### 2026-08-13 amendment — distribution root and caller workspace are separate
+
+An installed `ccodex` resolves this launcher from the agentic-sdlc distribution checkout. The old
+`mise -C <distribution> exec -- ocx claude` also changed the child working directory, so a launch
+invoked from another repository started Claude Code in the distribution checkout instead. Using a
+second mise working-directory option was tested and rejected: it made mise resolve configuration in
+the caller workspace, where the distribution's OpenCodex pin was absent. Operator-tools installation
+now resolves the reviewed `ocx`, `jq`, and `uv` pins once, writes their absolute paths into `ccodex`, and
+installed launch invokes the bound `ocx` directly. That keeps the distribution identity separate
+from Claude Code's physical current directory without depending on ambient PATH or daily mise
+activation. A reviewed toolchain change requires a separate explicit operator-tools reinstall;
+ordinary launch never silently resolves, installs, or updates tools. Direct source-checkout use keeps
+a repository-scoped mise fallback. This applies equally to ordinary and Ultracode launches and
+preserves argument boundaries, global `~/.claude` use, gateway supervision, and route-integrity
+checks.
+
 ## Consequences
 
 - Positive: one launch route instead of three, and it does what the gateway is for. Roughly 370
   lines of scrub/isolation/refusal machinery and 35 tests of removed behavior are gone.
-- Positive: the two remaining checks catch the failures that actually bit on a real host, both of
-  which previously looked like success.
+- Positive: the three route-integrity channels catch failures that otherwise print a gateway
+  banner while bypassing the gateway or charging Console API credits.
 - Negative: `ocx claude` writes its `ocx-*.md` roster agents and gateway model cache into the
   operator's global `~/.claude`. That is a real side effect the isolated plane used to prevent; it
   is now accepted deliberately, and the model-cache write is load-bearing for the picker.
@@ -114,11 +142,13 @@ login`, which establishes that passthrough requires no credential onboarded into
 - Negative: ADR-0010's env-policy classification no longer applies to this launcher. Its helper is
   exercised only through `scripts/muse-claude.sh` and `tests/test_muse_claude.py` now, so a
   regression in the classes this launcher used to assert would surface there or not at all.
-- Testing: five new tests cover the route-integrity checks (each bypass class, the settings-file
-  channel, `apiKeyHelper`, the Console-key prefix without echoing it, and acceptance of an
-  `sk-ant-oat*` token). `tests/test_opencodex_claude.py` carries a documented PRE-EXISTING harness
-  defect that this change deliberately did not fix: nothing writes `calls.log`, so nine
-  `log.read_text()` calls raise and several `assertFalse(log.exists())` assertions pass vacuously.
+- Testing: the launcher harness writes one exact-line OCX trace and asserts both positive routing
+  and pre-gateway refusal against its contents, so an appended argument cannot satisfy a substring
+  assertion and an unwritten side log cannot make a refusal pass vacuously. The selected-settings
+  cases cover both syntaxes, inline and file documents, every bypass class, invalid/uncheckable
+  values, redaction, repeated occurrences, and Claude's later literal `--` boundary. Operator-tools
+  tests remove ambient mise/ocx, inject hostile PATH/override values, and prove the bound OCX, jq,
+  and uv paths run from the caller workspace or fail with named refresh guidance when stale.
 
 ## Reversal condition
 

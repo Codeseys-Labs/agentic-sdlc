@@ -1,0 +1,42 @@
+{
+  "schema_version": "rightsize-task-pack/v1",
+  "id": "harness-smoke-v1",
+  "kind": "harness-smoke",
+  "harness_profile": "claude-code-print-v1",
+  "runtime_profile": "no-tools",
+  "target_representative": false,
+  "expected_results_hidden_or_immutable": false,
+  "data_classification": "synthetic",
+  "tasks": [
+    {
+      "id": "exact-output",
+      "task_class": "mechanical_redo",
+      "critical": false,
+      "prompt": "Return exactly RIGHTSIZE_OK and nothing else.",
+      "expected_peak_input_tokens": 32,
+      "output_reserve_tokens": 16,
+      "tools": [],
+      "verifier": {
+        "type": "exact",
+        "expected": "RIGHTSIZE_OK"
+      }
+    },
+    {
+      "id": "structured-output",
+      "task_class": "deterministic_gated_change",
+      "critical": false,
+      "prompt": "Return one JSON object with status set to ok and count set to 1.",
+      "expected_peak_input_tokens": 40,
+      "output_reserve_tokens": 64,
+      "tools": [],
+      "verifier": {
+        "type": "schema",
+        "required": ["status", "count"],
+        "properties": {
+          "status": "string",
+          "count": "integer"
+        }
+      }
+    }
+  ]
+}

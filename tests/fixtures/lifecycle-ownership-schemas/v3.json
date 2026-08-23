@@ -1,0 +1,45 @@
+{
+ "entries": {
+  "@CLAUDE_HOME@/agents/cartographer.md": {
+   "agent": "claude",
+   "collection_identity": "stat-v2:2096:2451809:1787298722.825727387",
+   "destination_identity": "stat-v2:2096:2451810:1787298722.825727388",
+   "destination_type": "file",
+   "digest": "02691bc61396c7b88e52145fd4a281ba8b3143948b2552bd9630f1ad411ad9a0",
+   "kind": "agent",
+   "mode": "copy",
+   "name": "cartographer.md",
+   "removable": true,
+   "root_identity": "stat-v2:2096:2445189:1787298722.622880962",
+   "source": "@SOURCE_ROOT@/agents/claude/cartographer.md"
+  },
+  "@CLAUDE_HOME@/commands/sdlc-frame.md": {
+   "agent": "claude",
+   "collection_identity": "stat-v2:2096:2451811:1787298722.854705448",
+   "destination_identity": "stat-v2:2096:2451812:1787298722.854705449",
+   "destination_type": "file",
+   "digest": "cf8ef05087b7a6113e6e6a3a9ce969052dd7f3a7ae08ef5a8f23755db78ef59d",
+   "kind": "command",
+   "mode": "copy",
+   "name": "sdlc-frame.md",
+   "removable": true,
+   "root_identity": "stat-v2:2096:2445189:1787298722.622880962",
+   "source": "@SOURCE_ROOT@/commands/sdlc-frame.md"
+  },
+  "@CLAUDE_HOME@/skills/alpha-skill": {
+   "agent": "claude",
+   "collection_identity": "stat-v2:2096:2451719:1787298722.753400627",
+   "destination_identity": "stat-v2:2096:2451720:1787298722.753400628",
+   "destination_type": "directory",
+   "digest": "9982edb298dd978c3383dfb5da1e9582a0b6627d0776145f656fbaddcfb4d64a",
+   "kind": "skill",
+   "mode": "copy",
+   "name": "alpha-skill",
+   "removable": true,
+   "root_identity": "stat-v2:2096:2445189:1787298722.622880962",
+   "source": "@SOURCE_ROOT@/skills/alpha-skill"
+  }
+ },
+ "transactions": {},
+ "version": 3
+}

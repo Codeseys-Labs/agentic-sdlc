@@ -85,6 +85,41 @@ def matt_lock(*names: str) -> dict[str, dict]:
 OCCUPIED_SAMPLE = MODULE.MATTPOCOCK.names[:3]
 
 
+# The agent files upstream hyperresearch 0.10.0 actually renders, RECORDED rather than derived.
+# Recorded by executing `hyperresearch install --global` in a container on 2026-08-20 against
+# `hyperresearch v0.10.0` (`hyperresearch --version`), then `ls ~/.claude/agents | grep
+# hyperresearch` — 16 files, listed here in that command's sorted order.
+#
+# This fixture exists because that front door exposes NO verb that enumerates what it renders:
+# `hyperresearch --help` at 0.10.0 lists install/setup/init/status/sync/search/... and nothing
+# that lists agents, and `install --help` has no --dry-run, so there is no oracle to derive the
+# expected set from at status time. A hardcoded list is therefore the only offline source, and it
+# drifted two files behind this SAME upstream version once already (hyperresearch-browser-fetcher
+# and hyperresearch-cite-checker were missing, so `status` reported a truthful 14/14 against a
+# directory holding 16). The next drift must fail a named test instead of under-reporting
+# silently. When it does: re-run the install, re-`ls`, re-record BOTH this tuple and the version
+# named in this comment and in the row's own comment, and never reconcile by editing one side.
+RECORDED_HYPERRESEARCH_AGENTS = (
+    "hyperresearch-browser-fetcher",
+    "hyperresearch-cite-checker",
+    "hyperresearch-corpus-critic",
+    "hyperresearch-depth-critic",
+    "hyperresearch-depth-investigator",
+    "hyperresearch-dialectic-critic",
+    "hyperresearch-draft-orchestrator",
+    "hyperresearch-fetcher",
+    "hyperresearch-instruction-critic",
+    "hyperresearch-loci-analyst",
+    "hyperresearch-patcher",
+    "hyperresearch-polish-auditor",
+    "hyperresearch-readability-recommender",
+    "hyperresearch-source-analyst",
+    "hyperresearch-synthesizer",
+    "hyperresearch-width-critic",
+)
+RECORDED_HYPERRESEARCH_VERSION = "0.10.0"
+
+
 class PrecheckTests(unittest.TestCase):
     """The collision precheck, driven against fixture homes. No network, no installs."""
 
@@ -977,6 +1012,327 @@ class DryRunCommandTests(unittest.TestCase):
         self.assertIn("claude", result.stdout)
 
 
+class SecondFrontDoorTests(unittest.TestCase):
+    """mattpocock has TWO legitimate doors, and they differ in prerequisite rather than payload.
+
+    The marketplace door needs an authenticated Claude Code session — executed 2026-08-20 on a
+    logged-out Claude Code 2.1.238, `claude plugin marketplace list` prints "No marketplaces
+    configured" and the install fails not-found-in-any-configured-marketplace. The `skills` CLI
+    door needs no Claude session at all. Nothing here reaches the network: the marketplace state
+    is a fixture file and every front door is stubbed.
+    """
+
+    def tearDown(self) -> None:
+        while make_home.cleanups:  # type: ignore[attr-defined]
+            make_home.cleanups.pop().cleanup()  # type: ignore[attr-defined]
+
+    def config(self, home: Path, **overrides: object) -> object:
+        return MODULE.Config(repo_root=ROOT, home=home, **overrides)  # type: ignore[arg-type]
+
+    def marketplace_home(self, *names: str) -> Path:
+        """A home whose Claude plugin state configures exactly ``names`` marketplaces.
+
+        No names writes no file, which is precisely the logged-out shape: the real file is absent
+        on a home that has never authenticated, and `marketplace list` reports none.
+        """
+        home = make_home()
+        if names:
+            plugins = home / ".claude" / "plugins"
+            plugins.mkdir(parents=True, exist_ok=True)
+            (plugins / "known_marketplaces.json").write_text(
+                json.dumps({name: {"source": f"{name}/source"} for name in names}),
+                encoding="utf-8",
+            )
+        return home
+
+    def stub_which(self, present: tuple[str, ...]) -> None:
+        original = MODULE.shutil.which
+        MODULE.shutil.which = (  # type: ignore[assignment]
+            lambda tool: f"/usr/bin/{tool}" if tool in present else None
+        )
+        self.addCleanup(setattr, MODULE.shutil, "which", original)
+
+    def test_the_skills_cli_command_is_exactly_the_observed_grammar(self) -> None:
+        # Every token here was read off `npx -y skills@latest --help` (CLI 1.5.23), not a README:
+        # `add <package>`, then Add Options -g/--global, -a/--agent, -s/--skill ("use '*' for all
+        # skills"), -y/--yes. `--agent claude-code` is the same one-host scoping the removal front
+        # door uses, so this door cannot fan out across every agent that CLI knows.
+        self.assertEqual(
+            MODULE.skills_cli_command(MODULE.MATTPOCOCK, "npx"),
+            (
+                "npx",
+                "-y",
+                "skills@latest",
+                "add",
+                "mattpocock/skills",
+                "--global",
+                "--agent",
+                "claude-code",
+                "--skill",
+                "*",
+                "--yes",
+            ),
+        )
+
+    def test_the_package_spec_is_the_other_channels_own_lock_source(self) -> None:
+        # Drift-proofing: the spec `skills add` takes is the same string that channel's lock
+        # records, so it is read from `lock_source` rather than duplicated as a second literal.
+        command = MODULE.skills_cli_command(MODULE.MATTPOCOCK, "npx")
+        self.assertIn(MODULE.MATTPOCOCK.lock_source, command)
+        self.assertEqual(command[command.index("add") + 1], MODULE.MATTPOCOCK.lock_source)
+
+    def test_bunx_carries_no_npm_only_flag_and_is_used_when_npx_is_absent(self) -> None:
+        # Both runners come from tools this repo already pins, so naming them adds no
+        # prerequisite. `bunx skills@latest --version` was executed and reported the same CLI
+        # version as npx; bunx has no `-y`, so passing npm's flag to it would be a guess.
+        self.stub_which(("bunx",))
+        self.assertEqual(MODULE.skills_cli_runner(), "bunx")
+        command = MODULE.skills_cli_command(MODULE.MATTPOCOCK, MODULE.skills_cli_runner())
+        self.assertEqual(command[0], "bunx")
+        self.assertNotIn("-y", command)
+        self.assertIn("--yes", command)
+
+    def test_npx_is_preferred_when_both_runners_are_present(self) -> None:
+        self.stub_which(("npx", "bunx"))
+        self.assertEqual(MODULE.skills_cli_runner(), "npx")
+
+    def test_neither_runner_present_is_reported_missing_rather_than_guessed(self) -> None:
+        self.stub_which(())
+        self.assertEqual(MODULE.skills_cli_runner(), "")
+        report = "\n".join(
+            MODULE.cli_alternative_report(MODULE.MATTPOCOCK, self.config(make_home()))
+        )
+        self.assertIn("MISSING", report)
+        self.assertIn("npx", report)
+        self.assertIn("bunx", report)
+
+    def test_the_printed_command_quotes_the_glob_the_argv_passes_literally(self) -> None:
+        # The argv is literal because nothing here uses a shell. The PRINTED line is pasted into
+        # one, where a bare `*` expands against the operator's directory and becomes a different
+        # command, so the two representations must differ in exactly this way.
+        command = MODULE.skills_cli_command(MODULE.MATTPOCOCK, "npx")
+        self.assertIn("*", command)
+        self.assertIn("--skill '*'", MODULE.paste_safe(command))
+
+    def test_an_unconfigured_marketplace_directs_at_the_second_door(self) -> None:
+        config = self.config(self.marketplace_home())
+        report = "\n".join(MODULE.cli_alternative_report(MODULE.MATTPOCOCK, config))
+        self.assertIn("marketplaces: NONE configured", report)
+        self.assertIn("AUTHENTICATED Claude Code session", report)
+        self.assertIn("DIRECTED", report)
+        self.assertIn("skills@latest add mattpocock/skills", report)
+
+    def test_a_configured_marketplace_keeps_the_marketplace_door_primary(self) -> None:
+        # The paired positive control: the direction above must be a consequence of the empty
+        # state rather than something this always prints.
+        config = self.config(self.marketplace_home("claude-plugins-official"))
+        report = "\n".join(MODULE.cli_alternative_report(MODULE.MATTPOCOCK, config))
+        self.assertIn("stays primary", report)
+        self.assertNotIn("DIRECTED", report)
+        self.assertNotIn("marketplaces: NONE", report)
+        # The second door is still named — it is an alternative, not a consolation prize.
+        self.assertIn("second door:", report)
+
+    def test_a_corrupt_or_absent_marketplace_file_reads_as_none_configured(self) -> None:
+        for label, payload in (
+            ("not json", "{not json"),
+            ("not an object", "[]"),
+        ):
+            with self.subTest(case=label):
+                home = make_home()
+                plugins = home / ".claude" / "plugins"
+                plugins.mkdir(parents=True, exist_ok=True)
+                (plugins / "known_marketplaces.json").write_text(payload, encoding="utf-8")
+                self.assertEqual(
+                    MODULE.configured_marketplaces(self.config(home)), ()
+                )
+                # Read-only: the file the operator's Claude Code owns is never rewritten.
+                self.assertEqual(
+                    (plugins / "known_marketplaces.json").read_text(encoding="utf-8"), payload
+                )
+
+    def test_a_failed_marketplace_install_names_both_the_prerequisite_and_the_other_door(
+        self,
+    ) -> None:
+        # The seed's whole point: a not-found from an empty marketplace must not read as "this
+        # library is unreachable". The hint has to carry BOTH halves — why it failed, and the
+        # door that does not need what is missing.
+        self.stub_which(("claude", "npx"))
+        home = self.marketplace_home()
+        original = MODULE.run_front_door
+        MODULE.run_front_door = lambda command, config: (  # type: ignore[assignment]
+            1,
+            ["front door exited 1: " + " ".join(command)],
+        )
+        self.addCleanup(setattr, MODULE, "run_front_door", original)
+        code, lines = MODULE.command_install(
+            ["mattpocock"], self.config(home, assume_yes=True)
+        )
+        output = "\n".join(lines)
+        self.assertEqual(code, 1, output)
+        self.assertIn("install FAILED for mattpocock", output)
+        self.assertIn("AUTHENTICATED Claude Code session", output)
+        self.assertIn("npx -y skills@latest add mattpocock/skills", output)
+        self.assertIn("FLAT names into", output)
+
+    def test_the_failure_hint_is_silent_when_a_marketplace_is_configured(self) -> None:
+        # Positive control for the guard: with a marketplace present the failure has some other
+        # cause, and inventing the authentication explanation would be a lie.
+        self.stub_which(("claude", "npx"))
+        home = self.marketplace_home("claude-plugins-official")
+        original = MODULE.run_front_door
+        MODULE.run_front_door = lambda command, config: (  # type: ignore[assignment]
+            1,
+            ["front door exited 1: " + " ".join(command)],
+        )
+        self.addCleanup(setattr, MODULE, "run_front_door", original)
+        code, lines = MODULE.command_install(
+            ["mattpocock"], self.config(home, assume_yes=True)
+        )
+        output = "\n".join(lines)
+        self.assertEqual(code, 1, output)
+        self.assertIn("install FAILED for mattpocock", output)
+        self.assertNotIn("AUTHENTICATED Claude Code session", output)
+        self.assertNotIn("second door, which needs no Claude Code session", output)
+
+    def test_the_second_door_is_printed_and_never_invoked(self) -> None:
+        # The boundary: the precheck that ran is the plugin channel's. This door writes flat
+        # names, so invoking it from here would install behind a precheck that never looked at
+        # its namespace — exactly the silent loss the module exists to prevent.
+        self.stub_which(("claude", "npx"))
+        calls: list[tuple[str, ...]] = []
+        original = MODULE.run_front_door
+        MODULE.run_front_door = lambda command, config: (  # type: ignore[assignment]
+            calls.append(tuple(command)),
+            (1, ["front door exited 1"]),
+        )[1]
+        self.addCleanup(setattr, MODULE, "run_front_door", original)
+        MODULE.command_install(
+            ["mattpocock"], self.config(self.marketplace_home(), assume_yes=True)
+        )
+        self.assertEqual(calls, [MODULE.MATTPOCOCK.front_door], calls)
+        cli_door = MODULE.skills_cli_command(MODULE.MATTPOCOCK, "npx")
+        self.assertNotIn(cli_door, calls)
+
+    def test_a_library_with_one_door_prints_no_second_one(self) -> None:
+        config = self.config(make_home())
+        for library in (MODULE.ECC, MODULE.HYPERRESEARCH):
+            with self.subTest(library=library.key):
+                self.assertEqual(library.cli_alternative, "")
+                self.assertEqual(MODULE.cli_alternative_report(library, config), [])
+                self.assertEqual(MODULE.empty_marketplace_hint(library, config), [])
+
+    def test_the_dry_run_shows_both_doors_without_running_either(self) -> None:
+        self.stub_which(("claude", "npx"))
+        calls: list[tuple[str, ...]] = []
+        original = MODULE.run_front_door
+        MODULE.run_front_door = lambda command, config: (  # type: ignore[assignment]
+            calls.append(tuple(command)),
+            (0, ["should not happen"]),
+        )[1]
+        self.addCleanup(setattr, MODULE, "run_front_door", original)
+        code, lines = MODULE.command_install(
+            ["mattpocock"], self.config(self.marketplace_home())
+        )
+        output = "\n".join(lines)
+        self.assertEqual(code, 0, output)
+        self.assertIn("front door:   claude plugins install mattpocock-skills", output)
+        self.assertIn("second door:  npx -y skills@latest add mattpocock/skills", output)
+        self.assertIn("DRY RUN", output)
+        self.assertEqual(calls, [], f"a dry run invoked: {calls}")
+
+
+class RecordedAgentSetTests(unittest.TestCase):
+    """hyperresearch's agent set is a recorded fixture, because its front door enumerates nothing.
+
+    `hyperresearch --help` at 0.10.0 exposes install/setup/init/status/... and no verb that lists
+    what `install --global` renders, and `install --help` has no --dry-run, so there is no offline
+    oracle to derive the expected set from at status time. That makes the hardcoded row the only
+    source — and it silently drifted two files behind this same upstream version once. These
+    tests are the named failure the next drift gets instead of a quiet under-count.
+    """
+
+    def tearDown(self) -> None:
+        while make_home.cleanups:  # type: ignore[attr-defined]
+            make_home.cleanups.pop().cleanup()  # type: ignore[attr-defined]
+
+    def test_the_row_matches_the_set_recorded_from_the_executed_install(self) -> None:
+        self.assertEqual(MODULE.HYPERRESEARCH.extra_agents, RECORDED_HYPERRESEARCH_AGENTS)
+        self.assertEqual(len(RECORDED_HYPERRESEARCH_AGENTS), 16)
+        # The version this set was recorded against must travel with it: a refreshed list under a
+        # stale version number would be the same lie in the other direction.
+        self.assertEqual(MODULE.HYPERRESEARCH.version, RECORDED_HYPERRESEARCH_VERSION)
+
+    def test_the_two_files_the_stale_list_omitted_are_present(self) -> None:
+        # Named explicitly rather than left to the tuple comparison, so the regression this fixes
+        # is legible in the failure output rather than as a diff of sixteen strings.
+        for name in ("hyperresearch-browser-fetcher", "hyperresearch-cite-checker"):
+            self.assertIn(name, MODULE.HYPERRESEARCH.extra_agents, name)
+
+    def test_status_counts_the_whole_recorded_set_when_the_home_holds_it(self) -> None:
+        home = make_home()
+        agents = home / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        for name in RECORDED_HYPERRESEARCH_AGENTS:
+            (agents / f"{name}.md").write_text("", encoding="utf-8")
+        code, lines = MODULE.command_status(MODULE.Config(repo_root=ROOT, home=home))
+        output = "\n".join(lines)
+        self.assertEqual(code, 0, output)
+        self.assertIn("agents: 16/16 of the recorded 0.10.0 set present", output)
+        self.assertNotIn("does not name", output)
+
+    def test_status_reports_a_prefixed_agent_file_the_recorded_set_does_not_name(self) -> None:
+        # The operator-facing half of the fix. A test only fails for whoever runs this gate; an
+        # upstream release that adds an agent file changes the surface in a HOME, so status has
+        # to notice the residue rather than reporting a complete-looking N/N.
+        home = make_home()
+        agents = home / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        for name in RECORDED_HYPERRESEARCH_AGENTS:
+            (agents / f"{name}.md").write_text("", encoding="utf-8")
+        (agents / "hyperresearch-future-role.md").write_text("", encoding="utf-8")
+        _, lines = MODULE.command_status(MODULE.Config(repo_root=ROOT, home=home))
+        output = "\n".join(lines)
+        self.assertIn("1 further hyperresearch-prefixed file(s)", output)
+        self.assertIn("hyperresearch-future-role.md", output)
+        self.assertIn("the surface is wider than the count above", output)
+
+    def test_an_unrelated_agent_file_is_not_claimed_as_drift(self) -> None:
+        # The paired control: the residue check is scoped by the library's own name prefix, so a
+        # foreign agent file in the same directory is nobody's drift.
+        home = make_home()
+        agents = home / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        (agents / "some-other-agent.md").write_text("", encoding="utf-8")
+        _, lines = MODULE.command_status(MODULE.Config(repo_root=ROOT, home=home))
+        output = "\n".join(lines)
+        self.assertNotIn("some-other-agent", output)
+        self.assertNotIn("further hyperresearch-prefixed", output)
+
+    def test_a_recorded_agent_rendered_as_a_bare_directory_is_not_residue(self) -> None:
+        # `present_names` reports whatever the directory holds, and a render layout that uses a
+        # bare `<name>` directory instead of a lone `<name>.md` file is still one of the recorded
+        # 16 -- `hyperresearch-fetcher` is itself a name in RECORDED_HYPERRESEARCH_AGENTS.
+        # `expected_agent_files` has to accept BOTH spellings (`<name>` and `<name>.md`); dropping
+        # the bare-name half would make this legitimate entry look like drift the recorded set
+        # does not name. The positive control below (16/16, no residue line) is what a dropped
+        # bare-name half would flip to a false "1 further ... file(s)" residue report.
+        home = make_home()
+        agents = home / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        for name in RECORDED_HYPERRESEARCH_AGENTS:
+            if name == "hyperresearch-fetcher":
+                (agents / name).mkdir()
+            else:
+                (agents / f"{name}.md").write_text("", encoding="utf-8")
+        code, lines = MODULE.command_status(MODULE.Config(repo_root=ROOT, home=home))
+        output = "\n".join(lines)
+        self.assertEqual(code, 0, output)
+        self.assertIn("agents: 16/16 of the recorded 0.10.0 set present", output)
+        self.assertNotIn("does not name", output)
+        self.assertNotIn("further hyperresearch-prefixed", output)
+
+
 class IsolationFromInstallPathTests(unittest.TestCase):
     """No verb here may be reachable from bundle:install, setup, or any gate leaf."""
 
@@ -1107,6 +1463,26 @@ class SkillContractTests(unittest.TestCase):
         body = SKILL.read_text(encoding="utf-8")
         for reference in sorted(set(re.findall(r"\breferences/[A-Za-z0-9._-]+\.md", body))):
             self.assertTrue((SKILL.parent / reference).is_file(), reference)
+
+    def test_skill_states_both_mattpocock_doors_and_the_authentication_split(self) -> None:
+        # The doctrine half of the fix: the row must not read as one door, and it must name the
+        # prerequisite that makes the marketplace one fail on a logged-out host.
+        body = SKILL.read_text(encoding="utf-8")
+        self.assertIn("claude plugins install mattpocock-skills", body)
+        self.assertIn("skills@latest add mattpocock/skills", body)
+        self.assertIn("authenticated", body)
+        self.assertIn("No marketplaces configured", body)
+        # And it must not still claim the marketplace needs nothing first.
+        self.assertNotIn(
+            "already listed, so there is no `marketplace add` step to run first", body
+        )
+
+    def test_skill_agent_count_matches_the_recorded_set_in_the_module(self) -> None:
+        # The count in prose is the thing that rotted: it said 14 while upstream shipped 16. Tie
+        # it to the module's own row so a refresh in one place cannot leave the other stale.
+        body = SKILL.read_text(encoding="utf-8")
+        self.assertIn(f"{len(MODULE.HYPERRESEARCH.extra_agents)} agents", body)
+        self.assertNotIn("17 skills + 14 agents", body)
 
     def test_no_static_model_or_effort_pin(self) -> None:
         block = re.match(r"^---\n(.*?)\n---", SKILL.read_text(encoding="utf-8"), re.DOTALL)

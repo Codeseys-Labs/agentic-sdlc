@@ -3,7 +3,17 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Inspect or explicitly activate the packaged Claude Code status line."""
+"""Inspect or explicitly activate the packaged Claude Code status line.
+
+Exit vocabulary (Implementation Decision 9), one derivation point via the EXIT_* names below:
+  0  every completed answer, whether the mutating verb performed its effect (`activate`,
+     `deactivate`) or `status` merely read and reported one of its five distinguishable
+     read-only states -- `active`, `inactive`, `unmanaged`, `conflict`, or a pending
+     recovery -- in the returned MESSAGE, never in the exit code.
+  2  a real refusal or failure: a malformed argument, an unreadable or foreign-owned
+     settings/receipt file, a settings change detected mid-write, or any other
+     `StatuslineError`/`OperatorToolsError`.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +34,10 @@ import install_operator_tools as operator_tools
 RECEIPT_VERSION = 2
 LEGACY_RECEIPT_VERSION = 1
 MANAGED_KEYS = ("type", "command")
+
+# Single derivation point for this module's exit vocabulary; see the module docstring's table.
+EXIT_OK = 0
+EXIT_REFUSED = 2
 
 
 class StatuslineError(RuntimeError):
@@ -433,7 +447,10 @@ def _deactivate(
     receipt_file = receipt_path(state_root)
     receipt = recover_pending(receipt_file, load_receipt(receipt_file), dry_run=dry_run)
     if receipt is None:
-        return 1, ["statusline is not managed"]
+        # Decision 9: deactivating an already-inactive statusline performs no effect and
+        # names no refusal -- it is the requested end state, already true. EXIT_OK, never
+        # EXIT_REFUSED; see the module docstring's exit table.
+        return EXIT_OK, ["statusline is not managed"]
     if receipt.get("settings") != str(path):
         raise StatuslineError("statusline receipt targets a different Claude settings path")
     settings, before = load_settings(path)
@@ -479,16 +496,25 @@ def _status(path: Path, state_root: Path) -> tuple[int, list[str]]:
     settings, _ = load_settings(path)
     receipt = load_receipt(receipt_path(state_root))
     statusline = settings.get("statusLine") or {}
+    # Decision 9: `_status` itself never mutates anything -- it only reads settings and the
+    # receipt -- so every branch below is a successfully answered read-only query: EXIT_OK
+    # regardless of which of the five states it names. (`status()`, the caller just below,
+    # still takes `operator_tools.lifecycle_lock`, which DOES create the lock file and its
+    # parent directory -- that is the one real effect this read path admits, and it is not
+    # one of the five states named here.) The five states stay distinguished in the returned
+    # MESSAGE, never in the exit code; a real read failure (corrupt settings, unreadable
+    # receipt) raises StatuslineError before reaching this function and is reported at
+    # EXIT_REFUSED by main() instead.
     if receipt is None:
         if statusline:
-            return 1, [f"unmanaged statusline: {path}"]
-        return 1, [f"statusline inactive: {path}"]
+            return EXIT_OK, [f"unmanaged statusline: {path}"]
+        return EXIT_OK, [f"statusline inactive: {path}"]
     if receipt.get("phase") == "pending":
-        return 1, [f"statusline {receipt['operation']} recovery pending: {path}"]
+        return EXIT_OK, [f"statusline {receipt['operation']} recovery pending: {path}"]
     managed = receipt["managed"]
     if receipt.get("settings") != str(path) or any(statusline.get(key, object()) != value for key, value in managed.items()):
-        return 1, [f"statusline conflict: {path}"]
-    return 0, [f"statusline active: {path} -> {managed['command']}"]
+        return EXIT_OK, [f"statusline conflict: {path}"]
+    return EXIT_OK, [f"statusline active: {path} -> {managed['command']}"]
 
 
 def status(
@@ -526,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
         }[args.command]()
     except (StatuslineError, operator_tools.OperatorToolsError) as exc:
         print(f"fatal: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_REFUSED
     for message in messages:
         print(message)
     return code

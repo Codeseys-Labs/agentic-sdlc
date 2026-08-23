@@ -553,10 +553,25 @@ def _render_lock(policy: dict[str, object]) -> int:
     return descriptor
 
 
+USAGE_LINE = "usage: render_mermaid_linux.py <definition> <final-svg>"
+
+
+def _usage_error(reason: str) -> int:
+    """Every EXIT_USAGE return goes through here, so a 2 always names why."""
+    print(USAGE_LINE, file=sys.stderr)
+    print(f"render_mermaid_linux.py: error: {reason}", file=sys.stderr)
+    return EXIT_USAGE
+
+
 def main(argv: list[str] | None = None) -> int:
     values = list(sys.argv[1:] if argv is None else argv)
+    if values in (["--help"], ["-h"]):
+        print(USAGE_LINE)
+        return EXIT_OK
     if len(values) != 2:
-        return EXIT_USAGE
+        return _usage_error(
+            f"expected exactly 2 arguments (<definition> <final-svg>), received {len(values)}"
+        )
     if sys.platform != "linux" or os.uname().machine not in {"x86_64", "amd64"}:
         return EXIT_UNSUPPORTED
     workspace: Path | None = None

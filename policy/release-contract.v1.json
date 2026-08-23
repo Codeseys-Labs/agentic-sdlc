@@ -1,0 +1,139 @@
+{
+  "schema_version": "release-contract/v1",
+  "checkout": {
+    "certification_claim": "none",
+    "plane": "checkout-development",
+    "public_channel": null,
+    "release_topology_adr_status": "proposed",
+    "version": "0.7.3"
+  },
+  "compatibility": {
+    "core": {
+      "certification_requires_current_capability_evidence": true,
+      "host": "claude-code",
+      "minimum_host_version": "2.1.154",
+      "minimum_is_eligibility_only": true,
+      "required_capabilities": [
+        "dynamic-workflows-effectively-enabled"
+      ],
+      "surface": "core"
+    },
+    "dated_references": {
+      "as_of": "2026-08-15",
+      "latest": {
+        "ceiling": false,
+        "certification": false,
+        "role": "nomination-regression-reference",
+        "version": "2.1.233"
+      },
+      "stable": {
+        "ceiling": false,
+        "certification": false,
+        "role": "nomination-regression-reference",
+        "version": "2.1.224"
+      }
+    },
+    "known_incompatible_host_versions": [],
+    "optional_profile_floors": {},
+    "support_rows": [],
+    "support_tiers": [
+      "certified",
+      "capability-qualified",
+      "experimental",
+      "unsupported"
+    ],
+    "tuple_dimensions": [
+      "product_release",
+      "surface",
+      "host",
+      "host_version",
+      "operating_system",
+      "architecture",
+      "runtime_boundary",
+      "installation_plane",
+      "capability_evidence",
+      "optional_profile_versions",
+      "dependency_versions"
+    ]
+  },
+  "channels": {
+    "preview": {
+      "inherits_stable_state": false,
+      "install_mode": "side-by-side",
+      "may_overwrite_stable": false,
+      "selection": "exact"
+    },
+    "public_channel_names": [
+      "stable",
+      "preview"
+    ],
+    "stable": {
+      "allows_experimental_profiles": false,
+      "default_permission_bypass": false,
+      "requires_complete_core_release_gate": true,
+      "requires_current_certified_core": true,
+      "requires_migration_and_recovery": true,
+      "selection": "exact"
+    }
+  },
+  "claim_lint": {
+    "allowed_extensions": [
+      ".md",
+      ".txt"
+    ],
+    "fixture_root": "tests/fixtures/release-claims",
+    "forbidden_claims": {
+      "asd_conformance": [
+        "asd-ste100 certified",
+        "asd-ste100 compliant",
+        "asd-ste100 conformance"
+      ],
+      "blanket_cross_platform_latest": [
+        "all newer versions",
+        "all platforms",
+        "every platform",
+        "latest-compatible"
+      ],
+      "bundled_companion": [
+        "bundled companion library",
+        "bundled companion",
+        "bundled external library"
+      ],
+      "model_wide": [
+        "all models",
+        "every model"
+      ],
+      "official_product": [
+        "anthropic-endorsed",
+        "official anthropic product",
+        "official claude code product"
+      ],
+      "provider_neutral_equal_parity": [
+        "equal feature parity",
+        "equal parity",
+        "provider-neutral"
+      ],
+      "provider_wide": [
+        "all providers",
+        "every provider"
+      ],
+      "replacement": [
+        "claude code replacement",
+        "replaces claude code"
+      ],
+      "security_completeness": [
+        "complete security",
+        "security completeness",
+        "security-complete"
+      ],
+      "universal_gateway": [
+        "universal gateway"
+      ],
+      "unsupported_renderer": [
+        "cross-platform renderer",
+        "renderer support on macos",
+        "renderer support on windows"
+      ]
+    }
+  }
+}

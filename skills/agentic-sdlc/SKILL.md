@@ -36,26 +36,31 @@ baseline, Seeds, pinned gates, trust, and shared AGENTS.md guidance. If the targ
 Seeds queue, route to `/sdlc-init` and stop; Frame and Wave never improvise activation.
 Mise is the only bootstrap prerequisite. From a reviewed distribution checkout, run the installed
 flagship tool `seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node
-`22.22.3`. Bootstrap requires an exact clean Git distribution root. It rejects any nested checkout
+`22.23.2`. Bootstrap requires an exact clean Git distribution root. It rejects any nested checkout
 path. It also rejects a distribution whose tracked, staged, untracked, or ignored content differs
 from the exact `HEAD` tree. Bootstrap alone runs the reviewed `mise --locked install`. That install
 uses only the root `mise.toml`/adjacent lock, a fresh private mise data/cache/home, the fixed
 official npm registry, distinct empty npmrc files, and a disabled hooks/config environment. Ambient
 HOME, npmrc/registry, and mise config/data/cache cannot select acquisition. Bootstrap then resolves
 exact config-free roots and atomically publishes an active tuple receipt. It verifies the executing
-Node and the recorded Node are exactly `22.22.3`, and Bun is exactly `1.3.10`, and the package/bin
+Node and the recorded Node are exactly `22.23.2`, and Bun is exactly `1.4.0`, and the package/bin
 layout matches exact `@os-eco/seeds-cli@0.5.15`. It permits only the real package's benign string
 `engines.bun` compatibility declaration; it rejects actual Bun/config/TypeScript/macro/preload
 controls. It records a trusted empty Bun configuration, the exact Git root/commit/tree plus
 `mise.toml`/`mise.lock`, and typed tree/file hashes. It retains the preceding receipt for explicit
-rollback. The receipt establishes an execution integrity boundary against ordinary accidental
+rollback. A structurally intact preceding receipt that records a superseded tuple is retained and
+its superseded tuple named, never refused: establishing a new tuple is precisely what bootstrap is
+for, and a pin bump is the one expected reason a prior receipt disagrees with the launcher's
+constants. Malformed preceding state is still refused and never repaired, and every other verb still
+refuses a receipt whose recorded tuple is not the current one.
+The receipt establishes an execution integrity boundary against ordinary accidental
 drift. It does not establish tarball/transitive authenticity. It does not stop a
 same-UID TOCTOU attacker that races verification against execution. An npm version, a backend,
 and a lock do not authenticate a tarball or its transitive dependencies.
 
 After an explicit successful bootstrap, `Seeds(<target>, <args...>)` is implemented by
 `seeds-launcher.mjs inspect --target <target> <args...>` under the exact recorded and currently
-executing Node `22.22.3`.
+executing Node `22.23.2`.
 `inspect` never installs, invokes mise, or networks. It never discovers replacement tooling,
 repairs state, or accepts ambient provenance. It loads and validates only the active receipt and
 the recorded current hashes. It accepts only `--version`, `prime`, `ready [--format json]`, and
@@ -149,19 +154,33 @@ mutation.
 
 Use this phase order unless the task is clearly smaller:
 
-1. Frame: define done, constraints, repo state, queue state, and allowed blast radius.
+1. Frame: define done, constraints, repo state, queue state, and allowed blast radius. Seal a
+   Mission-shaped Frame's durable objective with `tools/mission-contract.py define`, and capture
+   the observed repo/queue facts with `tools/planning-snapshot.py capture`.
 2. Discover: assign read-only workers across code areas. Require file/line evidence.
 3. Research: only for external or load-bearing unknowns — a deep-research pipeline if the
    host provides one, otherwise primary sources directly.
 4. Plan: emit workstreams, dependencies, worktree strategy, gates, rollback, and Seeds updates.
+   Compile the WavePlan and its PlanDiff with `tools/wave-plan-compiler.py compile`/`diff`, then
+   admit the compiled plan against current state with `tools/wave-plan-admission.py admit` before
+   Act begins.
 5. Act: launch workers in separate worktrees for independent workstreams.
-6. Review: review stable branch/worktree snapshots, not only worker summaries.
-7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs.
+6. Review: review stable branch/worktree snapshots, not only worker summaries. Project a
+   read-only status view over the recorded journal, assignments, activation result, and gate
+   receipts with `tools/sdlc-observability-projection.py`, and verify each receipt's envelope and
+   correlation graph with `tools/receipt-envelope.py verify`/`check-graph` before trusting it.
+7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs. Derive the
+   wave's one terminal state — accepted, remediation-progress, or blocked — with
+   `tools/wave-verdict.py derive` rather than asserting it from worker summaries.
 8. Ship: squash/rebase, sync Seeds, open PR or commit according to repo policy. Before proposing
    any commit, PR, or squash text, load `../change-writing/SKILL.md` to author it; this phase still
    owns the squash/rebase/PR operations and the human still authorizes publication.
 
-Use backflow when review reveals an earlier phase was weak: re-enter Discover, Research, or Plan with a scoped task instead of restarting the whole run.
+Use backflow when review reveals an earlier phase was weak: re-enter Discover, Research, or Plan
+with a scoped task instead of restarting the whole run. Classify observed drift against the sealed
+plan with `tools/drift-classifier.py classify` before deciding backflow scope, and admit or refuse
+any proposed autonomous continuation past that point with `tools/auto-envelope.py
+admit-transition` against one preapproved envelope.
 
 ## Delegation Rules
 
@@ -170,12 +189,17 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
   when no certified delegation route is available, and is never a worker/model spawn or a
   `RuntimeAssignment` claim.
 - Every actual worker or model spawn is delegated execution. It requires the certified
-  `RuntimeAssignment` admission boundary below; a missing, inherited, unresolved, or unverified
-  route stops before dispatch and spawn. Do not relabel a worker as direct execution to bypass it.
+  `RuntimeAssignment` admission boundary below, admitted by `tools/runtime-assignment.py admit`
+  and classified afterward by `tools/runtime-assignment.py classify`; a missing, inherited,
+  unresolved, or unverified route stops before dispatch and spawn. Do not relabel a worker as
+  direct execution to bypass it.
 - Require every delegated worker to return a structured report for conductor capture. A
   write-capable worker may also maintain its assigned artifact; for a read-only worker, the
-  conductor persists the captured submission. Treat messages, status, and summaries as
-  advisory notifications, not acceptance evidence or authority.
+  conductor persists the captured submission. The conductor records each node's disposition in
+  the append-only journal with `tools/wave-journal.py record-node`, and seals and verifies a
+  worker's wave-evidence submission against that tool's closed submission schemas with
+  `tools/wave-submission.py` before treating it as captured. Treat messages, status, and
+  summaries as advisory notifications, not acceptance evidence or authority.
 - For long-running work, use the host's native background or persistent-task mechanism and
   durable artifact files. Do not hold one blocking call open indefinitely.
 - Use Claude Code workers for nested dynamic workflow execution on one bounded workstream. Do not let a nested Claude workflow own the whole project queue unless explicitly requested.
@@ -186,8 +210,14 @@ Use backflow when review reveals an earlier phase was weak: re-enter Discover, R
   artifact into the four semantic tiers and choose within the eligible Sol/Fable, Terra/Opus,
   or Luna/Sonnet pair by task fit, independent perspective, quota, and verified transport.
   The caller must inject a certified exact model ID and **explicit requested effort** for
-  every worker; provider-neutral role definitions do not select a model. Stop before dispatch
-  when identity or adapter readback is unresolved. No host-default policy or artificial
+  every worker; provider-neutral role definitions do not select a model. For an OCX Ultracode
+  Workflow, every explicit `agent()` model ID must use its exact `[1m]` request form. If that
+  marked tuple is not certified, admitted, and readable through the required request/identity
+  evidence, stop before dispatch and return one `SeedProposal`; never fall back to the
+  unsuffixed form. The `[1m]` request remains distinct from base-ID identity readback and does
+  not prove served context. The canonical marker rule is in
+  `../model-tier-rightsizing/SKILL.md#ocx-ultracode-workflow-marker-rule`. Stop before dispatch
+  when a route is inherited, unresolved, or unverified. No host-default policy or artificial
   all-six representation.
 - Keep one macro conductor responsible for Seeds adjudication, worktree ownership, and
   evidence-backed recommendations. The conductor alone mutates Seeds; an authorized
@@ -227,6 +257,11 @@ Read only what is needed:
   draft-review text. It never stages, commits, pushes, mutates PRs, merges, or deploys.
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 - `references/evidence-discipline.md`: whether any advisory submission's claim may be made at all — the five-class evidence vocabulary, the anti-inflation rule (a class is assigned once and never raised later), disposition-row/gap-register discipline, and the receipt-is-not-a-control-when-author-equals-verifier rule.
+- `references/readiness-composition.md`: which surface owns each pre-effect readiness
+  dimension and in what order — `ccodex sdlc doctor` (host and install state),
+  `planning-snapshot capture` (observed repository state with named unknowns), and
+  `wave-plan-admission admit` (the wave-effect gate) — plus why no unified readiness
+  guard is queued (`agentic-sdlc-9857`).
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
   alternate VCS substrate is activated by this bundle.
 - `references/skill-authoring.md`: admission floor, the four-gate test, the ≥2-of-5
@@ -264,5 +299,7 @@ never globally). Slash commands (Claude Code): `/sdlc-init`, `/sdlc-frame`, `/sd
 - Do not run write-capable workers in the user's dirty checkout. Use a clean worktree.
 - Do not close Seeds from worker claims alone. Verify files, tests, and acceptance criteria.
 - Do not install, start, or enable cmux or tmux unless the user explicitly requests that environment change.
-- Do not recursively launch agents without a bound: cap workers, passes, and review/fix rounds.
+- Do not recursively launch agents without a bound: cap workers, passes, and review/fix rounds;
+  charge each pass against the conductor-owned ledger with `tools/pass-budget.py charge` (or
+  inspect it with `status`) so the cap is evidence-backed, not memory.
 - Do not push, force-push, rewrite history, alter secrets, or change CI settings unless the user explicitly authorizes that action.

@@ -13,10 +13,12 @@ import platform
 import re
 import secrets
 import stat
+import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 
 COMMON_AGENT_RULES = """
@@ -49,8 +51,8 @@ RUNTIME_FIELDS = (
 ONE_MILLION_CONTEXT_SEMANTICS = "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance."
 VALIDATION_ONLY_SEMANTICS = "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
 SEEDS_READ_ONLY_SEMANTICS = "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor."
-RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "2ca7f36c728d324ab60f2b99d4b3fb03f064180496c0731aa33447a7dee4ba72"
-RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "e490284af11143c71a9a07d0e5778594c3ba99bd648220dec3268b4d5491e0b8"
+RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "675c8799587b9b7151fd7f98f3424e5e9783986d2db9dc5488bb2a1a704b7794"
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "22c165551389b844fc46b8fcae2e7cd750254181ad2096b6884b0ee8f25b801c"
 SOURCE_PINNED_REVIEWER_INSTRUCTIONS_SHA256 = {
     "adversarial_reviewer": "72c99c20fb4c96df000a0bd4cf3e06a665fba444fd2d3bd292e542805cd111fe",
     "replication_reviewer": "81e0c077a3a88e6ba21f74cee539120266a323f2f5362b7783a3089e272335de",
@@ -232,7 +234,7 @@ RUNTIME_MODEL_ASSIGNMENT_NO_COPIED_READBACK = "Prompt echoes and copied requeste
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 - Research Director is Seeds-read-only.
 - Use only the exact accepted Seeds inspection contract:
-  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.22.3 bun@1.3.10 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
+  `Seeds(<target>, <args...>)` = `MISE_NPM_PACKAGE_MANAGER=npm mise --no-config --cd <target> exec node@22.23.2 bun@1.4.0 npm:@os-eco/seeds-cli@0.5.15 -- sd <args>`.
 - Inspect `Seeds(<target>, prime)`, `Seeds(<target>, ready --format json)`, and `Seeds(<target>, blocked --format json)` before substantive orchestration when Seeds is available.
 - Do not create, claim, update, close, sync, or disposition Seeds.
 - For work that outlives the session, emit exactly one typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.
@@ -1126,6 +1128,14 @@ MANIFEST_REL = ".codex/research-os-manifest.json"
 MANIFEST_SCHEMA = "research-os-ownership-manifest/v1"
 STATE_VERSION = 1
 IDENTITY_VERSION = "stat-v2"
+# How long ONE `apply` run may wait for a birth-timestamp quantum to close before it refuses by name.
+# This is a BOUND, not a sleep: a fine-grained host pays one throwaway create per recording site and
+# never waits, and a coarse-clock host pays one quantum for everything the run deferred, plus the
+# constant inline settle of the pre-existing target root. Never one quantum per file.
+# Kept identical to `scripts/install_skill_bundle.py` on purpose.
+BIRTH_SETTLE_TIMEOUT_SECONDS = 3.0
+BIRTH_SETTLE_FIRST_POLL_SECONDS = 0.0005
+BIRTH_SETTLE_MAX_POLL_SECONDS = 0.05
 _STATE_NAMESPACE = "agentic-sdlc-research-os"
 _MANIFEST_TRANSACTION_KEY = "@manifest"
 _PRIVATE_PREFIX = ".research-os-"
@@ -1137,6 +1147,24 @@ class ResearchOSError(RuntimeError):
 
 class RecoveryConflict(ResearchOSError):
     """An interrupted transaction no longer has one exact safe interpretation."""
+
+
+class TargetRootError(ResearchOSError):
+    """The caller's `--target` does not resolve to a safe, existing directory this process may
+    open: supplied but missing, supplied but not a directory, or supplied but unsafe to follow.
+    """
+
+
+# EXITS, as one derivation point (product-spec Implementation Decision 9). `main`'s only
+# currently-classified refusal is an unusable `--target`; every other `ResearchOSError` this
+# module raises describes a state this survey has not mapped yet and stays an unexpected
+# internal failure (1) until a later change gives it its own class.
+#: `main` completed: the scaffold ran (or a dry run reported what it would do) and no
+#: `TargetRootError` was raised.
+EXIT_OK = 0
+#: A `TargetRootError` was raised: the supplied `--target` could not be opened as a safe
+#: existing directory. Nothing was opened; nothing was written.
+EXIT_INPUT = 2
 
 
 class _LinuxStatxTimestamp(ctypes.Structure):
@@ -1401,11 +1429,328 @@ def _identity_matches(path: Path, expected: Any, *, follow_symlinks: bool = True
         return False
 
 
+def _identity_generation(token: str) -> str:
+    """The birth-witness field of one identity token."""
+    return token.split(":", 3)[3]
+
+
+def _birth_witness_order(generation: str) -> tuple[int, int]:
+    """Order one platform's birth-witness spelling against another value of the same spelling."""
+    seconds, separator, fraction = generation.partition(".")
+    try:
+        return (int(seconds), int(fraction or 0)) if separator else (int(seconds), 0)
+    except ValueError as exc:
+        raise ResearchOSError(f"unreadable birth witness {generation!r}") from exc
+
+
+def _birth_probe_token(directory: Path) -> str:
+    """Create, witness, and immediately retire one throwaway object in `directory`."""
+    try:
+        descriptor, name = tempfile.mkstemp(prefix=".birth-probe-", dir=directory)
+    except OSError as exc:
+        raise ResearchOSError(f"cannot witness object creation in {directory}: {exc}") from exc
+    probe = Path(name)
+    try:
+        os.close(descriptor)
+        token = _path_identity(probe, follow_symlinks=False)
+    except BaseException:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        probe.unlink()
+    except OSError as exc:
+        raise ResearchOSError(f"cannot retire creation probe {probe}: {exc}") from exc
+    return token
+
+
+def _settlement_targets(
+    witnesses: Iterable[tuple[Path, Any]], *, probe_dir: Path
+) -> list[tuple[Path, tuple[int, int], Path]]:
+    """Resolve witnesses into `(path, birth order, directory to probe)` settlement targets.
+
+    Same defect, same shape, same fix as `settlement_targets` in
+    `scripts/install_skill_bundle.py`: `stat-v2` names an object by device, inode, and birth
+    timestamp; inodes are reused; and every filesystem quantizes the birth timestamp, so while a
+    newly created object's own quantum is still open a delete-and-recreate at the same name can
+    land on the same inode carrying the same witness. This installer's exposure is not
+    theoretical but structural -- its transactions mint a witness and persist it into
+    `state.json` within MILLISECONDS, which is exactly the window a coarse-clock host leaves
+    open, and a later run's recovery or `_authority_matches` then treats the replacement as owned.
+    A digest cannot substitute, because the generated content is deterministic: a byte-identical
+    rewrite satisfies it.
+
+    A target is SETTLED once some object created after it reports a strictly later birth
+    timestamp, which proves its quantum has closed: every later creation is stamped strictly later
+    and any replacement differs at ANY granularity.
+    """
+    windows = _platform_system() == "Windows"
+    targets: list[tuple[Path, tuple[int, int], Path]] = []
+    probe_device: int | None = None
+    for path, token in witnesses:
+        if not _identity_token_valid(token):
+            raise ResearchOSError(f"cannot settle an invalid identity witness for {path}")
+        if windows and _windows_file_identity(path, follow_symlinks=False) is not None:
+            # The Windows file-id witness is the volume serial plus the 128-bit file id, whose
+            # sequence number changes when the record is reused, so a replacement already differs
+            # at any timestamp granularity. Where that file id is UNAVAILABLE `_path_identity`
+            # falls back to `st_ctime_ns`, which is exactly the reproducible witness -- so that
+            # case is not skipped, it falls through and settles like any other timestamp witness.
+            continue
+        try:
+            metadata = os.lstat(path)
+        except OSError as exc:
+            raise ResearchOSError(f"cannot identify {path}: {exc}") from exc
+        if probe_device is None:
+            try:
+                probe_device = os.stat(probe_dir).st_dev
+            except OSError as exc:
+                raise ResearchOSError(
+                    f"cannot witness object creation in {probe_dir}: {exc}"
+                ) from exc
+        # Timestamp granularity belongs to the filesystem holding the object, so a probe only
+        # measures an object on its own device.
+        directory = (
+            probe_dir
+            if metadata.st_dev == probe_device
+            else (path if stat.S_ISDIR(metadata.st_mode) else path.parent)
+        )
+        targets.append(
+            (path, _birth_witness_order(_identity_generation(str(token))), directory)
+        )
+    return targets
+
+
+def _unsettled_target(
+    targets: Iterable[tuple[Path, tuple[int, int], Path]]
+) -> Path | None:
+    """One probe round: the first target whose birth quantum is still open, else None."""
+    probes: dict[Path, tuple[int, int]] = {}
+    for path, order, directory in targets:
+        if directory not in probes:
+            probes[directory] = _birth_witness_order(
+                _identity_generation(_birth_probe_token(directory))
+            )
+        if probes[directory] <= order:
+            return path
+    return None
+
+
+def _wait_for_settlement(targets: list[tuple[Path, tuple[int, int], Path]]) -> None:
+    """Block until every target's birth quantum has provably closed, or refuse by name.
+
+    The ONE place this installer ever sleeps. A host whose birth timestamps do not advance within
+    the bound is refused by name rather than recorded. Every round re-probes every enrolled
+    directory together, so the wall cost is the slowest quantum among them, never their sum.
+    """
+    if not targets:
+        return
+    deadline = time.monotonic() + BIRTH_SETTLE_TIMEOUT_SECONDS
+    delay = BIRTH_SETTLE_FIRST_POLL_SECONDS
+    while True:
+        unsettled = _unsettled_target(targets)
+        if unsettled is None:
+            return
+        if time.monotonic() >= deadline:
+            raise ResearchOSError(
+                f"filesystem birth timestamps cannot distinguish {unsettled} from a replacement: "
+                f"no later creation was recorded within {BIRTH_SETTLE_TIMEOUT_SECONDS:g}s"
+            )
+        time.sleep(delay)
+        delay = min(delay * 2, BIRTH_SETTLE_MAX_POLL_SECONDS)
+
+
+def _settle_identity_witnesses(
+    witnesses: Iterable[tuple[Path, Any]], *, probe_dir: Path
+) -> None:
+    """Prove settlement now, waiting up to the cap. Not used by this installer's own recording.
+
+    Its transactions call `_defer_identity_witnesses`, which never sleeps, so one `apply` run pays
+    at most one wait no matter how many of the scaffold's files it writes.
+    """
+    _wait_for_settlement(_settlement_targets(witnesses, probe_dir=probe_dir))
+
+
+class _SettlementLedger:
+    """The single deferred birth-quantum wait one `apply` run is allowed to pay.
+
+    The topology this exists for: this installer persists `state.json` durably PER FILE
+    TRANSACTION -- `_execute_create`, `_execute_replace`, and `_execute_delete` each arm a journal
+    and then commit it -- so the 103-file scaffold performs hundreds of durable writes in one run.
+    Settling inline at each of those recording points costs one full birth quantum per
+    transaction, which is linear in the file count and reaches minutes on a coarse-clock host.
+
+    So recording only ever PROBES (`_defer_identity_witnesses`); on a filesystem with sub-quantum
+    granularity that proves settlement outright and nothing is deferred. What it cannot prove is
+    enrolled here and persisted marked `witness_settled: false`, and the run pays one bounded wait
+    for all of it at the end.
+
+    That durable unsettled record is safe only because it CARRIES its status and every later
+    consumer refuses to discriminate on it: `_authority_matches` returns False, so `_plan_install`
+    treats the leaf as unowned, removal skips it as modified, and `_recover_one` raises
+    `RecoveryConflict` -- preserve, never remove, exactly as a degenerate clock already behaves.
+    An interrupted run cannot leave a witness a later run silently trusts, because the marker
+    lands in the SAME atomic state write as the witness it qualifies.
+
+    Within the run that deferred them the witnesses stay fully trusted: the marker is injected at
+    the state-WRITE boundary and stripped again for this ledger's own keys at the state-READ
+    boundary, so the in-memory record a transaction works with never carries it. Another process
+    has an empty ledger, strips nothing, and fails closed.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.targets: list[tuple[Path, tuple[int, int], Path]] = []
+        self.keys: set[str] = set()
+        # Deferring is only sound when SOMETHING will finish the settlement. Outside a run scope
+        # there is no finalizer, so a deferral there would write a marker nothing ever clears.
+        self.active = False
+
+    def begin(self) -> None:
+        """Open one run's settlement scope over an empty ledger."""
+        self.reset()
+        self.active = True
+
+    @property
+    def deferred(self) -> bool:
+        return bool(self.targets)
+
+    def defer(
+        self,
+        targets: list[tuple[Path, tuple[int, int], Path]],
+        keys: Iterable[str],
+    ) -> None:
+        self.targets.extend(targets)
+        self.keys.update(keys)
+
+    def marked(self, document: dict[str, Any]) -> dict[str, Any]:
+        """A copy of one state document with this ledger's unsettled keys marked, for WRITING."""
+        if not self.keys:
+            return document
+        marked = copy.deepcopy(document)
+        for key in self.keys:
+            for record in _settlement_records(marked, key):
+                record["witness_settled"] = False
+        return marked
+
+    def unmarked(self, document: dict[str, Any]) -> dict[str, Any]:
+        """Strip only THIS process's own markers from a document it just read back.
+
+        An in-run reload must see the same trusted view the in-memory dict had, or a transaction
+        this run is still driving would classify its own staged payload as foreign. A marker this
+        ledger did not place survives the read.
+        """
+        if not self.keys or not isinstance(document, dict):
+            return document
+        for key in self.keys:
+            for record in _settlement_records(document, key):
+                record.pop("witness_settled", None)
+        return document
+
+
+def _settlement_records(document: dict[str, Any], key: str) -> Iterator[dict[str, Any]]:
+    """Every record in one state document that a `witness_settled` marker for `key` qualifies.
+
+    This walks a document that has NOT been validated yet, because stripping has to precede
+    validation. Every level is therefore shape-checked rather than assumed, so a malformed
+    document still reaches `_validate_state`'s named refusal instead of raising here.
+    """
+    for collection, name in (("entries", key), ("manifest", None)):
+        container = document.get(collection)
+        if name is None:
+            if collection == "manifest" and key == _MANIFEST_TRANSACTION_KEY and isinstance(container, dict):
+                yield container
+            continue
+        if isinstance(container, dict) and isinstance(container.get(name), dict):
+            yield container[name]
+    transactions = document.get("transactions")
+    tx = transactions.get(key) if isinstance(transactions, dict) else None
+    if isinstance(tx, dict):
+        yield tx
+        for field in ("new_record", "old_record", "authority_record"):
+            if isinstance(tx.get(field), dict):
+                yield tx[field]
+
+
+def _open_marked_transaction(document: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """The transaction at `key` when it is open AND carries an unsettled-witness marker.
+
+    This is the whole enrolment rule for resolving an inherited marker, and it is what keeps
+    recovery's question separate from ownership's. A marker on the JOURNAL is proof that the run
+    which armed it held `key` in its ledger, so every record `_settlement_records` reaches under
+    that key -- including the owned record the transaction has already committed, which
+    `_recover_one` re-verifies in its `committed` phase -- belongs to that same interrupted run and
+    is part of the transaction this installer must now finish or roll back.
+
+    An owned record marked with NO open transaction is the ownership-deletion question seed 249d
+    exists for, and it is never enrolled. The two cannot be confused: a marked owned record is
+    non-discriminating, so `_plan_install` calls the leaf unowned and arms no transaction on it at
+    all, which is why an unmarked journal beside a marked record is not a reachable state.
+    """
+    transactions = document.get("transactions")
+    tx = transactions.get(key) if isinstance(transactions, dict) else None
+    if not isinstance(tx, dict) or _witness_settlement_trusted(tx.get("witness_settled")):
+        return None
+    return tx
+
+
+_SETTLEMENT = _SettlementLedger()
+
+
+def _witness_settlement_trusted(marker: Any) -> bool:
+    """Whether a recorded witness may be discriminated on at all.
+
+    Absent means the writer proved settlement before persisting -- the ordinary case, and the only
+    shape a document written before this marker existed can have. Anything else, `False` included,
+    is non-discriminating and fails closed.
+    """
+    return marker is None or marker is True
+
+
+def _defer_identity_witnesses(
+    witnesses: Iterable[tuple[Path, Any]],
+    *,
+    probe_dir: Path,
+    keys: Iterable[str],
+    durable_probe_dir: Path | None = None,
+    probe: bool = True,
+) -> bool:
+    """Prove settlement with ONE probe round and no wait; enrol what is still unsettled.
+
+    `probe=False` is for a dry run, which persists no witness and so must take no throwaway
+    create. `durable_probe_dir` re-points the DEFERRED round: granularity belongs to the
+    filesystem rather than to any one directory, and the natural immediate probe directory is a
+    private stage or backup container that the transaction deletes as it commits.
+    """
+    if not probe:
+        return True
+    targets = _settlement_targets(witnesses, probe_dir=probe_dir)
+    if not targets or _unsettled_target(targets) is None:
+        return True
+    if not _SETTLEMENT.active:
+        # A direct API caller -- anything not inside `apply_install`'s scope -- has no finalizer
+        # that would ever clear the marker, so it settles INLINE here, exactly as every caller did
+        # before deferral existed. Fail-closed by construction rather than by remembering.
+        _wait_for_settlement(targets)
+        return True
+    if durable_probe_dir is not None:
+        targets = [
+            (path, order, durable_probe_dir if directory == probe_dir else directory)
+            for path, order, directory in targets
+        ]
+    _SETTLEMENT.defer(targets, keys)
+    return False
+
+
 def _physical_target(root: Path) -> str:
     try:
         return os.path.normcase(str(root.resolve(strict=True)))
     except OSError as exc:
-        raise ResearchOSError(f"cannot resolve target root {root}: {exc}") from exc
+        raise TargetRootError(f"cannot resolve target root {root}: {exc}") from exc
 
 
 def _state_root() -> Path:
@@ -1431,17 +1776,23 @@ def _safe_open_flags(*, write: bool = False) -> int:
 
 def _open_root(root: Path) -> int | None:
     if os.name == "nt":
-        metadata = os.lstat(root)
+        try:
+            metadata = os.lstat(root)
+        except OSError as exc:
+            raise TargetRootError(f"cannot open target root {root}: {exc}") from exc
         if not stat.S_ISDIR(metadata.st_mode) or metadata.st_file_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
-            raise ResearchOSError("target root is not a safe directory")
+            raise TargetRootError("target root is not a safe directory")
         return None
     required = ("O_DIRECTORY", "O_NOFOLLOW")
     if any(not hasattr(os, name) for name in required):
-        raise ResearchOSError("safe no-follow directory primitives are unavailable")
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+        raise TargetRootError("safe no-follow directory primitives are unavailable")
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+    except OSError as exc:
+        raise TargetRootError(f"cannot open target root {root}: {exc}") from exc
     try:
         if not stat.S_ISDIR(os.fstat(fd).st_mode):
-            raise ResearchOSError("target root is not a directory")
+            raise TargetRootError("target root is not a directory")
         return fd
     except BaseException:
         os.close(fd)
@@ -1614,6 +1965,15 @@ def _ancestor_records(ancestors: tuple[tuple[str, str], ...]) -> list[dict[str, 
     return [{"path": path, "identity": identity} for path, identity in ancestors]
 
 
+def _ancestor_witnesses(
+    root: Path, ancestors: tuple[tuple[str, str], ...]
+) -> tuple[tuple[Path, str], ...]:
+    """Resolve the root-relative ancestor records into settleable (path, witness) pairs."""
+    return tuple(
+        (root.joinpath(*relative.split("/")), identity) for relative, identity in ancestors
+    )
+
+
 def _record_from_observation(observed: ObservedLeaf) -> dict[str, Any]:
     if observed.state != "regular-readable" or observed.identity is None or observed.digest is None or observed.mode is None:
         raise ResearchOSError("cannot record a non-exact generated leaf")
@@ -1627,13 +1987,19 @@ def _record_from_observation(observed: ObservedLeaf) -> dict[str, Any]:
 
 
 def _record_structure_valid(record: Any) -> bool:
-    if not isinstance(record, dict) or set(record) != {
+    # `witness_settled` is OPTIONAL and appears only as `False`: it is written when a birth
+    # witness had to be persisted before its quantum provably closed, and the successful
+    # end-of-run settle removes it again. Absent therefore means settled, which is also the only
+    # shape a document written before this marker existed can have.
+    if not isinstance(record, dict) or set(record) - {"witness_settled"} != {
         "destination_identity",
         "destination_type",
         "digest",
         "mode",
         "ancestors",
     }:
+        return False
+    if "witness_settled" in record and record["witness_settled"] is not False:
         return False
     ancestors = record.get("ancestors")
     return bool(
@@ -1655,8 +2021,16 @@ def _record_structure_valid(record: Any) -> bool:
 
 
 def _authority_matches(observed: ObservedLeaf, record: dict[str, Any]) -> bool:
+    """Whether the observed leaf is the exact recorded object.
+
+    A record whose witness was persisted before its birth quantum provably closed cannot answer
+    that: a same-quantum replacement at the same name reproduces the witness exactly. So an
+    unsettled record is non-discriminating and answers False, which routes every consumer to its
+    preserve-and-report branch rather than to a removal it cannot justify.
+    """
     return bool(
-        observed.state == "regular-readable"
+        _witness_settlement_trusted(record.get("witness_settled"))
+        and observed.state == "regular-readable"
         and observed.identity == record["destination_identity"]
         and _ancestor_records(observed.ancestors) == record["ancestors"]
     )
@@ -1706,7 +2080,9 @@ def _artifact_state_valid(value: Any) -> bool:
 
 
 def _transaction_valid(key: str, tx: Any) -> bool:
-    if not isinstance(tx, dict) or set(tx) != {
+    # As with a record, `witness_settled` is optional and only ever `False`. On a transaction it
+    # covers the private stage and backup CONTAINER witnesses, which no record carries.
+    if not isinstance(tx, dict) or set(tx) - {"witness_settled"} != {
         "operation",
         "phase",
         "rel",
@@ -1716,6 +2092,8 @@ def _transaction_valid(key: str, tx: Any) -> bool:
         "stage",
         "backup",
     }:
+        return False
+    if "witness_settled" in tx and tx["witness_settled"] is not False:
         return False
     operation = tx.get("operation")
     if operation not in {"create", "replace", "delete"} or tx.get("phase") not in {"armed", "committed"} or tx.get("rel") != key:
@@ -1831,7 +2209,10 @@ def _load_state(path: Path, root: Path, root_identity: str) -> tuple[dict[str, A
         state = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ResearchOSError(f"cannot read Research OS state {path}: {exc}") from exc
-    return _validate_state(state, root, root_identity), True
+    # Markers this same process placed are stripped back out BEFORE validation: within one run the
+    # objects they qualify never left its control, and validation is what refuses a marker left by
+    # any other process -- including this run's own pre-crash predecessor.
+    return _validate_state(_SETTLEMENT.unmarked(state), root, root_identity), True
 
 
 def _fsync_directory(path: Path) -> None:
@@ -1846,6 +2227,10 @@ def _fsync_directory(path: Path) -> None:
 
 def _write_state(path: Path, state: dict[str, Any], root: Path, root_identity: str) -> None:
     _validate_state(state, root, root_identity)
+    # Every witness this run deferred is marked unsettled HERE, in the same atomic replace that
+    # makes the witness durable, so no crash can separate a witness from its status. The caller's
+    # in-memory document is untouched: mid-run consumers keep the trusted view.
+    state = _SETTLEMENT.marked(state)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary = tempfile.mkstemp(prefix=".state-", dir=path.parent)
     temporary_path = Path(temporary)
@@ -2056,6 +2441,50 @@ def _link_fd(fd: int, directory_fd: int, name: str) -> None:
         raise OSError(error, os.strerror(error), name)
 
 
+_LINKAT_EMPTY_PATH_CAPABLE: bool | None = None
+
+
+def _linkat_empty_path_capable() -> bool:
+    """Probe once per process whether linkat(..., AT_EMPTY_PATH) can publish an
+    anonymous (O_TMPFILE) descriptor without CAP_DAC_READ_SEARCH.
+
+    Per man 2 linkat, AT_EMPTY_PATH normally requires CAP_DAC_READ_SEARCH; some
+    kernels relax that for a file the caller itself opened O_TMPFILE. That
+    relaxation is a property of the running kernel/process, not of the target
+    filesystem (O_TMPFILE *support* is per-filesystem and is already handled by
+    the caller's own fallback), so the result is cached for the life of the
+    process rather than re-checked per call.
+    """
+    global _LINKAT_EMPTY_PATH_CAPABLE
+    if _LINKAT_EMPTY_PATH_CAPABLE is not None:
+        return _LINKAT_EMPTY_PATH_CAPABLE
+    capable = False
+    try:
+        with tempfile.TemporaryDirectory(prefix=".research-os-linkat-probe-") as probe_dir:
+            directory_fd = os.open(probe_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                try:
+                    probe_fd = os.open(
+                        ".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=directory_fd
+                    )
+                except (AttributeError, OSError):
+                    probe_fd = None
+                if probe_fd is not None:
+                    try:
+                        _link_fd(probe_fd, directory_fd, "probe")
+                        capable = True
+                    except OSError:
+                        capable = False
+                    finally:
+                        os.close(probe_fd)
+            finally:
+                os.close(directory_fd)
+    except OSError:
+        capable = False
+    _LINKAT_EMPTY_PATH_CAPABLE = capable
+    return capable
+
+
 def _inspect_absolute(path: Path) -> ObservedLeaf:
     try:
         metadata = os.lstat(path)
@@ -2217,9 +2646,15 @@ def _stage_file(parent: Path, data: bytes, mode: int, ancestors: tuple[tuple[str
     try:
         if os.name != "nt":
             container_fd = os.open(artifact.container, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                file_fd = os.open(".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0), mode, dir_fd=container_fd)
-            except (AttributeError, OSError):
+            if _linkat_empty_path_capable():
+                try:
+                    file_fd = os.open(
+                        ".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0), mode, dir_fd=container_fd
+                    )
+                except (AttributeError, OSError):
+                    file_fd = os.open("payload", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=container_fd)
+                    named = True
+            else:
                 file_fd = os.open("payload", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=container_fd)
                 named = True
         else:
@@ -2336,7 +2771,30 @@ def _move_exact_to_backup(
             if exact_fd is not None:
                 backup_fd = _open_verified_directory(backup.container, backup.identity)
                 try:
-                    _link_fd(exact_fd, backup_fd, "witness")
+                    if _linkat_empty_path_capable():
+                        _link_fd(exact_fd, backup_fd, "witness")
+                    else:
+                        # AT_EMPTY_PATH linking is unavailable on this kernel/process; fall
+                        # back to a byte-for-byte descriptor-only copy of the fd's already
+                        # verified content (never a path lookup for the moved-away original).
+                        os.lseek(exact_fd, 0, os.SEEK_SET)
+                        witness_data = _read_fd_bytes(exact_fd)
+                        witness_fd = os.open(
+                            "witness",
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                            stat.S_IMODE(opened.st_mode),
+                            dir_fd=backup_fd,
+                        )
+                        try:
+                            written = 0
+                            while written < len(witness_data):
+                                count = os.write(witness_fd, witness_data[written:])
+                                if count <= 0:
+                                    raise OSError("short write recovering witness content")
+                                written += count
+                            os.fsync(witness_fd)
+                        finally:
+                            os.close(witness_fd)
                     os.fsync(backup_fd)
                 finally:
                     os.close(backup_fd)
@@ -2447,6 +2905,22 @@ def _execute_create(
     if _inspect_leaf(root, root_fd, parts).state != "missing":
         raise RecoveryConflict(f"create destination appeared: {destination}")
     stage = _stage_file(parent, data, mode, ancestors)
+    # ONE probe round per transaction and NO wait, after every object it created and before any
+    # witness of theirs is persisted. The payload was created last, so a probe that already orders
+    # later than it proves settlement for the container and for every ancestor directory this
+    # transaction had to make; each is still listed, because settlement is asserted per witness
+    # rather than inferred. What the probe cannot prove joins the run's single deferred wait, and
+    # this key's record and journal persist marked unsettled until that wait succeeds.
+    _defer_identity_witnesses(
+        (
+            (stage.artifact.payload, stage.record["destination_identity"]),
+            (stage.artifact.container, stage.artifact.identity),
+            *_ancestor_witnesses(root, ancestors),
+        ),
+        probe_dir=parent,
+        durable_probe_dir=parent,
+        keys=(key,),
+    )
     tx = _transaction("create", key, authority_record=None, old_record=None, new_record=stage.record, stage=stage.artifact, backup=None)
     candidate = copy.deepcopy(state)
     candidate["transactions"][key] = tx
@@ -2482,6 +2956,21 @@ def _execute_replace(
     parent_identity = root_identity if not parts[:-1] else observed.ancestors[-1][1]
     stage = _stage_file(parent, data, mode, observed.ancestors)
     backup = _reserve_artifact(parent, "backup")
+    # The backup container is the newest object here, so one probe round covers it, the staged
+    # payload, every ancestor, and the destination this transaction is about to retire -- whose
+    # freshly minted `old_record` witness is journalled for recovery just like the new one.
+    _defer_identity_witnesses(
+        (
+            (backup.container, backup.identity),
+            (stage.artifact.payload, stage.record["destination_identity"]),
+            (stage.artifact.container, stage.artifact.identity),
+            (destination, old_record["destination_identity"]),
+            *_ancestor_witnesses(root, observed.ancestors),
+        ),
+        probe_dir=parent,
+        durable_probe_dir=parent,
+        keys=(key,),
+    )
     tx = _transaction("replace", key, authority_record=authority_record, old_record=old_record, new_record=stage.record, stage=stage.artifact, backup=backup)
     candidate = copy.deepcopy(state)
     candidate["transactions"][key] = tx
@@ -2516,6 +3005,16 @@ def _execute_delete(
     old_record = _record_from_observation(observed)
     parent_identity = root_identity if not parts[:-1] else observed.ancestors[-1][1]
     backup = _reserve_artifact(destination.parent, "backup")
+    _defer_identity_witnesses(
+        (
+            (backup.container, backup.identity),
+            (destination, old_record["destination_identity"]),
+            *_ancestor_witnesses(root, observed.ancestors),
+        ),
+        probe_dir=destination.parent,
+        durable_probe_dir=destination.parent,
+        keys=(key,),
+    )
     tx = _transaction("delete", key, authority_record=authority_record, old_record=old_record, new_record=None, stage=None, backup=backup)
     candidate = copy.deepcopy(state)
     candidate["transactions"][key] = tx
@@ -2560,6 +3059,13 @@ def _recover_one(
     key: str,
 ) -> None:
     tx = state["transactions"][key]
+    # A journal armed with a witness whose birth quantum had not provably closed cannot be
+    # recovered by comparison; that includes the stage and backup CONTAINER witnesses, which no
+    # record carries. Conflict is the fail-closed answer -- report and preserve.
+    if not _witness_settlement_trusted(tx.get("witness_settled")):
+        raise RecoveryConflict(
+            f"interrupted transaction carries an unsettled birth witness: {key}"
+        )
     _validate_transaction_artifact_location(root, key, tx)
     _, parts, destination = _transaction_destination(root, key)
     live = _inspect_leaf(root, root_fd, parts)
@@ -2787,6 +3293,27 @@ def _apply_locked(
             raise ResearchOSError("target root changed while opening")
         state_path = _state_path(root)
         state, state_exists = _load_state(state_path, root, root_identity)
+        if not dry_run:
+            # Every state document this run may write carries `target.identity`, a witness minted
+            # for a root this installer did NOT create. Settle it INLINE, before recovery or any
+            # other write can persist it, so a root swapped inside its own birth quantum is
+            # refused rather than accepted as the same target. A dry run writes nothing and
+            # therefore probes nothing.
+            #
+            # This one is deliberately NOT deferred, and it is the single exception to the
+            # one-wait-per-run rule. Deferring it would need the marker to live in
+            # `state["target"]`, and the fail-closed reading of an untrusted ROOT is "identify
+            # nothing here", which refuses the whole document -- including the crash-recovery
+            # retry that an interrupted run depends on. So the cost is paid here instead. It is a
+            # CONSTANT: one probe, and a wait only when the operator points at a directory created
+            # inside the current birth quantum, which a long-lived target repository never is. It
+            # does not grow with the scaffold's file count, which is the property the deferral
+            # exists to protect.
+            _settle_identity_witnesses(((root, root_identity),), probe_dir=root)
+            # Then re-prove whatever a PREVIOUS run left unproven, before recovery or planning
+            # consults it. A hard kill never reaches `apply_install`'s debt payment, so this is the
+            # only path by which a marker from a dead run can ever be cleared.
+            _resolve_inherited_settlement(root, state_path, state, root_identity)
         _recover_transactions(root, root_fd, state_path, state, root_identity, read_only=dry_run)
         if state["transactions"]:
             if not dry_run:
@@ -2822,6 +3349,170 @@ def _apply_locked(
             os.close(root_fd)
 
 
+def _record_identity_tokens(value: Any) -> Iterator[str]:
+    """Every identity witness nested anywhere in one owned record or journal entry.
+
+    A `witness_settled` marker names a KEY, not a witness, so resolving it means proving settlement
+    for every object that key's records name: the leaf, its recorded ancestors, and for a journal
+    entry the private stage and backup containers. Walking the record keeps that faithful when a
+    record grows a field, where a hand-listed set would silently stop covering one.
+    """
+    if isinstance(value, str):
+        if _identity_token_valid(value):
+            yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _record_identity_tokens(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _record_identity_tokens(item)
+
+
+def _inherited_settlement_targets(
+    root: Path, state: dict[str, Any]
+) -> tuple[list[tuple[Path, tuple[int, int], Path]], set[str]]:
+    """Targets that re-prove settlement for markers a PREVIOUS run left durable.
+
+    Only the NEWEST witness under a key is enrolled: settlement is the claim "this birth quantum
+    has closed", and a probe strictly later than the newest of a key's witnesses is strictly later
+    than all of them. The probe directory is the target ROOT rather than any recorded object,
+    because a marker has to be resolvable for a leaf that is absent, staged, or already replaced,
+    and birth-timestamp granularity belongs to the filesystem rather than to any one object.
+
+    Enrolment is `_open_marked_transaction`: an OPEN, MARKED journal, never a bare owned record.
+    An `entries` leaf or manifest record marked with no transaction beside it is the
+    ownership-deletion question seed 249d exists for, and it is left exactly where it is so
+    `_authority_matches` keeps answering False, planning keeps calling the leaf unowned, and removal
+    keeps skipping it as modified.
+
+    A key whose witnesses cannot be ordered is left out with its marker intact, because proving
+    nothing is the fail-closed answer.
+    """
+    targets: list[tuple[Path, tuple[int, int], Path]] = []
+    keys: set[str] = set()
+    for key in sorted(state.get("transactions") or {}):
+        if _open_marked_transaction(state, key) is None:
+            continue
+        records = list(_settlement_records(state, key))
+        tokens = {
+            token for record in records for token in _record_identity_tokens(record)
+        }
+        if not tokens:
+            continue
+        try:
+            newest = max(
+                tokens,
+                key=lambda token: _birth_witness_order(_identity_generation(token)),
+            )
+            resolved = _settlement_targets(((root, newest),), probe_dir=root)
+        except ResearchOSError:
+            continue
+        targets.extend(resolved)
+        keys.add(key)
+    return targets, keys
+
+
+def _resolve_inherited_settlement(
+    root: Path, state_path: Path, state: dict[str, Any], root_identity: str
+) -> None:
+    """Prove the settlement a previous run could not, so an interrupted transaction converges.
+
+    This separates the two questions the settlement gate conflated. "Is this witness discriminating
+    enough to justify REMOVING or REPLACING something?" is correctly answered NO for an unsettled
+    witness, and `_authority_matches` still answers it that way -- nothing here relaxes it, and a
+    marked owned record with no open transaction beside it is left untouched, so planning still
+    calls the leaf unowned and removal still skips it. But "may this installer finish or roll back
+    the TRANSACTION it already started, whose own committed record `_recover_one` re-verifies?" is a
+    different question, and refusing it forever is not fail-closed at all: it trades
+    the documented idempotent-recovery guarantee for a protection that was never bought, because
+    the interrupted state, its private stage and its backup all simply stay on disk.
+
+    Settlement is RE-PROVABLE, which is what makes converging safe. A probe taken now proves the
+    recorded witness's birth quantum closed before now, so every creation from here on is stamped
+    strictly later and can never collide with it. The only object that can still reproduce the
+    witness is one created INSIDE that original quantum -- within one filesystem tick of the dead
+    run's own create, while it still held this lock. Waiting longer does not widen that window,
+    because the window is bounded by the quantum and not by when the probe is taken.
+
+    What is NOT re-provable stays refused: a host whose birth timestamps never advance exhausts the
+    cap, the markers stay durable, and `_authority_matches` and `_recover_one` keep failing closed
+    by name. This function is therefore silent on failure by design -- the named refusal belongs to
+    the consumer that actually declines to act, not to a preparatory step.
+
+    A dry run resolves nothing: a settle proves itself by CREATING an object, and a preview may not
+    write. Its report of a foreign leaf is honest, because a witness the next real run has not yet
+    proven is not yet proven.
+    """
+    targets, keys = _inherited_settlement_targets(root, state)
+    if not targets:
+        return
+    try:
+        _wait_for_settlement(targets)
+    except ResearchOSError:
+        return
+    for key in keys:
+        for record in _settlement_records(state, key):
+            record.pop("witness_settled", None)
+    _write_state(state_path, state, root, root_identity)
+
+
+def _finish_settlement(root: Path, root_identity: str) -> None:
+    """Pay the ONE bounded birth-quantum wait an `apply` run is allowed, then clear its markers.
+
+    This is the whole wait budget of a run, whatever the scaffold's file count: every recording
+    site only ever probed, so nothing before this point has slept, and the wait rounds re-probe
+    every enrolled directory together rather than one after another.
+
+    Order matters. The wait comes first, so markers are only ever cleared after settlement is
+    proven. If it cannot be proven inside the cap the markers are LEFT durable and the refusal is
+    raised by name: the files are written but their records are non-discriminating, which is the
+    same answer a degenerate clock has always produced -- planning treats those leaves as unowned
+    and removal skips them. Silence would be the one unacceptable outcome.
+    """
+    # The ledger is module-global, so it MUST be empty when this returns however it returns. A
+    # leaked ledger would let the next run in this process strip markers it never placed, which is
+    # the one direction that fails open.
+    try:
+        if not _SETTLEMENT.deferred:
+            return
+        state_path = _state_path(root)
+        _wait_for_settlement(_SETTLEMENT.targets)
+        if not state_path.exists():
+            return
+        state, _ = _load_state(state_path, root, root_identity)
+        # Clearing before the write is what makes the write land unmarked.
+        _SETTLEMENT.reset()
+        _write_state(state_path, state, root, root_identity)
+    finally:
+        _SETTLEMENT.reset()
+
+
+def _settle_after_failure(root: Path) -> None:
+    """Pay the settlement a FAILING run still owes, best effort, before it re-raises.
+
+    Paying here rests on exactly the same ground as paying it on the success path: the witnesses
+    were minted by this run, the state lock is still held, and nothing outside this process is
+    supported in mutating a managed path meanwhile. So this widens no window at all -- it just stops
+    discarding a debt the run can still settle.
+
+    Leaving them unproven was the one shape that could never converge. Nothing else clears a marker
+    a dead run left behind, so its journal became permanently unrecoverable and its owned leaves
+    permanently foreign on a coarse-clock host, while the files it wrote stayed on disk either way.
+    The protection was never bought.
+
+    Best effort by construction: the original failure is the one the caller has to see, so every
+    outcome here is swallowed and the markers simply stay durable when the debt cannot be paid.
+    `_resolve_inherited_settlement` is the second line of defence, for the hard kill that never
+    reaches this path at all.
+    """
+    try:
+        _finish_settlement(root, _path_identity(root))
+    except BaseException:
+        pass
+    finally:
+        _SETTLEMENT.reset()
+
+
 def apply_install(
     root: Path,
     *,
@@ -2835,7 +3526,15 @@ def apply_install(
         return _apply_locked(root, files, normalised, force=force, dry_run=True)
     state_path = _state_path(root)
     with _state_lock(state_path):
-        return _apply_locked(root, files, normalised, force=force, dry_run=False)
+        # One deferred-settlement scope per run.
+        _SETTLEMENT.begin()
+        try:
+            actions = _apply_locked(root, files, normalised, force=force, dry_run=False)
+        except BaseException:
+            _settle_after_failure(root)
+            raise
+        _finish_settlement(root, _path_identity(root))
+        return actions
 
 
 
@@ -2854,7 +3553,11 @@ def main() -> int:
     project_name = args.project_name or root.name
     files = build_files(project_name)
 
-    actions = apply_install(root, files=files, force=args.force, dry_run=args.dry_run)
+    try:
+        actions = apply_install(root, files=files, force=args.force, dry_run=args.dry_run)
+    except TargetRootError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_INPUT
 
     counts: dict[str, int] = {}
     for rel in sorted(actions):

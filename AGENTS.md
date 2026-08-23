@@ -51,6 +51,12 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   in a `RuntimeAssignment`; otherwise dispatch stops. Its
   canonical calibration preserves evidence, quotas, complements, fallbacks, controls, and
   roadmap lanes.
+- `skills/dispatching-exact-ocx-models/` — exact-route handoff after rightsizing. It distinguishes
+  generated `ocx-*` Agent definitions from Workflow call-site injection, checks route/tool
+  compatibility, and refuses results without correlated provider/model receipt evidence.
+- `skills/reviewing-overengineering/` — independent complexity/deletion audit for an immutable
+  plan or diff. It applies deletion pressure plus a safety-preservation rebuttal and requires any
+  remediated candidate to be reviewed again. Ponytail is optional, never a dependency.
 - `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
   critic, integrator) in Claude `.md` and Codex `.toml` forms, plus the repo-scoped
   research roster under `agents/codex/research/`.
@@ -61,6 +67,17 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   dispatch; `model-tier-rightsizing` itself remains a skill, not a slash command. Other hosts
   invoke the flagship skill with the same intents. Global installation and per-repository
   activation are separate lifecycle planes.
+- `workflows/` — Claude Code Dynamic Workflow documents, installed as ordinary owned bytes into
+  `<claude-home>/.claude/workflows/` by the same lifecycle that owns skills, agents, and commands:
+  same ownership records, staging, refresh, migration, and modified/foreign preservation. Codex
+  owns no record of them. Installing, refreshing, adopting, or removing one never runs it, never
+  enables it, and never reloads a host — enabling or executing the real overlay is a separately
+  authorized user-configuration effect. The shipped `sdlc-wave-scout` is a read-only two-stage
+  scout that proposes a wave graph and refuses before dispatch until the conductor supplies a
+  resolved `RuntimeAssignment` per stage, because the distributed bytes carry no model or effort
+  pin. Adding one = adding `workflows/<name>.js` whose first line is `// workflow: <name>`; the
+  validator checks that pairing, the lowercase-slug name, module-free parseability, the absence of
+  a static model/effort pin, and the absence of user-specific paths.
 
 ## Working on THIS repo
 
@@ -68,9 +85,12 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   mise-managed uv/Python to validate name==dirname, the Codex 1024-char description cap,
   broken references, TOML/JSON parses, shell syntax, manifests, and secret-shaped strings in
   tracked text, then runs the installer tests, the lifecycle self-test, and the pinned
-  working-tree secrets scan (`mise run secrets` = `betterleaks dir .` with `--config` pinned at
-  the tracked extend-only `.config/betterleaks.toml`, so a drop-in config or `GITLEAKS_CONFIG*`
-  variable cannot silently replace the ruleset). Full git-history
+  Git-visible secrets scan. `mise run secrets` selects tracked files plus nonignored untracked
+  files, rejects symlinks and any selected path beneath a symlinked parent rather than following
+  them outside the repository, then calls betterleaks with the tracked extend-only
+  `.config/betterleaks.toml` on every batch; ignored runtime state is excluded but a force-tracked
+  ignored path remains covered, and no drop-in config or `GITLEAKS_CONFIG*` variable can replace
+  the ruleset. Full git-history
   scanning stays a separate, explicitly consented pre-publish step. A passing gate
   is evidence only; it does not authorize an outward effect.
 - Run `./scripts/install-skill-bundle.sh self-test` after installer changes.
@@ -117,6 +137,15 @@ hashes), so loosening the sanitizer allowlist or the sandbox limits fails the ga
 
 ## Installing this bundle
 
+The current supported distribution is checkout-backed and follows the steps below. A future
+self-contained GitHub release will make
+`mise use -g github:Codeseys-Labs/agentic-sdlc` the primary quick install while retaining this
+managed checkout for customization, contribution, gates, and release building. Do not claim that
+path works before a release artifact exists. Its proposed payload, explicit host-plane activation,
+copy-versus-link boundary, platform limits, and implementation order are recorded in
+`docs/plans/2026-08-14T163833Z-Install-UX.md`; ADR-0011 remains current until a later ADR supersedes
+it with executed release evidence.
+
 mise 2026.4.27+ is the only bootstrap prerequisite. It is the managed-tool bootstrap, not the
 sole readiness prerequisite. It pins uv, consumes the checked-in cross-platform `mise.lock`, and
 uv supplies Python 3.12.11 for all authoritative Python entrypoints. Git, a verified Seeds
@@ -139,7 +168,7 @@ plane and blocks only direct Claude installation, so a selected Codex plane stil
 Without the trust step every later `mise` command in the repository exits with `config files are not trusted`. Resolving the lock downloads
 roughly 1.3 GB across the 12 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
 so skipping the explicit install step does not avoid the cost — the first `mise run <task>`
-installs all 12 without prompting. `mise run check` last measured 654 tests in 814s with
+installs all 12 without prompting. `mise run check` last measured 3308 tests in 913s with
 `OK (skipped=13)` on Linux, its `validate` and `secrets` leaves each under 2s, so budget about 15
 minutes and expect longer on a loaded host. Both figures go stale by design — the count grows
 with the suite and the clock varies by host — and the gate's verdict is the evidence.
@@ -168,12 +197,12 @@ task includes cannot serve this repository: they clone into a cache anyway, pars
 the task-file schema, carry no `[tools]`, and run tasks in the caller's directory.
 
 To acquire Seeds from an exact clean Git distribution root, run the installed flagship
-`tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.22.3.
+`tools/seeds-launcher.mjs bootstrap --distribution <distribution-root>` under Node 22.23.2.
 Bootstrap and inspect both reject any other executing Node. Bootstrap rejects nested, staged,
 dirty, untracked, or ignored distribution content, then explicitly invokes reviewed
 `mise --locked install` with isolated HOME, mise config/data/cache, hooks, npmrc files, and fixed
 official registry/npm backend. Ambient npm/mise config cannot select acquisition. It resolves only
-config-free exact roots, validates Node 22.22.3, Bun 1.3.10, and the
+config-free exact roots, validates Node 22.23.2, Bun 1.4.0, and the
 `npm:@os-eco/seeds-cli@0.5.15` package/bin/layout; the released package's string `engines.bun` is
 benign while actual config/macro/preload controls remain forbidden. It then atomically records the
 exact Git commit/tree, tool hashes, and a prior receipt for rollback. Inspect is separate and never
@@ -224,6 +253,11 @@ model selection as policy.
   `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
+- `rightsize:evaluate` — explicit model-rightsizing discovery/plan/evaluate/render surface; never a
+  gate leaf. `plan` makes no model calls. `evaluate` requires the plan's exact authorization digest
+  after the operator reviews routes, target-data egress, attempts, provider/subscription capacity,
+  budgets, outputs, and stop conditions. It emits advisory v2 map/evidence artifacts and never
+  dispatches workflow roles or changes runtime receipt policy.
   `ocx:launch` runs Claude Code through the gateway using the operator's OWN `~/.claude` login, so
   ONE session serves both catalogs: a genuine `claude*`/`anthropic*` id that no alias or `modelMap`
   claims is forwarded verbatim to `api.anthropic.com` on that subscription, while every gateway id
@@ -235,10 +269,30 @@ model selection as policy.
   the environment scrub, the subscription refusals, the `session` verbs, and the separately named
   `claude-subscription` route are all GONE (ADR-0014 supersedes ADR-0013 and amends ADR-0003).
   `launch` still refuses (exit 3) when the route would not actually be used: a provider-routing key
-  (`CLAUDE_CODE_USE_BEDROCK`-class, exported or in the global `settings.json` `env`), an
-  `apiKeyHelper`, or an `sk-ant-api*` Console key — the first bypasses the gateway entirely, and the
-  last takes the same native branch but bills API credits. An `sk-ant-oat*` login is accepted; no
-  credential value is ever read or printed. A healthy launch is still not model-identity evidence.
+  (`CLAUDE_CODE_USE_BEDROCK`-class, exported or in a persistent settings `env`), an
+  `apiKeyHelper`, an `sk-ant-api*` Console key, a cloud-provider-shaped model id (Bedrock or
+  Vertex form) in `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU,FABLE}_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+  or `ANTHROPIC_MODEL`, or an explicit `--settings` value that is uncheckable
+  or carries the same blocker — the provider switch bypasses the gateway entirely, the Console
+  key takes the same native branch but bills API credits, and a cloud-provider id in a model slot
+  re-points that model family to the gateway's default provider instead of Anthropic (a plain
+  `claude-*` alias or a gateway id in those slots stays fine). Every selected settings value is inspected
+  before gateway startup, then accepted arguments are forwarded unchanged. An `sk-ant-oat*` login
+  is accepted; no credential value or selected settings path is printed. A healthy launch is still
+  not model-identity evidence.
+  `ocx:configure` admits only reviewed non-Anthropic provider/account routes, and a mutation there
+  writes the CONFIG FILE only: the wrapper prints the required `ocx sync` plus `ccodex restart` and
+  runs neither, because until both have run a request naming the new provider is classified
+  `routeKind: "default-provider"` and billed against the DEFAULT provider instead of failing
+  closed. By opencodex 2.28.0 (absent in 2.11.1) the sync is not always a `~/.codex` config write — with the Codex
+  integration off, or an external `model_provider` owning `config.toml`, it reports a
+  `CodexSyncResult` status of `catalog-only`, leaving `config.toml`, the journal, and history untouched (the catalog and models-cache files under `~/.codex` may still refresh), and a `validateOnly`
+  injection preflight fails a bad config before any partial rewrite. That narrows the blast radius,
+  not the authorization: a sync that WOULD rewrite shared `~/.codex` still requires its own
+  explicit approval, and which branch a host takes is not knowable without running it. A provider
+  absent from the config file is admitted only by name against the registry roster the wrapper
+  pins (2.28.0 adds `chutes`, `featherless`, `nous`, `novita`, `xiaomi-mimo`); an unlisted name is
+  refused, never admitted by absence.
   Muse Spark has no tasks of its own: it is one provider registered in the gateway, whose models
   appear in the single flat live catalog as namespaced ids, so
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a
@@ -271,15 +325,41 @@ remains inactive until the operation-specific `claude:statusline:activate` comma
 fresh installs neither require nor recreate them. `operator-tools:retire-aliases` removes only
 unchanged removable owned copies through the crash-consistent unlink lifecycle; modified,
 foreign, and adopted copies are preserved and reported. `ccodex ultracode` enables session
-Ultracode without bypassing permissions and refuses competing settings or bypass flags. Native
-Windows statusline/operator-tool activation is not certified and fails closed.
+Ultracode with ordinary permissions by default. A first `--yolo` on either `ccodex launch` or
+`ccodex ultracode` is an explicit unsafe opt-in to Claude Code permission bypass; it is consumed
+by the wrapper, cannot be combined with another permission-mode control, and does not weaken the
+gateway-health or billing-honesty refusals. `-- --yolo` forwards the spelling literally.
+`ccodex set-fast-model [<exact-model-id|->]` delegates to OpenCodex's existing configuration API
+for Claude Code's Haiku/background small-fast slot. Bare invocation offers current Claude families
+(entitlement checked when used), the gateway's live OCX catalog, and clear-to-normal-Haiku; one
+argument preserves exact noninteractive selection and `-` clears. A completed choice is a
+persistent operator mutation and is not an Auto-mode classifier selector. Native Windows
+statusline/operator-tool activation is not certified and fails closed.
 `operator-tools:status` reports a never-installed desired command as `absent` and reserves
 `unmanaged` for a desired file that exists but is not owned; historical aliases are never
 reported as required or absent.
 
-`ccodex` has NO private plane (ADR-0014). Its `launch` and `ultracode` use the operator's own
-`~/.claude` — configuration, plugins, agents, and login — which is what lets Claude Code present
-its existing session to the gateway. `ocx claude` therefore writes its `ocx-*.md` roster agents and
+`ccodex` has NO private plane (ADR-0014). Its `launch` and `ultracode` resolve the launcher from
+the distribution checkout and directly execute the absolute `ocx` path bound by the last explicit
+`operator-tools:install`; the same install binds `jq` and `uv` for catalog/config and Python-backed
+routes, so ordinary installed use does not invoke repository-scoped mise or substitute caller-PATH
+copies. A DIRECT source-checkout launch carries no such binding and therefore resolves `jq` through
+the pinned `mise -C <root> exec -- jq` route: no `jq` NAME is ever looked up, and `$AGENTIC_SDLC_JQ`
+is admitted only as an absolute path or the literal pinned sentinel, so a bare or relative binding
+is refused instead of resolved through ambient PATH. That `jq` classifies
+the settings documents a refusal depends on and reads a provider config and gateway catalog adjacent
+to credentials, so under ADR-0020 it is an exact dependency, and a substituted copy answering
+`clean` would suppress every settings refusal. The residual is stated rather than hidden: that
+pinned route locates `mise` itself on PATH, because mise is the documented sole bootstrap
+prerequisite and is not itself pinned, so a substituted `mise` still governs this parse exactly as
+it governs `ocx`. A bound-but-broken `$AGENTIC_SDLC_JQ` does not fall
+back to the pin either — the surface that needed it blocks by name (exit 3 for a launch refusal,
+`unknown` for the advisory catalog comparison), and rebinding stays an explicit
+`operator-tools:install`. Claude Code therefore starts in the caller's physical current workspace. A reviewed toolchain refresh requires a
+separate explicit operator-tools reinstall; ordinary commands never silently re-resolve, install, or
+update tools. They use the operator's own `~/.claude` — configuration, plugins, agents, and login —
+which is what lets Claude Code present its existing session to the gateway. `ocx claude` therefore
+writes its `ocx-*.md` roster agents and
 the gateway model cache into that global dir; the cache write is load-bearing, because Claude Code
 only refreshes it while holding a credential and the `/model` picker would otherwise never list the
 routed ids. There are no `ccodex session` verbs and no constructed plane-local `settings.json`.
@@ -296,10 +376,15 @@ that no session data is shared, and do not read a skipped entry as inheritance w
 
 Mutating global Claude settings still requires explicit operation-specific approval and no launcher
 does it: the global file is read, never written, copied, or linked. `ccodex launch` refuses (exit 3)
-rather than editing anything when that document would defeat the route — a provider-routing switch
-in its `env`, an `apiKeyHelper`, or an `sk-ant-api*` Console key. An `sk-ant-oat*` login is accepted
-wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares nothing; `--`
-forwards the remaining arguments verbatim to the wrapped tool.
+rather than editing anything when a persistent or explicit settings document would defeat the route
+— a provider-routing switch in `env`, an `apiKeyHelper`, an `sk-ant-api*` Console key, or a
+cloud-provider-shaped model id in a model slot — `ANTHROPIC_MODEL`, an `ANTHROPIC_DEFAULT_*_MODEL`
+tier slot, or `ANTHROPIC_SMALL_FAST_MODEL`. Explicit
+`--settings` values must be one JSON object or a readable file containing one; every occurrence is
+inspected before gateway startup and accepted argv is forwarded unchanged. An `sk-ant-oat*` login
+is accepted wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares
+nothing; the leading wrapper `--` forwards the remaining arguments, while a later literal `--` ends
+Claude's own option parsing.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim

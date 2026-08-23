@@ -2,7 +2,11 @@
 
 - **Status:** accepted
 - **Note:** scoped to `scripts/muse-claude.sh` by ADR-0014. `scripts/opencodex-claude.sh` no longer
-  has a plane to inherit into. `assets/claude/session-inheritance.sh` is unchanged.
+  has a plane to inherit into, and ADR-0014 changed nothing inside
+  `assets/claude/session-inheritance.sh`. That file did change on 2026-08-18, for this record's own
+  Amendment A: see Amendment A.1 below, which records the allow-by-name half being implemented and
+  wired. It changed again on 2026-08-19 for Amendment A.2, which adds the closed unprefixed
+  credential-NAME grammar to the deny half.
 - **Date:** 2026-08-07
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/adr/0003-gateway-stance-downgraded-to-optional.md`
@@ -236,6 +240,111 @@ A bug worth recording because it was self-inflicted and silent: the policy lists
 under `set -u`. They are copied to locals first. The same lists are excluded from the status
 report, since reporting launcher state as "a denied variable you set" would be a false statement
 about the operator's shell.
+
+### A.1 The allow half was prose for eleven days; implemented 2026-08-18
+
+**What was actually shipped in A, and what was not.** The deny half landed in code: both launchers
+swept `ANTHROPIC_*`/`CLAUDE_*`/`AWS_*` by prefix and the three unprefixed hazards by name. The
+`CLAUDE_*` **allow-by-name** half did not. The enumeration and the capture-then-restore existed in
+`assets/claude/session-inheritance.sh` with **zero callers** — `scrub_and_restore_claude_env`,
+`CLAUDE_INHERITED_ENV_VARS`, `CLAUDE_DENIED_ENV_VARS`, and `report_env_policy` were all orphans —
+while `scripts/muse-claude.sh` ran a private prefix scrub that dropped every `CLAUDE_*` variable.
+So the concrete regression this amendment names, a set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+being swept and thereby **re-enabling** nonessential traffic under set-to-activate semantics, was
+live for eleven days. Prose is not policy; only a called function is.
+
+**Now one shared helper, one enumeration, one caller.** `scrub_and_restore_claude_env` is the
+launcher's only scrub, `scripts/muse-claude.sh` calls it in place of its deleted private copy, and
+`report_env_policy` is wired into that launcher's `status` route — the one place that can answer
+"will the flag I set survive a launch?" without launching. The list stays in the shared asset rather
+than moving into its single consumer, so a future plane inherits the reviewed boundary. **The ocx
+launcher is deliberately NOT a second caller:** ADR-0014 deleted its plane and its scrub, because
+that route's whole premise is presenting the operator's own environment and login. Item 8's "one
+mechanism serves both launchers" therefore now reads as *one mechanism serves any plane that
+prepares a child*, and there is exactly one today.
+
+**Two failures were found by wiring it, both invisible while it was dead code.** First, the
+capture-then-restore round-tripped values as `name=value` LINES, so a value the operator controls
+could inject a second name: `CLAUDE_CODE_ACCESSIBILITY=$'1\nAWS_BEARER_TOKEN_BEDROCK=<token>'`
+exported a Bedrock bearer token into the child and truncated the real preference to `1` — the exact
+boundary failure this amendment exists to close, arriving through the half meant to preserve inert
+preferences. Both lists are now bash arrays and the restore uses parallel name/value arrays, so a
+restored name can only come from the literal enumeration, and a value is never re-parsed. (Arrays
+cannot be exported, so the policy state is now also structurally incapable of reaching the child.)
+Second, a missing or empty list would have failed silently in opposite directions — an empty
+denylist scrubs nothing, an empty allowlist drops the privacy flags — so both are refused by name
+instead of defaulted.
+
+**The list checks itself, because allow-by-name fails by allowing too much.**
+`assert_env_allowlist_is_admissible` runs on every scrub and refuses the launch, before anything is
+unset, for an entry that is not an exact upper-case name (which is what forbids a prefix or glob
+from ever becoming an allow rule), is not `CLAUDE_*`, or is credential-, destination-, model-pin-,
+or plane-selector-shaped. `CLAUDE_CONFIG_DIR` is refused rather than merely absent, since a restored
+value would point the child at `~/.claude`. Every entry now carries its own in-code reason, and the
+admission test is about the NAME's whole value space, never about the value an operator happens to
+have set. Ordering at the call site is unchanged and load-bearing: the subscription refusal reads
+`ANTHROPIC_*` and so still precedes the scrub, which the `CLAUDE_*`-only allow half cannot weaken;
+the route slots are exported after the restore, so no preserved preference can shadow them.
+
+### A.2 The unprefixed half was three names; it is now three names plus a closed credential grammar (2026-08-19)
+
+**The defect, measured against HEAD rather than argued.** The deny half of A closed
+`ANTHROPIC_*`/`CLAUDE_*`/`AWS_*` by prefix and exactly three unprefixed hazards by name, so an
+unprefixed **credential** was never swept. Reproduced by the Fable-lane credential-boundary review
+of agentic-sdlc-71f4 and again against HEAD, so it is pre-existing rather than a regression: an
+exported `MODEL_API_KEY` **reached the child verbatim**, alongside the `ANTHROPIC_AUTH_TOKEN`
+carrying the same value that the prefix sweep did remove. The boundary was closed for the namespaced
+spelling of a secret and open for the unnamespaced one. `MODEL_API_KEY` is not a hypothetical name
+here — it is `scripts/muse-claude.sh`'s own documented credential input.
+
+**The decision: the unprefixed class gains a credential-NAME grammar, and stays a name policy.**
+`assets/claude/session-inheritance.sh` denies any variable whose whole final word is one of ten
+endings — `API_KEY`, `APIKEY`, `AUTH_TOKEN`, `ACCESS_TOKEN`, `TOKEN`, `SECRET`, `SECRET_KEY`,
+`PASSWORD`, `CREDENTIALS`, `PRIVATE_KEY` — matched as `(^|_)WORD$`, so `MODEL_API_KEY`,
+`MODEL_APIKEY`, a bare `API_KEY`, `GITHUB_TOKEN`, and `CI_JOB_TOKEN` all go while
+`MODEL_API_TIMEOUT`, `MODEL_API_KEYS`, `MONKEY`, and `TOKENIZER_PARALLELISM` all stay. `TOKEN` was
+added after `GITHUB_TOKEN` and `CI_JOB_TOKEN` were found reaching the child verbatim under the
+original nine-ending grammar: neither name ends in `AUTH_TOKEN` or `ACCESS_TOKEN`, so the bare-word
+ending was missing. A name that merely *contains* a credential word is deliberately not swept:
+`*KEY*`-style containment is how a deny grammar starts eating the operator's inert preferences,
+which is the failure the whole of A exists to prevent.
+
+**Why this is not the value scanner A ruled out.** A's constraint is unchanged and this amendment
+does not relax it: no value is read, scanned, matched, or classified anywhere in the policy. Value
+inspection is the wrong instrument in both directions — it misses a low-entropy secret and deletes a
+high-entropy preference — so what is denied is a NAME whose final word declares that its value space
+is a credential. The grammar is **closed** (an enumerated word list, not a heuristic) and
+self-checking: `credential_shaped_env_name_ere` refuses a glob, an alternation, a digit, or a
+leading/trailing underscore rather than expanding it, so the deny list cannot quietly widen into a
+pattern rule any more than the allow list can quietly widen into a prefix rule. A missing or empty
+grammar refuses the launch by name, before anything is unset, exactly as an empty allow or deny list
+already does.
+
+**The two halves are structurally incapable of disagreeing, and that is tested.** Every one of the
+ten endings is already refused from the allowlist by `assert_env_allowlist_is_admissible`'s
+credential-shape patterns, so no *admissible* allowlist entry can match the grammar and the sweep
+needs no exception for an allowed name. Capture-then-restore is independent belt: it captures before
+every sweep and restores after, so an allowlisted preference survives regardless.
+`tests/test_muse_claude.py` proves both halves per ending, reading the word list from the shipped
+array rather than re-typing it, so narrowing the shipped grammar fails the gate.
+
+**One grammar, two consumers.** The sweep and the `status` classification read the same ERE. A second
+hand-maintained copy of the word list is how a status route ends up promising that a variable
+survives a scrub that removes it, so `report_env_policy` now classifies the unprefixed credential
+class from that ERE, reports a name that satisfies both a prefix rule and the grammar exactly once,
+and continues to print no value. The grammar list is itself `CLAUDE_*`-named, so — like the two lists
+before it — it is resolved into a local before the prefix sweep can unset it, and excluded from the
+report as launcher state rather than operator environment.
+
+**Sweeping this launcher's own credential input is safe because of ordering, not luck.**
+`resolve_credential` copies `MODEL_API_KEY` into a shell variable *before* `prepare_child_environment`
+runs, and the route's `ANTHROPIC_AUTH_TOKEN` slot is exported *after* the scrub. That ordering was
+already load-bearing for the subscription refusal; it now carries this too.
+
+**What this does not close, recorded rather than solved.** A secret an operator stores under a name
+the grammar does not describe — `MY_THING`, `DEPLOY_PW`, or any allowlisted preference — still crosses
+as that variable's value. A name policy cannot see it. The same review recorded that limit, and this
+amendment narrows the gap rather than closing it.
 
 ### B. One `ccodex` dispatcher, not N commands, and the clone is required
 

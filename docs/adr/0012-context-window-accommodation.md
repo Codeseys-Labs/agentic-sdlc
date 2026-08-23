@@ -5,7 +5,9 @@
   stale for `scripts/opencodex-claude.sh`: ADR-0014 deleted that script's environment scrub
   entirely, and its `cmd_launch` now sets `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85` directly rather than
   through session-inheritance's capture-then-restore. `scripts/muse-claude.sh` is unaffected and
-  still ships the default through its own capture-then-restore fallback. The opinionated value,
+  still ships the default through a capture-then-restore — the SHARED helper's since 2026-08-18,
+  when ADR-0010 Amendment A's allow-by-name half landed and this launcher's private scrub, and its
+  private copy of this fallback, were deleted. The opinionated value,
   its one-directional safety, and the operator-export override remain unchanged for both
   launchers.
 - **Date:** 2026-08-07

@@ -1,0 +1,237 @@
+{
+  "schema_version": "model-benchmark-evidence/v1",
+  "captured_at": "2026-08-12",
+  "provenance": "mined",
+  "authority": "candidate nomination only; cannot prove a route, context form, qualification rung, frontier slot, runtime admission, or dispatch authorization",
+  "sources": [
+    {
+      "id": "deepswe-v1.1",
+      "publisher": "DataCurve",
+      "title": "DeepSWE v1.1",
+      "urls": [
+        "https://deepswe.datacurve.ai/",
+        "https://arxiv.org/html/2607.07946"
+      ],
+      "version": "v1.1 (updated 2026-08-07)",
+      "evaluation_identity": {
+        "taskset": "113 tasks from 91 repositories in five languages",
+        "harness": "common mini-swe-agent harness",
+        "runtime": "benchmark-managed repository environments",
+        "attempts": "approximately four rollouts per task in the paper"
+      },
+      "metrics": ["task-normalized pass@1", "uncertainty", "cost", "output tokens", "wall time", "agent steps"],
+      "applicable_task_classes": ["deterministic_gated_change", "semantic_implementation", "integration_reconcile"],
+      "relevance": "direct",
+      "limitations": [
+        "binary patch reward has no partial credit",
+        "fixed autonomous patching harness does not measure planning, dialogue, semantic review, or authority work",
+        "effort settings differ across model families",
+        "context exhaustion and timeout count as failures",
+        "confidence intervals overlap for close rows"
+      ],
+      "rows": [
+        {"configuration": "claude-opus-5[max]", "pass_at_1": 0.74, "uncertainty": 0.04, "mean_cost_usd": 11.84, "mean_output_tokens": 118000, "mean_steps": 99},
+        {"configuration": "gpt-5.6-sol[max]", "pass_at_1": 0.73, "uncertainty": 0.03, "mean_cost_usd": 8.39, "mean_output_tokens": 60000, "mean_steps": 61},
+        {"configuration": "claude-fable-5[max]", "pass_at_1": 0.70, "uncertainty": 0.04, "mean_cost_usd": 21.63, "mean_output_tokens": 119000, "mean_steps": 88},
+        {"configuration": "gpt-5.6-terra[max]", "pass_at_1": 0.70, "uncertainty": 0.03, "mean_cost_usd": 3.96, "mean_output_tokens": 72000, "mean_steps": 76},
+        {"configuration": "gpt-5.6-luna[max]", "pass_at_1": 0.67, "uncertainty": 0.04, "mean_cost_usd": 0.61, "mean_output_tokens": 73000, "mean_steps": 102},
+        {"configuration": "gpt-5.5[xhigh]", "pass_at_1": 0.67, "uncertainty": 0.06, "mean_cost_usd": 7.23, "mean_output_tokens": 46000, "mean_steps": 82},
+        {"configuration": "claude-opus-4.8[max]", "pass_at_1": 0.59, "uncertainty": 0.02, "mean_cost_usd": 13.22, "mean_output_tokens": 135000, "mean_steps": 120},
+        {"configuration": "muse-spark-1.2[xhigh]", "pass_at_1": 0.55, "uncertainty": 0.02, "mean_cost_usd": 3.70, "mean_output_tokens": 99000, "mean_steps": 101},
+        {"configuration": "claude-sonnet-5[max]", "pass_at_1": 0.54, "uncertainty": 0.04, "mean_cost_usd": 26.40, "mean_output_tokens": 214000, "mean_steps": 268}
+      ]
+    },
+    {
+      "id": "artificial-analysis-coding-agent-index-v1.3",
+      "publisher": "Artificial Analysis",
+      "title": "Coding Agent Index",
+      "url": "https://artificialanalysis.ai/agents/coding-agents",
+      "version": "v1.3",
+      "evaluation_identity": {
+        "taskset": "equally weighted DeepSWE, Terminal-Bench v2, and SWE-Atlas-QnA",
+        "harness": "published agent/harness variants",
+        "attempts": "three attempts per task"
+      },
+      "metrics": ["task-normalized pass@1", "input tokens", "cache tokens", "output tokens", "cache-hit rate", "API cost per task", "active-agent wall time"],
+      "applicable_task_classes": ["deterministic_gated_change", "repository_discovery", "semantic_implementation", "integration_reconcile"],
+      "relevance": "direct",
+      "limitations": [
+        "composite hides component-specific fit unless component rows are retained",
+        "harness choice is part of the result",
+        "active-agent wall time is not commensurable with Intelligence Index decode-time estimates",
+        "API price is not Claude subscription marginal cost"
+      ]
+    },
+    {
+      "id": "artificial-analysis-intelligence-index-v4.1.1",
+      "publisher": "Artificial Analysis",
+      "title": "Intelligence Index",
+      "url": "https://artificialanalysis.ai/models",
+      "version": "v4.1.1",
+      "evaluation_identity": {
+        "taskset": "GDPval-AA v2, tau3-Banking, Terminal-Bench v2.1, SciCode, HLE, GPQA Diamond, CritPt, AA-Omniscience, AA-LCR",
+        "harness": "Artificial Analysis per-evaluation harnesses",
+        "time_metric": "weighted decode-time estimate derived from output tokens and speed; excludes time-to-first-token and overhead"
+      },
+      "metrics": ["composite intelligence score", "per-evaluation scores", "modeled cost per task", "estimated time per task"],
+      "applicable_task_classes": ["evidence_extraction", "repository_discovery", "semantic_review", "authority_or_frontier"],
+      "relevance": "supporting-only",
+      "limitations": [
+        "aggregate score is not a universal SDLC routing score",
+        "component domains and controls differ",
+        "fallback-composite rows are not exact-model evidence",
+        "time per task is not active-agent wall time",
+        "model-level context is usually a combined maximum and can conceal lower output limits"
+      ],
+      "illustrative_rows": [
+        {"configuration": "Claude Opus 5 max", "index_score": 63},
+        {"configuration": "Claude Opus 5 xhigh", "index_score": 63},
+        {"configuration": "Claude Fable 5 with fallback", "index_score": 62, "exact_route_evidence": false},
+        {"configuration": "Claude Opus 5 high", "index_score": 61},
+        {"configuration": "GPT-5.6 Sol max", "index_score": 61}
+      ]
+    },
+    {
+      "id": "cursorbench-3.2",
+      "publisher": "Cursor",
+      "title": "CursorBench",
+      "urls": [
+        "https://cursor.com/evals",
+        "https://cursor.com/blog/cursorbench"
+      ],
+      "version": "3.2",
+      "evaluation_identity": {
+        "taskset": "ambiguous multi-file tasks derived from real Cursor sessions",
+        "harness": "Cursor agent evaluation harness",
+        "runtime": "repository editing tasks"
+      },
+      "metrics": ["score", "average API-equivalent cost per task", "tokens per task", "steps per task"],
+      "applicable_task_classes": ["repository_discovery", "semantic_implementation", "semantic_review", "integration_reconcile"],
+      "relevance": "direct",
+      "limitations": [
+        "small score differences may not be statistically meaningful",
+        "API-equivalent cost is not subscription marginal cost",
+        "production-session sampling and harness details limit direct transfer"
+      ],
+      "rows": [
+        {"configuration": "Grok 4.6 Extra High", "score": 0.708, "mean_cost_usd": 2.81},
+        {"configuration": "Fable 5 Max", "score": 0.705, "mean_cost_usd": 17.32},
+        {"configuration": "Opus 5 Max", "score": 0.700, "mean_cost_usd": 8.23},
+        {"configuration": "GPT-5.6 Sol Max", "score": 0.672, "mean_cost_usd": 5.69},
+        {"configuration": "GPT-5.6 Terra Max", "score": 0.649, "mean_cost_usd": 2.31},
+        {"configuration": "Opus 4.8 Max", "score": 0.623, "mean_cost_usd": 5.77},
+        {"configuration": "Sonnet 5 Max", "score": 0.615, "mean_cost_usd": 4.30},
+        {"configuration": "GPT-5.6 Luna Max", "score": 0.611, "mean_cost_usd": 0.39},
+        {"configuration": "GPT-5.6 Luna High", "score": 0.568, "mean_cost_usd": 0.16},
+        {"configuration": "GPT-5.6 Luna Low", "score": 0.376, "mean_cost_usd": 0.03}
+      ]
+    },
+    {
+      "id": "cursor-routing-economics",
+      "publisher": "Cursor",
+      "title": "Agent routing and swarm model economics",
+      "urls": [
+        "https://cursor.com/blog/agent-swarm-model-economics"
+      ],
+      "version": "observed 2026-08-12",
+      "evaluation_identity": {
+        "taskset": "production and internal agent workloads",
+        "harness": "two-stage sufficiency/uplift router and planner-worker decomposition"
+      },
+      "metrics": ["user correction/continuation proxies", "quality uplift", "cost budget", "cache misses", "planner-caused downstream cost"],
+      "applicable_task_classes": ["mechanical_redo", "semantic_implementation", "semantic_review", "authority_or_frontier"],
+      "relevance": "methodology",
+      "limitations": ["private production distribution", "exact uplift threshold is workload-specific", "outcome proxies are not local deterministic gates"]
+    },
+    {
+      "id": "prime-intellect-verifiers-v1",
+      "publisher": "Prime Intellect",
+      "title": "Verifiers v1 and hosted evaluations",
+      "urls": [
+        "https://www.primeintellect.ai/blog/verifiers-v1",
+        "https://www.primeintellect.ai/blog/hosted-evaluations",
+        "https://www.primeintellect.ai/blog/frontier-swe",
+        "https://www.primeintellect.ai/blog/scaling-agentic-rl"
+      ],
+      "version": "observed 2026-08-12",
+      "evaluation_identity": {
+        "formula": "taskset × harness × runtime × model settings",
+        "components": ["taskset", "harness", "runtime", "API dialect", "typed trace"]
+      },
+      "metrics": ["verifier reward", "rollout traces", "task completion", "retry/flakiness evidence"],
+      "applicable_task_classes": ["deterministic_gated_change", "repository_discovery", "semantic_implementation", "integration_reconcile", "authority_or_frontier"],
+      "relevance": "methodology",
+      "limitations": [
+        "evaluation framework is more transferable than any one leaderboard",
+        "FrontierSWE is ultra-long-horizon, approximately 11 hours per task, sparse, and too expensive for default qualification",
+        "hosted evaluation dependencies are not adopted by this stdlib implementation"
+      ],
+      "adopted_methods": ["gold-patch validation", "no-op validation", "repeated flakiness checks", "hidden grading material", "auditable exclusions"]
+    },
+    {
+      "id": "claude-official-context-and-economics",
+      "publisher": "Anthropic",
+      "title": "Claude Code model, cost, platform model, pricing, and plan documentation",
+      "urls": [
+        "https://code.claude.com/docs/en/model-config",
+        "https://code.claude.com/docs/en/costs",
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://claude.com/pricing"
+      ],
+      "version": "observed 2026-08-12",
+      "facts": [
+        "Fable 5, Opus 5, and Sonnet 5 have 1M upstream context",
+        "their synchronous output maximum is 128K",
+        "subscription usage is rolling quota shared across Claude surfaces",
+        "some Fable or extended-context use may consume usage credits depending on plan",
+        "API-equivalent dollars shown by Claude Code are not necessarily the subscriber's bill",
+        "model switching can cause prompt-cache misses"
+      ],
+      "applicable_task_classes": ["all"],
+      "relevance": "route-economics-and-context",
+      "limitations": [
+        "upstream context does not certify the exact gateway/client request form",
+        "published API price does not establish subscription marginal cost",
+        "a requested one-million-token form does not prove served context or compaction"
+      ]
+    }
+  ],
+  "artificial_analysis_applicability": [
+    {"evaluation": "Coding Agent Index", "relevance": "direct", "task_classes": ["deterministic_gated_change", "repository_discovery", "semantic_implementation", "integration_reconcile"], "use": "component-level coding/terminal/repository prior"},
+    {"evaluation": "DeepSWE", "relevance": "direct", "task_classes": ["deterministic_gated_change", "semantic_implementation"], "use": "autonomous repository patching prior"},
+    {"evaluation": "Terminal-Bench v2.1", "relevance": "direct", "task_classes": ["deterministic_gated_change", "integration_reconcile"], "use": "terminal and system task prior"},
+    {"evaluation": "SWE-Atlas-QnA", "relevance": "direct", "task_classes": ["evidence_extraction", "repository_discovery"], "use": "repository understanding prior"},
+    {"evaluation": "AA-LCR", "relevance": "direct", "task_classes": ["evidence_extraction", "repository_discovery", "semantic_review"], "use": "10K-100K long-document reasoning prior; not 1M proof"},
+    {"evaluation": "IFBench", "relevance": "direct", "task_classes": ["mechanical_redo", "deterministic_gated_change"], "use": "instruction and output-constraint prior"},
+    {"evaluation": "ITBench-AA", "relevance": "direct", "task_classes": ["evidence_extraction", "repository_discovery", "semantic_review", "integration_reconcile"], "use": "Kubernetes diagnosis and evidence synthesis"},
+    {"evaluation": "AA-Omniscience", "relevance": "direct-supporting", "task_classes": ["semantic_review", "authority_or_frontier"], "use": "hallucination and knowledge-reliability prior"},
+    {"evaluation": "AA-Briefcase", "relevance": "direct-supporting", "task_classes": ["evidence_extraction", "semantic_review", "authority_or_frontier"], "use": "long-horizon knowledge-work prior"},
+    {"evaluation": "GDPval-AA v2", "relevance": "workload-dependent", "task_classes": ["semantic_review", "authority_or_frontier"], "use": "broad professional-task prior"},
+    {"evaluation": "tau3-Banking", "relevance": "workload-dependent", "task_classes": ["repository_discovery", "authority_or_frontier"], "use": "knowledge navigation, tool use, and guardrail prior"},
+    {"evaluation": "AutomationBench-AA", "relevance": "workload-dependent", "task_classes": ["integration_reconcile", "authority_or_frontier"], "use": "objective SaaS completion and guardrail prior"},
+    {"evaluation": "EnterpriseOps-Gym-AA", "relevance": "workload-dependent", "task_classes": ["integration_reconcile", "authority_or_frontier"], "use": "stateful workflow and final-state grading prior"},
+    {"evaluation": "APEX-Agents-AA", "relevance": "workload-dependent", "task_classes": ["semantic_implementation", "integration_reconcile"], "use": "cross-application long-horizon planning prior"},
+    {"evaluation": "AA-AnalystAgent", "relevance": "workload-dependent", "task_classes": ["evidence_extraction", "deterministic_gated_change"], "use": "document/spreadsheet quantitative analysis prior"},
+    {"evaluation": "SciCode", "relevance": "domain-specific", "task_classes": ["deterministic_gated_change", "semantic_implementation"], "use": "scientific repository prior only"},
+    {"evaluation": "Harvey LAB-AA", "relevance": "domain-specific", "task_classes": ["semantic_review", "authority_or_frontier"], "use": "legal workload prior only"},
+    {"evaluation": "MMMU-Pro", "relevance": "domain-specific", "task_classes": ["evidence_extraction"], "use": "multimodal inputs only"},
+    {"evaluation": "Humanity's Last Exam", "relevance": "narrow-prior", "task_classes": ["authority_or_frontier"], "use": "frontier knowledge/reasoning signal, not SDLC route selection"},
+    {"evaluation": "GPQA Diamond", "relevance": "narrow-prior", "task_classes": ["authority_or_frontier"], "use": "graduate science reasoning signal"},
+    {"evaluation": "CritPt", "relevance": "narrow-prior", "task_classes": ["authority_or_frontier"], "use": "narrow reasoning signal"},
+    {"evaluation": "MMLU-Pro", "relevance": "narrow-prior", "task_classes": ["authority_or_frontier"], "use": "general knowledge signal"},
+    {"evaluation": "Global-MMLU-Lite", "relevance": "narrow-prior", "task_classes": ["evidence_extraction"], "use": "multilingual knowledge signal when target matches"},
+    {"evaluation": "MATH-500", "relevance": "narrow-prior", "task_classes": ["deterministic_gated_change"], "use": "math-only deterministic prior"},
+    {"evaluation": "AIME 2025", "relevance": "narrow-prior", "task_classes": ["deterministic_gated_change"], "use": "competition-math prior"},
+    {"evaluation": "LiveCodeBench", "relevance": "narrow-prior", "task_classes": ["deterministic_gated_change"], "use": "algorithmic coding, not repository agent work"},
+    {"evaluation": "Terminal-Bench Hard", "relevance": "legacy", "task_classes": ["deterministic_gated_change"], "use": "historical terminal prior; prefer current Terminal-Bench"},
+    {"evaluation": "tau2-Bench Telecom", "relevance": "narrow-prior", "task_classes": ["authority_or_frontier"], "use": "domain-specific tool/guardrail prior"}
+  ],
+  "non_comparable_metrics": [
+    ["Coding Agent Index active-agent wall time", "Intelligence Index estimated decode time"],
+    ["Claude subscription quota", "API marginal dollars"],
+    ["binary SWE pass", "semantic review acceptance"],
+    ["native upstream context", "certified gateway/client context form"],
+    ["fallback-composite configuration", "exact model tuple"]
+  ]
+}

@@ -23,5 +23,11 @@ jobs:
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
         with:
           install: true
+      # advisory forensics probe for seed agentic-sdlc-df5f (mechanisms A/B1/B2); remove once the runner's btime/ctime data is recorded
+      - name: Advisory host capability probe (never a gate leaf)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        timeout-minutes: 2
+        run: mise exec -- python3 -u .github/scripts/ci-capability-probe.py || true
       - name: Run authoritative check
         run: mise run check

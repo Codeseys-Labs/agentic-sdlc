@@ -20,6 +20,15 @@ MANIFEST_SCHEMA = "agentic-sdlc/instruction-manifest@2"
 KINDS = {"root_agents", "root_claude", "subtree_agents", "claude_rule"}
 _REL_RE = re.compile(r"[^/\\\x00]+")
 
+# EXITS, as one derivation point (product-spec Implementation Decision 9). This module only ever
+# produces the two codes below: `main` has exactly one refusal path (`GeneratorError`) and one
+# success path, so no other code is named here.
+#: The one selected output rendered and its canonical result document was written to stdout.
+EXIT_OK = 0
+#: A `GeneratorError` was raised: an unusable manifest (missing, malformed, non-canonical,
+#: schema-invalid) or an unusable `--entry` selection. Nothing was written to stdout.
+EXIT_INPUT = 2
+
 
 class GeneratorError(ValueError):
     pass
@@ -169,11 +178,11 @@ def _canonical(value: Any) -> bytes:
 
 
 def _load(path: Path) -> dict[str, Any]:
-    raw = path.read_bytes()
     try:
+        raw = path.read_bytes()
         value = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise GeneratorError("invalid canonical manifest") from exc
+        raise GeneratorError(f"invalid canonical manifest: {path}") from exc
     if _canonical(value) != raw:
         raise GeneratorError("manifest is not canonical")
     return validate_manifest(value)
@@ -190,10 +199,10 @@ def main(argv: list[str] | None = None) -> int:
         rendered = render_selected(manifest, args.entry, lambda _: ({"kind": "absent", "identity": None}, None))
         result = {"schema": "agentic-sdlc/instruction-render@2", "path": rendered["path"], "action": rendered["action"], "sha256": hashlib.sha256(rendered["content"]).hexdigest()}
         sys.stdout.buffer.write(_canonical(result))
-        return 0
+        return EXIT_OK
     except GeneratorError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_INPUT
 
 
 if __name__ == "__main__":

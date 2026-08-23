@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import copy
+import errno
 import hashlib
 import importlib.util
 import json
@@ -11,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -398,7 +401,7 @@ class TransactionSafetyTests(unittest.TestCase):
             with mock.patch.object(installer, "_publish_staged_file", side_effect=mark_published), mock.patch.object(
                 installer, "_inspect_absolute", side_effect=swap_after_cleanup_check
             ):
-                with self.assertRaises(Exception):
+                with self.assertRaises(installer.RecoveryConflict):
                     installer.apply_install(root, files={rel: "CANONICAL\n"})
 
             foreign = [
@@ -506,13 +509,13 @@ class TransactionSafetyTests(unittest.TestCase):
                 nonlocal swapped
                 if not swapped and Path(destination) == root / installer.MANIFEST_REL:
                     swapped = True
-                    foreign = stage.payload.with_name("foreign")
+                    foreign = stage.artifact.payload.with_name("foreign")
                     foreign.write_text("FOREIGN TEMP RACE\n", encoding="utf-8")
-                    os.replace(foreign, stage.payload)
+                    os.replace(foreign, stage.artifact.payload)
                 return real_publish(stage, destination, *args, **kwargs)
 
             with mock.patch.object(installer, "_publish_staged_file", side_effect=swap_manifest_stage):
-                with self.assertRaises(Exception):
+                with self.assertRaises(installer.RecoveryConflict):
                     installer.apply_install(root, files={rel: "CANONICAL\n"})
 
             self.assertFalse((root / installer.MANIFEST_REL).exists())
@@ -799,6 +802,685 @@ class HyperResearchDoctrineTests(unittest.TestCase):
             )
             with self.subTest(surface=path.name):
                 self.assertEqual(violations, [], "\n".join(violations))
+
+
+class BirthWitnessSettlementTests(unittest.TestCase):
+    """This installer records a `stat-v2` witness and re-verifies it milliseconds later, which is
+    exactly the window a coarse birth clock leaves open: CI run 32554149554 (kernel 6.6.141,
+    ext4) saw ONE distinct btime across 40 back-to-back creates and repeated an identical
+    (inode, btime) pair in 20 of 20 delete-recreate trials. Its generated content is
+    deterministic, so a byte-identical replacement at a new inode also satisfies the digest and
+    only the physical witness can refuse it. The coarse arms force granularity through the
+    `_linux_statx` seam; the 1ns arm of the coarse-and-native tests is a deliberate native
+    passthrough that inherits this host's real granularity by design."""
+
+    maxDiff = None
+
+    @contextmanager
+    def simulated_birth_clock(self, quantum_seconds: float | None):
+        """Force the installer's birth-timestamp source to a chosen granularity.
+
+        A float truncates every birth timestamp to that quantum; `None` freezes it. Any operation
+        sequence shorter than the quantum provably lands inside ONE bucket, which makes both
+        directions deterministic instead of leaving them to where the host's clock happens to sit.
+        A simulated clock can only be made coarser than the real one, and coarseness is the defect.
+
+        The grid is anchored on the FIRST REAL BIRTH VALUE this clock observes, never on a
+        wall-clock reading. A filesystem stamps btime on a clock tick, so an object created
+        microseconds AFTER a `time.time_ns()` sample can report a btime BEFORE it, and Python's
+        `//` then floors that value into the bucket one quantum EARLIER -- reporting the object a
+        whole quantum older than a sibling the filesystem stamped identically. That is a fine-clock
+        assumption: rare on a host whose btime is finer than the sampling gap (measured at roughly
+        1 failure in 55 native runs of the sibling module on such a host), intermittent on
+        a host whose btime is coarse, which is exactly the host this class models. Measured: CI run
+        32565128438 failed this class's own POSITIVE CONTROL with two witnesses exactly one 3600s
+        quantum apart and an identical fractional part on both sides.
+
+        An observed birth value cannot split one of the filesystem's own quanta, and a value below
+        the anchor is clamped UP into the first bucket rather than floored below it, because looking
+        OLDER is what grants settlement and this helper exists to withhold it.
+        """
+        real = installer._linux_statx
+        quantum_ns = None if quantum_seconds is None else max(1, int(quantum_seconds * 10**9))
+        anchor: int | None = None
+
+        class _Btime:
+            def __init__(self, seconds: int, nanoseconds: int) -> None:
+                self.tv_sec = seconds
+                self.tv_nsec = nanoseconds
+
+        class _Simulated:
+            def __init__(self, source: object, btime: _Btime) -> None:
+                self._source = source
+                self.stx_btime = btime
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._source, name)
+
+        def simulated(path: bytes, *, descriptor: int = -100, flags: int = 0):
+            nonlocal anchor
+            result = real(path, descriptor=descriptor, flags=flags)
+            if result is None:
+                return None
+            if quantum_ns is None:
+                return _Simulated(result, _Btime(1700000000, 0))
+            total = result.stx_btime.tv_sec * 10**9 + result.stx_btime.tv_nsec
+            if anchor is None:
+                anchor = total
+            total = anchor + max(0, (total - anchor) // quantum_ns) * quantum_ns
+            return _Simulated(result, _Btime(total // 10**9, total % 10**9))
+
+        with mock.patch.object(installer, "_linux_statx", simulated):
+            yield
+
+    @staticmethod
+    def replace_byte_identically(target: Path) -> None:
+        """Swap in a byte-identical replacement at a new inode, the way the digest cannot see."""
+        replacement = target.parent / f"{target.name}.replacement"
+        replacement.write_bytes(target.read_bytes())
+        replacement.chmod(stat.S_IMODE(target.stat().st_mode))
+        os.replace(replacement, target)
+
+    @staticmethod
+    def reused_inode_witness(replacement_token: str, recorded_token: str) -> str:
+        """The witness a record would carry if a replacement landed on the recorded inode.
+
+        `os.replace` never reuses an inode, so the collision the CI probe measured 20 out of 20
+        times has to be modelled rather than raced: the replacement's real device and inode with
+        the RECORDED birth timestamp. Once the recorded timestamp is strictly older, this
+        forgery stops matching however the allocator behaves.
+        """
+        version, device, inode, _ = replacement_token.split(":", 3)
+        return f"{version}:{device}:{inode}:{installer._identity_generation(recorded_token)}"
+
+    def classify_replaced_leaf(
+        self, rel: str, state_root: Path, root: Path
+    ) -> tuple[bool, str, str]:
+        """Replace an owned leaf byte-identically, then ask the real ownership classifier."""
+        record = json.loads(
+            expected_state_path(state_root, root).read_text(encoding="utf-8")
+        )["entries"][rel]
+        self.replace_byte_identically(root / rel)
+        root_fd = installer._open_root(root)
+        try:
+            observed = installer._inspect_leaf(root, root_fd, tuple(rel.split("/")))
+        finally:
+            if root_fd is not None:
+                os.close(root_fd)
+        assert observed.identity is not None
+        forged = {
+            **record,
+            "destination_identity": self.reused_inode_witness(
+                observed.identity, record["destination_identity"]
+            ),
+        }
+        return (
+            installer._exact_matches(observed, forged),
+            record["destination_identity"],
+            observed.identity,
+        )
+
+    @contextmanager
+    def settlement_removed(self):
+        """Neutralize BOTH settlement seams, which is what "no settlement at all" now means.
+
+        Recording defers (`_defer_identity_witnesses`, which never sleeps) and only the target-root
+        witness still settles inline, so a mutation that removes just one of the two leaves the
+        other still enforcing. A positive control has to remove both or it proves nothing.
+        """
+        with mock.patch.object(
+            installer, "_settle_identity_witnesses", lambda *a, **k: None
+        ):
+            with mock.patch.object(
+                installer, "_defer_identity_witnesses", lambda *a, **k: True
+            ):
+                yield
+
+    def test_same_quantum_witness_cannot_discriminate_a_reused_inode(self) -> None:
+        """Positive control: with settlement removed the recorded witness is reproducible."""
+        rel = "research/status.md"
+        with self.simulated_birth_clock(3600.0):
+            with self.settlement_removed():
+                with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                    root = Path(directory)
+                    installer.apply_install(root, files={rel: "CANONICAL\n"})
+
+                    owned, recorded, current = self.classify_replaced_leaf(
+                        rel, state_root, root
+                    )
+
+                    self.assertEqual(
+                        installer._identity_generation(recorded),
+                        installer._identity_generation(current),
+                    )
+                    self.assertTrue(owned)
+
+    def test_a_settled_witness_discriminates_a_reused_inode(self) -> None:
+        rel = "research/status.md"
+        with self.simulated_birth_clock(0.5):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                installer.apply_install(root, files={rel: "CANONICAL\n"})
+
+                owned, recorded, current = self.classify_replaced_leaf(rel, state_root, root)
+
+                self.assertLess(
+                    installer._birth_witness_order(
+                        installer._identity_generation(recorded)
+                    ),
+                    installer._birth_witness_order(
+                        installer._identity_generation(current)
+                    ),
+                )
+                self.assertFalse(owned)
+
+    def test_byte_identical_replacement_is_preserved_under_a_coarse_birth_clock(self) -> None:
+        rel = "research/status.md"
+        with self.simulated_birth_clock(0.5):
+            with tempfile.TemporaryDirectory() as directory, isolated_state():
+                root = Path(directory)
+                target = root / rel
+                installer.apply_install(root, files={rel: "CANONICAL\n"})
+                self.replace_byte_identically(target)
+
+                removal = installer.apply_install(root, files={})
+                self.assertEqual(removal[rel], "skipped-remove-modified")
+                self.assertEqual(target.read_text(encoding="utf-8"), "CANONICAL\n")
+
+                overwrite = installer.apply_install(root, files={rel: "NEXT\n"}, force=True)
+                self.assertEqual(overwrite[rel], "skipped-foreign")
+                self.assertEqual(target.read_text(encoding="utf-8"), "CANONICAL\n")
+
+    def test_owner_lifecycle_works_under_coarse_and_native_birth_clocks(self) -> None:
+        rel = "research/status.md"
+        for quantum in (0.000000001, 0.5):
+            with self.subTest(quantum=quantum), self.simulated_birth_clock(quantum):
+                with tempfile.TemporaryDirectory() as directory, isolated_state():
+                    root = Path(directory)
+                    target = root / rel
+                    self.assertEqual(
+                        installer.apply_install(root, files={rel: "ONE\n"})[rel], "created"
+                    )
+                    self.assertEqual(
+                        installer.apply_install(root, files={rel: "TWO\n"})[rel], "updated"
+                    )
+                    self.assertEqual(target.read_text(encoding="utf-8"), "TWO\n")
+                    self.assertEqual(installer.apply_install(root, files={})[rel], "removed")
+                    self.assertFalse(target.exists())
+
+    def test_recording_refuses_when_the_birth_clock_cannot_discriminate(self) -> None:
+        rel = "research/status.md"
+        with self.simulated_birth_clock(None):
+            with mock.patch.object(installer, "BIRTH_SETTLE_TIMEOUT_SECONDS", 0.05):
+                with tempfile.TemporaryDirectory() as directory, isolated_state():
+                    root = Path(directory)
+
+                    with self.assertRaisesRegex(
+                        installer.ResearchOSError, "birth timestamps cannot distinguish"
+                    ):
+                        installer.apply_install(root, files={rel: "CANONICAL\n"})
+
+                    self.assertFalse((root / rel).exists())
+
+    def test_dry_run_leaves_no_creation_probe(self) -> None:
+        rel = "research/status.md"
+        with self.simulated_birth_clock(None):
+            with mock.patch.object(installer, "BIRTH_SETTLE_TIMEOUT_SECONDS", 0.05):
+                with tempfile.TemporaryDirectory() as directory, isolated_state():
+                    root = Path(directory)
+
+                    actions = installer.apply_install(
+                        root, files={rel: "CANONICAL\n"}, dry_run=True
+                    )
+
+                    self.assertEqual(actions[rel], "created")
+                    self.assertEqual(list(root.iterdir()), [])
+
+    def test_settle_refuses_within_its_bound_and_probes_once_per_round(self) -> None:
+        self.assertGreater(installer.BIRTH_SETTLE_TIMEOUT_SECONDS, 0)
+        self.assertLessEqual(installer.BIRTH_SETTLE_TIMEOUT_SECONDS, 5.0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            targets = []
+            for index in range(4):
+                target = root / f"object-{index}"
+                target.mkdir()
+                targets.append(target)
+            probes = 0
+            sleeps = 0
+            real_probe = installer._birth_probe_token
+            real_sleep = installer.time.sleep
+
+            def counted_probe(path: Path) -> str:
+                nonlocal probes
+                probes += 1
+                return real_probe(path)
+
+            def counted_sleep(seconds: float) -> None:
+                nonlocal sleeps
+                sleeps += 1
+                real_sleep(seconds)
+
+            with self.simulated_birth_clock(None):
+                witnesses = [
+                    (target, installer._path_identity(target, follow_symlinks=False))
+                    for target in targets
+                ]
+                with mock.patch.object(installer, "_birth_probe_token", counted_probe):
+                    with mock.patch.object(installer.time, "sleep", counted_sleep):
+                        with mock.patch.object(
+                            installer, "BIRTH_SETTLE_TIMEOUT_SECONDS", 0.05
+                        ):
+                            started = time.monotonic()
+                            with self.assertRaisesRegex(
+                                installer.ResearchOSError, "cannot distinguish"
+                            ):
+                                installer._settle_identity_witnesses(
+                                    witnesses, probe_dir=root
+                                )
+                            elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 2.0)
+        self.assertGreater(probes, 0)
+        self.assertEqual(probes, sleeps + 1)
+
+    def test_windows_skips_a_file_id_witness_and_settles_the_timestamp_fallback(self) -> None:
+        """A reused Windows file id already differs; the ctime fallback does not, so it settles."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "object"
+            target.mkdir()
+            probes = 0
+            real_probe = installer._birth_probe_token
+
+            def counted_probe(path: Path) -> str:
+                nonlocal probes
+                probes += 1
+                return real_probe(path)
+
+            with mock.patch.object(installer, "_platform_system", lambda: "Windows"):
+                with mock.patch.object(installer, "_birth_probe_token", counted_probe):
+                    with mock.patch.object(
+                        installer, "_windows_file_identity", lambda *a, **k: (1, 2, 0)
+                    ):
+                        token = installer._path_identity(target, follow_symlinks=False)
+                        installer._settle_identity_witnesses(
+                            ((target, token),), probe_dir=root
+                        )
+                        self.assertEqual(probes, 0)
+                    with mock.patch.object(
+                        installer, "_windows_file_identity", lambda *a, **k: None
+                    ):
+                        fallback = installer._path_identity(target, follow_symlinks=False)
+                        self.assertNotEqual(fallback, token)
+                        installer._settle_identity_witnesses(
+                            ((target, fallback),), probe_dir=root
+                        )
+            self.assertGreater(probes, 0)
+
+    def test_wait_count_does_not_grow_with_the_scaffold_file_count(self) -> None:
+        """The wait budget must be independent of the file count -- the point of deferring.
+
+        A coarse clock makes every recording site defer, which is the shape that used to cost one
+        full birth quantum per file transaction. `_wait_for_settlement` is the only function that
+        sleeps, so counting its invocations counts the waits -- and they are counted separately by
+        origin, because a run has two: the pre-existing TARGET ROOT still settles inline (with an
+        empty ledger), while every witness the run MINTS shares one deferred wait. Only the
+        deferred count is the subject here, and it must be exactly one for one file and for
+        sixteen alike.
+        """
+        observed = []
+        for count in (1, 4, 16):
+            waits: list[int] = []
+            real_wait = installer._wait_for_settlement
+
+            def counted_wait(targets):
+                # The ledger is only non-empty for the run's single DEFERRED wait; the inline
+                # target-root settle runs before anything is enrolled.
+                waits.append(installer._SETTLEMENT.deferred)
+                return real_wait(targets)
+
+            files = {f"research/note-{index:03d}.md": f"NOTE {index}\n" for index in range(count)}
+            with self.simulated_birth_clock(0.25):
+                with tempfile.TemporaryDirectory() as directory, isolated_state():
+                    root = Path(directory)
+                    with mock.patch.object(installer, "_wait_for_settlement", counted_wait):
+                        actions = installer.apply_install(root, files=files)
+                    self.assertEqual(
+                        sorted(set(actions.values())), ["created"], actions
+                    )
+                    for rel in files:
+                        self.assertTrue((root / rel).exists())
+            observed.append((count, sum(1 for deferred in waits if deferred), len(waits)))
+        # Exactly one deferred wait per run, at every file count. A count of zero would satisfy
+        # "constant" trivially, so requiring one is also the positive control for the measurement.
+        self.assertEqual([deferred for _, deferred, _ in observed], [1, 1, 1], observed)
+        # And the total, inline root settle included, stays constant too.
+        self.assertEqual(len({total for _, _, total in observed}), 1, observed)
+
+    def test_an_interrupted_run_leaves_a_witness_a_later_run_will_not_trust(self) -> None:
+        """Crash safety: durable after a state write, never settled, never later trusted.
+
+        The interruption lands exactly where it matters -- after the durable writes that make the
+        witnesses persistent and before the run's single settle. The root settle runs earlier, with
+        an empty ledger, so keying off `deferred` interrupts only the deferred wait.
+        """
+        rel = "research/status.md"
+        with self.simulated_birth_clock(0.25):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                real_wait = installer._wait_for_settlement
+
+                def interrupt_only_the_deferred_wait(targets):
+                    if installer._SETTLEMENT.deferred:
+                        raise KeyboardInterrupt("interrupted before the settle")
+                    return real_wait(targets)
+
+                with mock.patch.object(
+                    installer, "_wait_for_settlement", interrupt_only_the_deferred_wait
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        installer.apply_install(root, files={rel: "CANONICAL\n"})
+
+                # The leaf IS on disk and IS recorded: the interruption came after publication.
+                self.assertTrue((root / rel).exists())
+                document = json.loads(
+                    expected_state_path(state_root, root).read_text(encoding="utf-8")
+                )
+                self.assertIs(document["entries"][rel]["witness_settled"], False)
+
+        # A later run's ledger is empty, which is what makes the marker bite.
+        self.assertEqual(installer._SETTLEMENT.keys, set())
+        self.assertFalse(installer._SETTLEMENT.deferred)
+
+    def test_an_unsettled_record_is_non_discriminating_and_never_removed(self) -> None:
+        """Invariant: a durably recorded unsettled witness is trusted by no later consumer.
+
+        The marker is asserted at the classifier AND end to end: planning must not call the leaf
+        owned, and removal must preserve it. Each has the positive control the repository's
+        doctrine requires -- the same record without the marker discriminates and is removed.
+        """
+        rel = "research/status.md"
+        for marked in (True, False):
+            with self.subTest(marked=marked):
+                with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                    root = Path(directory)
+                    installer.apply_install(root, files={rel: "CANONICAL\n"})
+                    state_path = expected_state_path(state_root, root)
+                    document = json.loads(state_path.read_text(encoding="utf-8"))
+
+                    root_fd = installer._open_root(root)
+                    try:
+                        observed = installer._inspect_leaf(
+                            root, root_fd, tuple(rel.split("/"))
+                        )
+                    finally:
+                        if root_fd is not None:
+                            os.close(root_fd)
+                    record = document["entries"][rel]
+                    if marked:
+                        record = {**record, "witness_settled": False}
+                    self.assertEqual(
+                        installer._exact_matches(observed, record), not marked
+                    )
+
+                    if marked:
+                        document["entries"][rel]["witness_settled"] = False
+                        state_path.write_text(json.dumps(document), encoding="utf-8")
+
+                    removal = installer.apply_install(root, files={})
+                    if marked:
+                        # Non-discriminating, so the leaf is foreign to removal and preserved.
+                        self.assertEqual(removal[rel], "skipped-remove-modified")
+                        self.assertEqual(
+                            (root / rel).read_text(encoding="utf-8"), "CANONICAL\n"
+                        )
+                    else:
+                        self.assertEqual(removal[rel], "removed")
+                        self.assertFalse((root / rel).exists())
+
+    def arm_hard_killed_journal(self, root: Path, rel: str, files: dict[str, str]) -> None:
+        """Arm a journal, then die WITHOUT paying the deferred settlement, as a SIGKILL does.
+
+        `apply_install` pays the wait it deferred even when the run raises, so an in-process failure
+        leaves nothing unproven. A SIGKILL, an OOM kill and a power cut reach no handler, so the
+        marker survives with no ledger anywhere that could clear it. Reducing `_settle_after_failure`
+        to the shipped behaviour -- drop the in-process ledger, discard the debt -- for the duration
+        of the crashing run is what reproduces that, and it doubles as the positive control for the
+        debt payment itself.
+        """
+        real_persist = installer._persist_candidate
+        interrupted = False
+
+        def crash_after_commit(path, state, candidate, target, identity):
+            nonlocal interrupted
+            result = real_persist(path, state, candidate, target, identity)
+            if (
+                not interrupted
+                and rel in candidate.get("transactions", {})
+                and candidate["transactions"][rel]["phase"] == "committed"
+            ):
+                interrupted = True
+                raise OSError("simulated hard kill after durable ownership commit")
+            return result
+
+        with mock.patch.object(
+            installer, "_persist_candidate", side_effect=crash_after_commit
+        ):
+            with mock.patch.object(
+                installer,
+                "_settle_after_failure",
+                lambda root: installer._SETTLEMENT.reset(),
+            ):
+                with self.assertRaises(OSError):
+                    installer.apply_install(root, files=files)
+
+    def test_hard_killed_journal_recovers_and_is_idempotent_under_a_coarse_clock(
+        self,
+    ) -> None:
+        """Convergence: an interrupted transaction no later run can prove was never recoverable.
+
+        Settlement is RE-PROVABLE -- a probe now proves the recorded quantum closed before now --
+        so `_resolve_inherited_settlement` pays one bounded wait and the journal becomes exactly as
+        trustworthy as one written on a fine-grained host. Without it the shipped behaviour was the
+        CI error verbatim, on every run forever, which is the positive control below.
+        """
+        rel = "research/status.md"
+        files = {rel: "CANONICAL\n"}
+        with self.simulated_birth_clock(0.25):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                self.arm_hard_killed_journal(root, rel, files)
+                state_path = expected_state_path(state_root, root)
+                document = json.loads(state_path.read_text(encoding="utf-8"))
+                # Precondition, so this can never silently stop exercising the marker.
+                self.assertIs(document["transactions"][rel]["witness_settled"], False)
+
+                # Positive control FIRST, because recovery consumes the journal.
+                with mock.patch.object(
+                    installer, "_resolve_inherited_settlement", lambda *a, **k: None
+                ):
+                    with self.assertRaisesRegex(
+                        installer.RecoveryConflict,
+                        "interrupted transaction carries an unsettled birth witness",
+                    ):
+                        installer.apply_install(root, files=files)
+
+                first = installer.apply_install(root, files=files)
+                tree_after_first = read_tree(root)
+                settled = json.loads(state_path.read_text(encoding="utf-8"))
+                second = installer.apply_install(root, files=files)
+
+                self.assertEqual(first[rel], "unchanged")
+                self.assertEqual(second, first)
+                self.assertEqual(read_tree(root), tree_after_first)
+                self.assertEqual(settled["transactions"], {})
+                # The converged record must carry no marker, or the transaction would have resolved
+                # into an entry no later ownership decision could ever trust.
+                self.assertNotIn("witness_settled", settled["entries"][rel])
+                self.assertEqual(
+                    json.loads(state_path.read_text(encoding="utf-8")), settled
+                )
+
+    def test_an_unprovable_inherited_marker_is_left_durable(self) -> None:
+        """The degenerate host converges on nothing, which is still the fail-closed answer.
+
+        Re-proving is the whole mechanism, so a wait that exhausts its cap must leave the marker
+        exactly where it is and write nothing -- after which `_recover_one` refuses the journal by
+        name, which the recovery test's positive control shows end to end. The refusal is asserted
+        at the seam rather than through a frozen clock because a frozen clock also re-stamps
+        `target.identity`, and `_validate_state` would then refuse the document before any of this
+        was reached.
+        """
+        rel = "research/status.md"
+        files = {rel: "CANONICAL\n"}
+        with self.simulated_birth_clock(0.25):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                self.arm_hard_killed_journal(root, rel, files)
+                state_path = expected_state_path(state_root, root)
+                identity = installer._path_identity(root)
+                state, _ = installer._load_state(state_path, root, identity)
+                self.assertIs(state["transactions"][rel]["witness_settled"], False)
+                before = state_path.read_bytes()
+
+                with mock.patch.object(
+                    installer,
+                    "_wait_for_settlement",
+                    side_effect=installer.ResearchOSError(
+                        "no later creation was recorded"
+                    ),
+                ):
+                    installer._resolve_inherited_settlement(
+                        root, state_path, state, identity
+                    )
+
+                self.assertEqual(state_path.read_bytes(), before)
+                self.assertIs(state["transactions"][rel]["witness_settled"], False)
+
+                # Positive control: with the wait allowed to succeed the SAME call clears the
+                # marker and persists it, so the refusal above comes from the cap and not from an
+                # inert resolver.
+                installer._resolve_inherited_settlement(root, state_path, state, identity)
+                self.assertNotIn("witness_settled", state["transactions"][rel])
+                self.assertNotIn(
+                    "witness_settled",
+                    json.loads(state_path.read_text(encoding="utf-8"))["transactions"][rel],
+                )
+
+    def test_inherited_resolution_never_clears_an_owned_record_marker(self) -> None:
+        """The scope line: recovery may converge, an ownership DELETION may not.
+
+        A journal marker is a question about finishing this installer's own transaction. An owned
+        record's marker is the ownership-deletion question seed 249d exists for, so nothing here
+        may clear it -- `test_an_unsettled_record_is_non_discriminating_and_never_removed` asserts
+        the end-to-end consequence, and this asserts the enrolment that would defeat it.
+        """
+        rel = "research/status.md"
+        with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+            root = Path(directory)
+            installer.apply_install(root, files={rel: "CANONICAL\n"})
+            state_path = expected_state_path(state_root, root)
+            document = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["transactions"], {})
+
+            for marked in ("entries", "manifest"):
+                with self.subTest(marked=marked):
+                    poisoned = copy.deepcopy(document)
+                    if marked == "entries":
+                        poisoned["entries"][rel]["witness_settled"] = False
+                    else:
+                        poisoned["manifest"]["witness_settled"] = False
+
+                    self.assertEqual(
+                        installer._inherited_settlement_targets(root, poisoned),
+                        ([], set()),
+                    )
+
+            # Positive control: the SAME marker on the journal half IS enrolled, so the empty
+            # answers above come from the scope line and not from an inert helper.
+            journal = copy.deepcopy(document)
+            journal["transactions"][rel] = {"witness_settled": False, **document["entries"][rel]}
+            targets, keys = installer._inherited_settlement_targets(root, journal)
+            self.assertEqual(keys, {rel})
+            self.assertTrue(targets)
+
+    def test_a_failed_run_still_pays_the_settlement_it_deferred(self) -> None:
+        """A failing run owes its deferred wait and still holds the lock, so it pays it.
+
+        Refusing to pay bought nothing -- the files it wrote stay on disk either way -- and the
+        marker it left could never be cleared by anything, so an interrupted run's journal was
+        permanently unrecoverable and its leaves permanently foreign on a coarse-clock host.
+        """
+        rel = "research/status.md"
+        files = {rel: "CANONICAL\n"}
+        with self.simulated_birth_clock(0.25):
+            with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
+                root = Path(directory)
+                real_persist = installer._persist_candidate
+                interrupted = False
+
+                def crash_after_commit(path, state, candidate, target, identity):
+                    nonlocal interrupted
+                    result = real_persist(path, state, candidate, target, identity)
+                    if (
+                        not interrupted
+                        and rel in candidate.get("transactions", {})
+                        and candidate["transactions"][rel]["phase"] == "committed"
+                    ):
+                        interrupted = True
+                        raise OSError("simulated crash after durable ownership commit")
+                    return result
+
+                with mock.patch.object(
+                    installer, "_persist_candidate", side_effect=crash_after_commit
+                ):
+                    with self.assertRaises(OSError):
+                        installer.apply_install(root, files=files)
+
+                document = json.loads(
+                    expected_state_path(state_root, root).read_text(encoding="utf-8")
+                )
+                self.assertIn(rel, document["transactions"])
+                for record in installer._settlement_records(document, rel):
+                    self.assertNotIn("witness_settled", record)
+                # The debt was paid, so the next run needs no inherited resolution at all.
+                self.assertEqual(
+                    installer._inherited_settlement_targets(root, document), ([], set())
+                )
+                self.assertEqual(installer.apply_install(root, files=files)[rel], "unchanged")
+
+    def test_a_probe_that_cannot_be_retired_refuses_by_name(self) -> None:
+        """Killing test for the probe-unlink guard: a leftover probe must never be swallowed.
+
+        Without the guard the probe stays behind, and a private container's exactness check reads
+        ANY extra child as foreign -- so the failure would resurface later as an unrelated
+        "foreign content" complaint about a payload nothing touched.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_unlink = Path.unlink
+
+            def refuse_probe_unlink(self, *args, **kwargs):
+                if self.name.startswith(".birth-probe-"):
+                    raise OSError(errno.EPERM, "operation not permitted")
+                return real_unlink(self, *args, **kwargs)
+
+            with mock.patch.object(Path, "unlink", refuse_probe_unlink):
+                with self.assertRaisesRegex(
+                    installer.ResearchOSError, "cannot retire creation probe"
+                ):
+                    installer._birth_probe_token(root)
+
+            # The refusal named the probe, and the probe is exactly what was left behind.
+            leftovers = list(root.glob(".birth-probe-*"))
+            self.assertEqual(len(leftovers), 1, leftovers)
+            for leftover in leftovers:
+                real_unlink(leftover)
+
+            # Positive control: with unlink restored the same call succeeds and retires the probe.
+            token = installer._birth_probe_token(root)
+            self.assertTrue(installer._identity_token_valid(token))
+            self.assertEqual(list(root.glob(".birth-probe-*")), [])
 
 
 if __name__ == "__main__":

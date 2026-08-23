@@ -59,8 +59,10 @@ is simply not the one that loads, with no error at all.
 The three libraries, with the facts re-verified for this record:
 
 - **mattpocock/skills** — MIT, Matt Pocock. The front door is `claude plugins install
-  mattpocock-skills`; it is already in Claude Code's official marketplace, so there is no
-  `marketplace add` step. Version 1.2.3. **Its surface is 25 skills, not 5** — the earlier count
+  mattpocock-skills`, primary once at least one marketplace is configured — in practice an
+  authenticated Claude Code session with that marketplace already registered; a fresh
+  logged-out session has none configured and the door is not reachable from it. Version 1.2.3.
+  **Its surface is 25 skills, not 5** — the earlier count
   read the five *category* directories (`engineering`, `productivity`, `misc`, `in-progress`,
   `deprecated`) as skills. The authority is `.claude-plugin/plugin.json`'s `skills` array. It is
   still the cheapest of the three by an order of magnitude. Plugin-namespaced, so it cannot lose
@@ -76,7 +78,7 @@ The three libraries, with the facts re-verified for this record:
   for the guided commands, while npm's `latest` dist-tag serves 2.1.0. The documented front door
   is newer than the published artifact.
 - **hyperresearch** — PyPI 0.10.0, MIT, Jordan Gibbs, `requires-python >=3.11,<3.14`. **Not a
-  skill library**: a CLI that *renders* 17 skills and 14 agents into a home or project via its
+  skill library**: a CLI that *renders* 17 skills and 16 agents into a home or project via its
   own `install` verb (`--global` for the home). Every rendered name is `hyperresearch`-prefixed.
   Its rendered agent files carry static `model:` frontmatter, which
   `scripts/validate_bundle.py` rejects for agent files — decisive against vendoring its output,

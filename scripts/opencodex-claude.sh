@@ -45,13 +45,18 @@
 # WHAT THIS SCRIPT DELIBERATELY DOES NOT DO
 #   * It never reads, copies, prints, or persists a credential. Claude Code holds its own login
 #     and `ocx claude` passes it to the gateway; this wrapper only checks NAMES, value PREFIXES,
-#     and base-URL SHAPES that would silently defeat the route, and never echoes a base URL
-#     because one can carry userinfo credentials (see assert_gateway_route_is_effective).
-#   * It does not verify which model actually served a request. The canary in
-#     docs/research/2026-08-05-gateway-selection-memo.md §4 is the qualification gate and is
-#     still unrun. A healthy gateway proves reachability, never model identity — and the routed
-#     branch RE-LABELS its reply with the requested model, so the response body is inadmissible
-#     as evidence. Only the gateway's own request log distinguishes the branches.
+#     and base-URL or model-id SHAPES that would silently defeat the route, and never echoes a
+#     base URL because one can carry userinfo credentials (see assert_gateway_route_is_effective).
+#     A model id is not a credential, so a refused one IS named.
+#   * It does not verify which model actually served a request. The qualification gate is the
+#     canary in docs/research/2026-08-05-gateway-selection-memo.md §4 (probes A, C, D, E, F).
+#     Whether that canary has been run, and its verdict, is recorded evidence this comment does
+#     not restate and cannot assert as a static fact — see
+#     docs/research/2026-08-07-opencodex-qualification-canary.md and ADR-0005 Decision item 5 for
+#     the current disposition. A healthy gateway proves reachability, never model identity — and
+#     the routed branch RE-LABELS its reply with the requested model, so the response body is
+#     inadmissible as evidence. Only the gateway's own request log (`ocx observe logs --jsonl`,
+#     the `resolvedModel` field correlated by `requestId`) distinguishes the branches.
 #   * A healthy `status` is evidence, not authorization. Exit 0 means the proxy answered an
 #     identity-checked health probe at that moment. It grants no authority for any outward
 #     effect.
@@ -71,11 +76,25 @@
 #     config file does not put it in the running gateway's catalog: `ocx sync` plus a gateway
 #     restart is required, and in the window between, a request naming the new provider's model
 #     falls through to the DEFAULT provider (see print_sync_required_notice). This wrapper
-#     reports that gap mechanically and refuses to close it silently, because `ocx sync`
-#     rewrites shared ~/.codex config and is its own authorized operation.
+#     reports that gap mechanically and refuses to close it silently, because a `sync` that
+#     rewrites shared ~/.codex config is its own authorized operation.
+#   * By opencodex 2.28.0 (absent in 2.11.1), a sync is not always a ~/.codex config write. With the Codex integration
+#     turned off, or with an external `model_provider` owning `config.toml`, the sync is
+#     CATALOG-ONLY: it reports a `CodexSyncResult` status of `catalog-only` and leaves
+#     config.toml, the journal, and history untouched (it may still refresh the catalog and
+#     models-cache files under ~/.codex), and a `validateOnly` injection preflight fails a bad config before any
+#     partial rewrite. That narrows the blast radius; it does not move the authorization. This
+#     wrapper cannot tell which of the two branches a given host will take without running the
+#     sync, so it keeps printing the sequence and still never runs it: a sync that WOULD rewrite
+#     ~/.codex needs its own explicit approval.
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# The jq route is resolved once per process and cached HERE, so it is initialized here too: a
+# lowercase `resolved_jq` inherited from the environment would otherwise be a third, unadmitted
+# route that outranks both admitted ones.
+resolved_jq=""
+caller_working_dir="$(pwd -P)"
 # No isolated config root any more (ADR-0014): `launch` uses the operator's own ~/.claude, which
 # is what lets Claude Code present its existing login to the gateway. assets/claude/
 # session-inheritance.sh still exists and is still used by scripts/muse-claude.sh, which keeps
@@ -155,12 +174,13 @@ EOF
         operator_verb=launch; ultra=''
       fi
       cat <<EOF
-usage: ccodex $operator_verb [claude args...]
-       opencodex-claude.sh $1 [claude args...]
+usage: ccodex $operator_verb [--yolo] [claude args...]
+       opencodex-claude.sh $1 [--yolo] [claude args...]
 
 Ensure the gateway is healthy (start it if down, restart once if half-up), then launch Claude
-Code through it using your OWN ~/.claude configuration and login. Fails closed if the gateway
-never becomes healthy.${ultra}
+Code through it in the caller's current workspace using your OWN ~/.claude configuration and
+login. The distribution checkout selects the pinned toolchain, not the project Claude works on.
+Fails closed if the gateway never becomes healthy.${ultra}
 
 Both kinds of model work in this one session (ADR-0014). A genuine claude/anthropic id that no
 alias or modelMap claims passes through verbatim to Anthropic on your own subscription; every
@@ -173,17 +193,31 @@ EOF
       [ "$1" = launch-ultracode ] && cat <<'EOF'
 
 This route owns the session --settings value, so it refuses a competing --settings argument,
-and it never bypasses permissions.
+including when --yolo is selected.
 EOF
       cat <<'EOF'
 
-Common arguments, all forwarded to Claude Code:
+Wrapper option (must be first; use `-- --yolo` to forward a literal `--yolo`):
+  --yolo                    Start with Claude Code permission checks bypassed. This is equivalent
+                            to --dangerously-skip-permissions and disables Auto's classifier.
+                            It is unsafe outside an isolated, disposable environment.
+
+Common arguments, forwarded to Claude Code unchanged after preflight:
   --model <id>              Any id in the running gateway's live catalog, including a
                             namespaced one: --model muse/muse-spark-1.2. See `ccodex models`.
+  --settings <file-or-json> A JSON object or readable JSON-object file. Ordinary launch checks
+                            every occurrence for route-bypassing settings, then forwards accepted
+                            arguments unchanged. A later literal `--` ends Claude option parsing.
 
 Config dir: your global ~/.claude. `ocx claude` writes its ocx-*.md roster agents and the
 gateway model cache there. That cache write is what puts the routed ids in the /model picker,
 because Claude Code only refreshes it while holding a credential.
+
+Claude.ai cloud connectors are off by default in this gateway route because some flatten to
+tool names longer than a provider's 64-character ceiling, causing the whole request to fail
+before inference. Local, project, and plugin MCP servers remain available. Opt in explicitly
+for a compatible model/session with:
+  ENABLE_CLAUDEAI_MCP_SERVERS=true ccodex launch
 
 Refused (exit 3) when the route would not actually be used:
   * a CLAUDE_CODE_USE_BEDROCK-style provider-routing variable, exported or enabled in a settings
@@ -192,10 +226,20 @@ Refused (exit 3) when the route would not actually be used:
   * an ANTHROPIC_BASE_URL pointing anywhere but this host's loopback gateway, exported OR in a
     settings `env` block (an exported one is PRESERVED into the session; a settings one REPLACES
     what this route sets -- both measured),
+  * a cloud-provider model id in ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_FABLE_MODEL, ANTHROPIC_SMALL_FAST_MODEL, or
+    ANTHROPIC_MODEL, exported or in a settings `env` block: a Bedrock region or `anthropic.`
+    publisher prefix, or a Vertex publisher path or @<date> suffix (leading/trailing whitespace
+    around the id does not defeat this check). That slot picks which id serves a whole model
+    family, so the gateway serves that family from the DEFAULT provider instead of Anthropic
+    (executed 2026-08-20: the session 400d). A plain claude-* alias is fine, and so is a gateway id
+    such as muse/muse-spark-1.2,
   * an apiKeyHelper, or an sk-ant-api* Console key in ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (it
-    takes the same native branch but bills API credits, not your subscription).
+    takes the same native branch but bills API credits, not your subscription),
+  * any explicit --settings value that is empty, not one JSON object or a readable file containing
+    one, or carries one of the route blockers above. Its bytes and path are never printed.
 
-EXACTLY these documents are checked, because these are the ones Claude Code was measured to read
+EXACTLY these persistent documents are checked, because these are the ones Claude Code was measured to read
 for `env`:
   ~/.claude/settings.json
   ./.claude/settings.json          (relative to the directory you launch from)
@@ -206,6 +250,16 @@ and enterprise managed policy (/etc/claude-code/managed-settings.json and its dr
 the platform equivalents, and the WSL registry policy chain) -- that channel is administrator-
 owned and its effect on `env` could not be verified here, so this route neither refuses on it nor
 claims it is clean.
+
+On a routed launch Claude Code prints `[claude-code:unrecognized_model]` for the gateway id. That
+line is cosmetic SDK-registry noise -- the id is absent from the client's own model-metadata
+table -- and it is NOT a routing failure: receipt-verified 2026-08-20, the same turn reached its
+provider with routeKind explicit-provider and status 200.
+
+Which upstream actually served a turn is answered by a FRESH provider-naming receipt for that
+turn, never by this wrapper's output. `ocx observe logs --jsonl` is a bounded rolling window:
+rows appear and disappear and tail order is not time order, so re-query, sort by timestamp, and
+read an absent row as UNKNOWN rather than as proof that nothing routed.
 
 THIS TEXT IS THIS WRAPPER'S. To reach Claude Code's OWN --help, end this wrapper's options
 with `--`, which prepares a real session and forwards everything after it verbatim:
@@ -259,8 +313,13 @@ mutation/import/export, and unknown future upstream routes fail closed with exit
 A provider add/edit/remove writes the CONFIG FILE only. It is NOT in the running gateway
 until `ocx sync` plus a restart, and until then a request naming it falls through to the
 DEFAULT provider. This route prints that sequence after a successful mutation and never
-runs it for you: `ocx sync` rewrites shared ~/.codex config and a restart interrupts
-in-flight turns, so each is separately authorized.
+runs it for you: a sync can rewrite shared ~/.codex config and a restart interrupts
+in-flight turns, so each is separately authorized. By opencodex 2.28.0 (absent in 2.11.1)
+the sync is catalog-only -- leaving config.toml, the journal, and history untouched, though
+it may still refresh the catalog and models-cache files under ~/.codex -- when the Codex
+integration is off or an external `model_provider` owns `config.toml`. A sync that WOULD rewrite ~/.codex still
+needs its own approval, and this route cannot tell the two branches apart without
+running it.
 
 Pass a key via piped stdin (`ocx account add-key <name>`) rather than --api-key where
 possible: argv is readable by every process on this host via `ps`.
@@ -277,18 +336,20 @@ usage() {
 usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|configure> [args...]
 
   ensure                    Ensure the gateway is healthy without launching Claude Code.
-  launch [claude args...]   Ensure the gateway is healthy (start it if down, restart once if
+  launch [--yolo] [claude args...]  Ensure the gateway is healthy (start it if down, restart once if
                             half-up), then launch Claude Code through it using your own
                             ~/.claude configuration and login. Native claude models pass
                             through to Anthropic on your subscription; gateway models route to
                             their own providers -- both in one session. Fails closed if the
                             gateway never becomes healthy, and refuses (exit 3) when a
-                            provider-routing key, a non-loopback ANTHROPIC_BASE_URL, or a
+                            provider-routing key, a non-loopback ANTHROPIC_BASE_URL, a
+                            cloud-provider model id in a default/small-fast model slot, or a
                             Console API key would silently defeat the route. `launch --help`
                             names the settings documents that check reads.
-  launch-ultracode [args...]  Apply the session-only {"ultracode":true} setting, then use the
-                            same fail-closed launch path. This convenience route refuses a
-                            competing --settings argument and permission-bypass flags.
+  launch-ultracode [--yolo] [args...]  Apply the session-only {"ultracode":true} setting, then
+                            use the same fail-closed launch path. This convenience route refuses
+                            a competing --settings argument. On either launch route, an explicit
+                            first --yolo enables Claude Code's permission-bypass mode.
   status                    Supervision view: pid, port, uptime, healthy/down, log location,
                             configured providers, attribution stream. Also compares each
                             CONFIGURED provider against the running gateway's LIVE catalog and
@@ -314,53 +375,106 @@ EOF
 }
 
 ocx() {
-  mise -C "$root" exec -- ocx "$@"
+  if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
+    "$AGENTIC_SDLC_OCX" "$@"
+  else
+    mise -C "$root" exec -- ocx "$@"
+  fi
 }
 
-# `jq` resolved the same way `ocx` is, and for the same reason.
+# An installed ccodex injects the exact ocx executable bound by operator-tools installation, so
+# daily launch neither re-evaluates repo-scoped mise nor changes cwd. Direct checkout use keeps a
+# mise fallback, but resolves the executable first and then starts it from the caller workspace.
+launch_ocx_claude() {
+  local executable="${AGENTIC_SDLC_OCX:-}"
+  if [ -z "$executable" ]; then
+    executable="$(mise -C "$root" which ocx 2>/dev/null || true)"
+  fi
+  [ -n "$executable" ] && [ -x "$executable" ] || {
+    printf 'error: the pinned opencodex executable is unavailable\n' >&2
+    exit 1
+  }
+  "$executable" claude "$@"
+}
+
+# TWO ADMITTED ROUTES, IN THIS ORDER, AND NO jq NAME IS EVER RESOLVED FROM AMBIENT PATH.
 #
-# THE DEFECT THIS FIXES (2026-08-08, found by a fresh-host container install). Every caller here
-# used a bare `jq`, which is absent from the operator's PATH: this command is explicitly designed
-# to run WITHOUT mise on PATH, and `jq` arrives only through mise's pinned toolchain
-# (`mise.toml`, jq = 1.8.2). A missing `jq` made `configured_provider_class` return
-# "unclassifiable", which made every `configure` mutation refuse with
-# `anthropic-or-unclassifiable-provider` -- on a host where the provider was correctly configured
-# as non-Anthropic. The refusal named the wrong cause, so it sent the operator to inspect a
-# provider config that was already right.
+#   1. $AGENTIC_SDLC_JQ -- the exact executable operator-tools bound at install time (see
+#      assets/launchers/ccodex.in, which exports it). Highest, because it IS the reviewed binding.
+#      Admitted only as an ABSOLUTE path or the literal pinned sentinel; see the guard below.
+#   2. the repository's pinned route, `mise -C "$root" exec -- jq` (mise.toml, jq = 1.8.2).
 #
-# Every `configure` route already calls require_ocx, which requires mise, so the pinned `jq` is
-# reachable wherever classification runs. A bare `jq` is preferred when present, because an
-# operator who installed their own has a working tool and a mise round-trip per call is pure
-# latency; the pinned copy is the fallback rather than the first choice.
+# RESIDUAL, STATED RATHER THAN HIDDEN: the pinned route locates `mise` itself on ambient PATH,
+# because mise is this repository's documented sole bootstrap prerequisite and is not itself
+# pinned -- a substituted `mise` therefore still governs this parse, exactly as it governs `ocx()`,
+# `require_ocx`, and `launch_ocx_claude`. What this resolver closes is the jq-specific channel: no
+# jq NAME is looked up, and the pin is not skipped in favour of an ambient copy.
+#
+# UNTIL 2026-08-21 THIS PREFERRED `$(type -P jq)` OVER THE PIN and only reached the pinned route
+# when PATH had none, so a source-checkout launch parsed trust-relevant JSON with whatever binary
+# the caller's PATH happened to name. That is the substitution ADR-0020 forbids -- "a
+# readiness-dependent executable is never selected from ambient PATH without an admitted exact
+# identity" -- and this is a trust boundary, not a convenience: this jq classifies the settings
+# documents that decide whether a launch is refused, and it reads a provider config and a gateway
+# catalog that sit next to credentials. A caller-supplied `jq` that answers `clean` suppresses
+# every settings refusal in this file. So no jq NAME is ever resolved: the binding is used as an
+# exact absolute path or the pinned route is taken, which also retires the `command -v jq`
+# recursion hazard the old probe existed to dodge.
+#
+# NO SILENT SUBSTITUTION EITHER WAY (ADR-0020 decision 4). A bound-but-broken $AGENTIC_SDLC_JQ does
+# NOT quietly fall back to the pinned route, and an unresolvable pinned route does NOT fall back to
+# anything: the surface that needed jq blocks with a named reason, and refreshing the binding stays
+# an explicit `operator-tools:install` lifecycle step.
 jq() {
   if [ -z "${resolved_jq:-}" ]; then
-    # `type -P` searches the PATH only. `command -v jq` would find THIS FUNCTION and recurse,
-    # because a function shadows the name it is probing -- the same shadowing class of bug that
-    # made a stale shell function hide the installed `ccodex`.
-    resolved_jq="$(type -P jq 2>/dev/null || true)"
-    [ -n "$resolved_jq" ] || resolved_jq="mise"
+    resolved_jq="${AGENTIC_SDLC_JQ:-mise}"
+    # AN ADMITTED EXACT IDENTITY IS AN ABSOLUTE PATH (install_operator_tools.py binds one:
+    # "pinned runtime executables are deliberately absolute") or the pinned sentinel. A bare NAME
+    # is neither: `AGENTIC_SDLC_JQ=gojq` sends this trust-boundary parse straight back through
+    # ambient PATH, and `AGENTIC_SDLC_JQ=jq` re-enters THIS function until the shell dies -- a
+    # death that `$(bypassing_settings_document_and_key)` reads as `clean`. A relative path
+    # resolves against the caller-controlled launch directory. Each becomes the unadmitted
+    # sentinel, so every consumer takes its own named fail-closed branch.
+    case "$resolved_jq" in
+      mise|/*) ;;
+      *) resolved_jq=unadmitted ;;
+    esac
   fi
-  if [ "$resolved_jq" = mise ]; then
-    mise -C "$root" exec -- jq "$@"
-  else
-    "$resolved_jq" "$@"
-  fi
+  case "$resolved_jq" in
+    mise) mise -C "$root" exec -- jq "$@" ;;
+    unadmitted) return 127 ;;
+    *) "$resolved_jq" "$@" ;;
+  esac
 }
 
-# True when jq is usable at all, by either route. Callers use this instead of `command -v jq`,
-# which now always succeeds (the function above shadows it) and so no longer answers the
-# question. A host with neither a PATH jq nor a resolvable pinned one still degrades honestly.
+# True only when the RESOLVED route above actually executes jq. Callers use this instead of
+# `command -v jq`, which now always succeeds (the function above shadows it) and so no longer
+# answers the question -- and instead of any name probe, which would answer a different question
+# than "does the admitted binary run here".
+#
+# DELIBERATELY UNCACHED, on ADR-0020 decision 2: configuration is not execution proof, so each
+# consumer re-verifies at the moment it needs the tool rather than trusting one earlier answer.
+# That also keeps the check honest across a mid-run change to the bound executable.
+#
+# A false answer means the admitted route is absent, unresolvable, not executable, or quarantined.
+# Every consumer below then either REFUSES BY NAME or degrades to an explicitly `unknown` display;
+# none of them may read it as "nothing to report".
 jq_available() {
   jq --version >/dev/null 2>&1
 }
 
 require_ocx() {
-  if ! command -v mise >/dev/null 2>&1; then
-    printf 'error: mise is required to resolve the pinned opencodex build\n' >&2
+  if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
+    [ -x "$AGENTIC_SDLC_OCX" ] || {
+      printf 'error: the installed pinned opencodex executable is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+      exit 1
+    }
+  elif ! command -v mise >/dev/null 2>&1; then
+    printf 'error: mise is required for direct checkout use of the pinned opencodex build\n' >&2
     exit 1
   fi
   if ! ocx --version >/dev/null 2>&1; then
-    printf 'error: pinned opencodex is not installed; run `mise install` in %s\n' "$root" >&2
+    printf 'error: pinned opencodex is not installed; run `mise --locked install` in %s\n' "$root" >&2
     exit 1
   fi
 }
@@ -452,8 +566,10 @@ gateway_half_up() {
 # and attempts against the wrong upstream. That is the canary's C1/C5 fail-open condition
 # reached through configuration drift rather than through a typo.
 #
-# Both readers degrade to silence rather than to a false verdict: no jq, no curl, or an
-# unparseable payload yields "unknown", never "live" and never "NOT-LIVE".
+# Both readers degrade to silence rather than to a false verdict: an unrunnable admitted jq route,
+# no curl, or an unparseable payload yields "unknown", never "live" and never "NOT-LIVE". This is a
+# DISPLAY, so a named `unknown` is the honest degrade here rather than a refusal -- and `cmd_status`
+# prints that reason out loud, because an operator who reads nothing reads it as agreement.
 
 configured_provider_names() {
   jq_available || return 1
@@ -483,6 +599,19 @@ live_provider_names() {
   printf '%s\n' "$catalog" | sed -n 's|^\([^/][^/]*\)/.*|\1|p' | sort -u
 }
 
+# The configured DEFAULT provider's name. Exit 1 when it cannot be read at all, and that status is
+# load-bearing rather than cosmetic: the default provider serves BARE model ids, so it never appears
+# in the `<name>/` set live_provider_names builds, and a silently-empty default name therefore
+# reports the default provider itself as NOT-LIVE -- the exact false alarm this comparison exists to
+# avoid. An empty STRING with exit 0 is a different fact (no default is configured) and is kept.
+# This is why the read is not wrapped in `|| true` any more: swallowing an unavailable jq or a failed
+# provider read here degraded the comparison to a WRONG verdict instead of to `unknown`.
+default_provider_name() {
+  jq_available || return 1
+  ocx provider list --json 2>/dev/null \
+    | jq -r '(.configured // []) | map(select(.isDefault == true)) | (first | .name) // ""' 2>/dev/null
+}
+
 # Prints one `<name>` per configured-but-not-served provider. Exit 1 means the comparison could
 # not be made (missing tool, gateway down, unparseable payload) -- deliberately distinct from
 # exit 0 with no output, which means every configured provider is live.
@@ -491,9 +620,7 @@ not_live_providers() {
   configured="$(configured_provider_names)" || return 1
   [ -n "$configured" ] || return 1
   live="$(live_provider_names "$port")" || return 1
-  default_name="$(jq_available \
-    && ocx provider list --json 2>/dev/null \
-      | jq -r '(.configured // []) | map(select(.isDefault == true)) | (first | .name) // ""' 2>/dev/null || true)"
+  default_name="$(default_provider_name)" || return 1
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     [ "$name" = "$default_name" ] && continue
@@ -501,9 +628,18 @@ not_live_providers() {
   done <<<"$configured"
 }
 
-# Printed after every admitted provider mutation. The sequence is NOT run for the operator:
-# `ocx sync` rewrites shared ~/.codex state and a restart interrupts in-flight turns, so each
-# is its own authorized operation rather than a side effect of a configuration edit.
+# Printed after every admitted provider mutation. The sequence is NOT run for the operator: a
+# sync can rewrite shared ~/.codex state and a restart interrupts in-flight turns, so each is its
+# own authorized operation rather than a side effect of a configuration edit.
+#
+# By opencodex 2.28.0 (absent in 2.11.1) the write half is CONDITIONAL: with the Codex integration
+# off, or with an external `model_provider` owning `config.toml`, the sync reports a
+# `CodexSyncResult` status of `catalog-only` and leaves config.toml, the journal, and history
+# untouched (it may still refresh the catalog and models-cache files under ~/.codex), and a
+# `validateOnly` injection preflight fails a
+# bad config before any partial rewrite. Which branch a host takes is not knowable from here
+# without running the sync, so the notice keeps naming the ~/.codex exposure: the narrower branch
+# lowers the blast radius, never the authorization.
 print_sync_required_notice() {
   local route="$1"
   cat <<EOF
@@ -518,8 +654,12 @@ Until then a request naming this provider's model does NOT fail closed. It is cl
 \`routeKind: "default-provider"\` and forwarded to the DEFAULT provider, so it is attempted and
 billed against the wrong upstream while the attribution log records the wrong provider.
 
-Neither step is run for you: \`ocx sync\` rewrites shared ~/.codex config and a restart
-interrupts in-flight turns, so both are separately authorized operations.
+Neither step is run for you: a \`sync\` can rewrite shared ~/.codex config and a restart
+interrupts in-flight turns, so both are separately authorized operations. By opencodex
+2.28.0 (absent in 2.11.1) the sync is catalog-only when the Codex integration is off or an
+external model_provider owns config.toml -- config.toml, the journal, and history stay
+untouched, though the catalog and models-cache files under ~/.codex may still refresh; a sync that WOULD rewrite ~/.codex
+still needs its own approval.
 
 Confirm the provider went live before dispatching anything to it:
   ccodex status
@@ -589,7 +729,7 @@ ensure_gateway_up() {
 # scrub/isolation/refusal machinery existed to prevent exactly what this route now wants, and
 # it is gone.
 #
-# What remains guards four SILENT failures that would otherwise be indistinguishable from
+# What remains guards five SILENT failures that would otherwise be indistinguishable from
 # success, which matters more now that this is the default rather than a named escape hatch:
 #
 #   1. An ENABLED provider-routing switch, exported or in a settings.json `env` block,
@@ -610,9 +750,17 @@ ensure_gateway_up() {
 #      (hasAnthropicNativeCredential in server/claude-messages.ts), so it takes the SAME
 #      native branch and bills API credits while looking like subscription traffic. The
 #      prefix is the only thing separating the two.
+#   5. A cloud-provider-shaped id in one of the six MODEL SLOTS -- `ANTHROPIC_MODEL`, an
+#      `ANTHROPIC_DEFAULT_*_MODEL` tier slot, or `ANTHROPIC_SMALL_FAST_MODEL` -- re-points a
+#      whole model family without touching any switch above: EXECUTED 2026-08-20 with
+#      CLAUDE_CODE_USE_BEDROCK unset and ANTHROPIC_DEFAULT_SONNET_MODEL exporting
+#      `global.anthropic.claude-sonnet-5[1m]`, `launch` proceeded and the session 400d at the Codex
+#      upstream because the gateway does not read that id as native passthrough and fell through to
+#      the DEFAULT provider. See $model_slot_overrides.
 #
-# Names, prefixes, and base-URL SHAPES only: no credential value is read, printed, copied, or
-# persisted, and a base URL is never echoed because it can carry userinfo credentials.
+# Names, prefixes, and base-URL or model-id SHAPES only: no credential value is read, printed,
+# copied, or persisted, and a base URL is never echoed because it can carry userinfo credentials.
+# A model id carries no secret, so a refused one is named rather than withheld.
 
 # ONE list per class, shared by the exported-environment check and the settings-document check
 # below. The two lists drifted apart once already -- the settings side was missing entries the
@@ -661,6 +809,73 @@ routing_endpoint_slots=(
 # STILL honouring ANTHROPIC_BASE_URL (the client's own message says its on-ramp REQUIRES that
 # variable plus ANTHROPIC_AUTH_TOKEN), so it does not defeat this route and refusing it would be a
 # false positive.
+
+# A THIRD CLASS, and neither a boolean nor an endpoint: these six carry a MODEL ID, and they
+# choose which id serves a whole model family for the session.
+#
+# EXECUTED 2026-08-20, which is why this is a refusal rather than a note. With
+# CLAUDE_CODE_USE_BEDROCK unset -- so every switch above read as off and every check above passed --
+# and ANTHROPIC_DEFAULT_SONNET_MODEL and its siblings still exporting Bedrock-shaped ids
+# (`global.anthropic.claude-sonnet-5[1m]` and kin), `launch` PROCEEDED and the session 400d at the
+# Codex upstream: the gateway does not recognize a `global.anthropic.*` id as native Anthropic
+# passthrough, so it fell through to the DEFAULT provider. The operator asked for Sonnet on their
+# subscription and got whichever provider is default, under a gateway banner.
+#
+# REFUSE, NOT WARN, and the refusal text says why: one of these variables changes which upstream
+# serves those slots as surely as a routing switch does. A warning on the channel that silently
+# re-points a whole model family is the fail-open shape every check in this section exists to
+# close, and the failure it produces -- an upstream 400, or worse a quietly substituted model --
+# names none of these variables.
+#
+# A MODEL ID IS NOT A CREDENTIAL. Unlike a base URL, a token, or a settings path, these refusals
+# may NAME the value: hiding it would leave the operator guessing which of six slots to fix, and
+# there is nothing secret in `us.anthropic.claude-opus-4-5-v1:0`.
+#
+# ANTHROPIC_MODEL and ANTHROPIC_DEFAULT_FABLE_MODEL joined the four above once MEASURED, not on a
+# guess: `skills/model-tier-rightsizing/references/workflow-prompt-budget.md` records
+# `effectiveModelEnv()` (`src/claude/context-windows.ts`) injecting `ANTHROPIC_MODEL` and
+# `ANTHROPIC_DEFAULT_OPUS/SONNET/FABLE/HAIKU_MODEL` as the SAME tier-slot set -- so both are the
+# identical hazard class as the original four and a cloud-shaped id in either re-points that
+# family exactly as it would in ANTHROPIC_DEFAULT_SONNET_MODEL.
+model_slot_overrides=(
+  ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL
+  ANTHROPIC_DEFAULT_FABLE_MODEL ANTHROPIC_SMALL_FAST_MODEL ANTHROPIC_MODEL
+)
+# ONE pattern for BOTH channels, on the same rule as $loopback_base_url_pattern above: bash `=~`
+# here and jq's `test()` in the settings program must not be able to disagree about which id is
+# cloud-provider-shaped. Everything in it is POSIX-ERE / Oniguruma common ground -- anchors,
+# alternation, escaped dots, a negated class, a bounded repeat -- so the two engines classify the
+# same fixtures identically.
+#
+# GROUNDED IN THE IDS THE REFUSALS ALREADY KNOW rather than in a guess about model naming: the
+# region-prefixed Bedrock inference profiles (`global.`/`us.`/`eu.`/`apac.`/GovCloud on
+# `anthropic.`), the bare Bedrock publisher form (`anthropic.claude-*`), and the two Vertex
+# spellings (a `publishers/anthropic/` or `projects/<p>/locations/...` path, and the `@<date>`
+# pinned-version suffix). A plain alias -- `claude-sonnet-5`, `claude-haiku-4-5` -- matches none of
+# them, and neither does a gateway id such as `muse/muse-spark-1.2`; both stay fine, because a
+# routed id in the small-fast slot is a legitimate use of this route.
+#
+# TRIMMED before either engine tests the shape. MEASURED: with a single leading space,
+# `ANTHROPIC_DEFAULT_SONNET_MODEL=' global.anthropic.claude-sonnet-5[1m]'` launched clean, because
+# every `^`-anchored alternative in the pattern above anchors immediately and a leading space
+# defeats it while the id is still, in every way that matters to the upstream, the same
+# cloud-provider id. Leading AND trailing whitespace are stripped -- trailing matters too, because
+# the last alternative anchors on `$` -- and ONLY whitespace is stripped: internal spelling is
+# untouched, so a genuinely malformed id (one with embedded whitespace) still fails to match and
+# is treated as an ordinary, non-cloud-shaped value rather than papered over.
+cloud_provider_model_id_pattern='^(global|us|eu|apac|us-gov-west-1|us-gov-east-1)\.anthropic\.|^anthropic\.claude|^publishers/anthropic/|^projects/[^/]+/locations/|@[0-9]{8}$'
+
+# ONE trim for BOTH engines, on the same rule as $cloud_provider_model_id_pattern above: bash
+# stripping leading/trailing whitespace one way while jq's `sub()` strips it another would let the
+# two channels disagree about the same exported-vs-settings value. Bash's own parameter-expansion
+# idiom (POSIX `[:space:]`, no subprocess) on this side; `sub("^\\s+";"")`/`sub("\\s+$";"")` on the
+# jq side below -- both remove ONLY leading/trailing runs, never anything internal.
+trim_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
 
 # Truthiness for the boolean switches only. Case- and whitespace-insensitive so ` False ` is not
 # read as enabled. Non-boolean slots never reach this function.
@@ -750,6 +965,36 @@ gateway_bypassing_env_name() {
   return 1
 }
 
+# The exported half of the model-slot check, as `<name><tab><value>` for the first slot carrying a
+# cloud-provider-shaped id. The VALUE is returned deliberately -- the refusal prints it, because a
+# model id is not a credential and naming it is what makes the message actionable. Reported by this
+# function rather than by gateway_bypassing_env_name because the two say different things: a
+# routing switch means the gateway is not in the path at all, while this means the gateway IS in
+# the path and will serve those slots from the wrong upstream.
+cloud_shaped_model_slot_env() {
+  local name value trimmed
+  for name in "${model_slot_overrides[@]}"; do
+    value="${!name:-}"
+    [ -n "$value" ] || continue
+    # $value is what the refusal PRINTS (verbatim, including any stray whitespace, because that is
+    # what the operator actually exported); $trimmed is what the SHAPE is tested against, so a
+    # leading or trailing space cannot slip an otherwise cloud-shaped id past the anchored pattern.
+    trimmed="$(trim_whitespace "$value")"
+    [ -n "$trimmed" ] || continue
+    if [[ "$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$trimmed")" =~ $cloud_provider_model_id_pattern ]]; then
+      printf '%s\t%s' "$name" "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ONE sentence for both channels, so the exported and settings refusals cannot drift into
+# describing the same hazard differently. The caller supplies how the value was set.
+model_slot_refusal_reason() {
+  printf '%s' "that variable chooses which id serves a whole model family, so it re-points that family's upstream as surely as a routing switch does: the gateway does not recognize a cloud-provider id as native Anthropic passthrough, so those turns fall through to the DEFAULT provider and are answered -- or 400d -- under a gateway banner. Use a plain claude-* id, or drop the variable and pick the model per session with \`--model\`"
+}
+
 # The same switches in a settings document, plus two hazards that exist only there. Shell env is
 # checked separately above because a settings document is the channel an operator forgets: it is
 # read on every launch and survives a clean shell.
@@ -821,25 +1066,22 @@ gateway_bypassing_env_name() {
 # ONE PATH PER CALL, and one jq program for every path. The document list lives in
 # claude_settings_documents below and is walked by bypassing_settings_document_and_key, so adding a
 # document is a list edit rather than a second copy of this program drifting away from the first.
-settings_document_bypassing_key_name() {
-  local settings="$1"
-  # A genuinely absent document carries no key. That is a real clean state, not a gap. `-e` follows
-  # the symlink, so a DANGLING one counts as absent -- deliberately matching Claude Code, which
-  # reads this path and treats ENOENT as no settings at all; hard-stopping a working launch because
-  # a dotfile symlink's target moved would refuse a client state that carries no key to begin with.
-  [ -e "$settings" ] || return 1
-  if [ ! -f "$settings" ] || [ ! -r "$settings" ]; then
-    printf 'unreadable:not a readable regular file'; return 0
-  fi
-  if ! jq_available; then
-    printf 'unreadable:jq is unavailable, so this document cannot be inspected'; return 0
-  fi
-  local found="" status=0
-  found="$(jq -r \
+# Read exactly one JSON settings object from stdin and emit one bounded classification: `clean` or
+# the first bypassing key. The document bytes never enter a shell variable. `-s` is intentional:
+# ordinary jq accepts an empty stream and concatenated JSON values, but neither is one settings
+# object. A nonzero status therefore means malformed, empty, multiple, or non-object input.
+settings_bypass_classification() {
+  jq -ers \
     --arg loopback "$loopback_base_url_pattern" \
+    --arg cloudmodel "$cloud_provider_model_id_pattern" \
     --argjson booleans "$(json_name_array "${routing_boolean_switches[@]}")" \
-    --argjson slots "$(json_name_array "${routing_endpoint_slots[@]}")" '
-    (.env // {}) as $env
+    --argjson slots "$(json_name_array "${routing_endpoint_slots[@]}")" \
+    --argjson models "$(json_name_array "${model_slot_overrides[@]}")" '
+    if length != 1 or (.[0] | type) != "object"
+    then error("not exactly one settings object")
+    else .[0]
+    end
+    | (.env // {}) as $env
     # ONE reader for every slot, and NOT `$env[.] // ""`. The jq `//` operator is false-OR-null,
     # not null-coalescing, so a JSON literal `false` read as ABSENT: `{"env":{"ANTHROPIC_BASE_URL":
     # false}}` reported CLEAN while the identical `"https://evil.example"` refused. That mattered
@@ -861,15 +1103,47 @@ settings_document_bypassing_key_name() {
         | select((slot(.) | ascii_downcase) | test($loopback) | not) ] as $base
     | [ "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"
         | select(slot(.) | startswith("sk-ant-api")) ] as $console
+    # The model-slot class, read by SHAPE through the same pattern the exported check uses. Only
+    # the NAME crosses back, because this program deliberately never puts document bytes into a
+    # shell variable: the settings refusal names the variable and the shape family rather than
+    # quoting the value, which is also why the exported channel -- the one that does hold the
+    # value -- is the channel that prints it.
+    #
+    # TRIMMED first, on the same rule trim_whitespace applies to the exported channel: a leading or
+    # trailing space in the value a settings document carries must not be able to slip the
+    # ^/$-anchored pattern any more than the same space in the shell can. Only leading/trailing
+    # whitespace is removed; internal spelling still reaches test($cloudmodel) unmodified.
+    | ($models | map(select(
+        slot(.) | sub("^\\s+"; "") | sub("\\s+$"; "") | ascii_downcase | test($cloudmodel)
+      ))) as $model_slots
     | (if (.apiKeyHelper // null) != null then ["apiKeyHelper"] else [] end) as $helper
-    | ($switches + $endpoints + $base + $console + $helper) | first // empty
-  ' "$settings" 2>/dev/null)" || status=$?
-  # Malformed JSON is unreadable, not clean -- jq exits nonzero and prints nothing.
-  if [ "$status" -ne 0 ]; then
-    printf 'unreadable:the document could not be parsed'; return 0
+    | ($switches + $endpoints + $base + $model_slots + $console + $helper) | first // "clean"
+  '
+}
+
+settings_document_bypassing_key_name() {
+  local settings="$1"
+  # A genuinely absent document carries no key. That is a real clean state, not a gap. `-e` follows
+  # the symlink, so a DANGLING one counts as absent -- deliberately matching Claude Code, which
+  # reads this path and treats ENOENT as no settings at all; hard-stopping a working launch because
+  # a dotfile symlink's target moved would refuse a client state that carries no key to begin with.
+  [ -e "$settings" ] || return 1
+  if [ ! -f "$settings" ] || [ ! -r "$settings" ]; then
+    printf 'unreadable:not a readable regular file'; return 0
   fi
-  found="$(printf '%s' "$found" | head -1)"
-  [ -n "$found" ] || return 1
+  # FAIL CLOSED: an existing document this host cannot classify is `unreadable:`, never `clean`.
+  # `launch` turns that into a refusal and `status` prints UNKNOWN, which is the whole point of the
+  # three-outcome contract above -- a document that carries a routing switch must not become
+  # invisible because the tool that reads it is missing.
+  if ! jq_available; then
+    printf 'unreadable:the admitted jq route could not be run, so this document cannot be inspected'; return 0
+  fi
+  local found="" status=0
+  found="$(settings_bypass_classification < "$settings" 2>/dev/null)" || status=$?
+  if [ "$status" -ne 0 ]; then
+    printf 'unreadable:the document could not be parsed as a settings object'; return 0
+  fi
+  [ "$found" = clean ] && return 1
   printf '%s' "$found"
 }
 
@@ -944,6 +1218,117 @@ bypassing_settings_document_and_key() {
   return 1
 }
 
+# Classify one explicit `--settings <file-or-json>` value without echoing it. Claude documents JSON
+# or a file path, so try a JSON object first; if that is not one cleanly parsed object, inspect an
+# existing path. The classifier returns only the source kind, never the path or selected bytes. A
+# missing path and invalid inline JSON are intentionally one generic `invalid` result because the CLI syntax cannot tell
+# which one the caller meant without guessing from secret-bearing text.
+settings_argument_bypassing_key_name() {
+  local value="$1" found="" status=0
+  if [ -n "$value" ]; then
+    # FAIL CLOSED BY NAME, not through the `invalid` door. Without jq neither form can be
+    # classified, and the old guard just skipped the inline attempt: an inline JSON object then fell
+    # through to the file branch, missed there too, and was reported as "not a valid JSON object or
+    # a readable settings file" -- a refusal (so never a bypass) that blamed the operator's value
+    # for this host's missing tool. ADR-0020 decision 3 wants the blocked surface to produce NAMED
+    # diagnostic evidence, so the reason is the tool. The `-e` file test below deliberately does not
+    # run first: a value that is BOTH unparseable and not a path must not be probed as a filename.
+    if ! jq_available; then
+      printf 'value\tunreadable:the admitted jq route could not be run, so this value cannot be inspected'
+      return 0
+    fi
+    found="$(printf '%s' "$value" | settings_bypass_classification 2>/dev/null)" || status=$?
+    if [ "$status" -eq 0 ]; then
+      [ "$found" = clean ] && return 1
+      printf 'inline\t%s' "$found"
+      return 0
+    fi
+  fi
+
+  if [ -e "$value" ]; then
+    if [ ! -f "$value" ] || [ ! -r "$value" ]; then
+      printf 'file\tunreadable:not a readable regular file'
+      return 0
+    fi
+    # Re-probed here rather than trusted from the check above, and that is not redundant: the file
+    # was `-r` a moment ago and the tool answered a moment ago, and neither fact survives into the
+    # open below. test_selected_settings_path_is_redacted_when_the_file_disappears_before_open
+    # exercises exactly this window.
+    if ! jq_available; then
+      printf 'file\tunreadable:the admitted jq route could not be run, so this file cannot be inspected'
+      return 0
+    fi
+    status=0
+    found="$(settings_bypass_classification 2>/dev/null < "$value")" || status=$?
+    if [ "$status" -ne 0 ]; then
+      printf 'file\tunreadable:the file could not be parsed as a settings object'
+      return 0
+    fi
+    [ "$found" = clean ] && return 1
+    printf 'file\t%s' "$found"
+    return 0
+  fi
+
+  printf 'invalid'
+}
+
+settings_argument_refusal() {
+  local source="$1" offending="$2" label="the selected --settings value"
+  [ "$source" = file ] && label="the selected --settings file"
+  case "$offending" in
+    invalid)
+      refuse "the --settings value is not a valid JSON object or a readable settings file" ;;
+    unreadable:*)
+      refuse "$label could not be checked (${offending#unreadable:}); an unverifiable --settings value stops the launch rather than passing as clean" ;;
+    apiKeyHelper)
+      refuse "$label defines apiKeyHelper, which outranks your Claude login and bills whatever key it returns; remove it or use a per-command wrapper" ;;
+    ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)
+      refuse "$label sets $offending to an sk-ant-api* Console key, which takes the same native passthrough branch and bills API credits rather than your subscription" ;;
+    ANTHROPIC_BASE_URL)
+      refuse "$label sets ANTHROPIC_BASE_URL in its \`env\` block to an address that is not this host's loopback gateway, and that value REPLACES the one this launch sets, so the session would talk to it instead of the gateway" ;;
+    ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_DEFAULT_FABLE_MODEL|ANTHROPIC_SMALL_FAST_MODEL|ANTHROPIC_MODEL)
+      refuse "$label sets $offending in its \`env\` block to a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)" ;;
+    *)
+      refuse "$label carries $offending, which routes Claude Code to a cloud provider and bypasses this gateway" ;;
+  esac
+}
+
+assert_forwarded_settings_are_effective() {
+  local -a arguments=("$@")
+  local index=0 argument value result source offending
+  while [ "$index" -lt "${#arguments[@]}" ]; do
+    argument="${arguments[$index]}"
+    case "$argument" in
+      --) break ;;
+      --settings)
+        index=$((index + 1))
+        if [ "$index" -ge "${#arguments[@]}" ] || [ -z "${arguments[$index]}" ]; then
+          printf 'error: --settings requires a non-empty file-or-json value\n' >&2
+          return 2
+        fi
+        value="${arguments[$index]}"
+        ;;
+      --settings=*)
+        value="${argument#--settings=}"
+        if [ -z "$value" ]; then
+          printf 'error: --settings requires a non-empty file-or-json value\n' >&2
+          return 2
+        fi
+        ;;
+      *) index=$((index + 1)); continue ;;
+    esac
+    if result="$(settings_argument_bypassing_key_name "$value")"; then
+      if [ "$result" = invalid ]; then
+        settings_argument_refusal inline invalid
+      fi
+      source="${result%%$'\t'*}"
+      offending="${result#*$'\t'}"
+      settings_argument_refusal "$source" "$offending"
+    fi
+    index=$((index + 1))
+  done
+}
+
 # An exported Console key displaces the OAuth login and bills credits on the very same native
 # passthrough branch, so it is refused by PREFIX rather than silently accepted.
 console_key_env_name() {
@@ -958,7 +1343,7 @@ console_key_env_name() {
 }
 
 assert_gateway_route_is_effective() {
-  local offending document
+  local offending document value
   if offending="$(gateway_bypassing_env_name)"; then
     case "$offending" in
       # An exported base URL neither outranks nor replaces anything: opencodex PRESERVES it and
@@ -968,6 +1353,14 @@ assert_gateway_route_is_effective() {
       *)
         refuse "$offending is exported and in force, which routes Claude Code to a cloud provider and bypasses the gateway entirely; unset it -- a switch whose value is 0, false, or empty already counts as off -- or set it per command in front of a plain \`claude\` run for that route" ;;
     esac
+  fi
+  # Checked with the exported switches above rather than after the documents, because it is the same
+  # channel: a slot set in this shell. A cloud switch still names itself first, since it defeats the
+  # route no matter what any model id says.
+  if offending="$(cloud_shaped_model_slot_env)"; then
+    value="${offending#*$'\t'}"
+    offending="${offending%%$'\t'*}"
+    refuse "$offending is exported as $value, a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)"
   fi
   if offending="$(bypassing_settings_document_and_key)"; then
     document="${offending%%$'\t'*}"
@@ -987,6 +1380,8 @@ assert_gateway_route_is_effective() {
         # child process environment, so this address wins and the gateway is never contacted. The
         # value is never printed -- a base URL can carry userinfo credentials.
         refuse "$document sets ANTHROPIC_BASE_URL in its \`env\` block to an address that is not this host's loopback gateway, and that value REPLACES the one this launch sets, so the session would talk to it instead of the gateway; remove the key, or set it to http://127.0.0.1:<the port \`ccodex status\` reports>" ;;
+      ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL|ANTHROPIC_DEFAULT_FABLE_MODEL|ANTHROPIC_SMALL_FAST_MODEL|ANTHROPIC_MODEL)
+        refuse "$document sets $offending in its \`env\` block to a cloud-provider model id (a Bedrock region or \`anthropic.\` publisher prefix, or a Vertex publisher path or @<date> suffix); $(model_slot_refusal_reason)" ;;
       *)
         refuse "$document carries $offending, which routes Claude Code to a cloud provider and bypasses this gateway; move it to a per-command wrapper instead of a settings document Claude Code reads on every launch" ;;
     esac
@@ -1006,10 +1401,13 @@ cmd_ensure() {
 }
 
 cmd_launch() {
+  local permission_profile="$1"
+  shift
   require_ocx
   # Checked BEFORE any gateway is started: a refused launch must not leave a proxy running
   # that the operator did not ask for.
   assert_gateway_route_is_effective
+  assert_forwarded_settings_are_effective "$@" || return $?
 
   if ! command -v claude >/dev/null 2>&1; then
     printf 'error: the `claude` CLI is not on PATH; opencodex cannot launch it\n' >&2
@@ -1031,6 +1429,17 @@ cmd_launch() {
     export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=85
   fi
 
+  # Claude Code flattens auto-fetched claude.ai connector tools into Anthropic tool names such
+  # as `mcp__claude_ai_<connector>__<tool>`. Muse Spark rejects the whole request when any one
+  # of those names exceeds its 64-character function-name ceiling, before the model can answer
+  # or choose a different tool. Measured on 2026-08-12 with AlphaVantage (68) and Robinhood (65).
+  # Keep local/project/plugin MCP servers: this switch gates only auto-fetched claude.ai cloud
+  # connectors. Preserve an explicit operator value so a native-Claude or known-compatible
+  # gateway session can opt back in with `ENABLE_CLAUDEAI_MCP_SERVERS=true ccodex launch`.
+  if [ -z "${ENABLE_CLAUDEAI_MCP_SERVERS+x}" ]; then
+    export ENABLE_CLAUDEAI_MCP_SERVERS=false
+  fi
+
   printf 'preparing gateway-routed Claude Code\n'
   ensure_gateway_up
   local json port
@@ -1042,31 +1451,99 @@ cmd_launch() {
   printf '  auth      : your own Claude login is preserved and sent to the gateway. Native claude\n'
   printf '              models pass through verbatim to Anthropic on your subscription; gateway\n'
   printf '              models route to their own providers. This wrapper never reads it.\n'
+  printf '  connectors: claude.ai cloud connectors are off by default for gateway compatibility;\n'
+  printf '              set ENABLE_CLAUDEAI_MCP_SERVERS=true before launch to opt in explicitly\n'
+  if [ "$permission_profile" = yolo ]; then
+    printf '  permissions: BYPASSED (--yolo); Auto classifier and ordinary approval checks are off\n'
+  else
+    printf '  permissions: no ccodex profile selected; forwarded Claude arguments remain authoritative\n'
+  fi
   printf '  routed at : http://127.0.0.1:%s\n' "${port:-unknown}"
-  # Forwarded Claude arguments can contain inline settings and secrets. Never echo raw argv.
-  printf '  command   : mise -C %s exec -- ocx claude [forwarded arguments withheld]\n\n' "$root"
+  # Accepted Claude arguments retain their exact bytes and boundaries. They can still contain
+  # settings and secrets, so validation never becomes an excuse to echo raw argv.
+  printf '  workspace : %s\n' "$caller_working_dir"
+  printf '  command   : pinned ocx claude [forwarded arguments withheld]\n\n'
   # ocx claude re-checks liveness, then execs `claude` with stdio inherited. It injects a marker
   # token ONLY when markerMode resolves to "proxy" (cli/claude.ts:133) or an admission key is
   # configured (:115); with a detected login neither fires, so Claude Code keeps its own OAuth
   # and the native models pass through. It also pre-writes the gateway model cache (:286), which
   # is what puts the routed ids in the /model picker.
-  ocx claude "$@"
+  if [ "$permission_profile" = yolo ]; then
+    launch_ocx_claude --dangerously-skip-permissions "$@"
+  else
+    launch_ocx_claude "$@"
+  fi
+}
+
+assert_yolo_has_no_competing_permission_control() {
+  local argument
+  for argument in "$@"; do
+    case "$argument" in
+      --) break ;;
+      --yolo|--dangerously-skip-permissions|--dangerously-skip-permissions=*|--allow-dangerously-skip-permissions|--allow-dangerously-skip-permissions=*|--permission-mode|--permission-mode=*)
+        printf 'REFUSED: --yolo owns the session permission mode; remove the competing %s argument\n' "$argument" >&2
+        return 3
+        ;;
+    esac
+  done
+}
+
+cmd_launch_route() {
+  local permission_profile="$1" forward_verbatim="$2"
+  shift 2
+  if ! $forward_verbatim; then
+    local argument
+    for argument in "$@"; do
+      [ "$argument" = -- ] && break
+      if [ "$argument" = --yolo ]; then
+        printf 'REFUSED: --yolo is a wrapper option and must be the first argument after the launch verb\n' >&2
+        return 3
+      fi
+    done
+  fi
+  if [ "$permission_profile" = yolo ]; then
+    assert_yolo_has_no_competing_permission_control "$@" || return $?
+  fi
+  cmd_launch "$permission_profile" "$@"
 }
 
 cmd_launch_ultracode() {
+  local permission_profile="$1" forward_verbatim="$2"
+  shift 2
   local argument previous=""
   for argument in "$@"; do
+    [ "$argument" = -- ] && break
     case "$argument" in
       --settings|--settings=*)
         printf 'REFUSED: launch-ultracode owns the session --settings value; use ordinary launch for a custom settings document\n' >&2
         return 3
         ;;
-      --dangerously-skip-permissions|--permission-mode=bypassPermissions)
+      --dangerously-skip-permissions|--dangerously-skip-permissions=*|--allow-dangerously-skip-permissions|--allow-dangerously-skip-permissions=*|--permission-mode=bypassPermissions)
+        if [ "$permission_profile" = yolo ]; then
+          printf 'REFUSED: --yolo owns the session permission mode; remove the competing %s argument\n' "$argument" >&2
+          return 3
+        fi
         printf 'REFUSED: launch-ultracode never bypasses permissions; use ordinary launch for an explicitly chosen risk profile\n' >&2
         return 3
         ;;
+      --permission-mode|--permission-mode=*)
+        if [ "$permission_profile" = yolo ]; then
+          printf 'REFUSED: --yolo owns the session permission mode; remove the competing %s argument\n' "$argument" >&2
+          return 3
+        fi
+        ;;
+      --yolo)
+        if ! $forward_verbatim; then
+          printf 'REFUSED: --yolo is a wrapper option and must be the first argument after the launch verb\n' >&2
+          return 3
+        fi
+        ;;
       bypassPermissions)
         if [ "$previous" = "--permission-mode" ]; then
+          if [ "$permission_profile" = yolo ]; then
+            printf 'REFUSED: --yolo owns the session permission mode; remove the competing --permission-mode argument\n' >&2
+            return 3
+          fi
           printf 'REFUSED: launch-ultracode never bypasses permissions; use ordinary launch for an explicitly chosen risk profile\n' >&2
           return 3
         fi
@@ -1074,7 +1551,10 @@ cmd_launch_ultracode() {
     esac
     previous="$argument"
   done
-  cmd_launch --settings '{"ultracode":true}' "$@"
+  if [ "$permission_profile" = yolo ]; then
+    assert_yolo_has_no_competing_permission_control "$@" || return $?
+  fi
+  cmd_launch "$permission_profile" --settings '{"ultracode":true}' "$@"
 }
 
 
@@ -1116,8 +1596,9 @@ cmd_status() {
   local stale stale_status=0
   stale="$(not_live_providers "${port:-}")" || stale_status=$?
   if [ "$stale_status" -ne 0 ]; then
-    printf '  unknown : could not compare (gateway down, or jq/curl unavailable). A configured\n'
-    printf '            provider is NOT proven live by appearing in the list above.\n'
+    printf '  unknown : could not compare (gateway down, or curl or the admitted jq route could not\n'
+    printf '            be run). A configured provider is NOT proven live by appearing in the list\n'
+    printf '            above.\n'
   elif [ -z "$stale" ]; then
     printf '  ok      : every configured provider is served by the running gateway\n'
   else
@@ -1132,7 +1613,7 @@ cmd_status() {
   # so its session data IS the operator's own. What replaced that report is the route check --
   # a bypassing key is the one remaining way a launch can look routed and not be.
   printf '\n== gateway route reachability ==\n'
-  local blocker="" document=""
+  local blocker="" document="" slot_value=""
   if blocker="$(gateway_bypassing_env_name)"; then
     case "$blocker" in
       ANTHROPIC_BASE_URL)
@@ -1141,6 +1622,14 @@ cmd_status() {
       *)
         printf '  BYPASSED: %s is exported; a launch would reach a cloud provider, not this gateway\n' "$blocker" ;;
     esac
+  # Same order as assert_gateway_route_is_effective, and here for the same reason `status` names its
+  # documents: reporting `ok` on a shell that `launch` refuses would be the reassurance this section
+  # exists to stop giving. A model id is not a credential, so the value IS printed.
+  elif blocker="$(cloud_shaped_model_slot_env)"; then
+    slot_value="${blocker#*$'\t'}"
+    blocker="${blocker%%$'\t'*}"
+    printf '  MISROUTED: %s is exported as %s, a cloud-provider model id; a launch refuses --\n' "$blocker" "$slot_value"
+    printf '            that family would be served by the DEFAULT provider, not by Anthropic\n'
   elif blocker="$(bypassing_settings_document_and_key)"; then
     document="${blocker%%$'\t'*}"
     blocker="${blocker#*$'\t'}"
@@ -1251,9 +1740,17 @@ explicit_non_anthropic_endpoint_argument() {
   $found
 }
 
+# The fallback for a provider that is NOT YET in the config file: a registry name upstream ships
+# but the operator has not added, so `configured_provider_class` returns absent (3) and there is
+# no baseUrl to classify. Every name here is one the upstream registry serves from a
+# non-Anthropic endpoint. It is a positive list on purpose -- an unrecognized name is refused,
+# not admitted -- so a registry that grows leaves this list narrow rather than wrong, and the
+# only cost of a stale entry is a refusal the operator resolves by adding the provider first.
+# Read from the opencodex 2.28.0 registry roster; the five names 2.28.0 added over 2.11.1 are
+# chutes, featherless, nous, novita, and xiaomi-mimo.
 known_non_anthropic_provider() {
   case "$(normalize_identifier "$1")" in
-    cursor|xai|command-code|kimi|kiro|openai-apikey|umans|opencode-go|neuralwatt|openrouter|cline-pass|cline|orcarouter|bizrouter|groq|google|google-vertex|google-antigravity|azure-openai|ollama|vllm|lm-studio|deepseek|cerebras|deepinfra|hyperbolic|baseten|commandcode|together|fireworks|firepass|moonshot|huggingface|nvidia|venice|zai|zhipu-bigmodel|nanogpt|synthetic|siliconflow|qwen-cloud|tencent-coding-plan|volcengine|volcengine-coding-plan|volcengine-agent-plan|qianfan|alibaba|alibaba-token-plan|alibaba-token-plan-intl|parallel|zenmux|litellm|ollama-cloud|mistral|minimax|minimax-cn|kimi-code|opencode-zen|vercel-ai-gateway|opencode-free|xiaomi|kilo|mimo-free|cloudflare-ai-gateway|cloudflare-workers-ai|github-copilot|gitlab-duo|openai) return 0 ;;
+    cursor|xai|command-code|kimi|kiro|openai-apikey|umans|opencode-go|neuralwatt|openrouter|cline-pass|cline|orcarouter|bizrouter|groq|google|google-vertex|google-antigravity|azure-openai|ollama|vllm|lm-studio|deepseek|cerebras|deepinfra|hyperbolic|baseten|commandcode|together|fireworks|firepass|moonshot|huggingface|nvidia|venice|zai|zhipu-bigmodel|nanogpt|synthetic|siliconflow|chutes|featherless|nous|novita|qwen-cloud|tencent-coding-plan|volcengine|volcengine-coding-plan|volcengine-agent-plan|qianfan|alibaba|alibaba-token-plan|alibaba-token-plan-intl|parallel|zenmux|litellm|ollama-cloud|mistral|minimax|minimax-cn|kimi-code|opencode-zen|vercel-ai-gateway|opencode-free|xiaomi|xiaomi-mimo|kilo|mimo-free|cloudflare-ai-gateway|cloudflare-workers-ai|github-copilot|gitlab-duo|openai) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1299,19 +1796,27 @@ provider_allowed_for_mutation() {
 # A tool this host cannot resolve is not a policy refusal, so it does not borrow the
 # subscription-boundary notice. It names the tool, the reason it is normally present, and the fix.
 refuse_missing_jq() {
-  printf '\nREFUSED: cannot classify this provider because `jq` is unavailable on this host.\n\n' >&2
+  printf '\nREFUSED: cannot classify this provider because no admitted `jq` route runs on this host.\n\n' >&2
   cat >&2 <<EOF
 This is a MISSING TOOL, not a rejected provider. Classification decides whether a configure
 mutation targets a non-Anthropic provider (admitted) or an Anthropic one (refused under
 ADR-0003), and it cannot be decided without reading the provider config.
 
-\`jq\` is pinned by this repository (mise.toml, jq = 1.8.2) and is normally resolved through it,
-so seeing this means neither a PATH \`jq\` nor the pinned copy could be reached. Fix either:
+Exactly two routes are admitted, and a \`jq\` merely present on PATH is deliberately NOT one of
+them (ADR-0020: an execution dependency at a trust boundary is exact or it is refused). Seeing
+this means neither admitted route ran. They are, in this order, the exact copy an
+operator-tools install bound and this checkout's pinned copy (mise.toml, jq = 1.8.2):
 
-  mise -C $root --locked install     # resolve the pinned toolchain
-  # or install jq through your own package manager
+  \$AGENTIC_SDLC_JQ
+  mise -C $root exec -- jq
 
-Then re-run the same command. Nothing was changed.
+Fix whichever applies -- rebind the installed executables, or resolve the pin in this checkout:
+
+  mise run operator-tools:install
+  mise -C $root --locked install
+
+Installing jq with your own package manager does NOT satisfy either route. Then re-run the same
+command. Nothing was changed.
 EOF
   exit 3
 }
@@ -1488,12 +1993,27 @@ case "$route" in
       verb_usage "$route"
       exit 0
     fi
-    # Every route uses one leading wrapper separator to reach Claude Code.
-    strip_forwarding_separator "${1:-}" && shift
+    # Every route uses one leading wrapper separator to reach Claude Code. For the two launch
+    # routes it also disables the wrapper-owned --yolo interpretation, so `-- --yolo` is passed
+    # literally while a first `--yolo` is consumed here and translated into Claude's explicit
+    # permission-bypass flag.
+    forward_verbatim=false
+    if strip_forwarding_separator "${1:-}"; then
+      shift
+      forward_verbatim=true
+    fi
     case "$route" in
       ensure) [ "$#" -eq 0 ] || { printf 'error: `ensure` takes no arguments\n' >&2; exit 2; }; cmd_ensure ;;
-      launch) cmd_launch "$@" ;;
-      launch-ultracode) cmd_launch_ultracode "$@" ;;
+      launch)
+        permission_profile=ordinary
+        if ! $forward_verbatim && [ "${1:-}" = --yolo ]; then permission_profile=yolo; shift; fi
+        cmd_launch_route "$permission_profile" "$forward_verbatim" "$@"
+        ;;
+      launch-ultracode)
+        permission_profile=ordinary
+        if ! $forward_verbatim && [ "${1:-}" = --yolo ]; then permission_profile=yolo; shift; fi
+        cmd_launch_ultracode "$permission_profile" "$forward_verbatim" "$@"
+        ;;
       status) cmd_status "$@" ;;
       restart) cmd_restart "$@" ;;
       configure) cmd_configure "$@" ;;

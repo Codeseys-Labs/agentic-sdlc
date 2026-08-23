@@ -34,6 +34,14 @@ class OpenCodexClaudeTests(unittest.TestCase):
         global_settings_local: object | None = None,
         project_settings: object | None = None,
         project_settings_local: object | None = None,
+        selected_settings_raw: str | None = None,
+        selected_settings_name: str = "selected-settings.json",
+        selected_settings_mode: int | None = None,
+        selected_settings_directory: bool = False,
+        remove_selected_settings_before_open: bool = False,
+        hostile_path_jq: bool = False,
+        bound_jq_refuses_default_provider_read: bool = False,
+        bound_jq_missing: bool = False,
         global_session_entries: bool = False,
         preset_isolated_settings: object | None = None,
         preset_isolated_projects: bool = False,
@@ -79,6 +87,14 @@ class OpenCodexClaudeTests(unittest.TestCase):
             if payload is not None:
                 (self.project / ".claude").mkdir(parents=True, exist_ok=True)
                 (self.project / ".claude" / name).write_text(json.dumps(payload))
+        self.selected_settings = self.project / selected_settings_name
+        if selected_settings_directory:
+            self.selected_settings.mkdir(parents=True, exist_ok=True)
+        elif selected_settings_raw is not None:
+            self.selected_settings.parent.mkdir(parents=True, exist_ok=True)
+            self.selected_settings.write_text(selected_settings_raw)
+            if selected_settings_mode is not None:
+                self.selected_settings.chmod(selected_settings_mode)
         if global_session_entries:
             self.global_claude.mkdir(parents=True, exist_ok=True)
             (self.global_claude / "history.jsonl").write_text('{"display":"real prompt"}\n')
@@ -109,11 +125,13 @@ class OpenCodexClaudeTests(unittest.TestCase):
         # Pinned `jq` resolution is a separate tool call and is not part of the gateway log.
         mise.write_text(
             "#!/bin/sh\n"
+            'case " $* " in *" which ocx ") printf "%s/ocx\\n" "$(dirname "$0")"; exit 0 ;; esac\n'
             "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n"
             "[ \"${1:-}\" = -- ] && shift\n"
             "if [ \"${1:-}\" = jq ]; then shift; exec \"${TEST_REAL_JQ:-jq}\" \"$@\"; fi\n"
             "printf '<%s>' \"$@\" >> \"$OCX_TRACE_LOG\"\n"
             "printf '\\n' >> \"$OCX_TRACE_LOG\"\n"
+            "if [ \"${1:-}\" = bash ]; then export PATH=\"$(dirname \"$0\"):$PATH\"; exec \"$@\"; fi\n"
             "case \"${1:-} ${2:-} ${3:-}\" in\n"
             "  'ocx --version ') exit 0 ;;\n"
             "  'ocx health ') exit ${HEALTHY:-0} ;;\n"
@@ -141,6 +159,16 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "exit ${OCX_EXIT:-0}\n"
         )
         mise.chmod(0o755)
+        ocx = bin_dir / "ocx"
+        ocx.write_text(
+            "#!/bin/sh\n"
+            "printf '<ocx>' >> \"$OCX_TRACE_LOG\"\n"
+            "printf '<%s>' \"$@\" >> \"$OCX_TRACE_LOG\"\n"
+            "printf '\\n' >> \"$OCX_TRACE_LOG\"\n"
+            'if [ "${1:-}" = claude ]; then shift; exec claude "$@"; fi\n'
+            "exit ${OCX_EXIT:-0}\n"
+        )
+        ocx.chmod(0o755)
         # curl stub: serves the gateway catalog fixture for /v1/models and fails for
         # /healthz so uptime stays a nicety. CATALOG_JSON empty => unreachable catalog.
         #
@@ -166,9 +194,69 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "exit 22\n"
         )
         curl.chmod(0o755)
+        # THE `jq` ON PATH IS NOT THE ONE THE LAUNCHER USES, and since 2026-08-21 that is the point
+        # rather than an accident. `scripts/opencodex-claude.sh` resolves jq from exactly two
+        # admitted routes -- `$AGENTIC_SDLC_JQ`, then `mise -C <root> exec -- jq` -- and never from
+        # PATH (ADR-0020). So this symlink stays planted as AMBIENT state the launcher must ignore,
+        # the mise stub above serves the pinned route from `$TEST_REAL_JQ`, and a test that needs to
+        # OBSERVE the tool binds it through `$AGENTIC_SDLC_JQ` below.
         jq = shutil.which("jq")
         if jq:
-            (bin_dir / "jq").symlink_to(jq)
+            jq_command = bin_dir / "jq"
+            if hostile_path_jq:
+                # A DIFFERENT jq at the head of PATH: it records that it ran, then answers `clean`
+                # to every program, which is the shape that would silently suppress every settings
+                # refusal in the launcher. Nothing here may ever invoke it.
+                jq_command.write_text(
+                    "#!/bin/sh\n"
+                    'printf "invoked <%s>\\n" "$*" >> "$OCX_TEST_HOSTILE_JQ_MARKER"\n'
+                    'if [ "${1:-}" = --version ]; then printf "jq-1.8.2\\n"; exit 0; fi\n'
+                    'printf "clean\\n"\n'
+                    "exit 0\n"
+                )
+                jq_command.chmod(0o755)
+                # The SAME stub under a second, non-`jq` name. A test that binds `AGENTIC_SDLC_JQ`
+                # to the bare name `jq` would recurse into the shell function until bash dies, so
+                # the bare-name channel is demonstrated with a name that would resolve through
+                # ambient PATH to a real executable instead of back into this file.
+                shim = bin_dir / "jq-shim"
+                shim.write_text(jq_command.read_text())
+                shim.chmod(0o755)
+            else:
+                jq_command.symlink_to(jq)
+        # THE TWO OBSERVABLE STUBS BELOW ARE BOUND AS THE EXACT jq (`$AGENTIC_SDLC_JQ`, the
+        # operator-tools binding), never planted on PATH: PATH is not a resolution channel any more,
+        # so a stub left there would simply never be reached and the state each fixture exists to
+        # create would never be entered. Both forward everything they do not intercept to the real
+        # jq, so the classification under test stays the real one.
+        #
+        # This one refuses exactly ONE of the reads `status` makes -- the configured-default lookup,
+        # identified by its program text rather than by a call number, so the fixture does not rot
+        # when a jq call is added elsewhere. That leaves the comparison genuinely half-complete,
+        # which is the only state that can produce the false NOT-LIVE the default-provider read is
+        # fail-closed to prevent.
+        if bound_jq_refuses_default_provider_read:
+            partial_jq = bin_dir / "bound-partial-jq"
+            partial_jq.write_text(
+                "#!/bin/sh\n"
+                'case " $* " in *isDefault*) exit 127 ;; esac\n'
+                'exec "$TEST_REAL_JQ" "$@"\n'
+            )
+            partial_jq.chmod(0o755)
+        # And this one counts availability probes and deletes the selected settings file on the
+        # second, which is what opens the window between the readability check and the open.
+        if remove_selected_settings_before_open:
+            counting_jq = bin_dir / "bound-counting-jq"
+            counting_jq.write_text(
+                "#!/bin/sh\n"
+                'if [ "${1:-}" = --version ]; then\n'
+                '  count=0; [ ! -f "$OCX_TEST_JQ_COUNT" ] || read -r count < "$OCX_TEST_JQ_COUNT"\n'
+                '  count=$((count + 1)); printf "%s\\n" "$count" > "$OCX_TEST_JQ_COUNT"\n'
+                '  [ "$count" -ne 2 ] || rm -f -- "$OCX_TEST_SELECTED_SETTINGS"\n'
+                'fi\n'
+                'exec "$TEST_REAL_JQ" "$@"\n'
+            )
+            counting_jq.chmod(0o755)
         claude = bin_dir / "claude"
         # Records the environment it actually received, so the ADR-0010 env policy can be
         # asserted per class against the REAL child environment rather than against the script's
@@ -185,6 +273,8 @@ class OpenCodexClaudeTests(unittest.TestCase):
         # forwards that one route instead of only recording it.
         self.env_log = root / "child-env.txt"
         self.argv_log = root / "child-argv.txt"
+        # Absent unless the hostile PATH `jq` above actually ran, which is the assertion.
+        self.hostile_jq_marker = root / "hostile-jq-invoked.txt"
         env = {
             "HOME": str(root / "home"),
             "XDG_STATE_HOME": str(root / "state"),
@@ -199,6 +289,9 @@ class OpenCodexClaudeTests(unittest.TestCase):
             "CATALOG_JSON": "" if catalog_json is None else json.dumps(catalog_json),
             "OCX_TEST_ENV_LOG": str(self.env_log),
             "OCX_TEST_ARGV_LOG": str(self.argv_log),
+            "OCX_TEST_SELECTED_SETTINGS": str(self.selected_settings),
+            "OCX_TEST_JQ_COUNT": str(root / "jq-count"),
+            "OCX_TEST_HOSTILE_JQ_MARKER": str(self.hostile_jq_marker),
             "SUBSCRIPTION_STATUS": json.dumps(subscription_status if subscription_status is not None else {
                 "enabled": True, "authMode": "auto", "markerMode": "subscription",
                 "authModeOrigin": "auto-present", "admissionKeyActive": False,
@@ -216,6 +309,14 @@ class OpenCodexClaudeTests(unittest.TestCase):
             # deliberately has no jq on it.
             "TEST_REAL_JQ": shutil.which("jq") or "jq",
         }
+        if remove_selected_settings_before_open:
+            env["AGENTIC_SDLC_JQ"] = str(bin_dir / "bound-counting-jq")
+        if bound_jq_refuses_default_provider_read:
+            env["AGENTIC_SDLC_JQ"] = str(bin_dir / "bound-partial-jq")
+        if bound_jq_missing:
+            # The bound exact executable is gone (a retired toolchain, a moved install) while a
+            # perfectly good jq stays on PATH. Neither route may borrow the other's copy.
+            env["AGENTIC_SDLC_JQ"] = str(bin_dir / "no-such-bound-jq")
         if parent_env:
             env.update(parent_env)
         # Kept so a test can launch a SECOND time against the same home and state root, which
@@ -302,6 +403,33 @@ class OpenCodexClaudeTests(unittest.TestCase):
         """The line the mise stub writes for `ocx <arguments>` (`printf '<%s>'` over argv)."""
         return "".join(f"<{field}>" for field in ("ocx", *arguments))
 
+    def assertExactTraceLine(self, log: Path, expected: str) -> None:
+        self.assertIn(expected, log.read_text().splitlines())
+
+    def assertExactTracedOcxRoute(self, log: Path, *arguments: str) -> None:
+        self.assertExactTraceLine(log, self.traced_ocx_route(*arguments))
+
+    def test_exact_route_assertion_rejects_appended_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "trace.log"
+            log.write_text("<ocx><claude><--model><gpt><--duplicated>\n")
+
+            with self.assertRaises(AssertionError):
+                self.assertExactTracedOcxRoute(log, "claude", "--model", "gpt")
+
+    def test_redacted_full_route_assertion_rejects_appended_arguments(self) -> None:
+        secret = "OCX_TEST_SECRET"
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "trace.log"
+            log.write_text(f"<ocx><provider><add><--api-key><{secret}><--duplicated>\n")
+
+            with self.assertRaises(AssertionError) as raised:
+                self.assertFullRouteWithRedactedFailure(
+                    log, "provider", "add", "--api-key", secret
+                )
+
+        self.assertNotIn(secret, str(raised.exception))
+
     def assertFullRouteWithRedactedFailure(self, log: Path, *arguments: str) -> None:
         """Assert the COMPLETE traced route, including any credential, without printing it.
 
@@ -327,7 +455,7 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.longMessage = False
         self.assertIn(
             self.traced_ocx_route(*arguments),
-            log.read_text(),
+            log.read_text().splitlines(),
             f"the complete route was not forwarded; expected (redacted): {redacted}",
         )
 
@@ -335,18 +463,113 @@ class OpenCodexClaudeTests(unittest.TestCase):
         result, log = self.run_launcher("launch-ultracode", "--model", "gpt-5.6-sol")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("<ocx><claude><--settings><{\"ultracode\":true}><--model><gpt-5.6-sol>", log.read_text())
+        self.assertExactTraceLine(
+            log, '<ocx><claude><--settings><{"ultracode":true}><--model><gpt-5.6-sol>'
+        )
+
+    def test_yolo_is_an_orthogonal_owned_flag_on_both_launch_profiles(self) -> None:
+        cases = (
+            (
+                ("launch", "--yolo", "--model", "gpt-5.6-sol"),
+                "<ocx><claude><--dangerously-skip-permissions><--model><gpt-5.6-sol>",
+            ),
+            (
+                ("launch-ultracode", "--yolo", "--model", "gpt-5.6-sol"),
+                "<ocx><claude><--dangerously-skip-permissions><--settings>"
+                "<{\"ultracode\":true}><--model><gpt-5.6-sol>",
+            ),
+        )
+        for arguments, expected_route in cases:
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher(*arguments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTraceLine(log, expected_route)
+                self.assertNotIn("<--yolo>", log.read_text())
+                self.assertIn("permissions: BYPASSED", result.stdout)
+
+    def test_yolo_refuses_competing_permission_controls_before_ocx(self) -> None:
+        for route in ("launch", "launch-ultracode"):
+            for conflict in (
+                ("--dangerously-skip-permissions",),
+                ("--dangerously-skip-permissions=true",),
+                ("--allow-dangerously-skip-permissions",),
+                ("--allow-dangerously-skip-permissions=true",),
+                ("--permission-mode=bypassPermissions",),
+                ("--permission-mode", "plan"),
+            ):
+                with self.subTest(route=route, conflict=conflict):
+                    result, log = self.run_launcher(route, "--yolo", *conflict)
+
+                    self.assertEqual(result.returncode, 3)
+                    self.assertIn("REFUSED", result.stderr)
+                    self.assertIn("--yolo", result.stderr)
+                    self.assertFalse(log.exists())
+
+    def test_forwarding_separator_keeps_a_literal_yolo_argument(self) -> None:
+        for route, expected in (
+            ("launch", "<ocx><claude><--yolo>"),
+            ("launch-ultracode", '<ocx><claude><--settings><{"ultracode":true}><--yolo>'),
+        ):
+            with self.subTest(route=route):
+                result, log = self.run_launcher(route, "--", "--yolo")
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTraceLine(log, expected)
+                self.assertNotIn("permissions: BYPASSED", result.stdout)
+
+    def test_wrapper_validation_stops_at_claudes_option_terminator(self) -> None:
+        cases = (
+            (
+                ("launch", "--yolo", "--", "--permission-mode", "auto"),
+                "<ocx><claude><--dangerously-skip-permissions><--><--permission-mode><auto>",
+            ),
+            (
+                ("launch", "--model", "gpt-5.6-sol", "--", "--yolo"),
+                "<ocx><claude><--model><gpt-5.6-sol><--><--yolo>",
+            ),
+            (
+                ("launch-ultracode", "--", "--", "--settings", "literal"),
+                '<ocx><claude><--settings><{"ultracode":true}><--><--settings><literal>',
+            ),
+        )
+        for arguments, expected_route in cases:
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher(*arguments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTraceLine(log, expected_route)
+
+    def test_unescaped_yolo_must_be_the_first_wrapper_argument(self) -> None:
+        for route in ("launch", "launch-ultracode"):
+            with self.subTest(route=route):
+                result, log = self.run_launcher(route, "--model", "gpt-5.6-sol", "--yolo")
+
+                self.assertEqual(result.returncode, 3)
+                self.assertIn("REFUSED", result.stderr)
+                self.assertIn("must be the first", result.stderr)
+                self.assertFalse(log.exists())
 
     def test_ultracode_refuses_competing_settings_before_ocx(self) -> None:
-        result, log = self.run_launcher("launch-ultracode", "--settings", "{}")
+        secret = "OCX_ULTRACODE_SETTINGS_SECRET"
+        for arguments in (
+            ("--settings", f'{{"token":"{secret}"}}'),
+            (f'--settings={{"token":"{secret}"}}',),
+        ):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch-ultracode", *arguments)
 
-        self.assertEqual(result.returncode, 3)
-        self.assertIn("REFUSED", result.stderr)
-        self.assertFalse(log.exists())
+                self.assertEqual(result.returncode, 3)
+                self.assertIn("REFUSED", result.stderr)
+                self.assertNotIn(secret, result.stdout + result.stderr)
+                self.assertFalse(log.exists())
 
     def test_ultracode_refuses_permission_bypass_before_ocx(self) -> None:
         for arguments in (
             ("--dangerously-skip-permissions",),
+            ("--dangerously-skip-permissions=true",),
+            ("--allow-dangerously-skip-permissions",),
+            ("--allow-dangerously-skip-permissions=true",),
             ("--permission-mode=bypassPermissions",),
             ("--permission-mode", "bypassPermissions"),
         ):
@@ -356,10 +579,199 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 self.assertFalse(log.exists())
 
     def test_ordinary_launch_keeps_argument_boundaries(self) -> None:
-        result, log = self.run_launcher("launch", "--settings", '{"custom":true}', "two words")
+        payload = '{"custom":"OCX_SETTINGS_VALUE"}'
+        for arguments in (
+            ("--settings", payload, "two words"),
+            (f"--settings={payload}", "two words"),
+            ("--", "--settings", payload, "two words"),
+        ):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch", *arguments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                forwarded = arguments[1:] if arguments[0] == "--" else arguments
+                self.assertExactTracedOcxRoute(log, "claude", *forwarded)
+                self.assertNotIn("OCX_SETTINGS_VALUE", result.stdout + result.stderr)
+
+    def test_ordinary_launch_keeps_readable_settings_file_arguments(self) -> None:
+        payload = '{"custom":"OCX_SETTINGS_FILE_VALUE"}'
+        for setting_argument in ("--settings", "--settings=selected-settings.json"):
+            with self.subTest(setting_argument=setting_argument):
+                arguments = (
+                    (setting_argument, "selected-settings.json")
+                    if setting_argument == "--settings"
+                    else (setting_argument,)
+                )
+                result, log = self.run_launcher(
+                    "launch", *arguments, selected_settings_raw=payload
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTracedOcxRoute(log, "claude", *arguments)
+                self.assertNotIn("OCX_SETTINGS_FILE_VALUE", result.stdout + result.stderr)
+
+    def test_ordinary_launch_stops_scanning_settings_at_claudes_option_terminator(self) -> None:
+        payload = '{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}'
+        arguments = ("prompt words", "--", "--settings", payload)
+
+        result, log = self.run_launcher("launch", *arguments)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("<ocx><claude><--settings><{\"custom\":true}><two words>", log.read_text())
+        self.assertExactTracedOcxRoute(log, "claude", *arguments)
+
+    def test_ordinary_launch_refuses_bypassing_inline_settings_before_gateway_contact(self) -> None:
+        payloads = (
+            ('{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}', "CLAUDE_CODE_USE_BEDROCK"),
+            ('{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid"}}', "ANTHROPIC_BASE_URL"),
+            ('{"apiKeyHelper":"/bin/echo"}', "apiKeyHelper"),
+            ('{"env":{"ANTHROPIC_API_KEY":"sk-ant-api-test"}}', "ANTHROPIC_API_KEY"),
+        )
+        for payload, key in payloads:
+            for arguments in (
+                ("--settings", payload),
+                (f"--settings={payload}",),
+                ("--", "--settings", payload),
+            ):
+                with self.subTest(key=key, arguments=arguments):
+                    result, log = self.run_launcher("launch", *arguments)
+
+                    self.assertEqual(result.returncode, 3, result.stderr)
+                    self.assertIn(key, result.stderr)
+                    self.assertNotIn(payload, result.stdout + result.stderr)
+                    self.assertNotIn("routed at", result.stdout)
+                    self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_bypassing_settings_files_before_gateway_contact(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+        payloads = (
+            ('{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}', "CLAUDE_CODE_USE_BEDROCK"),
+            ('{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid"}}', "ANTHROPIC_BASE_URL"),
+            ('{"apiKeyHelper":"/bin/echo"}', "apiKeyHelper"),
+            ('{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-api-test"}}', "ANTHROPIC_AUTH_TOKEN"),
+        )
+        for payload, key in payloads:
+            with self.subTest(key=key):
+                result, log = self.run_launcher(
+                    "launch",
+                    f"--settings={selected_name}",
+                    selected_settings_raw=payload,
+                    selected_settings_name=selected_name,
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(key, result.stderr)
+                self.assertNotIn(selected_name, result.stdout + result.stderr)
+                self.assertNotIn(payload, result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_validates_every_settings_occurrence(self) -> None:
+        bypass = '{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}'
+
+        result, log = self.run_launcher(
+            "launch", "--settings", '{"custom":true}', "--settings", bypass
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("CLAUDE_CODE_USE_BEDROCK", result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_rejects_missing_or_empty_settings_option_values(self) -> None:
+        for arguments in (("--settings",), ("--settings=",)):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch", *arguments)
+
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("--settings", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_invalid_inline_settings_without_echoing_them(self) -> None:
+        for payload in ("{not-json", "null", "42", '["not", "an", "object"]'):
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher("launch", "--settings", payload)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("valid JSON object or a readable settings file", result.stderr)
+                self.assertNotIn(payload, result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_invalid_selected_settings_files(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+        for payload in ("", "{not-json", "null", '["not", "an", "object"]'):
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher(
+                    "launch", "--settings", selected_name,
+                    selected_settings_raw=payload,
+                    selected_settings_name=selected_name,
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("--settings", result.stderr)
+                self.assertNotIn(selected_name, result.stdout + result.stderr)
+                self.assertNotIn("{not-json", result.stdout + result.stderr)
+                self.assertNotIn('["not", "an", "object"]', result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_refuses_unavailable_selected_settings_files(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+        cases = (
+            (("--settings", "missing-settings-OCX_PATH_SECRET.json"), {}),
+            (
+                ("--settings", "OCX_PATH_SECRET"),
+                {
+                    "selected_settings_name": "OCX_PATH_SECRET",
+                    "selected_settings_directory": True,
+                },
+            ),
+            (
+                ("--settings", selected_name),
+                {
+                    "selected_settings_raw": "{}",
+                    "selected_settings_name": selected_name,
+                    "selected_settings_mode": 0,
+                },
+            ),
+        )
+        for arguments, fixture in cases:
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("launch", *arguments, **fixture)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("--settings", result.stderr)
+                self.assertNotIn("OCX_PATH_SECRET", result.stdout + result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_selected_settings_path_is_redacted_when_the_file_disappears_before_open(self) -> None:
+        selected_name = "selected-settings-OCX_PATH_SECRET.json"
+
+        result, log = self.run_launcher(
+            "launch", "--settings", selected_name,
+            selected_settings_raw="{}",
+            selected_settings_name=selected_name,
+            remove_selected_settings_before_open=True,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("could not be checked", result.stderr)
+        self.assertNotIn("OCX_PATH_SECRET", result.stdout + result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_ordinary_launch_accepts_a_scalar_shaped_settings_filename(self) -> None:
+        result, log = self.run_launcher(
+            "launch", "--settings", "true",
+            selected_settings_raw='{"custom":true}', selected_settings_name="true",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertExactTracedOcxRoute(log, "claude", "--settings", "true")
+
+    def test_existing_persistent_settings_must_be_json_objects(self) -> None:
+        for payload in ("", "null", "42", '[]'):
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher("launch", global_settings_raw=payload)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("could not be checked", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
 
     def test_ensure_checks_health_without_launching_claude(self) -> None:
         result, log = self.run_launcher("ensure")
@@ -767,6 +1179,232 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("<ocx><claude>", log.read_text())
 
+    # --- cloud-provider-shaped model-slot overrides (executed 2026-08-20) -------------------
+    #
+    # THE GAP: with CLAUDE_CODE_USE_BEDROCK unset -- so every switch check above passed -- and
+    # ANTHROPIC_DEFAULT_SONNET_MODEL exporting `global.anthropic.claude-sonnet-5[1m]`, `launch`
+    # PROCEEDED and the session 400d at the Codex upstream, because the gateway does not read a
+    # provider-shaped id as native Anthropic passthrough and fell through to the DEFAULT provider.
+    # The refusal set covered switches, endpoints, base URLs and Console keys, and not this.
+    MODEL_SLOT_OVERRIDES = (
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        # RESIDUAL from the 8b1e1ba fix, now closed: `skills/model-tier-rightsizing/references/`
+        # `workflow-prompt-budget.md` records `effectiveModelEnv()` injecting these two into the
+        # SAME tier-slot set as the original four, so a cloud-shaped id in either is the identical
+        # hazard -- it re-points a whole model family without touching any switch above.
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "ANTHROPIC_MODEL",
+    )
+    # The shape families the refusal knows: region-prefixed Bedrock inference profiles, the bare
+    # Bedrock publisher form, and the two Vertex spellings.
+    CLOUD_SHAPED_MODEL_IDS = (
+        "global.anthropic.claude-sonnet-5[1m]",
+        "us.anthropic.claude-opus-4-5-v1:0",
+        "eu.anthropic.claude-haiku-4-5",
+        "anthropic.claude-3-5-haiku-20241022-v1:0",
+        "claude-sonnet-4@20250514",
+        "publishers/anthropic/models/claude-opus-4",
+    )
+    # THE POSITIVE CONTROL, and the reason this is a shape test rather than a presence test: these
+    # are the ordinary values of the same six variables. A plain alias is what the native half of
+    # this route serves, and a gateway id in the small-fast slot is a legitimate use of the routed
+    # half, so refusing either would break the launch this check exists to protect.
+    PLAIN_MODEL_IDS = (
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+        "claude-3-7-sonnet-latest",
+        "muse/muse-spark-1.2",
+    )
+
+    def test_launch_refuses_a_cloud_shaped_model_slot_exported_in_this_shell(self) -> None:
+        # Every one of the six slots, on the id that was actually measured failing.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            value = "global.anthropic.claude-sonnet-5[1m]"
+            with self.subTest(variable=name):
+                result, log = self.run_launcher("launch", parent_env={name: value})
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(name, result.stderr)
+                # A model id is not a credential, so unlike a base URL the value IS named -- with
+                # six slots to choose from, withholding it leaves the operator guessing.
+                self.assertIn(value, result.stderr)
+                # The refusal has to say WHY it is not a warning: the slot re-points an upstream.
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertNotIn("routed at", result.stdout)
+                # And it must land before anything is started or contacted.
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # Every shape family, on one slot, so a pattern narrowed to the Bedrock case fails here.
+        for value in self.CLOUD_SHAPED_MODEL_IDS:
+            with self.subTest(value=value):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_DEFAULT_SONNET_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL", result.stderr)
+                self.assertIn(value, result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # IN-TEST POSITIVE CONTROL. Exit 3 on six fixtures proves nothing about a refusal that
+        # simply refuses everything, so the ordinary values must still LAUNCH -- and reaching
+        # `ocx claude` in the trace is what distinguishes that from an exit-0 short circuit.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            with self.subTest(variable=name, control="plain alias"):
+                result, log = self.run_launcher(
+                    "launch", parent_env={name: "claude-sonnet-5"}
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("<ocx><claude>", log.read_text())
+        for value in self.PLAIN_MODEL_IDS:
+            with self.subTest(value=value, control="ordinary id"):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_SMALL_FAST_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_launch_refuses_a_cloud_shaped_model_slot_in_a_settings_env_block(self) -> None:
+        # The sibling channel every other refusal in this section covers twice: a settings `env`
+        # block is read on every launch and survives a clean shell, so a slot that refuses from the
+        # shell and passes silently from the file is the exact drift the shared jq program prevents.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            with self.subTest(variable=name, channel="global settings"):
+                result, log = self.run_launcher(
+                    "launch",
+                    global_settings={"env": {name: "us.anthropic.claude-opus-4-5-v1:0"}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(name, result.stderr)
+                self.assertIn("settings.json", result.stderr)
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertNotIn("routed at", result.stdout)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        for document in ("project_settings", "project_settings_local"):
+            with self.subTest(channel=document):
+                result, log = self.run_launcher(
+                    "launch",
+                    **{document: {"env": {
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-4@20250514"
+                    }}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_HAIKU_MODEL", result.stderr)
+                # The refusal names the document it actually read, not the global one.
+                self.assertIn(f"{self.project}/.claude/settings", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        with self.subTest(channel="explicit --settings"):
+            # The third settings source has its own refusal text, so it needs its own arm rather
+            # than the generic "routes Claude Code to a cloud provider" fallback, which is not what
+            # a model-slot id does.
+            result, log = self.run_launcher(
+                "launch",
+                "--settings",
+                '{"env":{"ANTHROPIC_SMALL_FAST_MODEL":"anthropic.claude-3-5-haiku-20241022-v1:0"}}',
+            )
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("ANTHROPIC_SMALL_FAST_MODEL", result.stderr)
+            self.assertIn("DEFAULT provider", result.stderr)
+            self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # IN-TEST POSITIVE CONTROL for the same channel.
+        result, log = self.run_launcher(
+            "launch", global_settings={"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5"}}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    # RESIDUAL (1) from the 8b1e1ba fix: every alternative in $cloud_provider_model_id_pattern
+    # anchors on `^` or `$`, so a stray leading or trailing space around an otherwise cloud-shaped
+    # id slipped past both engines. MEASURED before the fix:
+    # `ANTHROPIC_DEFAULT_SONNET_MODEL=' global.anthropic.claude-sonnet-5[1m]'` (one leading space)
+    # launched clean.
+    PADDED_CLOUD_SHAPED_MODEL_IDS = (
+        " global.anthropic.claude-sonnet-5[1m]",
+        "global.anthropic.claude-sonnet-5[1m] ",
+        "  us.anthropic.claude-opus-4-5-v1:0  ",
+        "\tanthropic.claude-3-5-haiku-20241022-v1:0\t",
+        "claude-sonnet-5@20250101 ",
+    )
+
+    def test_launch_refuses_a_cloud_shaped_model_slot_padded_with_whitespace(self) -> None:
+        # Both engines -- bash `=~` for the exported channel, jq's `test()` for the settings
+        # channel -- must trim before they test the shape, or the same padded value refuses from
+        # one channel and passes silently from the other exactly the way the two channels drifted
+        # apart once already (see the "ONE list per class" comment above model_slot_overrides).
+        for value in self.PADDED_CLOUD_SHAPED_MODEL_IDS:
+            with self.subTest(channel="exported", value=repr(value)):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_DEFAULT_SONNET_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL", result.stderr)
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+            with self.subTest(channel="global settings", value=repr(value)):
+                result, log = self.run_launcher(
+                    "launch",
+                    global_settings={"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": value}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL", result.stderr)
+                self.assertIn("DEFAULT provider", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+        # POSITIVE CONTROL: the same padding around an ORDINARY alias must not become a false
+        # refusal. Trimming exists to widen the SHAPE match, not to introduce a side effect that
+        # starts refusing a padded plain value this route never refused before.
+        for value in (" claude-sonnet-5", "claude-sonnet-5 ", "  claude-sonnet-5  "):
+            with self.subTest(control="padded plain alias", channel="exported", value=repr(value)):
+                result, log = self.run_launcher(
+                    "launch", parent_env={"ANTHROPIC_DEFAULT_SONNET_MODEL": value}
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("<ocx><claude>", log.read_text())
+
+        result, log = self.run_launcher(
+            "launch",
+            global_settings={"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "  claude-sonnet-5  "}},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_status_reports_a_cloud_shaped_model_slot_instead_of_ok(self) -> None:
+        # `status` and `launch` read the same shell. A status that printed `ok` on an environment
+        # `launch` refuses would be the reassurance-about-an-unchecked-surface defect this section
+        # has already been fixed for once.
+        result, _ = self.run_launcher(
+            "status",
+            parent_env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "global.anthropic.claude-opus-4-5"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MISROUTED", result.stdout)
+        self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL", result.stdout)
+        self.assertIn("global.anthropic.claude-opus-4-5", result.stdout)
+        self.assertNotIn("nothing exported in this shell", result.stdout)
+
+        control, _ = self.run_launcher(
+            "status", parent_env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-5"}
+        )
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertNotIn("MISROUTED", control.stdout)
+        self.assertIn("nothing exported in this shell", control.stdout)
+
     def test_a_dangling_settings_symlink_is_treated_as_no_settings_at_all(self) -> None:
         # Claude Code reads this path and treats ENOENT as no settings, so a dotfile symlink whose
         # target moved carries no key that could outrank the gateway. Admitting it as absent matches
@@ -870,6 +1508,37 @@ class OpenCodexClaudeTests(unittest.TestCase):
             self.assertIn(document, result.stdout)
         self.assertIn("NOT checked", result.stdout)
         self.assertIn("managed", result.stdout)
+        self.assertIn("Claude.ai cloud connectors are off by default", result.stdout)
+        self.assertIn("ENABLE_CLAUDEAI_MCP_SERVERS=true", result.stdout)
+        self.assertIn("--settings <file-or-json>", result.stdout)
+        self.assertIn("every occurrence for route-bypassing settings", result.stdout)
+        self.assertIn("bytes and path are never printed", result.stdout)
+        # The refusal list is the operator-facing contract for this route, so a refusal the code
+        # performs and the help omits is a documentation defect, not a cosmetic gap. Minor residual
+        # from the 8b1e1ba fix, closed: this one-line usage() mention had no dedicated assertion at
+        # all, and it now also states the trim behaviour rather than just the six variable names.
+        for name in self.MODEL_SLOT_OVERRIDES:
+            self.assertIn(name, result.stdout)
+        self.assertIn("does not defeat this check", result.stdout)
+
+    def test_launch_help_calls_the_unrecognized_model_line_cosmetic_and_bounds_the_observe_log(
+        self,
+    ) -> None:
+        # Two findings from the 2026-08-20 retest, both of which cost a careful reviewer a false
+        # negative. The `[claude-code:unrecognized_model]` line reads as a routing failure and is
+        # not one -- the same turn was receipt-verified as reaching its provider -- and a single
+        # empty `ocx observe logs` query was read as proof that nothing routed, when that log is a
+        # bounded rolling window in which absence means unknown.
+        result, _ = self.run_launcher("launch", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[claude-code:unrecognized_model]", result.stdout)
+        self.assertIn("cosmetic", result.stdout)
+        self.assertIn("NOT a routing failure", result.stdout)
+        self.assertIn("ocx observe logs --jsonl", result.stdout)
+        self.assertIn("rolling window", result.stdout)
+        self.assertIn("UNKNOWN", result.stdout)
+        self.assertIn("receipt", result.stdout)
 
     def test_status_names_the_documents_it_checked_instead_of_claiming_all_of_them(self) -> None:
         result, _ = self.run_launcher("status")
@@ -980,6 +1649,17 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(chosen.returncode, 0, chosen.stderr)
         self.assertIn("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=40", self.env_log.read_text())
 
+    def test_launch_disables_claude_ai_connectors_unless_the_operator_opts_in(self) -> None:
+        default_run, _ = self.run_launcher("launch")
+        self.assertEqual(default_run.returncode, 0, default_run.stderr)
+        self.assertIn("ENABLE_CLAUDEAI_MCP_SERVERS=false", self.env_log.read_text())
+
+        chosen, _ = self.run_launcher(
+            "launch", parent_env={"ENABLE_CLAUDEAI_MCP_SERVERS": "true"}
+        )
+        self.assertEqual(chosen.returncode, 0, chosen.stderr)
+        self.assertIn("ENABLE_CLAUDEAI_MCP_SERVERS=true", self.env_log.read_text())
+
     def test_launch_refuses_an_apikeyhelper_that_would_displace_the_login(self) -> None:
         result, log = self.run_launcher("launch", global_settings={"apiKeyHelper": "/bin/echo"})
 
@@ -998,6 +1678,35 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertIn("credits", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
         self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_yolo_routes_keep_gateway_and_billing_refusals_before_contact(self) -> None:
+        secret = "sk-ant-api03-YOLOTESTSENTINEL"
+        for route in ("launch", "launch-ultracode"):
+            with self.subTest(route=route, refusal="settings-route"):
+                result, log = self.run_launcher(
+                    route,
+                    "--yolo",
+                    global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("CLAUDE_CODE_USE_BEDROCK", result.stderr)
+                self.assertNotIn("permissions: BYPASSED", result.stdout)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+            with self.subTest(route=route, refusal="console-key"):
+                result, log = self.run_launcher(
+                    route,
+                    "--yolo",
+                    parent_env={"ANTHROPIC_API_KEY": secret},
+                )
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("ANTHROPIC_API_KEY", result.stderr)
+                self.assertIn("credits", result.stderr)
+                self.assertNotIn(secret, result.stdout + result.stderr)
+                self.assertNotIn("permissions: BYPASSED", result.stdout)
+                self.assertOnlyReadOnlyOcxRoutes(log)
 
     def test_launch_accepts_a_subscription_shaped_oauth_token(self) -> None:
         # The inverse of the case above, and the one ADR-0003 used to refuse outright: an
@@ -1092,7 +1801,39 @@ class OpenCodexClaudeTests(unittest.TestCase):
         result, log = self.run_launcher("configure", "login", "xai", "two words")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("<ocx><login><xai><two words>", log.read_text())
+        self.assertExactTracedOcxRoute(log, "login", "xai", "two words")
+
+    # THE ALLOWLIST IS THE ADMISSION RULE for a provider that is not in the config file yet, and
+    # nothing pinned its CONTENTS. A registry name opencodex serves but this list has never heard
+    # of is refused, which is the correct default and also a silent papercut when the registry
+    # grows: the five names opencodex 2.28.0 added over 2.11.1 were refused by a wrapper that was
+    # otherwise fully current. Each is named here, so dropping one from
+    # `known_non_anthropic_provider` fails this test instead of surfacing as an operator's
+    # unexplained exit 3. MEASURED on a /tmp copy with `novita` removed from the case list: this
+    # test fails on that subTest and the whole rest of the module still passes.
+    def test_configure_admits_every_registry_provider_name_the_allowlist_claims(self) -> None:
+        for provider in (
+            "chutes", "featherless", "nous", "novita", "xiaomi-mimo",
+            # 2.11.1-era names, kept so a rewrite of the list cannot narrow it silently.
+            "xai", "openrouter", "groq", "xiaomi",
+        ):
+            with self.subTest(provider=provider):
+                # An EMPTY config is the case under test: absent from the config file is what
+                # sends classification to the allowlist rather than to a baseUrl.
+                result, log = self.run_launcher("configure", "login", provider, config={"providers": {}})
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTracedOcxRoute(log, "login", provider)
+
+    def test_configure_still_refuses_a_provider_no_allowlist_entry_claims(self) -> None:
+        # The positive control for the test above: absence from the config file must not admit by
+        # itself. If this passes while the list is empty, that test proves nothing.
+        result, log = self.run_launcher(
+            "configure", "login", "not-a-registry-provider", config={"providers": {}}
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertOnlyReadOnlyOcxRoutes(log, "<ocx><config><show><--json>")
 
     def test_configure_allows_third_party_anthropic_wire_adapter(self) -> None:
         result, log = self.run_launcher(
@@ -1436,10 +2177,206 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertIn("REFUSED", result.stderr)
         self.assertNotIn("approved opencodex configuration route", result.stdout)
 
+    # --- jq is an EXACT execution dependency at a trust boundary (ADR-0020) ----------------
+    #
+    # THE DEFECT (agentic-sdlc-6f9d, CodeRabbit on PR #4, fixed 2026-08-21). The resolver read
+    # `${AGENTIC_SDLC_JQ:-$(type -P jq)}` and reached the pinned route only when PATH had no jq at
+    # all, so a source-checkout launch classified settings documents, a provider config, and a
+    # gateway catalog with whatever binary the caller's PATH named first. ADR-0020's compliance rule
+    # is explicit -- "a readiness-dependent executable is never selected from ambient PATH without an
+    # admitted exact identity" -- and this dependency decides REFUSALS next to credentials, so a
+    # substituted jq that answers `clean` is a silent bypass of every settings check in the file.
+    #
+    # The first two tests below plant a hostile jq at the HEAD of PATH while the pinned route
+    # resolves normally. Neither asserts a spelling of the resolver; both assert the two facts that
+    # matter -- the hostile binary never ran, and the verdict came from the admitted route. The two
+    # after them close the same substitution reached through the binding itself.
+
+    # EVERY ONE OF THE FOUR TESTS BELOW ASSERTS THAT A HOSTILE STUB DID NOT RUN, and the fixture
+    # only plants that stub when the host has a real jq to serve the pinned route with. Without the
+    # skip, `assertFalse(marker.exists())` on a jq-less host passes against a stub that was never
+    # written -- the vacuous-negative shape recorded in `host-dependent-tests-hide-clean-machine-
+    # failures`. The skip states the dependency instead of silently reporting a pass.
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_a_different_jq_on_path_is_never_used_for_the_settings_trust_boundary(self) -> None:
+        result, log = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            hostile_path_jq=True,
+        )
+
+        # The verdict came from the admitted route: the hostile stub answers `clean` to every
+        # program it is handed, so a launch that consulted it would have passed this document.
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("CLAUDE_CODE_USE_BEDROCK", result.stderr)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "a jq at the head of PATH was executed for a trust-boundary parse: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_a_different_jq_on_path_is_never_used_for_the_live_catalog_comparison(self) -> None:
+        # The same substitution reached through `status` rather than through a refusal: these are the
+        # readers that parse the provider config and the RUNNING gateway's catalog.
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [
+                {"name": "openai", "isDefault": True},
+                {"name": "muse", "isDefault": False},
+            ]},
+            catalog_json={"data": [{"id": "gpt-5.6-terra"}]},
+            hostile_path_jq=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Real jq sees muse configured and absent from the catalog. The hostile stub's `clean`
+        # collapses both lists to one identical name and reports every provider live.
+        self.assertIn("NOT-LIVE", result.stdout)
+        self.assertIn("muse", result.stdout)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "a jq at the head of PATH was executed for a catalog parse: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+
+    # REMOVING THE PATH ROUTE MAKES HAND-SETTING $AGENTIC_SDLC_JQ THE NATURAL OPERATOR REMEDY, so
+    # the variable is now the highest-priority channel with nothing behind it. Both routes above are
+    # exact by construction; the binding is exact only if it is CHECKED. An unvalidated binding
+    # re-opens the whole defect one level up: a bare `gojq` resolves through ambient PATH, a bare
+    # `jq` re-enters the shell function until bash core-dumps -- and that death lands inside
+    # `offending="$(bypassing_settings_document_and_key)"`, where any nonzero exit reads as "every
+    # document was read and held nothing". The suppression is therefore silent in both shapes.
+    #
+    # A lowercase `resolved_jq` in the environment is the same problem from the other side: it is
+    # the resolver's own cache variable, so an inherited value is a third route that outranks both
+    # admitted ones without ever being validated.
+    #
+    # Neither test spells the resolver. Both assert the two facts that matter -- the stub never ran,
+    # and the refusal the hostile `clean` would have suppressed still fired.
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_a_bare_name_binding_is_never_resolved_from_ambient_path(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            hostile_path_jq=True,
+            parent_env={"AGENTIC_SDLC_JQ": "jq-shim"},
+        )
+
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "a bare-name binding was resolved from PATH: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to plant a different one")
+    def test_an_inherited_resolved_jq_variable_is_not_an_admitted_route(self) -> None:
+        result, _ = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            hostile_path_jq=True,
+            parent_env={"resolved_jq": "jq-shim"},
+        )
+
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertFalse(
+            self.hostile_jq_marker.exists(),
+            "an inherited resolved_jq preempted the admitted routes: "
+            + (self.hostile_jq_marker.read_text() if self.hostile_jq_marker.exists() else ""),
+        )
+
+    # THE OTHER HALF OF THE FIX, and the reason a one-line resolution change was reverted once:
+    # taking PATH away is only safe if every consumer that guards a refusal fails CLOSED when the
+    # admitted route genuinely cannot run. AGENTS.md is unambiguous that an uncheckable explicit
+    # `--settings` value stops the launch at exit 3, and a persistent document that carries a
+    # routing switch must not become invisible because the tool that reads it is gone.
+    #
+    # Both of these bind a BROKEN exact jq while leaving a perfectly good one on PATH, so each run
+    # proves two things at once: the surface refuses, and the ambient copy is not quietly borrowed
+    # as a fallback (ADR-0020 decision 4 -- no silent substitution).
+
+    def test_an_explicit_settings_value_is_refused_when_no_admitted_jq_route_runs(self) -> None:
+        selected_name = "explicit-settings-OCX_PATH_SECRET.json"
+
+        result, log = self.run_launcher(
+            "launch", "--settings", selected_name,
+            selected_settings_raw='{"env":{}}',
+            selected_settings_name=selected_name,
+            bound_jq_missing=True,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("could not be checked", result.stderr)
+        self.assertIn("jq", result.stderr)
+        # The unverifiable path is still never echoed, on the same rule as every other refusal here.
+        self.assertNotIn("OCX_PATH_SECRET", result.stdout + result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_a_persistent_settings_document_is_refused_when_no_admitted_jq_route_runs(self) -> None:
+        # The document channel, which is the one an operator forgets: it is read on every launch,
+        # and this one really does carry a routing switch. Reporting it as clean because jq could not
+        # run would print a gateway banner over traffic that went to Bedrock instead.
+        result, log = self.run_launcher(
+            "launch",
+            global_settings={"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}},
+            bound_jq_missing=True,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("could not be checked", result.stderr)
+        self.assertIn("settings.json", result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_a_configure_mutation_names_the_tool_when_no_admitted_jq_route_runs(self) -> None:
+        # `refuse_missing_jq` had no test at all, and its text NAMES routes and fix commands -- the
+        # class of sentence that rots without anything failing. Two things are pinned here: the
+        # classification (a MISSING TOOL, never an unclassifiable provider, which is the misdirection
+        # the status-4 split was introduced to end) and the two routes it points at.
+        result, log = self.run_launcher(
+            "configure", "account", "add-key", "muse",
+            config={"providers": {"muse": {"baseUrl": "https://api.meta.ai/v1"}}},
+            bound_jq_missing=True,
+            stdin="",
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("MISSING TOOL", result.stderr)
+        self.assertIn("AGENTIC_SDLC_JQ", result.stderr)
+        self.assertIn("operator-tools:install", result.stderr)
+        self.assertNotIn("anthropic-or-unclassifiable-provider", result.stderr)
+        self.assertNotIn("approved opencodex configuration route", result.stdout)
+        # Classification legitimately reads the provider config, and nothing else may have run.
+        self.assertOnlyReadOnlyOcxRoutes(log, "<ocx><config><show><--json>")
+
+    def test_status_reports_unknown_rather_than_a_false_not_live_when_a_read_fails(self) -> None:
+        # The catalog comparison is a DISPLAY, so its honest degrade is `unknown` rather than a
+        # refusal -- but `unknown` and a false alarm are not the same degrade. The default provider
+        # serves BARE model ids, so it is never in the `<name>/` set the live catalog yields; if the
+        # default-provider read is swallowed instead of propagated, the default provider itself is
+        # reported NOT-LIVE, which is exactly the wrong verdict this section exists to avoid.
+        result, _ = self.run_launcher(
+            "status",
+            provider_list_json={"configured": [
+                {"name": "openai", "isDefault": True},
+                {"name": "muse", "isDefault": False},
+            ]},
+            catalog_json={"data": [{"id": "muse/muse-spark-1.2"}, {"id": "gpt-5.6-terra"}]},
+            bound_jq_refuses_default_provider_read=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unknown", result.stdout)
+        self.assertNotIn("NOT-LIVE", result.stdout)
+
     def test_the_jq_resolver_does_not_recurse_into_itself(self) -> None:
         # The resolver is a shell function NAMED `jq`, so probing with `command -v jq` would find
-        # the function and recurse until the shell died. `type -P` searches PATH only. This is the
-        # same shadowing class that let a stale `ccodex` shell function hide the installed binary.
+        # the function and recurse until the shell died -- the same shadowing class that let a stale
+        # `ccodex` shell function hide the installed binary. Since the ADR-0020 fix the resolver
+        # probes no NAME at all (`$AGENTIC_SDLC_JQ`, else the pinned mise route), so the hazard is
+        # closed by construction rather than by choosing `type -P` over `command -v`; this stays as
+        # the guard that a future resolver does not reintroduce a name lookup.
         self.run_launcher("status", config={"providers": {}})
         result = subprocess.run(
             [BASH, str(SCRIPT), "status"],
@@ -1487,6 +2424,17 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("-- --help", result.stdout)
         self.assertIn("claude --help", result.stdout)
+
+    def test_launch_help_documents_yolo_as_an_explicit_unsafe_wrapper_option(self) -> None:
+        for route in ("launch", "launch-ultracode"):
+            with self.subTest(route=route):
+                result, _ = self.run_launcher(route, "--help")
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("[--yolo]", result.stdout)
+                self.assertIn("--dangerously-skip-permissions", result.stdout)
+                self.assertIn("unsafe", result.stdout.lower())
+                self.assertIn("-- --yolo", result.stdout)
 
     def test_the_forwarding_separator_reaches_claude_code(self) -> None:
         # The escape hatch must actually work: `launch -- --help` prepares a real session and

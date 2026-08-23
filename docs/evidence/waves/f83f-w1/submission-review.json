@@ -1,0 +1,12 @@
+{
+ "digest": "cf2bb1dc314e3fcaf8cc7a35c6147e749be243a4d7e1c3a8920ca35633dac7af",
+ "evidence": [
+  "six executed acceptance criteria including a rebuilt mutation proof and a ten-vector whole-exit-surface diff; ACCEPTED (workflow wf_87650ad1-0ae node:ws-f83f-review)"
+ ],
+ "reasons": [],
+ "reviewer_node_id": "ws-f83f-review",
+ "schema": "agentic-sdlc/wave-review-submission@1",
+ "subject_node_id": "ws-f83f-fix",
+ "verdict": "accepted",
+ "wave_id": "wave-f83f-w1"
+}

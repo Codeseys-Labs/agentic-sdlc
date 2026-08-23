@@ -3,7 +3,36 @@
 - **Status:** accepted
 - **Note:** opencodex is still installed by default and still optional at runtime, but the
   SPLIT-PLANE framing below no longer holds: ADR-0014 replaced the two planes with one
-  launch route serving both catalogs.
+  launch route serving both catalogs. Three Decision items below are specifically superseded and
+  must not be read as current requirements:
+  - **Item 2** ("`scripts/opencodex-claude.sh` is the only supported entry point") is superseded
+    by ADR-0014's **2026-08-13 amendment "distribution root and caller workspace are separate"**
+    — that amendment, not its Decision item 6, which is the unrelated "state the residual limits
+    plainly rather than claiming approval" item. The operator-facing entry points are now the
+    `ccodex` dispatcher's own routes (`ccodex ensure`, `ccodex launch`, `ccodex ultracode`,
+    `ccodex status`, `ccodex restart`, `ccodex configure`, plus the explicit long form
+    `ccodex ocx <verb>`), which resolve the bound `ocx` path directly from the operator-tools
+    install rather than through this script's now-deleted isolated-plane machinery.
+    **Two surfaces, two spellings — do not merge them.** `launch-ultracode` is a subcommand of
+    the LAUNCHER, which item 2 below names correctly and which this note does not change. The
+    DISPATCHER's own top-level route is `ccodex ultracode`; `ccodex launch-ultracode` is not a
+    command at all. `assets/launchers/ccodex.in` admits only
+    `ensure|launch|ultracode|status|restart|configure` in its launcher-verb route arm, and the
+    substituted command answers `ccodex launch-ultracode` with
+    `error: unknown command launch-ultracode` at exit 2. The launcher's long-form name is
+    reachable only through the explicit `ccodex ocx launch-ultracode`, which `launcher_verb`
+    passes to the launcher unchanged — as does `ccodex ultracode`, which maps the short
+    dispatcher route onto that same launcher verb.
+  - **Item 4** ("the subscription-OAuth prohibition is enforced in code, not prose" — the
+    environment scrub, the `CLAUDE_CONFIG_DIR` isolation, and the refusal of a reachable
+    subscription credential) is superseded by ADR-0014's Decision items 1, 2, and 4: that
+    enforcement is removed. `launch` now uses the operator's own `~/.claude`, and an
+    `sk-ant-oat*` login is explicitly ACCEPTED on the single route, because carrying it is the
+    point — it is what lets Claude Code present its existing session to the gateway.
+  - **Item 7** (the separately named `ccodex claude-subscription` route, "deliberately separate
+    from the supported split plane") is superseded by ADR-0014's Decision item 3: that route is
+    deleted outright. The ordinary route no longer refuses what the escape hatch existed to
+    permit, so a second, narrower spelling of the same permission is dead weight.
 - **Date:** 2026-08-06
 - **Deciders:** operator (decision), agent (evidence and implementation)
 - **Relates to:** `docs/adr/0003-gateway-stance-downgraded-to-optional.md`,

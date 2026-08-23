@@ -1,0 +1,29 @@
+{
+ "entries": {
+  "@CLAUDE_HOME@/agents/cartographer.md": {
+   "agent": "claude",
+   "digest": "02691bc61396c7b88e52145fd4a281ba8b3143948b2552bd9630f1ad411ad9a0",
+   "kind": "agent",
+   "mode": "copy",
+   "name": "cartographer.md",
+   "source": "@SOURCE_ROOT@/agents/claude/cartographer.md"
+  },
+  "@CLAUDE_HOME@/commands/sdlc-frame.md": {
+   "agent": "claude",
+   "digest": "cf8ef05087b7a6113e6e6a3a9ce969052dd7f3a7ae08ef5a8f23755db78ef59d",
+   "kind": "command",
+   "mode": "copy",
+   "name": "sdlc-frame.md",
+   "source": "@SOURCE_ROOT@/commands/sdlc-frame.md"
+  },
+  "@CLAUDE_HOME@/skills/alpha-skill": {
+   "agent": "claude",
+   "digest": "9982edb298dd978c3383dfb5da1e9582a0b6627d0776145f656fbaddcfb4d64a",
+   "kind": "skill",
+   "mode": "copy",
+   "name": "alpha-skill",
+   "source": "@SOURCE_ROOT@/skills/alpha-skill"
+  }
+ },
+ "version": 1
+}

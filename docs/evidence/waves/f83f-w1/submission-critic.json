@@ -1,0 +1,33 @@
+{
+ "digest": "f6e8cdd141dc1711eb942bca1670919ec85a251f58ab1c29e88ca7d1243935d4",
+ "findings": [
+  {
+   "affected_artifact": "docs/plans/decision9-conformance-survey.md",
+   "evidence": [
+    "reviewer's ten-vector exit-surface diff, workflow wf_87650ad1-0ae node:ws-f83f-review"
+   ],
+   "finding_id": "finding-f83f-1",
+   "kind": "documentation",
+   "rationale": "the fix also converts directory-as-manifest from 1+traceback to a named exit 2 (same handler, same class); the survey's SP-8 record names only the missing-file vector",
+   "recommended_disposition": "note the second vector in the survey's SP-8 section on its next touch; no code change owed",
+   "resolution": null,
+   "resolved": false,
+   "severity": "non-blocking"
+  },
+  {
+   "affected_artifact": "skills/agentic-sdlc/tools/instruction-generator.py",
+   "evidence": [
+    "reviewer criterion 2, workflow wf_87650ad1-0ae node:ws-f83f-review"
+   ],
+   "finding_id": "finding-f83f-2",
+   "kind": "enhancement",
+   "rationale": "the malformed-manifest stderr message gained a ': <path>' suffix; no in-repo consumer parses that stderr and the committed positive control uses assertIn",
+   "recommended_disposition": "accept as-is; the named path improves the refusal",
+   "resolution": null,
+   "resolved": false,
+   "severity": "non-blocking"
+  }
+ ],
+ "schema": "agentic-sdlc/wave-critic-findings@1",
+ "wave_id": "wave-f83f-w1"
+}
