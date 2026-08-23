@@ -80,8 +80,10 @@ ten-minute diagnosis.
 2. One harvest is approved: the settings-bypass classifier as a Bun-compiled helper invoked by the
    existing bash launcher, after the demolition ranks land and the surface stabilizes.
    Preconditions, all mandatory, each measured in the survey's harvest checklist:
-   build against an out-of-band-verified runtime via `--compile-executable-path` (or wait for
-   oven-sh/bun#36173 to land registry-integrity verification); pin the helper's sha256 over the
+   build against an out-of-band-verified runtime via `--compile-executable-path`, pinned by a
+   digest this repository owns; oven-sh/bun#36173, if it lands, verifies only registry-supplied
+   `dist.integrity` metadata (survey §3.4), so a compromised registry satisfies it and it never
+   substitutes for the caller-owned pin; pin the helper's sha256 over the
    **shipped** bytes and never promise rebuild-and-compare; build with
    `--no-compile-autoload-dotenv --no-compile-autoload-bunfig`, because both autoloads default ON
    and a default-built helper would ingest a working-directory `.env` or `bunfig.toml` in violation
