@@ -271,7 +271,6 @@ class ExactOwnershipLifecycleTests(unittest.TestCase):
             root = Path(directory)
             target = root / rel
             installer.apply_install(root, files={rel: "VERSION-1\n"})
-            identity = target.stat().st_ino
 
             upgraded = installer.apply_install(root, files={rel: "VERSION-2\n"})
             self.assertEqual(upgraded[rel], "updated")
@@ -285,7 +284,11 @@ class ExactOwnershipLifecycleTests(unittest.TestCase):
             restored = installer.apply_install(root, files={rel: "VERSION-2\n"}, force=True)
             self.assertEqual(restored[rel], "restored")
             self.assertEqual(target.read_text(encoding="utf-8"), "VERSION-2\n")
-            self.assertNotEqual(target.stat().st_ino, identity)
+            # No inode assertion: the restore replaces via mkstemp + os.replace, but ext4
+            # recycles freed inode NUMBERS (identical (inode, btime) in 20/20 delete-recreate
+            # trials, docs/research/2026-08-22-ci-red-forensics.md), so inequality with the
+            # original number is allocator luck, and it failed here exactly once that way.
+            # Foreign-identity discrimination is the next block's job.
 
         with tempfile.TemporaryDirectory() as directory, isolated_state():
             root = Path(directory)
