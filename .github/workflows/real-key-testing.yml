@@ -59,16 +59,20 @@ jobs:
           echo "openrouter models listed: $LISTED"
           test "$LISTED" -gt 0
           # qwen3.7-flash: $0.03/M in, $0.13/M out at survey time; the cheapest capable
-          # routed check the OpenRouter catalog offered.
+          # routed check the OpenRouter catalog offered. It reasons before answering, so
+          # the token budget needs headroom or content comes back null at finish_reason
+          # length (measured: 32 fails, 2048 passes, ~$0.0003).
           REPLY=$(curl -s -m 90 http://127.0.0.1:10100/v1/chat/completions \
             -H 'Content-Type: application/json' \
-            -d '{"model":"openrouter/qwen/qwen3.7-flash","messages":[{"role":"user","content":"Reply with exactly: CI-GATEWAY-ROUTED-OK"}],"max_tokens":32}')
+            -d '{"model":"openrouter/qwen/qwen3.7-flash","messages":[{"role":"user","content":"Reply with exactly: CI-GATEWAY-ROUTED-OK"}],"max_tokens":2048}')
           echo "$REPLY" | mise exec -- python3 -c '
           import json, sys
           d = json.load(sys.stdin)
-          content = d["choices"][0]["message"]["content"].strip()
+          choice = d["choices"][0]
+          content = (choice["message"].get("content") or "").strip()
           print("reply:", content)
           print("served:", d.get("model", "-"))
+          print("finish_reason:", choice.get("finish_reason", "-"))
           assert "CI-GATEWAY-ROUTED-OK" in content, d
           '
 
