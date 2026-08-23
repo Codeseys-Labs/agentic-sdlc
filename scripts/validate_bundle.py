@@ -375,7 +375,8 @@ REVIEWER_OUTWARD_AUTHORITY_PATTERN = re.compile(
     r".{0,100}\b(?:push|publish(?:ing|ation)?|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
 )
 SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
-    r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
+    r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to|has\s+permission\s+to"
+    r"|is\s+allowed\s+to|are\s+allowed\s+to|is\s+permitted\s+to|are\s+permitted\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
 # Authority-granting prose the 31 shipped role projections must never carry: spawn/admission

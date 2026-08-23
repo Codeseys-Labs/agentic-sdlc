@@ -1397,6 +1397,12 @@ class GuardInteractionTest(unittest.TestCase):
             "transactional_create",
             "transactional_delete",
             "transactional_replace",
+            # The guard applies every pinned name with `hasattr`, so a writer RENAMED in the
+            # installer would silently stop being blocked. Every remaining pinned writer is
+            # asserted here so that rename breaks this test instead.
+            "rename_absent",
+            "reserve_private_artifact",
+            "save_owned_entry",
         )
         for name in needed:
             self.assertTrue(callable(getattr(adapter, name)), name)

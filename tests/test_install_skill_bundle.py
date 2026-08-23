@@ -1269,6 +1269,25 @@ class StateSchemaTests(LifecycleTestCase):
                     ):
                         installer.status(config)
 
+    def test_atomic_write_succeeds_where_os_fchmod_does_not_exist(self) -> None:
+        """Native Windows has no os.fchmod (CI run 32624250660): the unguarded call raised
+        before fdopen took the descriptor, and the still-open handle made the finally-unlink
+        fail with WinError 32. On POSIX, simulate the absent attribute; on Windows this
+        exercises the real branch natively."""
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "state.json"
+            had_fchmod = hasattr(os, "fchmod")
+            if had_fchmod:
+                original = os.fchmod
+                del os.fchmod
+            try:
+                installer.atomic_write(target, b"{}\n", 0o600)
+            finally:
+                if had_fchmod:
+                    os.fchmod = original
+            self.assertEqual(target.read_bytes(), b"{}\n")
+            self.assertEqual([p.name for p in Path(temp).iterdir()], ["state.json"])
+
 
 class ReadOnlyProjectionTests(LifecycleTestCase):
     def test_projection_reports_an_armed_transition_without_a_lock_or_a_write(self) -> None:
@@ -1371,6 +1390,27 @@ class ByteIdentityDoctrineTests(LifecycleTestCase):
     direction had to stay fail-closed and does; the other got weaker and is recorded here as the
     accepted behaviour rather than left for an operator to discover.
     """
+
+    def test_tree_digest_refuses_the_boundary_splice(self) -> None:
+        """With byte identity the sole ownership check, the digest stream must be prefix-free.
+        Under an unprefixed encoding, deleting `b` and appending its serialized record
+        (`F\\0b\\0` + content) to `a` yields the identical stream, so a materially different
+        tree would read as owned and uninstall would remove it."""
+        with tempfile.TemporaryDirectory() as temp:
+            two = Path(temp) / "two"
+            two.mkdir()
+            (two / "a").write_bytes(b"alpha")
+            (two / "b").write_bytes(b"beta")
+            spliced = Path(temp) / "spliced"
+            spliced.mkdir()
+            (spliced / "a").write_bytes(b"alpha" + b"F\0b\0" + b"beta")
+            self.assertNotEqual(installer.digest(two), installer.digest(spliced))
+            # Positive control: the same walker still answers identical for identical trees.
+            twin = Path(temp) / "twin"
+            twin.mkdir()
+            (twin / "a").write_bytes(b"alpha")
+            (twin / "b").write_bytes(b"beta")
+            self.assertEqual(installer.digest(two), installer.digest(twin))
 
     def install_copy(self, root: Path) -> tuple[installer.Config, installer.Entry, Path]:
         self.make_repo(root)
@@ -1579,6 +1619,26 @@ class PendingTransitionTests(LifecycleTestCase):
             self.assertIsNone(settled["pending"])
             self.assertIn(str(destination), settled["entries"])
             self.assertTrue(destination.is_dir())
+
+    def test_a_read_only_recovery_report_takes_no_durability_barrier(self) -> None:
+        """`status` and `--dry-run` resolve an armed transition without committing anything,
+        so a failing barrier must not turn their report into a DurabilityError."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config, entry, destination = self.prepared(root)
+
+            with mock.patch.object(installer, "publish", side_effect=OSError("power loss")):
+                with self.assertRaisesRegex(installer.InstallerError, "cannot install"):
+                    self.install_only(config, entry)
+
+            with mock.patch.object(
+                installer,
+                "fsync_directory",
+                side_effect=installer.DurabilityError("barrier unavailable"),
+            ):
+                checked = installer.status(config)
+            self.assertEqual(checked.exit_code, 1)
+            self.assertIn(f"would recover abort: {destination}", checked.messages)
 
     def test_an_install_interrupted_after_the_publish_is_committed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

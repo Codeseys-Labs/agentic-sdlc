@@ -646,8 +646,14 @@ class CcodexSdlcTests(unittest.TestCase):
                 policy_path.symlink_to(ROOT / relative)
                 linked = validator.Validation()
                 validator.validate_ccodex_sdlc_report_policies(root, linked)
+                # The absent sibling policy also reports "missing or linked", so the assertion
+                # must name THIS relative or it would pass with the is_symlink branch deleted.
                 self.assertTrue(
-                    any("missing or linked" in error for error in linked.errors), linked.errors
+                    any(
+                        error.startswith(f"{relative}: ") and "missing or linked" in error
+                        for error in linked.errors
+                    ),
+                    linked.errors,
                 )
 
     def test_generated_dispatcher_does_not_fall_back_to_poisoned_external_tools(self) -> None:

@@ -406,8 +406,9 @@ install and uninstall preserve it untouched. But a destination the operator repl
 BYTE-IDENTICAL copy of the bundle's own payload is now REMOVED by uninstall, where the retired
 witness refused it, and the same applies to a recreated link pointing at the same source and to a
 configured home the operator re-pointed at a directory holding an identical copy. The harm is
-bounded rather than absent: what is removed is byte-for-byte the bundle's own payload, and no
-content an operator authored can be byte-identical to a payload they did not write. What the
+bounded rather than absent: what is removed is byte-for-byte the bundle's own payload, so the
+removal destroys no information of the operator's own — what it can defeat is their intent to
+keep a copy there, never bytes only they hold. What the
 weakening buys is that the installer no longer refuses to run at all on a filesystem exposing no
 birth timestamp (NFS, several FUSE and overlay mounts) or on a libc without `renameat2` — there
 is no glibc-2.28 or birth-time requirement left. `assert_safe_collection` is the boundary byte

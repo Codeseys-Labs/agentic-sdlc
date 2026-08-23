@@ -21,8 +21,9 @@ follow, and both are stated rather than implied:
   direction is the trust boundary and it stays fail-closed.
 * A destination the operator replaced with a BYTE-IDENTICAL copy of the bundle's own payload is now
   removed by uninstall, where the retired witness layer refused it. That is an accepted, honestly
-  weaker doctrine: the bytes removed are the bundle's own, and no operator content can be
-  byte-identical to a payload it did not author. AGENTS.md records the same weakening.
+  weaker doctrine: the bytes removed are exactly the published payload, so the removal destroys
+  no information of the operator's own — only, at most, their intent to keep a copy at that
+  path. AGENTS.md records the same weakening.
 
 The retired layer also refused to run at all on a filesystem that exposes no birth timestamp (NFS,
 several FUSE and overlay mounts) and on a libc without `renameat2`, so this module now installs
@@ -503,12 +504,19 @@ def atomic_write(path: Path, content: bytes, mode: int) -> None:
     Darwin and `fsync` elsewhere, `os.replace` into place, then flush the parent directory. This
     spelling routes the two flushes through `flush_descriptor`/`fsync_directory` so a barrier
     failure raises `DurabilityError` and stops the mutation, which is this module's contract.
+
+    One divergence from the donor: the donor's plane fails closed on native Windows, this module
+    does not, and `os.fchmod` does not exist there. The call is guarded by existence (`mkstemp`
+    already creates the file 0o600, the only mode the one caller passes) and sits inside the
+    `fdopen` block so no exception can leave the descriptor open against the `finally` unlink,
+    which Windows refuses with WinError 32 while a handle is held.
     """
     durable_mkdir(path.parent)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, mode)
             handle.write(content)
             handle.flush()
             flush_descriptor(handle.fileno(), full=True)
@@ -679,17 +687,28 @@ def nested_entry_type(path: Path) -> str:
 
 
 def digest(path: Path) -> str:
-    """Hash bytes and node types without following nested links."""
+    """Hash bytes and node types without following nested links.
+
+    Every variable-length payload is length-prefixed so the stream is prefix-free: paths cannot
+    carry NUL and the length field is bare digits, so no file's content can impersonate a
+    sibling's header. Without the prefix, deleting `b` and appending its serialized record to
+    `a` yields the identical stream, and this digest is the sole ownership check.
+    """
     hasher = hashlib.sha256()
     if path.is_dir() and not path.is_symlink() and not is_junction(path):
         for child in sorted(path.rglob("*")):
             relative = child.relative_to(path).as_posix().encode("utf-8")
             kind = nested_entry_type(child)
-            hasher.update(kind.encode("ascii") + b"\0" + relative + b"\0")
             if kind == "F":
-                hasher.update(child.read_bytes())
+                payload = child.read_bytes()
             elif kind == "L":
-                hasher.update(os.fsencode(os.readlink(child)))
+                payload = os.fsencode(os.readlink(child))
+            else:
+                payload = b""
+            hasher.update(
+                kind.encode("ascii") + b"\0" + relative + b"\0" + b"%d\0" % len(payload)
+            )
+            hasher.update(payload)
     elif path.is_symlink() or is_junction(path):
         hasher.update(b"L\0" + os.fsencode(os.readlink(path)))
     else:
@@ -1111,7 +1130,10 @@ def recover_pending(
     operation = pending["operation"]
     before = pending["before"]
     after = pending["after"]
-    if destination.parent.is_dir():
+    if not read_only and destination.parent.is_dir():
+        # The barrier makes the interrupted rename durable before recovery commits state on it.
+        # A read-only caller (status, --dry-run) commits nothing, and a barrier failure would
+        # otherwise turn a report into a DurabilityError.
         fsync_directory(destination.parent)
     outcome: str | None = None
     if operation == "install":
