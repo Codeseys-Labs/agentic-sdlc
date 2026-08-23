@@ -37,3 +37,4 @@ edit either accepted record or infer a stronger status.
 | [ADR-0028](0028-organize-the-claude-code-first-product-boundary-as-one-initiative.md) | Organize the Claude Code-first product boundary as one initiative | proposed | 2026-08-15 |
 | [ADR-0029](0029-ported-libraries-are-a-second-external-library-catalog-class.md) | Ported libraries are a second external-library catalog class | accepted | 2026-08-20 |
 | [ADR-0030](0030-record-wave-evidence-in-git-and-one-markdown-file.md) | Record wave evidence in Git and one markdown file | accepted | 2026-08-22 |
+| [ADR-0031](0031-keep-ccodex-on-bash-and-python-and-harvest-one-bun-classifier.md) | Keep ccodex on bash and Python; harvest one Bun-compiled classifier | accepted | 2026-08-23 |
