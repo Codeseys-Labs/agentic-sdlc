@@ -11,11 +11,11 @@
 # reported `0 installed` on macOS and then failed at every later exec with ENOENT on the
 # INTERPRETER -- which CPython reports against the script path, so the operator saw
 # "no such file or directory: .../bin/ccodex" for a file that plainly existed. The installer
-# resolves the interpreter from a closed list of absolute system paths and renders it here; the
-# release-candidate bridge renders the exact digest-verified `trusted_bash.path` from
-# policy/release-candidate-execution.v1.json instead, which is why that linux-x64 pin stays a
-# candidate-surface fact rather than a daily-dispatcher one. A shebang cannot be quoted, so the
-# resolver admits no interpreter path containing whitespace.
+# resolves the interpreter from a closed list of absolute system paths and renders it here, and it
+# is now the only renderer: the candidate-execution bridge that used to substitute a digest-verified
+# linux-x64 `trusted_bash.path` was deleted with the acquisition engine, along with the policy that
+# pinned it. A shebang cannot be quoted, so the resolver admits no interpreter path containing
+# whitespace.
 #
 # The grammar below is deliberately bash-3.2 compatible for the same reason: macOS carries no
 # newer bash, so a bash-4-only construct here would be a dead command on a claimed platform.
@@ -44,10 +44,14 @@
 #     refresh them.
 set -euo pipefail
 
-# The release-candidate bridge renders this same authenticated template with the exact literal
-# `true`. Installed operator tools always render `false`, preserving their existing dispatch
-# behavior. Candidate mode is intentionally self-relative and exits before any installed route,
-# root override, tool binding, or gateway code can run.
+# Installed operator tools always render `false`, preserving their existing dispatch behavior.
+# NOTHING SHIPPED RENDERS `true` any more: the candidate-execution bridge that did was deleted with
+# the acquisition engine, so this branch is reachable only from the lifecycle-grammar and
+# recover-apply test modules, which render the literal themselves. The branch and its closed
+# read-only grammar are retained rather than removed because they remain the exact shape a future
+# candidate surface must render, and those two suites still hold it to it. Candidate mode is
+# intentionally self-relative and exits before any installed route, root override, tool binding, or
+# gateway code can run.
 candidate_readonly_profile=@CANDIDATE_READONLY_PROFILE@
 if [ "$candidate_readonly_profile" = true ]; then
   # This allowlist is closed by construction, so every mutating form -- `sdlc install --host claude`,

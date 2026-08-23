@@ -3,31 +3,91 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Pure one-output renderer for the P2 activation transaction."""
+"""Render, apply, and classify one repository's marked instruction block.
+
+`plan --manifest --entry` renders one selected output and prints its canonical result document.
+
+`apply --target --manifest --entry` splices the same block into the target file, prints a unified
+diff of before and after, and writes only when `--yes` is supplied, so approval and write are one
+invocation and no approved-then-changed window exists between them.
+
+`classify --target` answers exactly one of three verdicts about the repository's operating-contract
+surface, and every one of them asks the operator before a baseline is proposed:
+
+  * `brownfield` -- at least one contract surface is occupied, in Git's index or on disk, and each
+    occupied surface is named. This is the only verdict settled by positive observation.
+  * `greenfield` -- a PROPOSAL, not a licence to write: nothing is occupied, the repository holds at
+    most one commit, and the working tree is clean. Confirm with the operator before writing.
+  * `refuse-and-ask` -- anything else, with each reason named. Ask the operator.
+
+`--target` must be the repository ROOT, and a subdirectory is refused by name at exit 2: occupancy
+is measured at the supplied directory while commit count and cleanliness are repository-wide, so a
+subdirectory would mix two scopes in one verdict.
+
+A verdict is advisory evidence about what is on disk. It claims no readiness, ownership, or trust,
+and it authorizes no write.
+"""
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
+import os
 import re
+import stat
+import subprocess
 import sys
+import tempfile
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 MANIFEST_SCHEMA = "agentic-sdlc/instruction-manifest@2"
+CLASS_SCHEMA = "agentic-sdlc/repository-class@1"
 KINDS = {"root_agents", "root_claude", "subtree_agents", "claude_rule"}
 _REL_RE = re.compile(r"[^/\\\x00]+")
 
-# EXITS, as one derivation point (product-spec Implementation Decision 9). This module only ever
-# produces the two codes below: `main` has exactly one refusal path (`GeneratorError`) and one
-# success path, so no other code is named here.
-#: The one selected output rendered and its canonical result document was written to stdout.
+#: The operating-contract surfaces whose occupancy decides brownfield. Read in Git's index and on
+#: disk, because either alone answers "occupied" for a surface the other does not know about.
+CONTRACT_SURFACES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "mise.toml",
+    "lefthook.yml",
+    ".seeds",
+    "docs/adr",
+    ".github",
+    ".gitlab-ci.yml",
+    ".agentic-sdlc",
+)
+
+#: Exec resolution is carried across; everything else is asserted, so no ambient `GIT_*` variable
+#: and no system or global config can change what a read-only observation reports.
+_EXEC_RESOLUTION_ENV = ("PATH", "PATHEXT", "SYSTEMROOT")
+_GIT_ENVIRONMENT = {
+    "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": os.devnull,
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+    "LC_ALL": "C",
+    "LANG": "C",
+}
+
+# EXITS, as one derivation point (product-spec Implementation Decision 9).
+#: The selected verb completed: a rendered result document, a classification document, or an
+#: applied write, on stdout.
 EXIT_OK = 0
 #: A `GeneratorError` was raised: an unusable manifest (missing, malformed, non-canonical,
-#: schema-invalid) or an unusable `--entry` selection. Nothing was written to stdout.
+#: schema-invalid), an unusable `--entry` selection, an unusable `--target`, a refused target node,
+#: or an entry whose parent directory is absent in the target. Nothing was written to the target.
 EXIT_INPUT = 2
+#: `apply` rendered a change and was not given `--yes`. The diff is on stdout, the target is
+#: untouched, and the same invocation with `--yes` is the approval.
+EXIT_REFUSED = 3
 
 
 class GeneratorError(ValueError):
@@ -173,6 +233,156 @@ def render_selected(
     return validate_rendered_output({"path": output["path"], "action": action, "content": content, "mode": 0o644})
 
 
+def read_target(path: Path) -> tuple[dict[str, Any], bytes | None]:
+    """The target's prestate and bytes, opened so every non-regular node is refused at `EXIT_INPUT`.
+
+    `O_NOFOLLOW` refuses a planted symlink. `O_NONBLOCK` keeps a planted FIFO from blocking the open
+    until a writer appears, so the refusal below is reached instead of the process hanging. The raw
+    descriptor is `fstat`ed before it becomes a file object, because wrapping a directory descriptor
+    raises `IsADirectoryError` outside this function's refusal contract; the descriptor is closed on
+    that refusal path.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return {"kind": "absent", "identity": None}, None
+    except OSError as exc:
+        raise GeneratorError(f"refusing target {path}: {exc}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise GeneratorError(f"refusing target {path}: not a regular file")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    with open(descriptor, "rb") as handle:
+        return {"kind": "regular", "identity": None}, handle.read()
+
+
+def unified_diff(before: bytes, after: bytes, label: str) -> str:
+    old = before.decode("utf-8", "replace").splitlines(keepends=True)
+    new = after.decode("utf-8", "replace").splitlines(keepends=True)
+    return "".join(difflib.unified_diff(old, new, f"a/{label}", f"b/{label}"))
+
+
+def write_target(path: Path, content: bytes) -> None:
+    """Publish `content` at `path` through a same-directory temporary and `os.replace`.
+
+    `os.replace` renames rather than opens, so it cannot be redirected through a symlink planted at
+    the destination: the link itself is replaced. The directory is fsynced so the rename survives a
+    crash as either the old bytes or the new ones, never a truncated file.
+
+    A manifest entry may name a nested path, so the parent is checked before `mkstemp` is asked to
+    create a temporary inside it: a directory this tool does not create is a refusal that names that
+    parent, not a `FileNotFoundError` out of the publication path.
+    """
+    if not path.parent.is_dir():
+        raise GeneratorError(f"refusing to write {path}: its parent {path.parent} is not an existing directory")
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".new")
+    try:
+        with open(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    except BaseException:
+        os.unlink(temporary)
+        raise
+    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+
+
+def apply_entry(manifest: dict[str, Any], entry: str, target: Path, approved: bool) -> int:
+    """Render one entry against the live target, print the diff, and write only when approved."""
+    if not target.is_absolute() or not target.is_dir():
+        raise GeneratorError(f"--target must be an absolute existing directory: {target}")
+    observed: dict[str, bytes] = {}
+
+    def reader(relative: str) -> tuple[dict[str, Any], bytes | None]:
+        prestate, old = read_target(target / relative)
+        observed["before"] = old or b""
+        return prestate, old
+
+    rendered = render_selected(manifest, entry, reader)
+    sys.stdout.write(unified_diff(observed["before"], rendered["content"], rendered["path"]))
+    if rendered["action"] == "no-op":
+        print(f"no-op: {rendered['path']} already carries this block")
+        return EXIT_OK
+    if not approved:
+        print(
+            f"REFUSED: {rendered['path']} would be {rendered['action']}d and was not written; "
+            "re-run this exact command with --yes to approve the diff above",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+    write_target(target / rendered["path"], rendered["content"])
+    print(f"{rendered['action']}: {rendered['path']}")
+    return EXIT_OK
+
+
+def _git(target: Path, *arguments: str, allow_failure: bool = False) -> tuple[int, str]:
+    environment = {key: os.environ[key] for key in _EXEC_RESOLUTION_ENV if key in os.environ}
+    environment.update(_GIT_ENVIRONMENT)
+    try:
+        completed = subprocess.run(
+            ["git", "--no-optional-locks", "-C", str(target), *arguments],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise GeneratorError(f"cannot run git: {exc}") from exc
+    if completed.returncode != 0 and not allow_failure:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise GeneratorError(f"git {arguments[0]} exited {completed.returncode} in {target}: {detail}")
+    return completed.returncode, completed.stdout.decode("utf-8", "replace")
+
+
+def _commit_count(target: Path) -> int:
+    code, out = _git(target, "rev-list", "--count", "HEAD", allow_failure=True)
+    if code != 0:
+        _git(target, "rev-parse", "--git-dir")
+        return 0
+    return int(out.strip() or "0")
+
+
+def classify_repository(target: Path) -> dict[str, Any]:
+    """One of `brownfield`, `greenfield`, or `refuse-and-ask`; all three ask before a write.
+
+    Refuses anything that is not the repository root, because the two halves of the question have
+    different scopes: occupancy is read at the supplied directory, while commit count and working
+    tree cleanliness are properties of the whole repository. Answering both from a subdirectory
+    would report one verdict over two scopes.
+    """
+    if not target.is_absolute() or not target.is_dir():
+        raise GeneratorError(f"--target must be an absolute existing directory: {target}")
+    toplevel = _git(target, "rev-parse", "--show-toplevel")[1].strip()
+    if not toplevel or Path(toplevel).resolve() != target.resolve():
+        raise GeneratorError(f"--target is not a repository root; its root is {toplevel or 'unavailable'}: {target}")
+    listed = [item for item in _git(target, "ls-files", "-z", "--", *CONTRACT_SURFACES)[1].split("\0") if item]
+    occupied = sorted(
+        surface
+        for surface in CONTRACT_SURFACES
+        if os.path.lexists(target / surface) or any(item == surface or item.startswith(f"{surface}/") for item in listed)
+    )
+    if occupied:
+        reasons = [f"{surface} is an occupied operating-contract surface" for surface in occupied]
+        return {"schema": CLASS_SCHEMA, "verdict": "brownfield", "occupied": occupied, "reasons": reasons, "ask": True}
+    commits = _commit_count(target)
+    dirty = [item for item in _git(target, "status", "--porcelain", "-z")[1].split("\0") if item]
+    reasons = []
+    if commits > 1:
+        reasons.append(f"the repository already has {commits} commits")
+    if dirty:
+        reasons.append(f"the working tree is not clean ({len(dirty)} reported entries)")
+    verdict = "refuse-and-ask" if reasons else "greenfield"
+    return {"schema": CLASS_SCHEMA, "verdict": verdict, "occupied": [], "reasons": reasons, "ask": True}
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode() + b"\n"
 
@@ -189,13 +399,26 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["plan"])
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--entry", required=True)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", choices=["plan", "apply", "classify"])
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--entry")
+    parser.add_argument("--target", type=Path)
+    parser.add_argument("--yes", action="store_true", help="approve the printed diff and write it in this same invocation")
     args = parser.parse_args(argv)
     try:
+        if args.command == "classify":
+            if args.target is None:
+                raise GeneratorError("classify requires --target")
+            sys.stdout.buffer.write(_canonical(classify_repository(args.target)))
+            return EXIT_OK
+        if args.manifest is None or args.entry is None:
+            raise GeneratorError(f"{args.command} requires --manifest and --entry")
         manifest = _load(args.manifest)
+        if args.command == "apply":
+            if args.target is None:
+                raise GeneratorError("apply requires --target")
+            return apply_entry(manifest, args.entry, args.target, args.yes)
         rendered = render_selected(manifest, args.entry, lambda _: ({"kind": "absent", "identity": None}, None))
         result = {"schema": "agentic-sdlc/instruction-render@2", "path": rendered["path"], "action": rendered["action"], "sha256": hashlib.sha256(rendered["content"]).hexdigest()}
         sys.stdout.buffer.write(_canonical(result))

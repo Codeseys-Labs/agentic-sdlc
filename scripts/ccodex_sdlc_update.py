@@ -159,8 +159,8 @@ UPDATABLE_PHASES = ("activated", "activated-partial")
 
 # ---- re-expressed contracts, each pinned by a test against the shipped artifact -------------------
 
-#: The acquisition receipt's closed key set, re-expressed from
-#: policy/release-candidate-acquisition.v1.json -> records.schemas.immutable_receipt.required_keys.
+#: The acquisition receipt's closed key set, re-expressed from its producer,
+#: scripts/write_acquisition_receipt.py -> RECEIPT_KEYS.
 ACQUISITION_RECEIPT_KEYS = (
     "activation",
     "archive_sha256",
@@ -190,7 +190,6 @@ ACQUISITION_RECEIPT_CONSTANTS = {
     "support": "unsupported",
     "terminal_phase": "installed-unselected",
 }
-ACQUISITION_POLICY_NAME = "release-candidate-acquisition.v1.json"
 ACQUISITION_RECEIPT_SEGMENTS = ("agentic-sdlc", "acquisition", "receipts")
 ACQUISITION_CANDIDATE_SEGMENTS = ("agentic-sdlc", "acquisition", "candidates")
 ACQUISITION_CANDIDATE_LEAF = "root"

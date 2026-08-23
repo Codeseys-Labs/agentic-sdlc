@@ -46,7 +46,7 @@ RECEIPT_PRODUCER_PATH = ROOT / "scripts" / "distribution_activation_receipt.py"
 INSTALLER_PATH = ROOT / "scripts" / "install_skill_bundle.py"
 READER_PATH = ROOT / "scripts" / "ccodex_sdlc.py"
 ENVELOPE_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "receipt-envelope.py"
-ACQUISITION_POLICY_PATH = ROOT / "policy" / "release-candidate-acquisition.v1.json"
+RECEIPT_PRODUCER_SHIM_PATH = ROOT / "scripts" / "write_acquisition_receipt.py"
 RELEASE_CONTRACT_PATH = ROOT / "policy" / "release-contract.v1.json"
 
 
@@ -63,6 +63,9 @@ update = _load(MODULE_PATH, "ccodex_sdlc_update_under_test")
 receipts = _load(RECEIPT_PRODUCER_PATH, "ccodex_sdlc_update_receipt_producer")
 bundle = _load(INSTALLER_PATH, "ccodex_sdlc_update_installer")
 reader = _load(READER_PATH, "ccodex_sdlc_update_reader")
+# The acquisition receipt's producer, pinned in place of the deleted acquisition policy's schema
+# table: the contract this module re-expresses is now owned by the module that writes the document.
+shim = _load(RECEIPT_PRODUCER_SHIM_PATH, "ccodex_sdlc_update_acquisition_shim")
 
 PRIOR_INSTANT = "2026-08-19T09:10:11Z"
 INSTANT = "2026-08-20T12:13:14Z"
@@ -644,28 +647,25 @@ class TemporaryRoot(unittest.TestCase):
 class ReExpressedContractsTest(TemporaryRoot):
     """The constants and decisions this module re-expresses must still agree with the shipped tree."""
 
-    def test_acquisition_receipt_contract_matches_shipped_policy(self) -> None:
-        policy = json.loads(ACQUISITION_POLICY_PATH.read_text(encoding="utf-8"))
-        schema = policy["records"]["schemas"]["immutable_receipt"]
+    def test_acquisition_receipt_contract_matches_its_producer(self) -> None:
         self.assertEqual(
-            tuple(sorted(schema["required_keys"])), tuple(sorted(update.ACQUISITION_RECEIPT_KEYS))
+            tuple(sorted(shim.RECEIPT_KEYS)), tuple(sorted(update.ACQUISITION_RECEIPT_KEYS))
         )
-        expected = dict(schema["constants"])
-        expected["schema_version"] = schema["schema_version"]
-        self.assertEqual(expected, update.ACQUISITION_RECEIPT_CONSTANTS)
-        layout = policy["filesystem"]["layout"]
+        self.assertEqual(shim.RECEIPT_CONSTANTS, update.ACQUISITION_RECEIPT_CONSTANTS)
         self.assertEqual(
             "$XDG_STATE_HOME/" + "/".join(update.ACQUISITION_RECEIPT_SEGMENTS) + "/<archive-sha256>.json",
-            layout["receipt"],
+            shim.RECEIPT_LAYOUT,
         )
         self.assertEqual(
             "$XDG_DATA_HOME/"
             + "/".join(update.ACQUISITION_CANDIDATE_SEGMENTS)
             + f"/<archive-sha256>/{update.ACQUISITION_CANDIDATE_LEAF}",
-            layout["candidate_root"],
+            shim.CANDIDATE_ROOT_LAYOUT,
         )
         # Positive control: the same lookups do detect a disagreement.
-        self.assertNotEqual(expected, {**expected, "selection": "chosen"})
+        self.assertNotEqual(
+            shim.RECEIPT_CONSTANTS, {**shim.RECEIPT_CONSTANTS, "selection": "chosen"}
+        )
 
     def test_escape_display_agrees_with_the_receipt_producer(self) -> None:
         for sample in ("plain", "a\nb", "a\rb", "a\tb", "a\\b", "\x1b[2J", "\x7f", "٩"):

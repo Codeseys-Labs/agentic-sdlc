@@ -1,6 +1,10 @@
 # ADR-0024 — Execute each wave as one artifact-driven Dynamic Workflow
 
 - **Status:** accepted
+- **Note:** ADR-0030 refines decision 6 only. Completion still requires acceptance evidence,
+  qualifying gates, disposition of blocking findings, and an adversarial review; that evidence is
+  now read from Git and one `docs/evidence/waves/<wave-id>.md` file rather than derived as a
+  terminal verdict document. Decisions 1 through 5 stand unchanged.
 - **Date:** 2026-08-15
 - **Deciders:** operator (decision through the resolved Wayfinder review); agent (evidence and drafting)
 - **Relates to:** `skills/agentic-sdlc/SKILL.md`, `commands/sdlc-wave.md`, `skills/agentic-sdlc/references/sdlc-loop.md`

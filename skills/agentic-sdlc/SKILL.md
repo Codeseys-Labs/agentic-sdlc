@@ -155,32 +155,49 @@ mutation.
 Use this phase order unless the task is clearly smaller:
 
 1. Frame: define done, constraints, repo state, queue state, and allowed blast radius. Seal a
-   Mission-shaped Frame's durable objective with `tools/mission-contract.py define`, and capture
-   the observed repo/queue facts with `tools/planning-snapshot.py capture`.
+   Mission-shaped Frame's durable objective with `tools/mission-contract.py define`, and record
+   the observed repo/queue facts from Git and the queue directly.
 2. Discover: assign read-only workers across code areas. Require file/line evidence.
 3. Research: only for external or load-bearing unknowns — a deep-research pipeline if the
    host provides one, otherwise primary sources directly.
 4. Plan: emit workstreams, dependencies, worktree strategy, gates, rollback, and Seeds updates.
-   Compile the WavePlan and its PlanDiff with `tools/wave-plan-compiler.py compile`/`diff`, then
-   admit the compiled plan against current state with `tools/wave-plan-admission.py admit` before
-   Act begins.
+   Record the plan where the wave's later evidence can be read against it, and re-read the observed
+   repo state from Git directly before Act begins.
 5. Act: launch workers in separate worktrees for independent workstreams.
-6. Review: review stable branch/worktree snapshots, not only worker summaries. Project a
-   read-only status view over the recorded journal, assignments, activation result, and gate
-   receipts with `tools/sdlc-observability-projection.py`, and verify each receipt's envelope and
-   correlation graph with `tools/receipt-envelope.py verify`/`check-graph` before trusting it.
-7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs. Derive the
-   wave's one terminal state — accepted, remediation-progress, or blocked — with
-   `tools/wave-verdict.py derive` rather than asserting it from worker summaries.
+6. Review: review stable branch/worktree snapshots, not only worker summaries. Read what each node
+   actually did from Git — `git log --format='%H %s' <base>..<branch>` and
+   `git show --stat <integration-commit>` — and verify each gate receipt's envelope and correlation
+   graph with `tools/receipt-envelope.py verify`/`check-graph` before trusting it.
+7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs. State the wave's
+   one terminal disposition — accepted, remediation-progress, or blocked — from the recorded
+   evidence in `docs/evidence/waves/<wave-id>.md`, never from worker summaries.
 8. Ship: squash/rebase, sync Seeds, open PR or commit according to repo policy. Before proposing
    any commit, PR, or squash text, load `../change-writing/SKILL.md` to author it; this phase still
    owns the squash/rebase/PR operations and the human still authorizes publication.
 
 Use backflow when review reveals an earlier phase was weak: re-enter Discover, Research, or Plan
-with a scoped task instead of restarting the whole run. Classify observed drift against the sealed
-plan with `tools/drift-classifier.py classify` before deciding backflow scope, and admit or refuse
-any proposed autonomous continuation past that point with `tools/auto-envelope.py
-admit-transition` against one preapproved envelope.
+with a scoped task instead of restarting the whole run. Compare the recorded plan against what the
+branch actually contains before deciding backflow scope, and treat a scope or authority change as
+new work needing a new approval rather than a continuation of the approved one.
+
+## Wave Acceptance Rules
+
+Four rules decide whether a wave may be called accepted. They are read, not derived, and each is
+checkable against Git and one recorded receipt.
+
+- **No self-review.** The node that reviews a workstream is a different node than the one that
+  implemented it. A row reviewed by its own author is unreviewed.
+- **Approval is dated before the fan-in.** The operator's verbatim approval carries its date, and
+  that date precedes the integration commit's committer date. An authorization recorded after the
+  effect it authorizes is not an authorization.
+- **The gate passes on the merged snapshot.** Re-run the repository gate after integration and keep
+  its receipt; a receipt from a worktree head says nothing about the merged tree.
+- **A worker summary is never acceptance evidence.** Messages, status lines, and worker reports are
+  advisory notifications. Acceptance reads commits, diffs, and the gate receipt.
+
+Record all four for each wave in `docs/evidence/waves/<wave-id>.md`, copied from
+`docs/evidence/waves/TEMPLATE.md`. A complete record is evidence only; it authorizes no push,
+publication, PR mutation, merge, or deployment.
 
 ## Delegation Rules
 
@@ -195,11 +212,10 @@ admit-transition` against one preapproved envelope.
   direct execution to bypass it.
 - Require every delegated worker to return a structured report for conductor capture. A
   write-capable worker may also maintain its assigned artifact; for a read-only worker, the
-  conductor persists the captured submission. The conductor records each node's disposition in
-  the append-only journal with `tools/wave-journal.py record-node`, and seals and verifies a
-  worker's wave-evidence submission against that tool's closed submission schemas with
-  `tools/wave-submission.py` before treating it as captured. Treat messages, status, and
-  summaries as advisory notifications, not acceptance evidence or authority.
+  conductor persists the captured submission. The conductor records each node's role, resolved
+  model id, disposition, commit, and reviewer in the wave's evidence file, and reads a
+  write-capable worker's claimed output back from its commit before treating it as captured. Treat
+  messages, status, and summaries as advisory notifications, not acceptance evidence or authority.
 - For long-running work, use the host's native background or persistent-task mechanism and
   durable artifact files. Do not hold one blocking call open indefinitely.
 - Use Claude Code workers for nested dynamic workflow execution on one bounded workstream. Do not let a nested Claude workflow own the whole project queue unless explicitly requested.
@@ -258,9 +274,8 @@ Read only what is needed:
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 - `references/evidence-discipline.md`: whether any advisory submission's claim may be made at all — the five-class evidence vocabulary, the anti-inflation rule (a class is assigned once and never raised later), disposition-row/gap-register discipline, and the receipt-is-not-a-control-when-author-equals-verifier rule.
 - `references/readiness-composition.md`: which surface owns each pre-effect readiness
-  dimension and in what order — `ccodex sdlc doctor` (host and install state),
-  `planning-snapshot capture` (observed repository state with named unknowns), and
-  `wave-plan-admission admit` (the wave-effect gate) — plus why no unified readiness
+  dimension and in what order — `ccodex sdlc doctor` (host and install state) and the
+  Git-anchored wave-effect read at `/sdlc-wave` step 8 — plus why no unified readiness
   guard is queued (`agentic-sdlc-9857`).
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no
   alternate VCS substrate is activated by this bundle.

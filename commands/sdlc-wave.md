@@ -78,4 +78,13 @@ Run ONE implementation wave of the agentic-sdlc loop. Scope: $ARGUMENTS
    critic, Seed, gate, or local status claims never grant authority. Push, PR, merge, deletion,
    and other outward effects require explicit operation-specific human approval.
 8. Report: wave summary — Seeds closed/blocked, gates run, worktrees merged/kept,
-   findings carried forward.
+   findings carried forward. Record it in `docs/evidence/waves/<wave-id>.md` from
+   `docs/evidence/waves/TEMPLATE.md`, and fill it from these four readings rather than from any
+   worker summary:
+   - `git -C <repo> log --format='%H %s' <base>..<branch>` — what the node actually did.
+   - `git -C <repo> show --stat <integration-commit>` — the declared outputs really landed, anchored
+     to a commit rather than to the tree as it happens to be now.
+   - `python scripts/gate_receipt.py record --gate "mise run check" --out <path> -- mise run check`
+     on the MERGED head — a worktree-green receipt is not evidence about the merged snapshot.
+   - Reviewer is not the implementer, and the approval blockquote's date precedes the integration
+     commit's committer date (`git -C <repo> show -s --format=%cI <integration-commit>`).

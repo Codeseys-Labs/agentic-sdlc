@@ -346,7 +346,7 @@ def authorization(
 def _run_with_hostile_stderr(argv: list[str], *, mode: str, cwd: Path) -> tuple[int, bytes]:
     """Run argv with a stderr this process CANNOT write to. Returns (exit code, stdout bytes).
 
-    Re-expressed from the fixture `tests.test_activation_result` uses for the identical rule, not
+    Re-expressed from the fixture the retired activation-result tests used for the identical rule, not
     imported across test modules. Two shapes, kept separate because they produce DIFFERENT wrong exit
     codes and neither is exotic:
 

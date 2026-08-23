@@ -13,12 +13,13 @@ from pathlib import Path
 
 SCHEMA = "agentic-sdlc/offline-inspect@1"
 
-# EXITS, as one derivation point (product-spec Implementation Decision 9; the machine-readable form
-# is `policy/release-candidate-acquisition.v1.json`'s `exit_codes` map). This command opens nothing
+# EXITS, as one derivation point (product-spec Implementation Decision 9; the machine-readable
+# `exit_codes` map that used to restate it went with the acquisition engine, so this comment and
+# the constants below are now the only statement of it). This command opens nothing
 # for writing, spawns no process, touches no network, and mutates no target, so 3 and 4 are
 # UNREACHABLE rather than merely unused: a command that can cause no effect can neither refuse
-# before one nor admit a partial one. `skills/agentic-sdlc/tools/wave-verdict.py` states the same
-# rule for the same reason.
+# before one nor admit a partial one. That follows from Decision 9's own definitions of 3 and 4, so
+# it needs no precedent to lean on.
 #
 # NOT_READY is therefore NOT 1. A completed inspection that names a refusal is this command
 # SUCCEEDING at the question it was asked, so it may not occupy the code reserved for an unexpected

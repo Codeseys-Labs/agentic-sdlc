@@ -1490,7 +1490,7 @@ def observe_host_readiness(
 
     The planes live under the operator's own XDG state root beside the ownership documents the
     projections already read (spec Decision 11), and the acquisition layout is the one
-    ``release_candidate_acquisition`` writes.  Resolution is separated from observation so a test
+    ``write_acquisition_receipt`` seals into.  Resolution is separated from observation so a test
     can hand ``observe_readiness`` its own directories.
     """
     guard, operator_tools, _bundle = adapters
@@ -1892,8 +1892,10 @@ def main(argv: list[str] | None = None) -> int:
                 bundle,
             )
             # Candidate output is always one canonical subordinate observation. It is explicitly
-            # unadmitted and non-authoritative; only the external release-candidate bridge may
-            # validate it and render a final admitted v2 human or JSON report.
+            # unadmitted and non-authoritative, and since the external candidate-execution bridge
+            # was deleted with the acquisition engine, nothing in this tree admits it or renders a
+            # final v2 report from it. The v2 schema stays validated so a later admitter has a
+            # contract to meet; until one exists, this output is an observation and nothing more.
             sys.stdout.write(canonical_json(observation))
             return 0
         policy = load_policy(root)

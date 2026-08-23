@@ -17,7 +17,7 @@ TWO SEALS, DELIBERATELY NESTED, EACH WITH ITS OWN JOB.
     record_sha256  = sha256( canonical( body MINUS record_sha256 ) )
     content_digest = sha256( canonical( body INCLUDING record_sha256 ) )
 
-`record_sha256` is the acquisition receipt's own pattern (`scripts/release_candidate_acquisition.py`
+`record_sha256` is the acquisition receipt's own pattern (`scripts/write_acquisition_receipt.py`
 pops the key, seals, then writes the digest back), and it exists because the body travels as a record
 in its own right: a consumer holding only the body can still detect a hand-edit. `content_digest` is
 the envelope's, unchanged, and it therefore seals the body's seal. `canonical` is one form in both

@@ -39,8 +39,8 @@ checked existence and branch occupancy; they never checked that the destination 
 symlink, a mount crossing, or a special node, and they never distinguished an active registration
 from a drifted one (a predecessor's `rm -rf` that left the entry registered). `tools/worktree-custody-preflight.py`
 is the executable form of exactly those seven checks (including destination existence itself —
-absent, or an existing but empty directory), extracted read-only from `activation-planner.py`'s
-own custody primitive:
+absent, or an existing but empty directory). It is self-contained and read-only; the retired
+activation planner it was originally extracted from is gone, and this tool carries the primitive:
 
 ```sh
 REPO=$(git -C <repo> rev-parse --show-toplevel)

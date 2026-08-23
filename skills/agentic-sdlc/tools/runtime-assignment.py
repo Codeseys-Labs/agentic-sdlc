@@ -56,7 +56,7 @@ canonically valid.
 
 WHY IT IMPORTS NEITHER OPERAND. `receipt_admission.py` lives in another skill's tree and reads its
 policy from its own `__file__`; the activation family's tools are hyphen-named scripts loaded by
-path. This module follows `activation-result.py`'s rule and re-expresses the two seams it needs --
+path. This module re-expresses rather than imports the two seams it needs --
 `receipt_admission.canonical_json`'s newline-free `ensure_ascii=False` form for every receipt-side
 digest, and the activation family's sorted/tight/ASCII/one-trailing-newline form for its own output.
 The vocabularies are NOT re-expressed: the allowed efforts, context forms, and the exact model ID ->

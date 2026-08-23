@@ -42,9 +42,10 @@ RECOGNIZED_COMMANDS = DESIRED_COMMANDS + HISTORICAL_ALIASES
 # replacement of that file is outside this lifecycle, and claiming otherwise would be a false
 # guarantee. What it does record is the binding: the resolved path is part of the installed bytes,
 # so the entry's ownership digest covers it and a rebinding surfaces as a refresh or a conflict
-# rather than silently. Digest-pinned bash ADMISSION stays where it is measured -- the linux-x64
-# release-candidate surface (`trusted_bash` in policy/release-candidate-execution.v1.json,
-# enforced by release_candidate.py `_trusted_bash`).
+# rather than silently. Digest-pinned bash ADMISSION has no home in this tree at all now: the
+# linux-x64 candidate-execution surface that measured it, its policy document, and its enforcement
+# were deleted with the acquisition engine, so this resolver's binding record is the whole of what
+# is claimed here.
 BASH_INTERPRETER_CANDIDATES = (Path("/usr/bin/bash"), Path("/bin/bash"))
 
 

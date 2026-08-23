@@ -17,49 +17,13 @@ build/
 .claude/settings.local.json
 .gstack/
 
-# Activation receipts and recovery journals are no longer here to ignore: they live in the
-# operator's own plane, `${XDG_STATE_HOME:-~/.local/state}/ccodex/activation/<per-checkout
-# key>/` (ADR-0018, ADR-0022 decision 3, CONTEXT.md, product-spec Implementation Decision 11).
-# A receipt binds owned paths, hashes, tool identities, and trust state for ONE physical clone
-# or worktree, which is operator-plane data rather than repository data, so the former
-# `.agentic-sdlc/receipts/` and `.agentic-sdlc/transactions/` entries would now ignore paths the
-# engine never creates.
+# `.agentic-sdlc/` carries no machine-local activation state any more. The transactional
+# activation engine that produced receipts, transaction journals, plane pointers, and
+# `repo.toml` is deleted, so the former `.agentic-sdlc/receipts/`, `.agentic-sdlc/transactions/`,
+# and `.agentic-sdlc/plane.*.json` rules would ignore paths nothing writes. Repository
+# activation is now a reviewed diff written by `instruction-generator.py apply`, and its
+# evidence is the Git history of the files it changed.
 #
-# Exactly ONE machine-local file is still produced in the tree, and it is the one entry below.
-.agentic-sdlc/plane.*.json
-# `.agentic-sdlc/plane.<digest of the plane root path>.json` is the engine's own pointer to the
-# plane its state went into. It exists because the plane key is the digest of the checkout's
-# ABSOLUTE path: rename the checkout and the engine resolves a fresh, empty plane while the old
-# one still holds an unresolved journal for a product that is still published in the tree. The
-# pointer travels with the directory, so the old plane stays exactly nameable and the engine
-# refuses instead of reporting `inactive` with `effect: none`. It is ignored for the same reason
-# a receipt was: it records one machine's own plane path, which is not repository data.
-#
-# Committing it anyway does not corrupt anything, and it does not silently work either: Git
-# records no mode, so a fresh clone materializes it at the caller's umask and the engine refuses
-# it as `unsafe private plane pointer` rather than trusting a file it did not write. Delete the
-# tracked copy; do not chmod it back.
-#
-# `.agentic-sdlc/repo.toml` and `.agentic-sdlc/rightsize/` are the tracked, public half of that
-# root and are deliberately VISIBLE to Git. Neither omission is an oversight — do not "tidy"
-# either one into an ignore rule, because doing so silently defeats a decision the activation
-# engine depends on:
-#   * `.agentic-sdlc/repo.toml` — ADR-0022 decision 2 makes it the one tracked, public file
-#     in that root. The engine relies on seeing it in its Git projection to refuse a DIRTY
-#     manifest; hidden, an uncommitted edit to repository policy rides along inside an
-#     approved activation.
-#   * `.agentic-sdlc/rightsize/` — rendered recommendation artifacts a reader may commit, so
-#     they stay visible for the same reason. Hiding them would let the same file behave
-#     differently tracked versus untracked.
-# Both carve-outs, and the pointer's own suppression, are enforced in the projection filter in
-# `skills/agentic-sdlc/tools/activation-planner.py`; search for "stays VISIBLE to the Git
-# projection" and "EARNS suppression" rather than line numbers, which drift. The ignore rule
-# above is a convenience for the human reading `git status`: the engine suppresses the pointer
-# from its OWN projection regardless, because a target with no such rule must not fail the
-# clean-tree check on every apply after the first.
-#
-# `AGENTIC_SDLC_ACTIVATION_STATE=repo-local` is the one selection that puts `receipts/` and
-# `transactions/` back inside a target tree, for a checkout whose filesystem the plane
-# cannot share. That state stays unignored on purpose: the operator asked for state in their
-# repository, and the engine's projection filter already excludes it from the clean-tree
-# check, so hiding it from `git status` too would be the worse of the two surprises.
+# `.agentic-sdlc/rightsize/` remains deliberately VISIBLE to Git: rendered recommendation
+# artifacts a reader may commit. Do not "tidy" it into an ignore rule — hiding it would let the
+# same file behave differently tracked versus untracked.
