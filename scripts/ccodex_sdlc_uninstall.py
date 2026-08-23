@@ -45,8 +45,10 @@ DELIBERATE RESIDUALS
   * A validated receipt is a well-formed statement, not a true one.  This module re-proves every
     digest on disk rather than trusting the inventory, but it cannot prove that the plane's entries
     were ever what the receipt says they were.
-  * The digest and identity re-proofs narrow a window; they are not a boundary against a same-UID
-    racer mutating a destination between the proof and the rename.
+  * The digest re-proofs narrow a window; they are not a boundary against a same-UID racer mutating
+    a destination between the proof and the rename.  ``install_skill_bundle.rename_absent`` likewise
+    proves its target absent and then renames, which is two syscalls rather than one atomic
+    no-replace rename: the same racer is out of scope for it too.
   * A completed retirement is EVIDENCE.  It authorizes no push, publication, PR mutation, merge,
     deployment, or any other outward effect.
   * ``terminal_phase`` comes from the receipt family's closed matrix, not from this module's opinion:
@@ -620,9 +622,10 @@ def remove_one(
     """Quarantine one proved-owned entry, then delete the quarantined copy. Reused primitives only.
 
     The shape is the installer's own ``transactional_delete``: reserve a private container beside the
-    destination, record the armed transaction durably, atomically rename the destination into the
-    container with a no-replace rename, record the quarantine, then remove the quarantined payload and
-    the now-empty container.  A failure BEFORE the rename moved nothing and is reported as attention;
+    destination, record the armed transaction durably, rename the destination into the container in
+    one namespace operation once ``rename_absent`` has proved the target absent, record the
+    quarantine, then remove the quarantined payload and the now-empty container.  A failure BEFORE
+    the rename moved nothing and is reported as attention;
     a failure AFTER it is an unknown effect, because the entry has left the plane and this module will
     not claim where it ended up.
 
@@ -655,7 +658,6 @@ def remove_one(
         "destination": str(destination),
         "entry_name": row["entry_name"],
         "expected_sha256": expected,
-        "identity": artifact.identity,
         "payload": str(artifact.payload),
     }
 

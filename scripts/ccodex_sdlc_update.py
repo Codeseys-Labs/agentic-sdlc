@@ -1512,12 +1512,12 @@ def classify_footprint(
             f"the admitted candidate payload at {show(str(payload.candidate_root))} carries no"
             " claude-host entries, so there is nothing this refresh could write"
         )
-    outstanding = sorted(state.get("transactions", {}))
-    if outstanding:
+    outstanding = state.get("pending")
+    if isinstance(outstanding, dict):
         raise Refusal(
-            f"the installer ownership state holds {len(outstanding)} outstanding lifecycle"
-            f" transaction(s), the first being {show(outstanding[0])}; recovery is a separate explicit"
-            " operation and this update never resolves one"
+            "the installer ownership state holds an outstanding lifecycle transition for"
+            f" {show(str(outstanding.get('path')))}; recovery is a separate explicit operation and"
+            " this update never resolves one"
         )
     planned: list[PlannedEntry] = []
     footprint: set[str] = set()
@@ -1991,11 +1991,8 @@ def refresh(
         try:
             bundle.ensure_collection(item.entry, item.destination, bundle_config)
             if item.action == ACTION_INSTALL:
-                root_token, collection_token = bundle.authority_tokens(
-                    item.entry, item.destination, bundle_config
-                )
                 mode = bundle.transactional_create(
-                    item.entry, item.destination, bundle_config, state, root_token, collection_token
+                    item.entry, item.destination, bundle_config, state
                 )
                 disposition = DISPOSITION_INSTALLED
             else:
@@ -2006,7 +2003,6 @@ def refresh(
                     bundle_config,
                     state,
                     item.record,
-                    old_owned=True,
                     action_name="refresh",
                 )
                 disposition = DISPOSITION_REFRESHED
@@ -2394,12 +2390,12 @@ def run_update(config: Config, run: Run) -> int:
         try:
             state = bundle.load_config_state(bconfig)
         except bundle.InstallerError as exc:
+            # Every ownership schema but the installer's current one is refused HERE, by
+            # `load_config_state`, whose message names the version it found and the remedy.
+            # There is no per-generation branch left to take: demolition rank 4 deleted the
+            # v1/v2/v3 readers and their migrations, so a document this installer did not
+            # write is one refusal rather than several.
             raise Refusal(f"the installer ownership state is not readable: {show(exc)}") from exc
-        if state.get("version") == 1:
-            raise Refusal(
-                "the installer ownership state is still v1; explicit state migration is a separate"
-                " operation and this update never performs one"
-            )
         try:
             bundle.validate_state(bconfig, state)
         except bundle.InstallerError as exc:

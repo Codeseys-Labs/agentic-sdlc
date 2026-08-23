@@ -393,20 +393,50 @@ idempotence or Git-wave readiness from intent alone.
 Unix installs use symlinks. Windows automatic mode tries directory junctions and file
 symlinks, then falls back to copies; strict link mode has no fallback. Ownership state lives
 under `XDG_STATE_HOME` on Unix or `LOCALAPPDATA` on Windows. Write commands serialize on that
-state file and fail closed when stable physical identity or atomic no-replace primitives are
-unavailable; Linux lifecycle mutation requires glibc 2.28+ and `statx` birth-time support. Status
-inspects every known v1 document without rewriting it, and ordinary lifecycle commands block
-while one is outstanding. `bundle:install -- --migrate-state --dry-run` previews an exact,
-state-only conversion; `bundle:install -- --migrate-state` merges all exact records from the
-operator and configured-home legacy paths into central v2 without installing, refreshing, or
-adopting an unrecorded file or link. Diagnose unowned destinations with an install dry run;
-`--migrate-state` is not a repair path for them. A distinct legacy source is retired only after
-durable v2 persistence and an exact recheck. Linux/macOS persistence-barrier failures stop
-mutation; native Windows provides
-handle-bound process-crash recovery but does not claim sudden-power-loss durability for namespace
-transitions. Concurrent external mutation of managed paths during a write command is unsupported.
-Exact legacy links and byte-identical copies can be adopted; foreign, retargeted, and modified
-entries are preserved, while unchanged owned copies may refresh.
+state file.
+
+**Ownership is BYTE identity, not physical identity, and that is a deliberate weakening — read both
+halves of it.** An ownership record names its destination, its mode, and the digest of the bytes this
+lifecycle published there; there is no `statx`/`stat` birth-timestamp witness, no device/inode
+ownership token, and no settlement probe anywhere in the installer — the read-only projection's
+torn-read guard stats the state file for read stability, and no `stat` result ever justifies a
+mutation. So: a destination the operator MODIFIED is still refused, because any content they add,
+edit, or retarget changes the tree digest or the link target — status reports a conflict and
+install and uninstall preserve it untouched. But a destination the operator replaced with a
+BYTE-IDENTICAL copy of the bundle's own payload is now REMOVED by uninstall, where the retired
+witness refused it, and the same applies to a recreated link pointing at the same source and to a
+configured home the operator re-pointed at a directory holding an identical copy. The harm is
+bounded rather than absent: what is removed is byte-for-byte the bundle's own payload, and no
+content an operator authored can be byte-identical to a payload they did not write. What the
+weakening buys is that the installer no longer refuses to run at all on a filesystem exposing no
+birth timestamp (NFS, several FUSE and overlay mounts) or on a libc without `renameat2` — there
+is no glibc-2.28 or birth-time requirement left. `assert_safe_collection` is the boundary byte
+identity cannot substitute for and it is asserted before any destination is read, so a collection
+replaced with a link is refused by name rather than followed.
+
+The installer admits exactly ONE ownership schema. A document written by any other generation is
+refused by name, naming the version it found and the remedy — remove it and reinstall — and its bytes
+are never retrofitted. There is no `--migrate-state` flag and no per-generation reader: the physical
+witnesses and the transaction journal those documents carried no longer exist, so there is nothing a
+migration could faithfully convert. Crash consistency is one `pending` slot mirrored from
+`install_operator_tools.py`: a write arms the intended transition durably, moves the bytes, then
+commits, and a later run resolves it by comparing the live bytes to the armed `before`/`after`
+records. Bytes matching neither are reported and preserved, never guessed at. A copy-mode tree swap
+is a rename-aside pair rather than one atomic replace, so an interruption inside it can leave the
+previous tree parked in a named `.<name>.old-*` sibling; every such leftover is NAMED in the report
+for the operator to remove by hand and is never deleted on their behalf. Linux/macOS
+persistence-barrier failures stop mutation; native Windows provides handle-bound process-crash
+recovery but does not claim sudden-power-loss durability for namespace transitions, and staged copy
+CONTENT is no longer fsynced tree-wide either, so a copy-mode publication is process-crash consistent
+rather than power-loss durable. Concurrent external mutation of managed paths during a write command
+is unsupported. Exact legacy links and byte-identical copies can be adopted; foreign, retargeted, and
+modified entries are preserved, while unchanged owned copies may refresh. The measured argument for
+the weakening is recorded in `docs/research/2026-08-22-ci-red-forensics.md` and quoted in
+`docs/research/2026-08-22-overengineering-audit.json` at `result.synthesis`: on the reference CI
+runner the retired witness recorded an identical `(inode, btime)` pair in 20 of 20 delete-recreate
+trials, so it carried no discriminating information exactly where it was tested. That audit's
+`audits[0]` carries the qualitative deletion argument, not the measurement. No ADR governed the
+retired layer, so none is superseded here; this paragraph is the doctrine of record.
 
 Native Windows runs the current-host task normally. From WSL, all-host tasks run WSL first,
 then invoke native Windows mise and report the two hosts separately. `hooks:install` installs

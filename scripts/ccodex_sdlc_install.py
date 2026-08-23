@@ -41,8 +41,8 @@ THE FOUR PHASES, IN ORDER, EACH REFUSING BY NAME BEFORE THE NEXT COULD MOVE ANYT
      ``foreign`` or ``modified`` entry is PRESERVED and NAMED in both the journal and the receipt
      inventory rather than adopted, replaced, or dropped.  There is no wildcard, no ``--all``, no
      purge, and no presence-based overwrite or delete.  The per-entry effect runs through the
-     shipped installer's crash-consistent transactions, so an interruption leaves a recoverable
-     journal plus an outstanding transaction record, never a half-state reported complete.
+     shipped installer's crash-consistent transitions, so an interruption leaves a recoverable
+     journal plus its one armed ownership transition, never a half-state reported complete.
   4. SEAL ONE ``distribution-activation@1`` RECEIPT.  The sibling T1 producer derives both seals
      over the observation this module made: operation ``install``, the exact resolved candidate
      identity, the per-entry inventory with digests and prestates, the effect state and terminal
@@ -1153,13 +1153,12 @@ def classify_entries(
             f"the admitted candidate payload at {show(str(payload.candidate_root))} carries no"
             " claude-host entries, so there is nothing this activation could copy"
         )
-    outstanding = sorted(state.get("transactions", {}))
-    if outstanding:
+    outstanding = state.get("pending")
+    if isinstance(outstanding, dict):
         raise Refusal(
-            "the installer ownership state holds"
-            f" {len(outstanding)} outstanding lifecycle transaction(s), the first being"
-            f" {show(outstanding[0])}; recovery is a separate explicit operation and this activation"
-            " never resolves one"
+            "the installer ownership state holds an outstanding lifecycle transition for"
+            f" {show(str(outstanding.get('path')))}; recovery is a separate explicit operation and"
+            " this activation never resolves one"
         )
     planned: list[PlannedEntry] = []
     for entry in discovered:
@@ -1511,12 +1510,9 @@ def activate(
         run.effect_started = True
         try:
             bundle.ensure_collection(item.entry, item.destination, bundle_config)
-            root_token, collection_token = bundle.authority_tokens(
-                item.entry, item.destination, bundle_config
-            )
             if item.action == ACTION_INSTALL:
                 mode = bundle.transactional_create(
-                    item.entry, item.destination, bundle_config, state, root_token, collection_token
+                    item.entry, item.destination, bundle_config, state
                 )
                 disposition = DISPOSITION_INSTALLED
             else:
@@ -1527,7 +1523,6 @@ def activate(
                     bundle_config,
                     state,
                     item.record,
-                    old_owned=True,
                     action_name="refresh",
                 )
                 disposition = DISPOSITION_REFRESHED
@@ -1804,12 +1799,12 @@ def run_install(config: Config, run: Run) -> int:
         try:
             state = bundle.load_config_state(bundle_config)
         except bundle.InstallerError as exc:
+            # Every ownership schema but the installer's current one is refused HERE, by
+            # `load_config_state`, whose message names the version it found and the remedy.
+            # There is no per-generation branch left to take: demolition rank 4 deleted the
+            # v1/v2/v3 readers and their migrations, so a document this installer did not
+            # write is one refusal rather than several.
             raise Refusal(f"the installer ownership state is not readable: {show(exc)}") from exc
-        if state.get("version") == 1:
-            raise Refusal(
-                "the installer ownership state is still v1; explicit state migration is a separate"
-                " operation and this activation never performs one"
-            )
         try:
             bundle.validate_state(bundle_config, state)
         except bundle.InstallerError as exc:

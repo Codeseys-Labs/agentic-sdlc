@@ -1132,7 +1132,8 @@ IDENTITY_VERSION = "stat-v2"
 # This is a BOUND, not a sleep: a fine-grained host pays one throwaway create per recording site and
 # never waits, and a coarse-clock host pays one quantum for everything the run deferred, plus the
 # constant inline settle of the pre-existing target root. Never one quantum per file.
-# Kept identical to `scripts/install_skill_bundle.py` on purpose.
+# These values were shared with the witness layer `scripts/install_skill_bundle.py` carried until
+# demolition rank 4 (agentic-sdlc-0c38) deleted that layer; this module now owns them alone.
 BIRTH_SETTLE_TIMEOUT_SECONDS = 3.0
 BIRTH_SETTLE_FIRST_POLL_SECONDS = 0.0005
 BIRTH_SETTLE_MAX_POLL_SECONDS = 0.05
@@ -1471,11 +1472,12 @@ def _settlement_targets(
 ) -> list[tuple[Path, tuple[int, int], Path]]:
     """Resolve witnesses into `(path, birth order, directory to probe)` settlement targets.
 
-    Same defect, same shape, same fix as `settlement_targets` in
-    `scripts/install_skill_bundle.py`: `stat-v2` names an object by device, inode, and birth
-    timestamp; inodes are reused; and every filesystem quantizes the birth timestamp, so while a
-    newly created object's own quantum is still open a delete-and-recreate at the same name can
-    land on the same inode carrying the same witness. This installer's exposure is not
+    Same defect, shape, and fix as the `settlement_targets` the bundle installer carried until
+    demolition rank 4 (agentic-sdlc-0c38) replaced its ownership test with byte identity and deleted
+    that layer from `scripts/install_skill_bundle.py`: `stat-v2` names an object by device, inode,
+    and birth timestamp; inodes are reused; and every filesystem quantizes the birth timestamp, so
+    while a newly created object's own quantum is still open a delete-and-recreate at the same name
+    can land on the same inode carrying the same witness. This installer's exposure is not
     theoretical but structural -- its transactions mint a witness and persist it into
     `state.json` within MILLISECONDS, which is exactly the window a coarse-clock host leaves
     open, and a later run's recovery or `_authority_matches` then treats the replacement as owned.

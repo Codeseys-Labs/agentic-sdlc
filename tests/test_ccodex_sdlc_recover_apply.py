@@ -163,67 +163,39 @@ class RecoverApplyHarness(unittest.TestCase):
         destination = bundle.destination_for(entry, config)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, destination)
-        record = bundle.entry_record(
-            entry,
-            "copy",
-            # The configured ROOT of a claude entry is the operator's home, not the collection above
-            # the destination: an identity taken from the wrong directory makes every layout read as
-            # a conflict, which would make a recovery test pass while recovering nothing.
-            bundle.stat_identity(bundle.configured_root(entry, config)),
-            bundle.stat_identity(destination.parent),
-            installed_path=destination,
-        )
+        record = bundle.entry_record(entry, "copy", installed_digest=bundle.digest(destination))
         return destination, record, source
 
-    def armed_create(
-        self, destination: Path, record: dict[str, object], stage: Path | None
-    ) -> dict[str, object]:
-        container = stage or destination.parent / f".{destination.name}.stage-opaque"
-        return {
-            "operation": "create",
-            "phase": "armed",
-            "key": str(destination),
-            "destination": str(destination),
-            "old_record": None,
-            "old_owned": False,
-            "new_record": record,
-            "stage_container": str(container),
-            "stage_payload": str(container / "payload"),
-            "stage_identity": bundle.stat_identity(container)
-            if container.exists()
-            else bundle.stat_identity(destination.parent),
-            "backup_container": None,
-            "backup_payload": None,
-            "backup_identity": None,
-        }
+    def armed_install(self, destination: Path, record: dict[str, object]) -> dict[str, object]:
+        return bundle.pending_slot("install", str(destination), None, record)
 
-    def write_journal(self, environment: dict[str, str], transactions: dict[str, object]) -> Path:
+    def write_journal(self, environment: dict[str, str], pending: dict[str, object] | None) -> Path:
         path = self.bundle_state_path(environment)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps({"version": 3, "entries": {}, "transactions": transactions}), encoding="utf-8"
+            json.dumps({"version": bundle.STATE_VERSION, "entries": {}, "pending": pending}),
+            encoding="utf-8",
         )
         return path
 
     def plant_finalizable_transaction(
         self, root: Path, environment: dict[str, str]
     ) -> tuple[Path, Path]:
-        """An armed create whose destination is already exact: recovery FINALIZES it."""
+        """An armed install whose destination already holds the recorded bytes: recovery COMMITS it."""
         destination, record, _source = self.planted_entry(root, environment, "finalize-fixture")
-        journal = self.write_journal(
-            environment, {str(destination): self.armed_create(destination, record, None)}
-        )
+        journal = self.write_journal(environment, self.armed_install(destination, record))
         return destination, journal
 
     def plant_rollbackable_transaction(
         self, root: Path, environment: dict[str, str]
     ) -> tuple[Path, Path, Path]:
-        """An armed create that never published: the staged candidate is rolled back and removed.
+        """An armed install that never published: the destination is absent, so recovery ABORTS it.
 
-        The record is built from the STAGED payload, which is what the real transaction records: a
-        publish is a rename, so the payload's identity is the identity the destination would have
-        had.  Building it from a destination that never existed would make the layout read as a
-        conflict and the rollback below would prove nothing.
+        The record's digest is the STAGED payload's, which is what a real transition records: a
+        publish is a rename, so those are the bytes the destination would have carried.  The staged
+        container is left on disk by design -- ``recover_pending`` decides ownership and never moves
+        bytes, and ``leftover_messages`` names the container instead of deleting the only copy of what
+        the interrupted run had built.
         """
         config = self.bundle_config(environment)
         name = "rollback-fixture"
@@ -237,15 +209,9 @@ class RecoverApplyHarness(unittest.TestCase):
         stage.mkdir()
         shutil.copytree(source, stage / "payload")
         record = bundle.entry_record(
-            entry,
-            "copy",
-            bundle.stat_identity(bundle.configured_root(entry, config)),
-            bundle.stat_identity(destination.parent),
-            installed_path=stage / "payload",
+            entry, "copy", installed_digest=bundle.digest(stage / "payload")
         )
-        journal = self.write_journal(
-            environment, {str(destination): self.armed_create(destination, record, stage)}
-        )
+        journal = self.write_journal(environment, self.armed_install(destination, record))
         return destination, stage, journal
 
     def plant_operator_tools_pending(
@@ -557,7 +523,10 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
             digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
 
             document = json.loads(journal.read_text(encoding="utf-8"))
-            document["transactions"][str(destination)]["phase"] = "abort-cleanup"
+            # Move the state the plan was derived from: the armed record now names bytes the live
+            # destination does not carry, so the derivation classifies `install/live-other` instead of
+            # `install/live-after` and the plan digest moves with it.
+            document["pending"]["after"]["digest"] = "0" * 64
             journal.write_text(json.dumps(document), encoding="utf-8")
 
             moved, _ = self.plan_digest_from_dry_run(dispatcher, environment)
@@ -565,8 +534,10 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
 
             # And it moves for a journal edit no recovery ITEM reflects: an ownership record is state
             # too, so the plan's own byte digest of the journal is what makes the approval specific
-            # rather than merely descriptive of the transactions it happens to list.
-            document["transactions"][str(destination)]["phase"] = "armed"
+            # rather than merely descriptive of the transition it happens to list.
+            document["pending"] = self.armed_install(
+                destination, dict(document["pending"]["after"], digest=bundle.digest(destination))
+            )
             neighbour, record, _source = self.planted_entry(root, environment, "unrelated-neighbour")
             document["entries"] = {str(neighbour): record}
             journal.write_text(json.dumps(document), encoding="utf-8")
@@ -722,10 +693,10 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
 
             self.assertEqual(applied.returncode, 0, applied.stderr)
             self.assertIn("plan re-derived from verified journal and receipt state", applied.stdout)
-            self.assertIn("bundle: recovered:", applied.stdout)
+            self.assertIn("bundle: recovered commit:", applied.stdout)
             self.assertIn("authorizes no push, publication, merge, or deployment", applied.stdout)
             document = json.loads(journal.read_text(encoding="utf-8"))
-            self.assertEqual(document["transactions"], {})
+            self.assertIsNone(document["pending"])
             self.assertIn(str(destination), document["entries"])
             self.assertTrue((destination / "SKILL.md").is_file())
             # The plan is spent: the same digest no longer describes this host.
@@ -738,7 +709,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             self.assertEqual(after.returncode, 0, after.stderr)
             self.assertIn("nothing to recover", after.stderr)
 
-    def test_the_exact_digest_rolls_back_an_armed_create_that_never_published(self) -> None:
+    def test_the_exact_digest_aborts_an_armed_install_that_never_published(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment = self.make_dispatcher(root)
@@ -751,12 +722,15 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             )
 
             self.assertEqual(applied.returncode, 0, applied.stderr)
-            self.assertIn("bundle: recovered:", applied.stdout)
+            self.assertIn("bundle: recovered abort:", applied.stdout)
             document = json.loads(journal.read_text(encoding="utf-8"))
-            self.assertEqual(document["transactions"], {})
+            self.assertIsNone(document["pending"])
             self.assertEqual(document["entries"], {})
-            self.assertFalse(stage.exists())
             self.assertFalse(destination.exists())
+            # The staged container is NAMED rather than deleted: it holds the only copy of what the
+            # interrupted run had built, and this resolution moves no bytes at all.
+            self.assertIn("leftover:", applied.stdout)
+            self.assertTrue((stage / "payload" / "SKILL.md").is_file())
 
     def test_a_stale_digest_refuses_by_name_and_touches_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -766,7 +740,10 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
 
             document = json.loads(journal.read_text(encoding="utf-8"))
-            document["transactions"][str(destination)]["phase"] = "abort-cleanup"
+            # Move the state the plan was derived from: the armed record now names bytes the live
+            # destination does not carry, so the derivation classifies `install/live-other` instead of
+            # `install/live-after` and the plan digest moves with it.
+            document["pending"]["after"]["digest"] = "0" * 64
             journal.write_text(json.dumps(document), encoding="utf-8")
             before = tree_hash(*self.observed_roots(environment))
 
@@ -829,9 +806,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             destination, record, _source = self.planted_entry(root, environment, "conflict-fixture")
             foreign = destination / "SKILL.md"
             foreign.write_text("---\nname: foreign\n---\n", encoding="utf-8")
-            journal = self.write_journal(
-                environment, {str(destination): self.armed_create(destination, record, None)}
-            )
+            journal = self.write_journal(environment, self.armed_install(destination, record))
             digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
             payload_before = foreign.read_bytes()
 
@@ -846,7 +821,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             self.assertIn("preserved state is never overwritten or deleted", applied.stdout)
             self.assertEqual(foreign.read_bytes(), payload_before)
             document = json.loads(journal.read_text(encoding="utf-8"))
-            self.assertIn(str(destination), document["transactions"])
+            self.assertEqual(document["pending"]["path"], str(destination))
 
     def test_the_operator_tools_plane_is_rolled_back_through_its_own_machinery(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1124,7 +1099,7 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
                 Path(environment["XDG_STATE_HOME"]),
             )
             plan = {
-                "items": [{"component": "bundle", "path": "bundle-transaction://claude/skill/1"}],
+                "items": [{"component": "bundle", "path": "bundle-transition://claude/skill/1"}],
                 "journal": [
                     {
                         "component": "bundle",
@@ -1144,9 +1119,7 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
             messages, partial = recover.resume_bundle(bundle, config, plan, ledger)
             self.assertTrue(ledger["moved"])
             self.assertFalse(partial, messages)
-            self.assertEqual(
-                json.loads(journal.read_text(encoding="utf-8"))["transactions"], {}
-            )
+            self.assertIsNone(json.loads(journal.read_text(encoding="utf-8"))["pending"])
             self.assertIn(str(destination), json.loads(journal.read_text(encoding="utf-8"))["entries"])
 
     def test_an_operator_tools_state_swapped_between_derivation_and_the_lock_refuses(self) -> None:

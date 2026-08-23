@@ -1082,7 +1082,7 @@ class DurableCompleteExitZeroTest(Conformance):
         killed = plane.drive(
             "ccodex_sdlc_install",
             ["--host", "claude"],
-            fault={"function": "cleanup_private_artifact", "after": 0, "kind": "sigkill", "message": "killed"},
+            fault={"function": "commit_pending", "after": 0, "kind": "sigkill", "message": "killed"},
         )
         self.assertEqual(-9, killed.returncode, killed.stderr)
         digest, assessment = self.plan_digest(plane)
@@ -1090,9 +1090,9 @@ class DurableCompleteExitZeroTest(Conformance):
         self.assertEqual(EXIT_OK, applied.returncode, applied.stderr)
         self.assertEqual("", applied.stderr)
         self.assertIn("plan re-derived from verified journal and receipt state", applied.stdout)
-        # DURABLY TERMINAL: the interrupted transaction is gone from the ownership journal and the
+        # DURABLY TERMINAL: the interrupted transition is gone from the ownership journal and the
         # very next assessment offers no digest, so exit 0 named a state that stayed reached.
-        self.assertEqual({}, json.loads(plane.installer_state.read_text())["transactions"])
+        self.assertIsNone(json.loads(plane.installer_state.read_text())["pending"])
         again = plane.dispatch("sdlc", "recover", "--dry-run")
         self.assertEqual(EXIT_OK, again.returncode, again.stderr)
         self.assertIn("nothing to recover, so no plan digest is offered", again.stderr)
@@ -1193,7 +1193,7 @@ class CleanRefusalExitThreeTest(Conformance):
         killed = interrupted.drive(
             "ccodex_sdlc_install",
             ["--host", "claude"],
-            fault={"function": "cleanup_private_artifact", "after": 0, "kind": "sigkill", "message": "killed"},
+            fault={"function": "commit_pending", "after": 0, "kind": "sigkill", "message": "killed"},
         )
         self.assertEqual(-9, killed.returncode)
         before = tree_hash(*interrupted.observed_roots())
@@ -1383,7 +1383,7 @@ class AdmittedEffectExitFourTest(Conformance):
         killed = plane.drive(
             "ccodex_sdlc_install",
             ["--host", "claude"],
-            fault={"function": "cleanup_private_artifact", "after": 0, "kind": "sigkill", "message": "killed"},
+            fault={"function": "commit_pending", "after": 0, "kind": "sigkill", "message": "killed"},
         )
         self.assertEqual(-9, killed.returncode)
         digest = self.plan_digest(plane)
@@ -1401,7 +1401,7 @@ class AdmittedEffectExitFourTest(Conformance):
         control.drive(
             "ccodex_sdlc_install",
             ["--host", "claude"],
-            fault={"function": "cleanup_private_artifact", "after": 0, "kind": "sigkill", "message": "killed"},
+            fault={"function": "commit_pending", "after": 0, "kind": "sigkill", "message": "killed"},
         )
         clean = control.drive("ccodex_sdlc_recover", ["--apply", self.plan_digest(control)], fault=None)
         self.assertIn(clean.returncode, (EXIT_OK, EXIT_INTERNAL), clean.stderr)
@@ -1908,7 +1908,7 @@ class StalePrestateTest(Conformance):
         killed = plane.drive(
             "ccodex_sdlc_install",
             ["--host", "claude"],
-            fault={"function": "cleanup_private_artifact", "after": 0, "kind": "sigkill", "message": "killed"},
+            fault={"function": "commit_pending", "after": 0, "kind": "sigkill", "message": "killed"},
         )
         self.assertEqual(-9, killed.returncode)
         assessment = plane.dispatch("sdlc", "recover", "--dry-run")
@@ -1954,14 +1954,16 @@ class StalePrestateTest(Conformance):
 class CrashHonestyTest(Conformance):
     """A REAL ``SIGKILL`` inside the shipped installer's transaction, then the recovery chain.
 
-    The kill lands at ``cleanup_private_artifact`` -- after the transaction is durably journaled and
-    after the destination is published, before the record resolves.  That is the exact window a power
-    loss leaves open, and it is the one the recovery verbs exist for.  No signal handler runs, so the
-    state the chain then reads is not a state any ``except`` clause tidied.
+    The kill lands at ``commit_pending`` -- after the transition is durably armed in the installer's
+    one ``pending`` slot and after the destination is published, before the ownership record resolves.
+    That is the exact window a power loss leaves open, and it is the one the recovery verbs exist for.
+    No signal handler runs, so the state the chain then reads is not a state any ``except`` clause
+    tidied.  This kill point was ``cleanup_private_artifact`` until demolition rank 4 replaced the
+    per-entry transaction journal with that slot; the window it names is the same one.
     """
 
     SIGKILL_FAULT = {
-        "function": "cleanup_private_artifact",
+        "function": "commit_pending",
         "after": 0,
         "kind": "sigkill",
         "message": "killed inside the transaction",
@@ -1988,13 +1990,18 @@ class CrashHonestyTest(Conformance):
         # 1. NO POINTER, NO RECEIPT: the plane makes no statement it did not durably earn.
         self.assertFalse(plane.pointer.exists(), "a killed install must leave no active pointer")
         self.assertEqual([], plane.receipts(), "a killed install seals nothing")
-        # The ownership journal DOES hold the armed transaction, naming its destination and stage.
-        outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"]
-        self.assertEqual(1, len(outstanding), outstanding)
-        transaction = next(iter(outstanding.values()))
-        self.assertEqual("armed", transaction["phase"])
-        self.assertEqual("create", transaction["operation"])
-        published = Path(transaction["destination"])
+        # The ownership journal DOES hold the armed transition, naming its destination and the record
+        # it would become. No entry record was written yet: that is what `commit_pending` does, and
+        # that is where the kill landed.
+        outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"]
+        self.assertIsNotNone(outstanding, "the armed transition survives the kill")
+        self.assertEqual("install", outstanding["operation"])
+        self.assertIsNone(outstanding["before"])
+        published = Path(outstanding["path"])
+        self.assertNotIn(
+            str(published),
+            json.loads(plane.installer_state.read_text(encoding="utf-8"))["entries"],
+        )
         self.assertTrue(published.exists(), "the kill landed after the publish, which is the point")
 
         # 2. THE NEIGHBOURING VERBS REFUSE, because the plane states no active receipt.
@@ -2019,7 +2026,7 @@ class CrashHonestyTest(Conformance):
 
         # 5. TERMINAL STATE COHERENT: no outstanding transaction, nothing left to recover, the plane
         # still states no activation, and a fresh install now completes and lands its pointer.
-        self.assertEqual({}, json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"])
+        self.assertIsNone(json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"])
         self.assertIn(
             "nothing to recover, so no plan digest is offered",
             plane.dispatch("sdlc", "recover", "--dry-run").stderr,
@@ -2093,8 +2100,8 @@ class CrashHonestyTest(Conformance):
         plane.acquire_b()
         killed = plane.drive("ccodex_sdlc_update", [], fault=self.SIGKILL_FAULT)
         self.assertEqual(-9, killed.returncode)
-        outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"]
-        self.assertEqual(1, len(outstanding), "there IS an interrupted transaction to recover")
+        outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"]
+        self.assertIsNotNone(outstanding, "there IS an interrupted transition to recover")
 
         # 1. THE ASSESSMENT PLANS IT and names no unrecognised evidence: the plane's own receipt is
         # its own evidence.
@@ -2112,7 +2119,7 @@ class CrashHonestyTest(Conformance):
 
         # 3. TERMINAL STATE COHERENT: nothing outstanding, nothing left to recover, and the receipt
         # this run read as evidence is byte-identical -- recognised means READ, never rewritten.
-        self.assertEqual({}, json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"])
+        self.assertIsNone(json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"])
         self.assertIn(
             "nothing to recover, so no plan digest is offered",
             plane.dispatch("sdlc", "recover", "--dry-run").stderr,
@@ -2181,8 +2188,8 @@ class CrashHonestyTest(Conformance):
         plane.acquire_b()
         killed = plane.drive("ccodex_sdlc_update", [], fault=self.SIGKILL_FAULT)
         self.assertEqual(-9, killed.returncode)
-        outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"]
-        self.assertEqual(1, len(outstanding), "there IS an interrupted transaction to recover")
+        outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"]
+        self.assertIsNotNone(outstanding, "there IS an interrupted transition to recover")
 
         # Corrupt the filed receipt's bytes BEFORE the plan is derived at all: the plan's recorded
         # digest for this receipt will be the CORRUPTED digest, so apply's bytes-moved check cannot
@@ -2204,8 +2211,8 @@ class CrashHonestyTest(Conformance):
         self.assertIn(f"activation-receipt://{stem}", applied.stderr)
         self.assertNotIn("unrecognised", applied.stderr)
         self.assertEqual(before_apply, tree_hash(*plane.observed_roots()), "a refusal moves nothing")
-        still_outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"]
-        self.assertEqual(outstanding, still_outstanding, "the outstanding transaction is untouched")
+        still_outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"]
+        self.assertEqual(outstanding, still_outstanding, "the armed transition is untouched")
         self.assert_no_authority_claim(applied.stdout, applied.stderr, assessment.stderr)
 
         # POSITIVE CONTROL: restore the EXACT original bytes and the identical chain completes, which
@@ -2220,189 +2227,120 @@ class CrashHonestyTest(Conformance):
         self.assertEqual(EXIT_OK, restored.returncode, restored.stdout + restored.stderr)
         self.assertIn("recovered", restored.stdout)
         self.assertNotIn("unrecognised", restored.stderr)
-        self.assertEqual({}, json.loads(plane.installer_state.read_text(encoding="utf-8"))["transactions"])
+        self.assertIsNone(json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"])
         self.assertEqual([receipt_path], plane.receipts())
         self.assertEqual(original_bytes, receipt_path.read_bytes(), "recognised means READ, never rewritten")
         self.assert_no_authority_claim(restored.stdout, restored.stderr, restored_assessment.stderr)
 
 
-# ---- (5) old-schema reads --------------------------------------------------------------------------
-
-SCHEMA_FIXTURES = ROOT / "tests" / "fixtures" / "lifecycle-ownership-schemas"
+# ---- (5) one ownership schema, every other generation refused -------------------------------------
 
 
-class OldSchemaReadTest(Conformance):
-    """v1, v2, and v3 ownership documents are READ, each by its own reader, and never retrofitted.
+class OwnershipSchemaTest(Conformance):
+    """One ownership schema is READ; every other generation is refused BY NAME and never retrofitted.
 
-    Slice 3's exit artifact names "the two old-schema readers" (spec:586-591, agentic-sdlc-642f).
-    This section pins the shipped split in CODE rather than trusting the spec sentence alone:
+    Slice 3's exit artifact named "the two old-schema readers" (spec:586-591, agentic-sdlc-642f), and
+    this section used to pin that split: `normalize_document_to_v3` admitted v2 and v3, and
+    `combined_v1_state` recognized v1 for the explicit `--migrate-state` operation. Demolition rank 4
+    (seed agentic-sdlc-0c38) deleted every one of those readers along with the physical-identity
+    witnesses and the transaction journal the old records carried, so there is no longer a second
+    generation to read: a record whose witnesses this installer cannot check is not an ownership
+    claim it can honour.
 
-    * ``normalize_document_to_v3`` admits v2 and v3 and normalizes IN MEMORY.  The disk bytes are
-      never rewritten by a read.
-    * v1 is refused by that normalizer and recognized only by ``combined_v1_state``, the reader the
-      explicit ``--migrate-state`` operation uses.  A lifecycle verb over a v1 document therefore
-      refuses BY NAME instead of silently reading it as empty -- which is the retrofit that would
-      lose every prior ownership record.
+    What survives is the property that mattered -- a lifecycle verb never RETROFITS a document it did
+    not write. It refuses, names the version it found and the remedy, and leaves the bytes alone. The
+    committed `tests/fixtures/lifecycle-ownership-schemas/` documents went with the readers they
+    pinned: with one live schema the real installer's own output is the only fixture that cannot
+    drift.
     """
 
-    def materialize(self, plane: Plane, generation: str) -> Path:
-        """Write one committed fixture into a real plane, with its two placeholders substituted."""
-        source_root = (
-            plane.data_home / "agentic-sdlc" / "acquisition" / "candidates" / ARCHIVE_A / "root"
-        )
-        text = (
-            (SCHEMA_FIXTURES / f"{generation}.json")
-            .read_text(encoding="utf-8")
-            .replace("@CLAUDE_HOME@", str(plane.claude_root))
-            .replace("@SOURCE_ROOT@", str(source_root))
-        )
-        plane.installer_state.parent.mkdir(parents=True, exist_ok=True)
-        plane.installer_state.write_text(text, encoding="utf-8")
-        return plane.installer_state
+    def stripped_to_v1(self, document: dict[str, Any]) -> dict[str, Any]:
+        """The v1 shape: entries only, and only the six fields a v1-era writer produced."""
+        return {
+            "entries": {
+                key: {
+                    name: value
+                    for name, value in record.items()
+                    if name in ("agent", "digest", "kind", "mode", "name", "source")
+                }
+                for key, record in document["entries"].items()
+            },
+            "version": 1,
+        }
 
-    def test_the_committed_fixtures_still_carry_the_installers_own_record_keys(self) -> None:
-        """A fixture that drifted from the shipped record shape would prove nothing about it."""
-        live = self.plane()
-        live.acquire_a()
-        self.install_once(live)
-        produced = json.loads(live.installer_state.read_text(encoding="utf-8"))
-        self.assertEqual(3, produced["version"])
-        real_keys = {frozenset(record) for record in produced["entries"].values()}
-        self.assertEqual(1, len(real_keys), real_keys)
-
-        for generation in ("v2", "v3"):
-            with self.subTest(generation=generation):
-                document = json.loads((SCHEMA_FIXTURES / f"{generation}.json").read_text(encoding="utf-8"))
-                self.assertEqual({"entries", "transactions", "version"}, set(document))
-                self.assertEqual(int(generation[1:]), document["version"])
-                for key, record in document["entries"].items():
-                    self.assertEqual(next(iter(real_keys)), frozenset(record), key)
-        v1 = json.loads((SCHEMA_FIXTURES / "v1.json").read_text(encoding="utf-8"))
-        self.assertEqual({"entries", "version"}, set(v1), "a v1 document carries no transactions")
-        self.assertEqual(1, v1["version"])
-        # The v1 records are exactly what the SHIPPED v1 validator reads, checked against real roots.
+    def test_a_lifecycle_verb_admits_the_current_schema_and_persists_every_prior_record(self) -> None:
         plane = self.plane()
         plane.acquire_a()
         self.install_once(plane)
-        self.materialize(plane, "v1")
-        materialized = json.loads(plane.installer_state.read_text(encoding="utf-8"))
-        for key, record in materialized["entries"].items():
-            with self.subTest(entry=key):
-                self.assertTrue(bundle.v1_record_structure_valid(key, record), record)
-        # Positive control: the same validator rejects a record with a broken digest, so the
-        # acceptances above are the shape and not a validator that accepts anything.
-        key, record = next(iter(materialized["entries"].items()))
-        self.assertFalse(bundle.v1_record_structure_valid(key, {**record, "digest": "٩" * 64}))
+        produced = json.loads(plane.installer_state.read_text(encoding="utf-8"))
+        self.assertEqual(bundle.STATE_VERSION, produced["version"])
+        self.assertEqual({"entries", "pending", "version"}, set(produced))
+        self.assertIsNone(produced["pending"])
+        # Every record carries exactly the closed field set, so a drifted writer fails here.
+        self.assertEqual(
+            {frozenset(bundle.RECORD_FIELDS)},
+            {frozenset(record) for record in produced["entries"].values()},
+        )
+        keys_before = set(produced["entries"])
 
-    def test_v2_and_v3_are_normalized_in_memory_and_the_disk_bytes_are_untouched(self) -> None:
-        for generation in ("v2", "v3"):
-            with self.subTest(generation=generation):
-                plane = self.plane()
-                path = self.materialize(plane, generation)
-                before = path.read_bytes()
-                state = bundle.load_state(path)
-                self.assertEqual(3, state["version"], "both generations normalize to v3 IN MEMORY")
-                self.assertEqual({"entries", "transactions", "version"}, set(state))
-                self.assertEqual(3, len(state["entries"]))
-                self.assertEqual(before, path.read_bytes(), "a READ never rewrites the document")
-        # Positive control: a generation NEWER than v3 is refused by the same reader, so the two
-        # normalizations above are a decision about known versions.
-        plane = self.plane()
-        path = self.materialize(plane, "v3")
-        document = json.loads(path.read_text(encoding="utf-8"))
-        document["version"] = 4
-        path.write_bytes(canonical(document))
-        with self.assertRaises(bundle.InstallerError) as raised:
-            bundle.load_state(path)
-        self.assertIn("written by a newer installer", str(raised.exception))
+        plane.acquire_b()
+        completed = plane.dispatch("sdlc", "update")
 
-    def test_v1_is_refused_by_the_v3_normalizer_and_recognized_by_its_own_reader(self) -> None:
-        plane = self.plane()
-        path = self.materialize(plane, "v1")
-        before = path.read_bytes()
-        document = json.loads(path.read_text(encoding="utf-8"))
-
-        with self.assertRaises(bundle.InstallerError) as raised:
-            bundle.normalize_document_to_v3(document, path)
-        self.assertIn("invalid state", str(raised.exception))
-        self.assertEqual(before, path.read_bytes(), "a refused read never rewrites the document")
-        # THE REFUSAL MUST BE ABOUT THE VERSION, not about v1's missing ``transactions`` key.  A
-        # normalizer that admitted version 1 and only tripped over the absent key would pass the
-        # assertion above while silently upgrading any v1 document that happened to carry one -- the
-        # mutation table (M7) found exactly that hole.  So the same document WITH a transactions key
-        # is asserted refused too.
-        structurally_complete = {**document, "transactions": {}}
-        with self.assertRaises(bundle.InstallerError) as by_version:
-            bundle.normalize_document_to_v3(structurally_complete, path)
-        self.assertIn("invalid state", str(by_version.exception))
-        # Positive control: the identical document at version 2 IS normalized, so the refusal above
-        # is the version field and nothing else about these entries.
-        normalized = bundle.normalize_document_to_v3({**structurally_complete, "version": 2}, path)
-        self.assertEqual(3, normalized["version"])
-        self.assertEqual(set(document["entries"]), set(normalized["entries"]))
-
-        # Its OWN reader recognizes it, and returns it as v1 rather than upgrading it.
-        combined = bundle.combined_v1_state([(document, path)])
-        self.assertIsNotNone(combined)
-        assert combined is not None
-        self.assertEqual(1, combined["version"])
-        self.assertEqual(set(document["entries"]), set(combined["entries"]))
-        self.assertNotIn("transactions", combined)
-        # Positive control: the SAME v1 reader returns None for a v2 document, so the recognition
-        # above is the version field and not a reader that claims every document.
-        v2 = json.loads((SCHEMA_FIXTURES / "v2.json").read_text(encoding="utf-8"))
-        self.assertIsNone(bundle.combined_v1_state([(v2, path)]))
-
-    def test_a_lifecycle_verb_admits_a_v2_document_and_refuses_v1_and_v4_by_name(self) -> None:
-        """The same three generations, driven through the REAL ``ccodex sdlc update``."""
-        admitted = self.plane()
-        admitted.acquire_a()
-        self.install_once(admitted)
-        real_v3 = json.loads(admitted.installer_state.read_text(encoding="utf-8"))
-        self.assertEqual(3, real_v3["version"])
-        keys_before = set(real_v3["entries"])
-        # A v2 document with the records a real install wrote: the ONLY difference is the version.
-        admitted.installer_state.write_bytes(canonical({**real_v3, "version": 2}))
-        admitted.acquire_b()
-        completed = admitted.dispatch("sdlc", "update")
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
-        persisted = json.loads(admitted.installer_state.read_text(encoding="utf-8"))
-        # A verb that had to PERSIST ownership writes v3, and it carries every prior record: the old
-        # schema was read, not discarded.  This is the one write, and it is not a read-time retrofit.
-        self.assertEqual(3, persisted["version"])
+        persisted = json.loads(plane.installer_state.read_text(encoding="utf-8"))
+        self.assertEqual(bundle.STATE_VERSION, persisted["version"])
         self.assertEqual(keys_before, set(persisted["entries"]))
 
-        for generation, fragment in (
-            (1, "the installer ownership state is still v1"),
-            (4, "was written by a newer installer"),
-        ):
+    def test_every_other_generation_is_refused_by_name_and_never_retrofitted(self) -> None:
+        for generation in (1, 2, 3, bundle.STATE_VERSION + 1):
             with self.subTest(version=generation):
                 plane = self.plane()
                 plane.acquire_a()
                 self.install_once(plane)
                 document = json.loads(plane.installer_state.read_text(encoding="utf-8"))
                 if generation == 1:
-                    document = {
-                        "entries": {
-                            key: {
-                                name: value
-                                for name, value in record.items()
-                                if name in ("agent", "digest", "kind", "mode", "name", "source")
-                            }
-                            for key, record in document["entries"].items()
-                        },
-                        "version": 1,
-                    }
+                    document = self.stripped_to_v1(document)
                 else:
                     document["version"] = generation
                 plane.installer_state.write_bytes(canonical(document))
                 before = plane.installer_state.read_bytes()
+
                 plane.acquire_b()
                 refused = plane.dispatch("sdlc", "update")
+
                 self.assertEqual(EXIT_REFUSED, refused.returncode, refused.stderr)
-                self.assertIn(fragment, refused.stderr)
+                self.assertIn("different installer schema", refused.stderr)
+                self.assertIn(f"version {generation}", refused.stderr)
+                self.assertIn("remove it and reinstall to rebuild it", refused.stderr)
                 self.assertEqual(before, plane.installer_state.read_bytes(), "never retrofitted")
                 self.assertEqual("", refused.stdout)
+
+    def test_the_reader_refuses_the_same_generations_in_process_without_a_write(self) -> None:
+        """The same rule at the library seam, where the message and the untouched bytes are visible."""
+        plane = self.plane()
+        plane.acquire_a()
+        self.install_once(plane)
+        path = plane.installer_state
+        current = json.loads(path.read_text(encoding="utf-8"))
+
+        for generation in (1, 2, 3, bundle.STATE_VERSION + 1):
+            with self.subTest(version=generation):
+                document = self.stripped_to_v1(current) if generation == 1 else {
+                    **current, "version": generation
+                }
+                path.write_bytes(canonical(document))
+                before = path.read_bytes()
+                with self.assertRaises(bundle.InstallerError) as raised:
+                    bundle.load_state(path)
+                self.assertIn("different installer schema", str(raised.exception))
+                self.assertEqual(before, path.read_bytes(), "a refused read never rewrites")
+
+        # Positive control: the untouched current document IS read, so the refusals above are the
+        # version field and nothing else about these records.
+        path.write_bytes(canonical(current))
+        state = bundle.load_state(path)
+        self.assertEqual(bundle.STATE_VERSION, state["version"])
+        self.assertEqual(set(current["entries"]), set(state["entries"]))
 
 
 # ---- (6) non-authority ------------------------------------------------------------------------------

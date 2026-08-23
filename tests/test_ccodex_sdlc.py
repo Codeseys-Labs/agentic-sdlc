@@ -128,33 +128,12 @@ class CcodexSdlcTests(unittest.TestCase):
         destination.parent.mkdir(parents=True)
         destination.mkdir()
         (destination / "SKILL.md").write_text("---\nname: fixture\n---\n")
-        record = bundle.entry_record(
-            entry,
-            "copy",
-            bundle.stat_identity(destination.parent.parent),
-            bundle.stat_identity(destination.parent),
-            installed_path=destination,
-        )
+        record = bundle.entry_record(entry, "copy", installed_digest=bundle.digest(destination))
         shutil.rmtree(destination)
         return destination, record
 
-    def valid_create_transaction(self, destination: Path, record: dict[str, object]) -> dict[str, object]:
-        stage = destination.parent / f".{destination.name}.stage-opaque"
-        return {
-            "operation": "create",
-            "phase": "armed",
-            "key": str(destination),
-            "destination": str(destination),
-            "old_record": None,
-            "old_owned": False,
-            "new_record": record,
-            "stage_container": str(stage),
-            "stage_payload": str(stage / "payload"),
-            "stage_identity": bundle.stat_identity(destination.parent),
-            "backup_container": None,
-            "backup_payload": None,
-            "backup_identity": None,
-        }
+    def valid_install_transition(self, destination: Path, record: dict[str, object]) -> dict[str, object]:
+        return bundle.pending_slot("install", str(destination), None, record)
 
     def test_inspect_json_is_a_read_only_checkout_development_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -342,7 +321,7 @@ class CcodexSdlcTests(unittest.TestCase):
             "operator-pending": "gh" + "p_pending-canary",
             "operator-record": "xox" + "b-record-canary",
             "bundle-version": "AK" + "IA" + "1" * 16,
-            "bundle-transaction": "sk" + "-ant-api-transaction-canary",
+            "bundle-transition": "sk" + "-ant-api-transition-canary",
         }
 
         def operator_version(root: Path, environment: dict[str, str], canary: str) -> None:
@@ -376,12 +355,20 @@ class CcodexSdlcTests(unittest.TestCase):
         def bundle_version(root: Path, environment: dict[str, str], canary: str) -> None:
             path = self.bundle_state_path(environment)
             path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"version": canary, "entries": {}, "transactions": {}}))
+            path.write_text(json.dumps({"version": canary, "entries": {}, "pending": None}))
 
-        def bundle_transaction(root: Path, environment: dict[str, str], canary: str) -> None:
+        def bundle_transition(root: Path, environment: dict[str, str], canary: str) -> None:
             path = self.bundle_state_path(environment)
             path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"version": 3, "entries": {}, "transactions": {canary: {}}}))
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": bundle.STATE_VERSION,
+                        "entries": {},
+                        "pending": {"operation": "install", "path": canary, "before": None, "after": None},
+                    }
+                )
+            )
 
         scenarios = {
             "operator-version": operator_version,
@@ -389,7 +376,7 @@ class CcodexSdlcTests(unittest.TestCase):
             "operator-pending": operator_pending,
             "operator-record": operator_record,
             "bundle-version": bundle_version,
-            "bundle-transaction": bundle_transaction,
+            "bundle-transition": bundle_transition,
         }
         for name, builder in scenarios.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
@@ -415,7 +402,15 @@ class CcodexSdlcTests(unittest.TestCase):
             destination, record = self.valid_bundle_record(root, environment, canary)
             state_path = self.bundle_state_path(environment)
             state_path.parent.mkdir(parents=True)
-            state_path.write_text(json.dumps({"version": 3, "entries": {str(destination): record}, "transactions": {}}))
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": bundle.STATE_VERSION,
+                        "entries": {str(destination): record},
+                        "pending": None,
+                    }
+                )
+            )
 
             human = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor")
             machine = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
@@ -432,8 +427,8 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertNotIn(canary, machine.stdout)
             self.assertNotIn(canary, human.stdout)
 
-    def test_valid_current_bundle_transaction_uses_an_opaque_public_locator(self) -> None:
-        canary = "gh" + "p_valid-transaction-canary"
+    def test_valid_current_bundle_transition_uses_an_opaque_public_locator(self) -> None:
+        canary = "gh" + "p_valid-transition-canary"
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, _query_state = self.make_dispatcher(root)
@@ -443,9 +438,9 @@ class CcodexSdlcTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
-                        "version": 3,
+                        "version": bundle.STATE_VERSION,
                         "entries": {},
-                        "transactions": {str(destination): self.valid_create_transaction(destination, record)},
+                        "pending": self.valid_install_transition(destination, record),
                     }
                 )
             )
@@ -464,7 +459,7 @@ class CcodexSdlcTests(unittest.TestCase):
                     {
                         "action": "lifecycle-dry-run",
                         "component": "bundle",
-                        "path": "bundle-transaction://claude/skill/1",
+                        "path": "bundle-transition://claude/skill/1",
                         "state": "pending",
                     }
                 ],
@@ -472,7 +467,7 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertNotIn(canary, machine.stdout)
             self.assertNotIn(canary, human.stdout)
 
-    def test_old_home_bundle_transaction_is_not_current_projection_evidence(self) -> None:
+    def test_old_home_bundle_transition_is_not_current_projection_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, _query_state = self.make_dispatcher(root)
@@ -482,9 +477,9 @@ class CcodexSdlcTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
-                        "version": 3,
+                        "version": bundle.STATE_VERSION,
                         "entries": {},
-                        "transactions": {str(destination): self.valid_create_transaction(destination, record)},
+                        "pending": self.valid_install_transition(destination, record),
                     }
                 )
             )
