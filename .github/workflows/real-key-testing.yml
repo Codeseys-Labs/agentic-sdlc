@@ -1,0 +1,92 @@
+name: real-key-testing
+
+# Dispatch-only, never a gate leaf. Runs the fresh-environment operator journey with the
+# real provider credentials held by the `real-key-testing` environment, on a runner that
+# starts with no mise, no bundle, no gateway, and no Claude login. A green run is evidence
+# that install + operator tools + provider onboarding + a routed inference work from
+# nothing; it authorizes no outward effect. What it cannot test: `ccodex launch` itself,
+# which needs a Claude login no environment secret provides.
+on:
+  workflow_dispatch:
+
+jobs:
+  fresh-env-openrouter-route:
+    name: fresh env install + gateway route (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ matrix.os }}
+    environment: real-key-testing
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # jdx/mise-action v2.4.7
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+        with:
+          install: true
+
+      - name: Install the bundle onto a fresh Claude plane
+        shell: bash
+        run: |
+          mise run bundle:install -- --agent claude
+          STATUS=$(mise run bundle:status 2>&1)
+          echo "$STATUS" | tail -3
+          echo "$STATUS" | grep -E " 0 conflict"
+
+      - name: Install operator tools and read doctor
+        shell: bash
+        run: |
+          mise run operator-tools:install
+          # seed agentic-sdlc-21f4: the bound ocx is a node script but node is not bound
+          export PATH="$(dirname "$(mise which node)"):$HOME/.local/bin:$PATH"
+          ccodex sdlc doctor
+
+      - name: Onboard OpenRouter and prove a routed inference
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          export PATH="$(dirname "$(mise which node)"):$HOME/.local/bin:$PATH"
+          ccodex ensure
+          ccodex ocx configure provider add openrouter
+          # the restart is the publish step: the running gateway learns the provider here
+          ccodex restart
+          printf '%s' "$OPENROUTER_API_KEY" | ccodex ocx configure account add-key openrouter --label ci-real-key
+          LISTED=$(ccodex models | grep -c '^  openrouter/')
+          echo "openrouter models listed: $LISTED"
+          test "$LISTED" -gt 0
+          # qwen3.7-flash: $0.03/M in, $0.13/M out at survey time; the cheapest capable
+          # routed check the OpenRouter catalog offered.
+          REPLY=$(curl -s -m 90 http://127.0.0.1:10100/v1/chat/completions \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"openrouter/qwen/qwen3.7-flash","messages":[{"role":"user","content":"Reply with exactly: CI-GATEWAY-ROUTED-OK"}],"max_tokens":32}')
+          echo "$REPLY" | mise exec -- python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)
+          content = d["choices"][0]["message"]["content"].strip()
+          print("reply:", content)
+          print("served:", d.get("model", "-"))
+          assert "CI-GATEWAY-ROUTED-OK" in content, d
+          '
+
+      - name: Prove the Meta API key against muse-spark-1.2-contributor
+        shell: bash
+        env:
+          META_MODEL_API: ${{ secrets.META_MODEL_API }}
+        run: |
+          # A reasoning model: it spends a few hundred tokens thinking before any content,
+          # so the completion budget must leave headroom or content comes back null.
+          curl -s -m 120 https://api.meta.ai/v1/chat/completions \
+            -H "Authorization: Bearer $META_MODEL_API" -H 'Content-Type: application/json' \
+            -d '{"model":"muse-spark-1.2-contributor","messages":[{"role":"user","content":"Say the two words: MUSE OK"}],"max_completion_tokens":2048}' \
+            | mise exec -- python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)
+          content = (d["choices"][0]["message"].get("content") or "").strip()
+          print("reply:", content)
+          print("served:", d.get("model", "-"))
+          assert "MUSE OK" in content, d
+          '
