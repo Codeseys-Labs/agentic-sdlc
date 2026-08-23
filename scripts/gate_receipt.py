@@ -320,8 +320,8 @@ def _normalized_failures(failures: dict[str, Any], argv: list[str] | None) -> di
     return {"harness": harness, "state": state, "names": names}
 
 
-#: An allowlist, not an inheritance, mirroring `sdlc-observability-projection.py`'s precedent: the
-#: head observation gets exactly this much ambient environment. It matters more here than politeness
+#: An allowlist, not an inheritance: the head observation gets exactly this much ambient
+#: environment. It matters more here than politeness
 #: — an inherited `GIT_DIR` or `GIT_WORK_TREE` would silently re-point `rev-parse` at ANOTHER
 #: repository while the receipt went on naming this `cwd`, which is the one way this stamp could lie
 #: without anybody editing it.

@@ -18,23 +18,26 @@ of check for its own one-entry write set: `S_ISLNK` refusal (its `_assert_safe_p
 and mount-id containment via Linux `statx(..., STATX_MNT_ID)` (`_mount_id_fd`, `open_root_chain`).
 This module is an INDEPENDENT re-expression of that primitive against a different write set --
 a worktree custody directory rather than a private state root -- following this repository's own
-documented convention of re-expression across tool boundaries rather than a cross-tool import:
-`wave-plan-compiler.py`'s `_relative_path` already mirrors `wave-plan-admission.py`'s
-`_relative_custody` "MIRRORS ... own" by restating the same rule rather than importing it, and this
-module's `_custody_spelling_reason` restates that same rule a third time for the same documented
-reason -- each of the three tools is independently auditable without chasing an import across
-`tools/`, and none of them can be silently widened by editing a shared helper one of the others does
-not review. The one precedent for a cross-tool LOAD in this directory
+documented convention of re-expression across tool boundaries rather than a cross-tool import. The
+precedent is historical rather than live: `wave-plan-compiler.py`'s `_relative_path` restated
+`wave-plan-admission.py`'s `_relative_custody` rather than importing it, and both tools were removed
+by ADR-0030, which is exactly why re-expression was the right call -- this module's
+`_custody_spelling_reason` still owns the rule in full and did not lose it when its two neighbours
+went. Each such tool is independently auditable without chasing an import across `tools/`, and none
+can be silently widened by editing a shared helper one of the others does not review. The one
+precedent for a cross-tool LOAD in this directory
 (`repository-contract-writer.py`'s `_load_reader`) is for a SCHEMA constant a diverging copy would
 make two competing definitions of one document shape; this is a validation PREDICATE, the kind the
 family already re-expresses.
 
-WHY A NEW TOOL RATHER THAN A NEW VERB ON AN EXISTING ONE. `wave-plan-admission.py` admits a
-COMPILED `WavePlan` against sealed `planning-snapshot`/`mission-contract` documents; a bare
-`--target`/`--custody` pair with no plan, snapshot, or mission is outside what it reads, and
-folding this primitive into it would force every caller -- including a conductor about to run its
-very first `git worktree add` before any plan exists -- to assemble three sealed documents just to
-ask "is this one directory safe to create a worktree in". `activation-planner.py` is the primitive's
+WHY A NEW TOOL RATHER THAN A NEW VERB ON AN EXISTING ONE. The alternative considered was a verb on
+`wave-plan-admission.py`, which admitted a COMPILED `WavePlan` against sealed
+`planning-snapshot`/`mission-contract` documents; a bare `--target`/`--custody` pair with no plan,
+snapshot, or mission was outside what it read, and folding this primitive into it would have forced
+every caller -- including a conductor about to run its very first `git worktree add` before any plan
+exists -- to assemble three sealed documents just to ask "is this one directory safe to create a
+worktree in". ADR-0030 has since removed that tool entirely, so the rejected host no longer exists
+and this module's independence is what kept the check. `activation-planner.py` is the primitive's
 origin but is scoped to one manifest entry's private state root and carries no notion of a Seed,
 a worktree, or a wave at all; adding worktree custody to a 4,300-line activation engine would widen
 its own selection surface for an unrelated concern. A small, single-purpose tool is this
@@ -43,11 +46,12 @@ directory's own norm for a new primitive (`offline-inspect.py`, `pass-budget.py`
 
 SEVEN CHECKS, EACH ITS OWN NAMED SLUG, NONE OF THEM SILENT ON AN UNEVALUATED PATH:
 
-    custody-spelling        the exact canonical relative form `wave-plan-admission.py` seals: no
-                             leading `/` or drive letter, no backslash, no NUL, no empty/`.`/`..`
-                             segment. `worktree_custody` in this family's own schema already carries
-                             the `.worktrees/` prefix (`wave-plan-compiler.py`'s own fixtures record
-                             `.worktrees/wave-plan-compiler`), so `--custody` is read the same way.
+    custody-spelling        the one canonical relative form this family admits, which
+                             `wave-plan-admission.py` sealed before ADR-0030 removed it: no leading
+                             `/` or drive letter, no backslash, no NUL, no empty/`.`/`..` segment.
+                             A custody path carries the `.worktrees/` prefix
+                             (`references/worktree-lifecycle.md` owns that substrate rule), so
+                             `--custody` is read the same way.
     custody-root             the custody string's first segment must be `.worktrees` and it must
                              name at least one directory beneath it -- `.worktrees` itself is not
                              a custody destination.
@@ -95,12 +99,11 @@ Implementation Decision 9's exit vocabulary here is therefore the three-class su
 effect-free gate is entitled to: 0 for a clear result (the wave chain may proceed), 2 for a
 grammar/schema/input error (the question itself could not be asked), and 3 for a clean refusal --
 and because this tool never causes an effect, EVERY refusal it can name is "before" one, so 3 is
-never conditional the way it is in `wave-plan-admission.py` (whose own report is sealed either way)
-or reserved for a query tool that treats its own refusal as a successful answer the way
-`offline-inspect.py`'s `EXIT_NOT_READY` does. 1 remains reserved for a genuinely unexpected internal
-failure and is not deliberately reachable; 4 does not apply, by the same reasoning
-`sdlc-observability-projection.py`'s own EPILOG states for a pure projection: a tool that causes no
-effect can neither admit a partial one.
+never conditional the way it was in `wave-plan-admission.py`, whose own report was sealed either way
+(removed by ADR-0030), nor reserved for a query tool that treats its own refusal as a successful
+answer the way `offline-inspect.py`'s `EXIT_NOT_READY` does. 1 remains reserved for a genuinely
+unexpected internal failure and is not deliberately reachable; 4 does not apply, by Decision 9's own
+definition of it: a tool that causes no effect can neither admit a partial one.
 """
 
 from __future__ import annotations
@@ -119,8 +122,8 @@ from typing import Any, Callable
 SCHEMA = "agentic-sdlc/worktree-custody-preflight-result@1"
 
 #: The one segment every admissible custody path must start with. Re-expressed from
-#: `wave-plan-compiler.py`'s own literal `.worktrees` substrate naming
-#: (`references/worktree-lifecycle.md` "The substrate, in one line"), not imported.
+#: `references/worktree-lifecycle.md` "The substrate, in one line", which owns the rule, not
+#: imported from any tool.
 CUSTODY_ROOT = ".worktrees"
 
 EXIT_OK = 0
@@ -214,11 +217,12 @@ def _mount_id_fd(fd: int) -> int:
 def _custody_spelling_reason(custody: Any) -> str | None:
     """`None` when `custody` is the family's one canonical relative spelling; a named reason else.
 
-    Re-expressed from `wave-plan-admission.py`'s `_relative_custody`, which itself states it
-    MIRRORS `wave-plan-compiler.py`'s `_relative_path`: no leading `/` or drive letter, no
-    backslash, no NUL, no empty/`.`/`..` segment. The compiler's own reasoning applies here
-    unchanged -- custody is compared by STRING, so two spellings of one directory would compare as
-    two different custodies unless every caller is refused down to one spelling.
+    Re-expressed from `wave-plan-admission.py`'s `_relative_custody`, which itself restated
+    `wave-plan-compiler.py`'s `_relative_path` before ADR-0030 removed both: no leading `/` or drive
+    letter, no backslash, no NUL, no empty/`.`/`..` segment. The reasoning applies here unchanged --
+    custody is compared by STRING, so two spellings of one directory would compare as two different
+    custodies unless every caller is refused down to one spelling. This function is now the only
+    place in the repository that states the rule.
     """
     if not isinstance(custody, str) or not custody:
         return f"--custody {custody!r} is empty; a custody path names one directory under {CUSTODY_ROOT}/"
@@ -503,10 +507,10 @@ def _registration_reasons(git: str, target: Path, custody: str) -> tuple[str | N
     """`(occupied_reason, drifted_reason)`, at most one of them non-`None`.
 
     Compared as normalized TEXT against the observed list, exactly as `wave-plan-admission.py`'s
-    `check_custody_availability` does and names the same residual for: a differently spelled path
-    to the same directory (a symlink, a case-insensitive filesystem, a bind mount) would read as
-    unoccupied. That residual is accepted here rather than solved, for the same reason it is
-    accepted there.
+    `check_custody_availability` did before ADR-0030 removed it, and carrying the same residual it
+    named: a differently spelled path to the same directory (a symlink, a case-insensitive
+    filesystem, a bind mount) would read as unoccupied. That residual is accepted here rather than
+    solved, for the same reason it was accepted there.
     """
     claimed = os.path.normpath(os.path.join(str(target), custody))
     for path in _list_worktrees(git, target):

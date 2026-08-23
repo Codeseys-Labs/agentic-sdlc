@@ -28,35 +28,35 @@ What it cannot answer: it observes no host or install state (that is doctor's di
 and decides nothing about whether a wave plan may proceed against what it captured — a
 sealed snapshot is an observation, not a verdict.
 
-## 3. `wave-plan-admission.py admit` — the wave-effect gate
+## 3. The Git-anchored wave-effect read — `/sdlc-wave` step 8
 
-What it answers: whether a sealed `WavePlan` is admitted against the caller-supplied
-fresh planning snapshot and mission contract — issue 16's `admitted` lifecycle state,
-distinct from the compiler's `compiled` state. Six of issue 16's eleven readiness
-dimensions are decidable from the sealed documents it reads and run as checks; the
-other five, plus six partial refinements of checks that do run, are named in the
-report's own `deferred_dimensions` list rather than reported as met.
+What it answers: whether the wave's declared work is actually in the tree that was merged,
+and whether the two authority conditions held. Four readings, each against something that
+already exists: `git log --format='%H %s' <base>..<branch>` for what the node did,
+`git show --stat <integration-commit>` for the declared outputs anchored to a commit, a
+`scripts/gate_receipt.py` receipt produced on the MERGED head, and a two-line reading that
+the reviewer is not the implementer and that the operator's dated approval precedes the
+integration commit's committer date. The wave's own file under `docs/evidence/waves/`
+records all four.
 
-Optionally it also answers whether the ACTIVATION CHAIN that proved the repository's
-contract surface was derived against the head that is current now: pass
-`activation-result.py`'s terminal-state document as `--activation-result`, and its
-`evidence.head_commit`/`head_tree` must equal the head the fresh snapshot observed while
-its `state` must admit a write, so a `write-ready` chain agreed on one head cannot be
-handed to a wave running on another (`agentic-sdlc-187b`). The flag is opt-in evidence:
-omitted, admission is exactly what it is without it, and an admitted report does not
-record whether a chain was compared — the result document's checks do.
+There is deliberately no sealed-document admission gate here. The tool family that once
+held one (`wave-plan-compiler`, `wave-plan-admission`, `wave-journal`, `wave-verdict`,
+`wave-submission`, `sdlc-observability-projection`) was removed by
+`docs/adr/0030-record-wave-evidence-in-git-and-one-markdown-file.md`: it could not answer
+whether its evidence described the tree as it is now, which is the one question this
+dimension exists to answer, and Git answers it in one command.
 
-What it cannot answer: it observes no repository itself (freshness of the fresh
-snapshot is the caller's claim, not something this tool verifies independently, and the
-terminal state it may be handed carries no digest to re-derive either), calls
-no model, resolves no runtime route, and reads no environment variable. `admitted` is
-not `approved`: no dispatch, write, or other outward effect follows from an admission
-report by itself.
+What it cannot answer: whether the merged tree is still the current head at the moment a
+later effect runs, and whether the recorded approval was authentic rather than
+self-minted. Both are properties of a live repository and a live operator, not of any
+artifact a reader holds, and the second is the reason the no-self-review and
+approval-before-fan-in rules live in `../SKILL.md` as rules rather than as a check the
+audited party may decline to run.
 
 ## Standing sentence
 
 A passing result from any of these three surfaces — `doctor`'s clean read, a sealed
-planning snapshot, or an admitted wave-plan report — is evidence only. None of the three,
+planning snapshot, or a complete wave evidence file — is evidence only. None of the three,
 alone or composed, authorizes push, publication, PR mutation, merge, deployment,
 credential change, or any other outward effect. Only an explicit, operation-specific
 human or conductor authorization does that.
@@ -70,6 +70,6 @@ would have no unique authority of its own: each dimension already has exactly on
 surface that owns it, and a wrapper could only ever re-report what that surface already
 says — the same one-capability-one-front-door argument that formally dropped the
 `ccodex sdlc` profiles surface (`agentic-sdlc-c990`) rather than adding a generic verb
-over state that already had a receipt-backed mutation path. Composing the three calls
-above, in order, and reading `unknowns` and `deferred_dimensions` honestly, is the
+over state that already had a receipt-backed mutation path. Composing the three reads
+above, in order, and reading `unknowns` and the wave file's blanks honestly, is the
 readiness check; no additional tool sits over them.

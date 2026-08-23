@@ -71,7 +71,8 @@ because downstream admission leans on them and free text would make admission gu
   ADR-0025 and issue 16 make them non-waivable: an authority change and a scope change "always
   return for human disposition", hard-stop drift "immediately prevents the affected dispatch", and a
   partial or unknown prior effect "requires human disposition first". A contract that could omit one
-  would be a contract that grants what no contract may grant.
+  would be a contract that grants what no contract may grant. ADR-0030 superseded ADR-0025 but
+  explicitly retained this rule, which is ADR-0019 doctrine; the citation above stands as its origin.
 
 NO CLOCK. Every instant is a caller-supplied input, because this project's WSL2 host steps
 CLOCK_REALTIME backwards (Seed agentic-sdlc-184b) and a tool that read its own clock would refuse

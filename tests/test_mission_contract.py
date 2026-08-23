@@ -37,8 +37,10 @@ from typing import Any
 
 ROOT = Path(__file__).parents[1]
 TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "mission-contract.py"
-#: Used only as the POSITIVE CONTROL for `test_the_tool_reads_no_environment_variable`.
-JOURNAL_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "wave-journal.py"
+#: Used only as the POSITIVE CONTROL for `test_the_tool_reads_no_environment_variable` and for the
+#: effect-free import/call walk: a sibling that DOES read the environment and DOES write, so an
+#: empty answer from either assertion is evidence rather than a grep over a name nothing carries.
+CONTROL_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "pass-budget.py"
 
 CONTRACT_SCHEMA = "agentic-sdlc/mission-contract@1"
 RESULT_SCHEMA = "agentic-sdlc/mission-contract-result@1"
@@ -909,7 +911,7 @@ class ExitSpaceTests(ContractCase):
         self.assertEqual(calls & forbidden, set(), "an effect-free tool calls nothing that can write")
         # POSITIVE CONTROL: the same walk over a tool that DOES write finds both classes, so these
         # assertions are about the source rather than about names that appear nowhere in this repo.
-        other_modules, other_calls = imports_and_calls(JOURNAL_TOOL)
+        other_modules, other_calls = imports_and_calls(CONTROL_TOOL)
         self.assertIn("os", other_modules)
         self.assertTrue(other_calls & forbidden, "the control tool must exercise the forbidden set")
 
@@ -1011,7 +1013,7 @@ class EnvironmentTests(ContractCase):
         self.assertNotIn("os.environ", source)
         self.assertNotIn("getenv", source)
         # POSITIVE CONTROL: the same grep over a tool that DOES read one finds it.
-        self.assertIn("os.environ", JOURNAL_TOOL.read_text(encoding="utf-8"))
+        self.assertIn("os.environ", CONTROL_TOOL.read_text(encoding="utf-8"))
 
     def test_a_verdict_does_not_change_when_an_unrelated_variable_is_set(self) -> None:
         argv = [sys.executable, "-B", str(TOOL), "define", "--contract", str(self.store("body", contract_body()))]

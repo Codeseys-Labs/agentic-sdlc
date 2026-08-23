@@ -31,8 +31,9 @@ edit either accepted record or infer a stronger status.
 | [ADR-0022](0022-activate-repositories-through-digest-approved-plans.md) | Activate repositories through digest-approved plans | accepted | 2026-08-15 |
 | [ADR-0023](0023-adopt-one-evidence-preserving-documentation-profile.md) | Adopt one evidence-preserving documentation profile | accepted | 2026-08-15 |
 | [ADR-0024](0024-execute-each-wave-as-one-artifact-driven-dynamic-workflow.md) | Execute each wave as one artifact-driven Dynamic Workflow | accepted | 2026-08-15 |
-| [ADR-0025](0025-compile-execution-from-immutable-planning-artifacts.md) | Compile execution from immutable planning artifacts | accepted | 2026-08-15 |
+| [ADR-0025](0025-compile-execution-from-immutable-planning-artifacts.md) | Compile execution from immutable planning artifacts | superseded by ADR-0030 | 2026-08-22 |
 | [ADR-0026](0026-keep-threat-analysis-separate-from-human-risk-ownership.md) | Keep threat analysis separate from human risk ownership | accepted | 2026-08-15 |
 | [ADR-0027](0027-admit-compatibility-through-capability-evidence-above-published-minimums.md) | Admit compatibility through capability evidence above published minimums | accepted | 2026-08-15 |
 | [ADR-0028](0028-organize-the-claude-code-first-product-boundary-as-one-initiative.md) | Organize the Claude Code-first product boundary as one initiative | proposed | 2026-08-15 |
 | [ADR-0029](0029-ported-libraries-are-a-second-external-library-catalog-class.md) | Ported libraries are a second external-library catalog class | accepted | 2026-08-20 |
+| [ADR-0030](0030-record-wave-evidence-in-git-and-one-markdown-file.md) | Record wave evidence in Git and one markdown file | accepted | 2026-08-22 |

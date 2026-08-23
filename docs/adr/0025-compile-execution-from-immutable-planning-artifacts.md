@@ -1,7 +1,7 @@
 # ADR-0025 — Compile execution from immutable planning artifacts
 
-- **Status:** accepted
-- **Date:** 2026-08-15
+- **Status:** superseded by ADR-0030
+- **Date:** 2026-08-22
 - **Deciders:** operator (decision through the resolved Wayfinder review); agent (evidence and drafting)
 - **Relates to:** `commands/sdlc-frame.md`, `skills/agentic-sdlc/references/deep-work-loop.md`
 

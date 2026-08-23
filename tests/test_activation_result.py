@@ -1773,7 +1773,7 @@ class ResultContractTests(DerivationCase):
             self.assertIn(fragment, docstring.lower())
         self.assertIn("Decision 9", docstring)
 
-    def test_module_docstring_points_the_old_freshness_residual_at_the_shipped_binding(self) -> None:
+    def test_module_docstring_reopens_the_freshness_residual_the_removed_binding_had_closed(self) -> None:
         # Finding F3 used to be a stated residual here: the plan_digest binding proved the apply
         # consumed exactly the supplied plan and nothing more, so a stale matched pair from an
         # earlier tree plus a fresh receipt derived write-ready. agentic-sdlc-5ee7 shipped the head
@@ -1787,17 +1787,23 @@ class ResultContractTests(DerivationCase):
         # What is still open has to stay stated: an offline reader cannot prove the agreed head is
         # the CURRENT head, and the residual must keep saying so rather than overclaiming the fix.
         self.assertIn("is that the agreed head is the CURRENT head", squeezed)
-        # agentic-sdlc-187b then SHIPPED that comparison at the surface that authorizes wave writes,
-        # so the residual must NAME it instead of delegating to an unnamed "plan admission's job": an
-        # unnamed delegation reads as work nobody did. It must also keep saying the flag is opt-in,
-        # because a consumer that never passes this document to that gate still holds an unproven head.
+        # agentic-sdlc-187b once SHIPPED that comparison at the surface that authorized wave writes,
+        # and ADR-0030 deleted that surface. The residual must therefore name the REMOVAL and say the
+        # gap is open again: a docstring still promising a shipped flag would send a reader to a tool
+        # that is not there, which is worse than the unnamed delegation the assertion first replaced.
         self.assertIn("agentic-sdlc-187b", squeezed)
-        self.assertIn("wave-plan-admission.py admit --activation-result", squeezed)
-        self.assertIn("opt-in", squeezed)
-        # And the named flag has to EXIST. A prose pointer at a surface that does not accept it is the
-        # same rot as an unnamed delegation, one step harder to notice.
-        admission = TOOL.parent / "wave-plan-admission.py"
-        self.assertIn('"--activation-result"', admission.read_text(encoding="utf-8"))
+        self.assertIn("ADR-0030", squeezed)
+        self.assertIn("OPEN again", squeezed)
+        self.assertNotIn("wave-plan-admission.py admit --activation-result", squeezed)
+        # And the named surface must really be gone. A prose pointer at a tool that still ships would
+        # mean this assertion is describing a deletion that did not happen.
+        self.assertFalse(
+            (TOOL.parent / "wave-plan-admission.py").exists(),
+            "the docstring names this tool as removed; it is still on disk",
+        )
+        # POSITIVE CONTROL for that absence: a sibling this module really does still compose with is
+        # present, so the check above is about one deleted path rather than a wrong parent directory.
+        self.assertTrue((TOOL.parent / "planning-snapshot.py").is_file())
         # POSITIVE CONTROL for the two absence assertions above: the same squeezed docstring really
         # is the text being searched, so an empty answer is evidence rather than a broken read.
         self.assertIn("RESIDUALS, STATED EXACTLY", squeezed)

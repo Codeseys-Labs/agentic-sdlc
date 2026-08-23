@@ -103,15 +103,15 @@ RESIDUALS, STATED EXACTLY.
     receipt's `head` are now compared as ONE anchor by `assess_freshness`, and a chain whose stamps
     disagree, or whose stamp is absent, null, or malformed, is refused by name. What is still NOT
     proven, and is not provable by a module that reads paths and touches no repository, is that the
-    agreed head is the CURRENT head; comparing a recorded head against a live one is plan
-    admission's job, exactly as `planning-snapshot.py` records for its own seal. That comparison is
-    now SHIPPED at that surface rather than merely delegated to it: `agentic-sdlc-187b` added
-    `wave-plan-admission.py admit --activation-result`, which reads THIS document's
-    `evidence.head_commit`/`head_tree`, requires a `state` that admits a write, and refuses -- naming
-    both values -- when either half disagrees with the head the fresh planning snapshot captured
-    beside it. The gap therefore closes where wave writes are authorized, not here: this module's own
-    answer is unchanged, the flag there is opt-in, and a consumer that composes this state without
-    passing it to that gate still holds a head nobody proved current. The anchor is head
+    agreed head is the CURRENT head; comparing a recorded head against a live one needs a surface
+    that observes the repository, exactly as `planning-snapshot.py` records for its own seal. That
+    comparison HAD a shipped home and no longer does: `agentic-sdlc-187b` added it to
+    `wave-plan-admission.py`, which ADR-0030 removed with the rest of the wave-document stack. The
+    residual is therefore OPEN again and stated as such rather than left pointing at a deleted flag:
+    this module's own answer is unchanged, and a consumer composing this state holds a head nobody
+    proved current until it reads the live head itself. `commands/sdlc-wave.md` step 8 is where a
+    wave now anchors its evidence to a commit, by `git show --stat` on the integration commit and a
+    gate receipt recorded on the merged head. The anchor is head
     identity and not time because this host's clock legitimately steps backwards
     (agentic-sdlc-184b), so recorded wall time cannot order two artifacts, while head identity is
     deterministic.
@@ -631,11 +631,12 @@ def assess_freshness(
 
     WHAT THIS DOES AND DOES NOT PROVE. It proves the operands were derived against the SAME tree.
     It does not prove that tree is the CURRENT one -- this module reads paths and touches no
-    repository, so "still current" is unanswerable here and is the plan-admission check's job, in
-    exactly the split `planning-snapshot.py` records for its own seal. That check exists:
-    `wave-plan-admission.py admit --activation-result` compares the anchor recorded below against the
-    head a fresh planning snapshot observed (agentic-sdlc-187b). What THIS function closes is the gap
-    where three artifacts from two different trees composed into one verdict.
+    repository, so "still current" is unanswerable here and belongs to a surface that observes the
+    repository, in exactly the split `planning-snapshot.py` records for its own seal. That check no
+    longer exists as a tool: `wave-plan-admission.py`'s `--activation-result` comparison
+    (agentic-sdlc-187b) went with the wave-document stack ADR-0030 removed, so the comparison is a
+    reading a caller performs against the live head. What THIS function closes is the gap where three
+    artifacts from two different trees composed into one verdict.
 
     FAIL CLOSED, FOUR WAYS, EACH NAMED. An operand whose stamp is absent predates the stamp and is
     refused rather than exempted: these artifacts are regenerable, and admitting an unstamped one
