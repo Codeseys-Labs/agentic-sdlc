@@ -128,33 +128,12 @@ class CcodexSdlcTests(unittest.TestCase):
         destination.parent.mkdir(parents=True)
         destination.mkdir()
         (destination / "SKILL.md").write_text("---\nname: fixture\n---\n")
-        record = bundle.entry_record(
-            entry,
-            "copy",
-            bundle.stat_identity(destination.parent.parent),
-            bundle.stat_identity(destination.parent),
-            installed_path=destination,
-        )
+        record = bundle.entry_record(entry, "copy", installed_digest=bundle.digest(destination))
         shutil.rmtree(destination)
         return destination, record
 
-    def valid_create_transaction(self, destination: Path, record: dict[str, object]) -> dict[str, object]:
-        stage = destination.parent / f".{destination.name}.stage-opaque"
-        return {
-            "operation": "create",
-            "phase": "armed",
-            "key": str(destination),
-            "destination": str(destination),
-            "old_record": None,
-            "old_owned": False,
-            "new_record": record,
-            "stage_container": str(stage),
-            "stage_payload": str(stage / "payload"),
-            "stage_identity": bundle.stat_identity(destination.parent),
-            "backup_container": None,
-            "backup_payload": None,
-            "backup_identity": None,
-        }
+    def valid_install_transition(self, destination: Path, record: dict[str, object]) -> dict[str, object]:
+        return bundle.pending_slot("install", str(destination), None, record)
 
     def test_inspect_json_is_a_read_only_checkout_development_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -342,7 +321,7 @@ class CcodexSdlcTests(unittest.TestCase):
             "operator-pending": "gh" + "p_pending-canary",
             "operator-record": "xox" + "b-record-canary",
             "bundle-version": "AK" + "IA" + "1" * 16,
-            "bundle-transaction": "sk" + "-ant-api-transaction-canary",
+            "bundle-transition": "sk" + "-ant-api-transition-canary",
         }
 
         def operator_version(root: Path, environment: dict[str, str], canary: str) -> None:
@@ -376,12 +355,20 @@ class CcodexSdlcTests(unittest.TestCase):
         def bundle_version(root: Path, environment: dict[str, str], canary: str) -> None:
             path = self.bundle_state_path(environment)
             path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"version": canary, "entries": {}, "transactions": {}}))
+            path.write_text(json.dumps({"version": canary, "entries": {}, "pending": None}))
 
-        def bundle_transaction(root: Path, environment: dict[str, str], canary: str) -> None:
+        def bundle_transition(root: Path, environment: dict[str, str], canary: str) -> None:
             path = self.bundle_state_path(environment)
             path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"version": 3, "entries": {}, "transactions": {canary: {}}}))
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": bundle.STATE_VERSION,
+                        "entries": {},
+                        "pending": {"operation": "install", "path": canary, "before": None, "after": None},
+                    }
+                )
+            )
 
         scenarios = {
             "operator-version": operator_version,
@@ -389,7 +376,7 @@ class CcodexSdlcTests(unittest.TestCase):
             "operator-pending": operator_pending,
             "operator-record": operator_record,
             "bundle-version": bundle_version,
-            "bundle-transaction": bundle_transaction,
+            "bundle-transition": bundle_transition,
         }
         for name, builder in scenarios.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
@@ -415,7 +402,15 @@ class CcodexSdlcTests(unittest.TestCase):
             destination, record = self.valid_bundle_record(root, environment, canary)
             state_path = self.bundle_state_path(environment)
             state_path.parent.mkdir(parents=True)
-            state_path.write_text(json.dumps({"version": 3, "entries": {str(destination): record}, "transactions": {}}))
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": bundle.STATE_VERSION,
+                        "entries": {str(destination): record},
+                        "pending": None,
+                    }
+                )
+            )
 
             human = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor")
             machine = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
@@ -432,8 +427,8 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertNotIn(canary, machine.stdout)
             self.assertNotIn(canary, human.stdout)
 
-    def test_valid_current_bundle_transaction_uses_an_opaque_public_locator(self) -> None:
-        canary = "gh" + "p_valid-transaction-canary"
+    def test_valid_current_bundle_transition_uses_an_opaque_public_locator(self) -> None:
+        canary = "gh" + "p_valid-transition-canary"
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, _query_state = self.make_dispatcher(root)
@@ -443,9 +438,9 @@ class CcodexSdlcTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
-                        "version": 3,
+                        "version": bundle.STATE_VERSION,
                         "entries": {},
-                        "transactions": {str(destination): self.valid_create_transaction(destination, record)},
+                        "pending": self.valid_install_transition(destination, record),
                     }
                 )
             )
@@ -464,7 +459,7 @@ class CcodexSdlcTests(unittest.TestCase):
                     {
                         "action": "lifecycle-dry-run",
                         "component": "bundle",
-                        "path": "bundle-transaction://claude/skill/1",
+                        "path": "bundle-transition://claude/skill/1",
                         "state": "pending",
                     }
                 ],
@@ -472,7 +467,7 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertNotIn(canary, machine.stdout)
             self.assertNotIn(canary, human.stdout)
 
-    def test_old_home_bundle_transaction_is_not_current_projection_evidence(self) -> None:
+    def test_old_home_bundle_transition_is_not_current_projection_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, _query_state = self.make_dispatcher(root)
@@ -482,9 +477,9 @@ class CcodexSdlcTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
-                        "version": 3,
+                        "version": bundle.STATE_VERSION,
                         "entries": {},
-                        "transactions": {str(destination): self.valid_create_transaction(destination, record)},
+                        "pending": self.valid_install_transition(destination, record),
                     }
                 )
             )
@@ -587,76 +582,79 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(completed.stdout, "GATEWAY-STATUS:status\n")
 
-    def test_validator_rejects_noncanonical_duplicate_or_drifted_read_report_policy(self) -> None:
+    def test_validator_pins_both_ccodex_report_policies_by_digest(self) -> None:
+        """The structural re-derivation collapsed to a digest; the predicate got stronger.
+
+        Both descriptors are parsed by `scripts/ccodex_sdlc.py` on every invocation, which is
+        where malformed input must fail. What this pass owes is drift detection in the checkout,
+        so the mutations below are the ones the old 85-line structural walk covered — a widened
+        vocabulary, a dropped field, a trailing byte — plus the two cases it could not express:
+        an unrelated byte anywhere in the document, and a symlinked policy.
+        """
         clean = validator.Validation()
-        validator.validate_ccodex_sdlc_read_report_policy(ROOT, clean)
-        validator.validate_ccodex_sdlc_candidate_report_policy(ROOT, clean)
+        validator.validate_ccodex_sdlc_report_policies(ROOT, clean)
         self.assertEqual(clean.errors, [])
 
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            policy_path = root / "policy" / "ccodex-sdlc-read-report.v1.json"
-            policy_path.parent.mkdir()
-            policy_path.write_text('{"schema_version":"one","schema_version":"two"}\n')
-            duplicate = validator.Validation()
-
-            validator.validate_ccodex_sdlc_read_report_policy(root, duplicate)
-
-            self.assertTrue(any("duplicate key" in error for error in duplicate.errors))
-
-            policy_path.write_text((ROOT / "policy" / "ccodex-sdlc-read-report.v1.json").read_text() + " ")
-            noncanonical = validator.Validation()
-            validator.validate_ccodex_sdlc_read_report_policy(root, noncanonical)
-            self.assertTrue(any("canonical JSON" in error for error in noncanonical.errors))
-
-        original = json.loads(
-            (ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text()
+        relatives = (
+            "policy/ccodex-sdlc-read-report.v1.json",
+            "policy/ccodex-sdlc-read-report.v2.json",
         )
-        mutations: list[tuple[str, dict[str, object]]] = []
-        for key in original:
-            changed = copy.deepcopy(original)
-            changed.pop(key)
-            mutations.append((f"top-level-{key}", changed))
-        for key in original["canonical_serialization"]:
-            changed = copy.deepcopy(original)
-            changed["canonical_serialization"].pop(key)
-            mutations.append((f"canonical-{key}", changed))
-        for key in original["field_vocabularies"]:
-            changed = copy.deepcopy(original)
-            changed["field_vocabularies"][key].append("drift")
-            mutations.append((f"field-vocabulary-{key}", changed))
-        for key in original["vocabularies"]:
-            changed = copy.deepcopy(original)
-            changed["vocabularies"][key].append("drift")
-            mutations.append((f"value-vocabulary-{key}", changed))
-        for key, value in (
-            ("schema_version", "drift"),
-            ("report_schema_version", "drift"),
-            ("report_top_level_fields", [*original["report_top_level_fields"], "drift"]),
-        ):
-            changed = copy.deepcopy(original)
-            changed[key] = value
-            mutations.append((f"identity-{key}", changed))
-        for label, changed in mutations:
-            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
-                root = Path(temp)
-                policy_path = root / "policy" / "ccodex-sdlc-read-report.v2.json"
-                policy_path.parent.mkdir()
-                policy_path.write_text(json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n")
-                drift = validator.Validation()
-                validator.validate_ccodex_sdlc_candidate_report_policy(root, drift)
-                self.assertTrue(drift.errors, label)
+        self.assertEqual(
+            sorted(validator.CCODEX_SDLC_REPORT_POLICY_SHA256), sorted(relatives)
+        )
 
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            policy_path = root / "policy" / "ccodex-sdlc-read-report.v2.json"
-            policy_path.parent.mkdir()
-            policy_path.write_text(
-                (ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text() + " "
-            )
-            noncanonical_v2 = validator.Validation()
-            validator.validate_ccodex_sdlc_candidate_report_policy(root, noncanonical_v2)
-            self.assertTrue(any("canonical JSON" in error for error in noncanonical_v2.errors))
+        for relative in relatives:
+            original = json.loads((ROOT / relative).read_text())
+            mutations: list[tuple[str, str]] = [
+                ("trailing-byte", (ROOT / relative).read_text() + " "),
+                ("duplicate-member", '{"schema_version":"one","schema_version":"two"}\n'),
+            ]
+            for key in original:
+                changed = copy.deepcopy(original)
+                changed.pop(key)
+                mutations.append((f"dropped-{key}", json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n"))
+            for key, value in original.items():
+                if isinstance(value, list):
+                    changed = copy.deepcopy(original)
+                    changed[key] = [*value, "drift"]
+                    mutations.append((f"widened-{key}", json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n"))
+                if isinstance(value, dict):
+                    for inner, inner_value in value.items():
+                        if not isinstance(inner_value, list):
+                            continue
+                        changed = copy.deepcopy(original)
+                        changed[key][inner] = [*inner_value, "drift"]
+                        mutations.append((f"widened-{key}.{inner}", json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n"))
+            self.assertGreater(len(mutations), 10, relative)
+            for label, text in mutations:
+                with self.subTest(policy=relative, label=label), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    policy_path = root / relative
+                    policy_path.parent.mkdir(parents=True)
+                    policy_path.write_text(text)
+                    drift = validator.Validation()
+                    validator.validate_ccodex_sdlc_report_policies(root, drift)
+                    self.assertTrue(
+                        any("bytes differ from the reviewed ccodex report contract" in error for error in drift.errors),
+                        f"{relative} {label}: {drift.errors}",
+                    )
+
+            with self.subTest(policy=relative, label="symlinked"), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                policy_path = root / relative
+                policy_path.parent.mkdir(parents=True)
+                policy_path.symlink_to(ROOT / relative)
+                linked = validator.Validation()
+                validator.validate_ccodex_sdlc_report_policies(root, linked)
+                # The absent sibling policy also reports "missing or linked", so the assertion
+                # must name THIS relative or it would pass with the is_symlink branch deleted.
+                self.assertTrue(
+                    any(
+                        error.startswith(f"{relative}: ") and "missing or linked" in error
+                        for error in linked.errors
+                    ),
+                    linked.errors,
+                )
 
     def test_generated_dispatcher_does_not_fall_back_to_poisoned_external_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

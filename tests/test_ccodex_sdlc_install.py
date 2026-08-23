@@ -635,11 +635,11 @@ class PreservationTest(TemporaryRoot):
         # Positive control: an untouched owned entry in the same run is not called modified.
         self.assertEqual("owned", entries["skills/alpha-skill"]["prestate"])
 
-    def test_outstanding_transaction_refuses_before_any_effect(self) -> None:
-        """Recovery is a separate explicit operation, so an outstanding transaction stops this one.
+    def test_outstanding_transition_refuses_before_any_effect(self) -> None:
+        """Recovery is a separate explicit operation, so an armed transition stops this one.
 
-        The transaction record is built from a REAL owned record and a real private stage container,
-        because a hand-written one is refused earlier as malformed and would prove a different rule.
+        The armed slot is built from a REAL owned record, because a hand-written one is refused
+        earlier as malformed and would prove a different rule.
         """
         fixture = self.fixture()
         self.assertEqual(0, call_main(fixture).code)
@@ -648,18 +648,15 @@ class PreservationTest(TemporaryRoot):
         state = json.loads(state_path.read_text(encoding="utf-8"))
         key = str(fixture.destination("agents/cartographer.md"))
         record = state["entries"].pop(key)
-        artifact = bundle.reserve_private_artifact(Path(key), "stage")
-        state["transactions"][key] = bundle.transaction_record(
-            "create", key, old_record=None, old_owned=False, new_record=record, stage=artifact, backup=None
-        )
+        state["pending"] = bundle.pending_slot("install", key, None, record)
         state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         later = self.later_config(fixture)
         outcome = call_main(fixture, config=later)
         self.assertEqual(3, outcome.code)
-        self.assertIn("outstanding lifecycle transaction", outcome.stderr)
+        self.assertIn("outstanding lifecycle transition", outcome.stderr)
         self.assertEqual(1, len(fixture.activation_receipts()))
         # Positive control: restoring the resolved state admits the very same run.
-        state["transactions"].pop(key)
+        state["pending"] = None
         state["entries"][key] = record
         state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         self.assertEqual(0, call_main(fixture, config=later).code)
@@ -1389,13 +1386,23 @@ class GuardInteractionTest(unittest.TestCase):
             "installer_lock",
             "durable_mkdir",
             # Landed after the guard's pinned name set was first written (agentic-sdlc-7c7d): these
-            # arm, commit, retire, and rename an entry's own transaction and must be closed into the
-            # same set rather than left reachable by a future reader that loads this module for more
-            # than `readonly_projection`.
+            # arm, publish, and commit an entry's own transition and must be closed into the same set
+            # rather than left reachable by a future reader that loads this module for more than
+            # `readonly_projection`. `transactional_rename` was in this list until demolition rank 4
+            # deleted the one-skill rename migration it served.
+            "arm_pending",
+            "commit_pending",
+            "publish",
+            "recover_pending",
             "transactional_create",
             "transactional_delete",
-            "transactional_rename",
             "transactional_replace",
+            # The guard applies every pinned name with `hasattr`, so a writer RENAMED in the
+            # installer would silently stop being blocked. Every remaining pinned writer is
+            # asserted here so that rename breaks this test instead.
+            "rename_absent",
+            "reserve_private_artifact",
+            "save_owned_entry",
         )
         for name in needed:
             self.assertTrue(callable(getattr(adapter, name)), name)

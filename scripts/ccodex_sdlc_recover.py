@@ -14,11 +14,11 @@ spelling of the plan that could disagree with the one an ``--apply`` re-derives.
 observation -- it reads, classifies, and digests, and it writes nothing -- which is why the reader
 may call it while its process-wide read-only guard is installed.
 
-Resume and roll back happen ONLY through the reused substrate's own machinery
-(``install_skill_bundle.classify_recovery`` / ``execute_recovery`` / ``recover_transactions`` for the
-bundle journal, ``install_operator_tools.recover_pending`` for the operator-tools journal).  This
-module classifies, admits, and reports; it invents no repair of its own.  Foreign, modified,
-ambiguous, and unknown-effect state is preserved and NAMED rather than overwritten or deleted.
+Resume and roll back happen ONLY through the reused substrate's own machinery -- each substrate's own
+``recover_pending`` over its own single ``pending`` slot (``install_skill_bundle`` for the bundle
+journal, ``install_operator_tools`` for the operator-tools journal).  This module classifies, admits,
+and reports; it invents no repair of its own.  Foreign, modified, ambiguous, and unknown-effect state
+is preserved and NAMED rather than overwritten or deleted.
 
 A completed recovery is evidence, never authorization: no push, publication, PR mutation, merge, or
 deployment follows from it.  ``public_channel`` stays null and the release claim stays ``none``.
@@ -106,11 +106,16 @@ JOURNAL_PRESENT = "present"
 JOURNAL_ABSENT = "absent"
 JOURNAL_BLOCKING_STATES = ("irregular", "oversized", "symlinked", "unreadable")
 
-#: Item actions. ``preserve`` is a first-class outcome, not a failure to act.
-ACTION_RESUME_TRANSACTION = "resume-transaction"
+#: The one item action. Both substrates now carry one ``pending`` slot resolved by their own
+#: ``recover_pending``, so ``resume-transaction`` -- the per-entry phase-machine action that named the
+#: retired bundle journal -- has no subject left and is gone rather than kept as a synonym.
 ACTION_RESUME_PENDING = "resume-pending"
 
-CONFLICT = "conflict"
+#: Both halves spell the same one classified conflict: the live destination matches NEITHER recorded
+#: record, which is the state each substrate's ``recover_pending`` preserves and names rather than
+#: acts through. The plan's conflict count reads this suffix, so a `/live-other` item is counted
+#: whichever component observed it.
+CONFLICT_OBSERVATION = "/live-other"
 
 
 class Refusal(RuntimeError):
@@ -346,12 +351,15 @@ def observe_receipts(directory: Path) -> dict[str, Any]:
 
 
 def bundle_items(bundle: ModuleType, bundle_config: Any, journal: dict[str, Any]) -> list[dict[str, Any]]:
-    """Classify each interrupted bundle transaction that selects this configured home.
+    """Observe the bundle's interrupted transition without deciding its outcome here.
 
-    The locator is the reused installer's OWN read-only locator, so a plan item names exactly the
-    proposal the operator already saw in ``recover --dry-run`` rather than a second numbering.  The
-    classification is ``classify_recovery``'s own verdict, so a layout whose witnesses are no longer
-    exact appears here as ``conflict`` -- preserved and named, never acted through.
+    This mirrors ``operator_tools_items`` exactly, because the two substrates now carry the same one
+    ``pending`` slot: the derivation records only what is OBSERVABLE -- the recorded operation and
+    which of the two recorded records the live destination matches -- and leaves the verdict to
+    ``recover_pending``, which fsyncs on the way in and would be blocked by the reader's read-only
+    guard.  ``live-other`` is the shape ``recover_pending`` preserves and names rather than acts
+    through.  The locator is the reused installer's OWN read-only locator, so a plan item names
+    exactly the proposal the operator already saw in ``recover --dry-run``.
     """
     if journal["state"] != JOURNAL_PRESENT:
         return []
@@ -362,31 +370,36 @@ def bundle_items(bundle: ModuleType, bundle_config: Any, journal: dict[str, Any]
         state = bundle._readonly_json_document(raw, Path(journal["path"]))
     except Exception as exc:  # noqa: BLE001 - a malformed journal states no plan, it is not a crash
         raise PlanUnavailable(f"the bundle journal is not one strict JSON object ({show(exc)})") from exc
-    if set(state) != {"version", "entries", "transactions"} or state.get("version") != bundle.STATE_VERSION:
+    if set(state) != {"version", "entries", "pending"} or state.get("version") != bundle.STATE_VERSION:
         raise PlanUnavailable("the bundle journal is not one readable current-version document")
+    pending = state["pending"]
+    if pending is None:
+        return []
     try:
         bundle.validate_state(bundle_config, state)
     except Exception as exc:  # noqa: BLE001 - the substrate's own verdict on its own journal
         raise PlanUnavailable(f"the bundle journal does not validate ({show(exc)})") from exc
-    transactions = state["transactions"]
-    selected: list[dict[str, Any]] = []
-    for key in sorted(transactions):
-        transaction = transactions[key]
-        records = bundle.transaction_configured_records(transaction, bundle_config)
-        if not records:
-            continue
-        selected.append({"record": records[0], "transaction": transaction})
-    items: list[dict[str, Any]] = []
-    for ordinal, entry in enumerate(selected, start=1):
-        items.append(
-            {
-                "action": ACTION_RESUME_TRANSACTION,
-                "classification": bundle.classify_recovery(entry["transaction"], bundle_config),
-                "component": "bundle",
-                "path": bundle._readonly_locator("transaction", entry["record"], ordinal),
-            }
-        )
-    return items
+    record = bundle.pending_selects_config(pending, bundle_config)
+    if record is None:
+        return []
+    destination = Path(str(pending["path"]))
+    observed = "live-other"
+    if not bundle.path_present(destination):
+        observed = "live-absent"
+    else:
+        for role in ("before", "after"):
+            candidate = pending.get(role)
+            if isinstance(candidate, dict) and bundle.entry_matches_record(destination, candidate):
+                observed = f"live-{role}"
+                break
+    return [
+        {
+            "action": ACTION_RESUME_PENDING,
+            "classification": f"{pending['operation']}/{observed}",
+            "component": "bundle",
+            "path": bundle._readonly_locator("transition", record, 1),
+        }
+    ]
 
 
 def operator_tools_items(
@@ -480,7 +493,7 @@ def derive_plan(
     if present:
         items.extend(bundle_items(bundle, bundle_config, present[0]))
     items.sort(key=lambda item: (item["component"], item["path"], item["action"]))
-    conflicts = sum(1 for item in items if item["classification"] == CONFLICT)
+    conflicts = sum(1 for item in items if item["classification"].endswith(CONFLICT_OBSERVATION))
     plan = {
         "counts": {
             "conflicts": conflicts,
@@ -759,14 +772,20 @@ def resume_bundle(
     plan: dict[str, Any],
     ledger: dict[str, bool],
 ) -> tuple[list[str], bool]:
-    """Resume or roll back the bundle journal's transactions through the substrate's own machinery.
+    """Resume or roll back the bundle journal's transition through the substrate's own machinery.
 
     The journal's exact bytes are re-checked UNDER the installer lock against the digest the approved
     plan recorded: a plan verified before the lock and executed after it would otherwise have
     admitted whatever moved in between.
+
+    ``recover_pending`` REPORTS a live destination matching neither recorded record and returns it as
+    partial, rather than raising the way the operator-tools half does.  It returns that verdict before
+    it writes anything, which is why -- exactly as on the operator-tools side -- the pessimistic flag
+    may be lowered again on that one path and only on it.
     """
     if not any(item["component"] == "bundle" for item in plan["items"]):
         return [], False
+    moved_before = ledger["moved"]
     recorded = {
         journal["locator"]: journal["digest"]
         for journal in plan["journal"]
@@ -788,7 +807,9 @@ def resume_bundle(
         state_document = bundle.load_config_state(bundle_config)
         bundle.validate_state(bundle_config, state_document)
         ledger["moved"] = True
-        messages, partial = bundle.recover_transactions(bundle_config, state_document, read_only=False)
+        messages, partial = bundle.recover_pending(bundle_config, state_document, read_only=False)
+        if partial:
+            ledger["moved"] = moved_before
     return [f"bundle: {escape_display(message)}" for message in messages], partial
 
 

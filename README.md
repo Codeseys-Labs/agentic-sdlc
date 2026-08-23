@@ -490,9 +490,10 @@ falls back to copies. Strict link mode does not use that fallback. The installer
 per-entry ownership in the platform state directory (`XDG_STATE_HOME` on Unix,
 `LOCALAPPDATA` on Windows). Lifecycle operations use that record to distinguish bundle
 entries from user files. Write-capable lifecycle commands are serialized per state file.
-Linux lifecycle mutation requires glibc 2.28+ and a filesystem exposing `statx` birth time.
-Unsupported identity or no-replace primitives fail closed rather than weakening ownership
-authority.
+Ownership is BYTE identity: a record carries the digest of the bytes this lifecycle published, and
+nothing else identifies the destination. There is no birth-timestamp or device/inode requirement, so
+there is no minimum libc and no filesystem that has to expose `statx` birth time — a host where
+`cp -r` works can install. See "Ownership and lifecycle rules" below for what that costs.
 
 ```bash
 mise run bundle:install
@@ -770,43 +771,50 @@ Activation verifies the exact owned executable and mutates only `statusLine.type
 edit is preserved and reported as a conflict. This initial surface supports Linux, WSL, and
 macOS; native Windows activation fails with a named unsupported verdict.
 
-### Safe migration and lifecycle rules
+### Ownership and lifecycle rules
 
-Use the installer to inspect v1 ownership before explicitly migrating it:
+Inspect ownership, then act:
 
 ```bash
 mise run bundle:status
-mise run bundle:install -- --migrate-state --dry-run
-mise run bundle:install -- --migrate-state
-mise run bundle:status
+mise run bundle:install -- --agent claude --dry-run
 mise run check
 ```
 
-`status` and ordinary lifecycle commands never rewrite v1 state and block mutation while a
-known v1 document is outstanding. `--migrate-state --dry-run` validates every record from the
-operator state path and the configured home's distinct legacy path without changing files or
-state. The write-enabled command converts all exact, structurally valid records—including
-mixed-agent and historical-home records—into one central v2 document. Migration is state-only:
-it does not install, refresh, otherwise reconcile current bundle entries, or adopt an unrecorded
-file or link already occupying a configured collection. Diagnose that unowned destination with
-`bundle:install -- --agent <claude|codex> --dry-run`; resolve its ownership deliberately rather
-than using `--migrate-state` as a repair. A distinct legacy source is retired only after the central
-v2 write is durable and the source is rechecked. Retry is idempotent if retirement was interrupted.
-Migration fails closed on changed object types, conflicting records, changed sources, or unsafe
-roots.
+**Ownership is byte identity.** An ownership record names its destination, its mode, and the digest
+of the bytes this lifecycle published there. A destination you MODIFIED is refused and preserved,
+because your content changes the tree digest or the link target. A destination you replaced with a
+byte-identical copy of the bundle's own payload is treated as owned and will be removed by
+`bundle:uninstall` — that is a deliberate, bounded weakening (the bytes removed are the bundle's own),
+and it is what lets the installer run on filesystems that expose no birth timestamp. AGENTS.md
+records the full doctrine.
 
-Linux and macOS require their supported filesystem durability barriers; failures stop the
-operation. macOS uses `F_FULLFSYNC` for file content and directory fsync for namespace changes.
-Native Windows uses handle-bound, no-replace renames and supports process-crash recovery, but
-does not claim sudden-power-loss durability for namespace transitions. Concurrent external
-mutation of managed paths during a write command is unsupported; detected identity or content
-changes are preserved and reported as conflicts.
+The installer admits exactly one ownership schema. A document written by another generation is
+refused by name — it tells you the version it found and the remedy, which is to remove the state file
+and reinstall — and its bytes are never rewritten. There is no `--migrate-state` flag: the physical
+identity witnesses and the transaction journal those older documents carried no longer exist, so
+there is nothing a migration could faithfully convert. Diagnose an unowned destination with
+`bundle:install -- --agent <claude|codex> --dry-run` and resolve its ownership deliberately.
 
-Collection directories are never replaced. An exact legacy bundle link or byte-identical
-copy may be adopted into ownership. Foreign entries, retargeted links, and modified copies
-are preserved and reported as conflicts. Owned copies are refreshed only while they remain
-unchanged from the last recorded bundle content; user modifications are never overwritten.
-Uninstall removes only owned entries and leaves conflicts and foreign files in place.
+Crash consistency is one armed `pending` transition: a write records what it intends durably, moves
+the bytes, then commits, and a later run resolves it by comparing the live bytes to the recorded
+before/after. Bytes matching neither are reported and preserved. A copy-mode tree swap is a
+rename-aside pair rather than one atomic replace, so an interruption inside it can park the previous
+tree in a named `.<name>.old-*` sibling; every such leftover is named in the report for you to remove
+by hand and is never deleted for you.
+
+Linux and macOS require their supported namespace durability barriers; failures stop the operation.
+macOS uses `F_FULLFSYNC` for the state document and directory fsync for namespace changes; staged
+copy content is not fsynced tree-wide, so a copy-mode install is process-crash consistent rather than
+power-loss durable. Native Windows supports process-crash recovery but does not claim
+sudden-power-loss durability for namespace transitions. Concurrent external mutation of managed paths
+during a write command is unsupported; detected content changes are preserved and reported as
+conflicts.
+
+Collection directories are never replaced, and a collection replaced with a link is refused by name
+rather than followed. An exact legacy bundle link or byte-identical copy may be adopted into
+ownership. Foreign entries, retargeted links, and modified copies are preserved and reported as
+conflicts. Uninstall removes only owned entries and leaves conflicts and foreign files in place.
 
 For Claude Code, choose exactly one distribution plane per machine. Use either the direct
 bundle install or the Claude marketplace install (`claude plugin marketplace add` followed

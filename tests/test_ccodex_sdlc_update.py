@@ -248,7 +248,7 @@ def activate_with_the_shipped_installer(
     """Copy-activate one candidate's claude entries through the SHIPPED installer's own transactions.
 
     The prestate this ticket refreshes is therefore the prestate production holds -- real copies plus
-    real v2 ownership records -- rather than a hand-written state file that could agree with a defect.
+    real ownership records -- rather than a hand-written state file that could agree with a defect.
     """
     config = bundle.Config(candidate_root, home, codex_home, "copy", False, "claude", state_root)
     written: list[tuple[str, Path]] = []
@@ -259,10 +259,7 @@ def activate_with_the_shipped_installer(
                 continue
             destination = bundle.destination_for(entry, config)
             bundle.ensure_collection(entry, destination, config)
-            root_token, collection_token = bundle.authority_tokens(entry, destination, config)
-            mode = bundle.transactional_create(
-                entry, destination, config, state, root_token, collection_token
-            )
+            mode = bundle.transactional_create(entry, destination, config, state)
             assert mode == "copy", mode
             written.append(
                 (destination.relative_to(bundle.agent_root(entry, config)).as_posix(), destination)
@@ -1323,12 +1320,13 @@ class BlockedRefreshTest(TemporaryRoot):
         state_path.write_bytes(kept)
         self.assertEqual(0, call_main(fixture).code)
 
-    def test_an_outstanding_installer_transaction_refuses_rather_than_being_resolved(self) -> None:
-        """The outstanding transaction is armed with the installer's OWN primitives, not hand-written.
+    def test_an_outstanding_installer_transition_refuses_rather_than_being_resolved(self) -> None:
+        """The outstanding transition is armed with the installer's OWN primitives, not hand-written.
 
-        A hand-written journal row is refused by ``validate_state`` first, which would prove only that
-        an invalid state is invalid; this one is a record the shipped installer itself would recognise
-        as recoverable, so the refusal under test is the "recovery is a separate operation" one.
+        A hand-written slot is refused by ``validate_state`` first, which would prove only that an
+        invalid state is invalid; this one is a transition the shipped installer itself would
+        recognise as recoverable, so the refusal under test is the "recovery is a separate operation"
+        one.
         """
         fixture = self.fixture()
         state_path = fixture.state_home / "agentic-sdlc-installer" / "state.json"
@@ -1338,12 +1336,8 @@ class BlockedRefreshTest(TemporaryRoot):
         state = bundle.load_config_state(config)
         key = sorted(state["entries"])[0]
         record = state["entries"][key]
-        artifact = bundle.reserve_private_artifact(Path(key), "backup")
-        transaction = bundle.transaction_record(
-            "delete", key, old_record=record, old_owned=True, new_record=None, stage=None, backup=artifact
-        )
-        armed = bundle.state_with_transaction(state, key, transaction)
-        bundle.write_state(state_path, armed, False)
+        state["pending"] = bundle.pending_slot("uninstall", key, record, None)
+        bundle.write_state(state_path, state, False)
         bundle.validate_state(config, bundle.load_config_state(config))  # positive control: it is valid
 
         outcome = call_main(fixture)

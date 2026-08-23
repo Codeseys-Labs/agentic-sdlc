@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Run any test target with the installers' birth-timestamp clock FORCED COARSE.
+"""Run any test target with the research-os installer's birth-timestamp clock FORCED COARSE.
 
 WHY THIS FILE EXISTS
 --------------------
-Both lifecycle installers name a filesystem object by `stat-v2:<dev>:<ino>:<btime>`. Inodes are
-reused, so the birth timestamp is the entire discriminator, and every filesystem quantizes it:
-objects created inside one quantum are stamped identically. `scripts/install_skill_bundle.py` and
-`skills/codex-research-os/scripts/install_research_os.py` therefore try to prove a recorded witness
-SETTLED (its birth quantum provably closed) with one probe, and DEFER what the probe cannot prove:
-the record is persisted carrying `witness_settled: false` and one bounded wait is paid at the end
-of the command.
+`skills/codex-research-os/scripts/install_research_os.py` names a filesystem object by
+`stat-v2:<dev>:<ino>:<btime>`. Inodes are reused, so the birth timestamp is the entire
+discriminator, and every filesystem quantizes it: objects created inside one quantum are stamped
+identically. That installer therefore tries to prove a recorded witness SETTLED (its birth quantum
+provably closed) with one probe, and DEFERS what the probe cannot prove: the record is persisted
+carrying `witness_settled: false` and one bounded wait is paid at the end of the command.
+
+ONE SEAM, NOT TWO. `scripts/install_skill_bundle.py` used to be the second forced seam. It no longer
+has one: demolition rank 4 (seed `agentic-sdlc-0c38`) deleted its whole physical-identity layer --
+`stat_birth_identity`, `stat_identity`, the `SettlementLedger`, and the `witness_settled` marker --
+and left byte identity (a content digest plus a link target) as the entire ownership test. There is
+no birth timestamp left in that module for a clock to force, so forcing one there would patch
+nothing and prove nothing. The research-os installer was never audited for that deletion and keeps
+its witness layer, so this lever keeps its subject.
 
 That deferral-and-marker path is invisible to this repository's own gate. A development host with
 fine-grained btime (microsecond deltas between back-to-back creates) settles on the FIRST probe
@@ -19,9 +26,10 @@ whose btime is coarse (one distinct value measured across 40 creates inside a 78
 window) runs it for real, on every transaction. A gate that cannot reach a path cannot defend it,
 and a six-minute CI round trip is not an iteration surface.
 
-This module closes that hole. It forces the birth clock coarse at the two seams the product
-actually consults, then hands the test target to `unittest`, so the coarse-clock path is
-reproducible and provable on any host, forever.
+This module closes that hole. It forces the birth clock coarse at the one seam that product still
+consults, then hands the test target to `unittest`, so the coarse-clock path is reproducible and
+provable on any host, forever. A target that loads no such seam is REFUSED rather than run under a
+clock that is not actually forced; `--allow-unpatched` is the explicit opt-out.
 
 USAGE
 -----
@@ -40,21 +48,23 @@ WHAT THE QUANTUM COSTS
 ----------------------
 Every deferred witness makes its command pay a real bounded wait, so the quantum is a wall-clock
 multiplier, not a free knob. Measured here: `test_research_os_lifecycle` (45 tests) took 85s at
-`--quantum 1.0`; `test_install_skill_bundle` (107 tests) did not finish inside 500s at 1.0 but took
-15s at `--quantum 0.05`, finding the identical failure set. So use 1.0 on a focused target where
-one-second fidelity is the point, and 0.05 for a module or the whole suite. A quantum only has to
-outlast the gap between two back-to-back creations to collapse them, and 50ms outlasts it by
-three orders of magnitude.
+`--quantum 1.0`. The second measurement this section used to carry -- `test_install_skill_bundle`
+at 1.0 versus 0.05 -- is GONE with its seam, and it is not restated as though it still held. So use
+1.0 on a focused target where one-second fidelity is the point, and 0.05 for a module or the whole
+suite. A quantum only has to outlast the gap between two back-to-back creations to collapse them,
+and 50ms outlasts it by three orders of magnitude.
 
 WHY THIS ANCHORS ON AN OBSERVED BIRTH VALUE (measured, not assumed)
 ------------------------------------------------------------------
-HISTORICAL NOTE, kept because the measurement is the argument: the repo's own two per-test
+HISTORICAL NOTE, kept because the measurement is the argument: the repo's per-test
 `simulated_birth_clock` helpers USED to anchor on `origin = time.time_ns()` and floor with Python's
 `//`, which rounds toward negative infinity. A btime BELOW that origin lands in bucket -1 and is
 reported one whole quantum early -- that is what failed the settlement suite's own positive control
-on CI run 32565128438. Seed `agentic-sdlc-249d-recovery` re-anchored BOTH helpers on an observed
-birth value with the same upward clamp used here, so they no longer carry the defect; grep
-`anchor: int | None = None` in either test module to confirm rather than trusting this sentence.
+on CI run 32565128438. Seed `agentic-sdlc-249d-recovery` re-anchored them on an observed birth value
+with the same upward clamp used here, so they no longer carry the defect; grep
+`anchor: int | None = None` in `tests/test_research_os_lifecycle.py` to confirm rather than trusting
+this sentence. There were two such helpers; the `tests/test_install_skill_bundle.py` one went with
+that module's witness tests in demolition rank 4, so only the research-os helper remains.
 Measured on this host, which is NOT a coarse-btime host:
 
   * btime here is fine-grained: 200 creates in 8.6ms produced 200/200 distinct witnesses, minimum
@@ -113,11 +123,11 @@ and a value below the anchor is clamped up to it. Both rules are load-bearing:
 * Anchoring to an observed birth value means the grid boundary can never fall INSIDE one of the
   host filesystem's own quanta. A wall-clock anchor can, and then two objects the host stamped
   identically get different forced witnesses -- a phantom discrimination the host never had. That
-  is not hypothetical: the existing per-test helpers in `tests/test_research_os_lifecycle.py` and
-  `tests/test_install_skill_bundle.py` anchor on `time.time_ns()`, and on the coarse CI runner
-  that produced witnesses exactly one 3600s quantum apart for two files created microseconds
-  apart, failing `test_same_quantum_witness_cannot_discriminate_a_reused_inode` on its own
-  positive control.
+  is not hypothetical: the per-test helpers in `tests/test_research_os_lifecycle.py` and (before
+  demolition rank 4 retired it) `tests/test_install_skill_bundle.py` anchored on `time.time_ns()`,
+  and on the coarse CI runner that produced witnesses exactly one 3600s quantum apart for two files
+  created microseconds apart, failing
+  `test_same_quantum_witness_cannot_discriminate_a_reused_inode` on its own positive control.
 * Clamping up, rather than letting a pre-existing object fall into an earlier bucket, keeps the
   forced clock from GRANTING discrimination. A target that looks older than a probe settles; the
   whole point of this lever is to withhold settlement, so every rounding choice here rounds toward
@@ -153,9 +163,11 @@ It fakes a clock. It does not fake a kernel, a filesystem, or an allocator.
   the existing per-test `simulated_birth_clock(None)` freeze.
 * Only the birth timestamp is forced. `st_ctime`, `st_mtime`, `st_atime` and every other stat
   field stay real, because the ownership witness consults none of them.
-* The `install_skill_bundle` seam is its whole birth-identity FUNCTION, so its Darwin and Windows
-  branches are forced too. The `install_research_os` seam is its Linux `statx` wrapper, so on
-  Darwin or Windows that installer reads the host clock unforced.
+* The `install_research_os` seam is its Linux `statx` wrapper, so on Darwin or Windows that
+  installer reads the host clock unforced and this lever forces nothing there.
+* `install_skill_bundle` is not a subject at all any more. It owns no birth-timestamp function to
+  patch, so a target that loads only that module forces nothing -- and is REFUSED for exactly that
+  reason rather than reported as a forced run.
 * A forced witness never reaches disk as a claim about the host: it is a return value inside one
   process. Ownership state written during a forced run is a fixture, not a receipt.
 """
@@ -175,11 +187,10 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_ROOT = REPO_ROOT / "tests"
-# The two product seams. Each is matched by the module's resolved `__file__`, not by the name a
-# test happened to register in `sys.modules`, because every test module here loads these installers
-# by path under a name of its own choosing.
-BUNDLE_INSTALLER = REPO_ROOT / "scripts" / "install_skill_bundle.py"
-BUNDLE_SEAM = "stat_birth_identity"
+# The one product seam left. It is matched by the module's resolved `__file__`, not by the name a
+# test happened to register in `sys.modules`, because every test module here loads this installer
+# by path under a name of its own choosing. `_SEAMS` stays a tuple of triples so a second seam is
+# added there and nowhere else.
 RESEARCH_OS_INSTALLER = (
     REPO_ROOT / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
 )
@@ -194,7 +205,8 @@ class QuantumGrid:
     """A birth-timestamp grid, anchored either to an observed value or to the epoch.
 
     One grid is shared by every patched seam in a run, so two installers exercised by the same
-    test agree about what "the same quantum" means.
+    test would agree about what "the same quantum" means. Only one installer carries a seam today;
+    the sharing stays because it is the property that made two agree, not a count.
 
     `observed` (the default) anchors to the first real value seen since the last reset, which is
     what makes a reproduction deterministic: the boundary is a real birth value, so it cannot fall
@@ -205,8 +217,8 @@ class QuantumGrid:
     clock tick, and is therefore the only mode that can return a birth value EARLIER than a
     wall-clock reading taken before the object was created. That asymmetry is not academic: it is
     the whole mechanism by which a wall-clock-anchored simulated clock (`origin = time.time_ns()`,
-    floor toward the epoch -- the shape of the per-test helpers in
-    `tests/test_research_os_lifecycle.py` and `tests/test_install_skill_bundle.py`) drops one
+    floor toward the epoch -- the shape of the per-test helper in
+    `tests/test_research_os_lifecycle.py`) drops one
     object into the bucket BELOW its own origin and reports it a full quantum older than a sibling
     the filesystem stamped identically. Reproducing that needs this mode, and this mode is
     deliberately NOT the default, because whether the split lands depends on where in the quantum
@@ -245,34 +257,6 @@ class QuantumGrid:
         return self.anchor_ns + (offset // self.quantum_ns) * self.quantum_ns
 
 
-def _coarse_birth_identity(real: Callable[..., Any], grid: QuantumGrid) -> Callable[..., Any]:
-    """Force `install_skill_bundle.stat_birth_identity`, preserving its platform spelling.
-
-    Linux spells the witness `<tv_sec>.<tv_nsec>`; the Darwin and Windows branches spell it as an
-    integer nanosecond count. Both are kept exactly as the real seam produces them (unpadded, the
-    way the product formats them), because the product compares whole witness strings.
-    """
-
-    @functools.wraps(real)
-    def forced(path: Path, *, follow_symlinks: bool = True) -> str | None:
-        value = real(path, follow_symlinks=follow_symlinks)
-        if value is None:
-            return None
-        seconds, separator, fraction = value.partition(".")
-        try:
-            total = int(seconds) * 10**9 + int(fraction or 0) if separator else int(seconds)
-        except ValueError:
-            # A spelling this lever does not understand is passed through untouched rather than
-            # silently replaced with a fabricated one.
-            return value
-        coarse = grid.coarsen(total)
-        if separator:
-            return f"{coarse // 10**9}.{coarse % 10**9}"
-        return str(coarse)
-
-    return forced
-
-
 class _ForcedBtime:
     def __init__(self, seconds: int, nanoseconds: int) -> None:
         self.tv_sec = seconds
@@ -306,7 +290,6 @@ def _coarse_linux_statx(real: Callable[..., Any], grid: QuantumGrid) -> Callable
 
 
 _SEAMS: tuple[tuple[Path, str, Callable[..., Any]], ...] = (
-    (BUNDLE_INSTALLER, BUNDLE_SEAM, _coarse_birth_identity),
     (RESEARCH_OS_INSTALLER, RESEARCH_OS_SEAM, _coarse_linux_statx),
 )
 
@@ -356,18 +339,15 @@ def _probe_collapse_once(module: Any, attribute: str) -> str:
         first.write_bytes(b"")
         second.write_bytes(b"")
         seam = getattr(module, attribute)
-        if attribute == BUNDLE_SEAM:
-            witnesses = (seam(first), seam(second))
-        else:
-            results = (seam(os.fsencode(first)), seam(os.fsencode(second)))
-            if any(result is None for result in results):
-                raise RuntimeError(
-                    f"{module.__name__}.{attribute} reported no birth timestamp for a file it "
-                    "just created; this host cannot host a birth-witness reproduction"
-                )
-            witnesses = tuple(
-                f"{result.stx_btime.tv_sec}.{result.stx_btime.tv_nsec}" for result in results
+        results = (seam(os.fsencode(first)), seam(os.fsencode(second)))
+        if any(result is None for result in results):
+            raise RuntimeError(
+                f"{module.__name__}.{attribute} reported no birth timestamp for a file it "
+                "just created; this host cannot host a birth-witness reproduction"
             )
+        witnesses = tuple(
+            f"{result.stx_btime.tv_sec}.{result.stx_btime.tv_nsec}" for result in results
+        )
         if witnesses[0] is None or witnesses[0] != witnesses[1]:
             raise RuntimeError(
                 f"forced coarse clock did not collapse two back-to-back creates through "
@@ -408,9 +388,8 @@ def forced_coarse_birth_clock(
         if not seams and require_seam:
             raise RuntimeError(
                 "no birth-timestamp seam is loaded, so this run would force nothing. Load a test "
-                f"module that imports {BUNDLE_INSTALLER.name} or {RESEARCH_OS_INSTALLER.name}, or "
-                "pass --allow-unpatched to run an unrelated target under a clock that is not "
-                "actually forced."
+                f"module that imports {RESEARCH_OS_INSTALLER.name}, or pass --allow-unpatched to "
+                "run an unrelated target under a clock that is not actually forced."
             )
         for module, attribute, factory in seams:
             stack.enter_context(

@@ -97,7 +97,7 @@ class WorkflowLifecycleTests(unittest.TestCase):
         record = installer.load_state(config.state_path)["entries"][str(destination)]
         self.assertEqual(record["kind"], "workflow")
         self.assertEqual(record["name"], "wave.js")
-        self.assertEqual(record["destination_type"], "file")
+        self.assertEqual(set(record), installer.RECORD_FIELDS)
         self.assertEqual(record["digest"], installer.digest(self.entry.source))
 
         removed = installer.uninstall(config)
@@ -247,36 +247,21 @@ class WorkflowLifecycleTests(unittest.TestCase):
         self.assertEqual(degraded["state"], "degraded")
         self.assertEqual([entry["state"] for entry in degraded["entries"]], ["foreign"])
 
-    def test_a_workflow_transaction_is_admitted_only_under_its_own_collection(self) -> None:
+    def test_a_workflow_transition_is_admitted_only_under_its_own_collection(self) -> None:
         config = self.config()
         destination = self.destination(config)
-        installer.ensure_collection(self.entry, destination, config)
-        root_identity, collection_identity = installer.authority_tokens(
-            self.entry, destination, config
-        )
-        staged = installer.stage_candidate(
-            self.entry, destination, config, root_identity, collection_identity
-        )
-        transaction = installer.transaction_record(
-            "create",
-            str(destination),
-            old_record=None,
-            old_owned=False,
-            new_record=staged.record,
-            stage=staged.artifact,
-            backup=None,
-        )
+        record = installer.entry_record(self.entry, "copy")
         state = installer.empty_state()
-        state["transactions"][str(destination)] = transaction
+        state["pending"] = installer.pending_slot("install", str(destination), None, record)
 
-        installer.validate_transactions(config, state)
+        installer.validate_pending(config, state)
 
         mismatched = installer.empty_state()
-        moved = dict(transaction)
-        moved["new_record"] = dict(transaction["new_record"], kind="command")
-        mismatched["transactions"][str(destination)] = moved
+        mismatched["pending"] = installer.pending_slot(
+            "install", str(destination), None, dict(record, kind="command")
+        )
         with self.assertRaises(installer.InstallerError) as raised:
-            installer.validate_transactions(config, mismatched)
+            installer.validate_pending(config, mismatched)
         self.assertIn(str(destination), str(raised.exception))
 
     def test_the_codex_plane_owns_no_workflow(self) -> None:
@@ -304,7 +289,14 @@ class WorkflowLifecycleTests(unittest.TestCase):
             )
         self.assertEqual(str(raised.exception), "unsupported entry kind: playbook")
 
-        with mock.patch.object(
+        # `main` derives its state path from the environment, so the state root is redirected here:
+        # without it this assertion reads the OPERATOR's own ownership document and could pass on
+        # whatever that document happens to say rather than on the refusal under test.
+        with mock.patch.dict(
+            os.environ,
+            {"XDG_STATE_HOME": str(self.root / "cli-state"), "LOCALAPPDATA": str(self.root / "cli-state")},
+            clear=False,
+        ), mock.patch.object(
             installer,
             "discover_entries",
             return_value=[installer.Entry("claude", "playbook", "wave.js", self.entry.source)],
@@ -351,7 +343,7 @@ class WorkflowLifecycleTests(unittest.TestCase):
         healthy_state = installer.load_state(config.state_path)
         installer.validate_state(config, healthy_state)
 
-    def test_the_v1_reader_admits_no_workflow_record(self) -> None:
+    def test_a_workflow_record_is_refused_under_another_collection(self) -> None:
         home = self.root / "home"
         record = {
             "agent": "claude",
@@ -360,20 +352,22 @@ class WorkflowLifecycleTests(unittest.TestCase):
             "source": str(self.entry.source),
             "mode": "copy",
             "digest": "0" * 64,
+            "removable": True,
         }
-        key = str(home / ".claude" / "workflows" / "wave.js")
 
-        self.assertFalse(installer.v1_record_structure_valid(key, record))
+        self.assertFalse(
+            installer.record_structure_valid(str(home / ".claude" / "commands" / "wave.js"), record)
+        )
 
-        # Positive control: the same record shape is admitted for a kind a v1 writer could write.
-        command_key = str(home / ".claude" / "commands" / "wave.md")
-        command_record = dict(record, kind="command", name="wave.md")
-        self.assertTrue(installer.v1_record_structure_valid(command_key, command_record))
+        # Positive control: the same record under its own collection is admitted.
+        self.assertTrue(
+            installer.record_structure_valid(str(home / ".claude" / "workflows" / "wave.js"), record)
+        )
 
-    def test_the_v1_reader_refuses_an_unhashable_agent_rather_than_raising(self) -> None:
-        """The v1 mirror of the unhashable-agent guard: `v1_record_structure_valid` has its own
-        `agent in {"claude", "codex"}` membership test and needs the same `isinstance` guard the
-        kind path already carries, or an unhashable `agent` raises TypeError instead of refusing.
+    def test_the_record_reader_refuses_an_unhashable_agent_rather_than_raising(self) -> None:
+        """`record_structure_valid` carries an `agent in {"claude", "codex"}` membership test, so it
+        needs the same `isinstance` guard the kind path already has, or an unhashable `agent` raises
+        TypeError instead of refusing.
         """
         home = self.root / "home"
         key = str(home / ".claude" / "commands" / "wave.md")
@@ -384,13 +378,13 @@ class WorkflowLifecycleTests(unittest.TestCase):
             "source": str(self.entry.source),
             "mode": "copy",
             "digest": "0" * 64,
+            "removable": True,
         }
 
-        self.assertFalse(installer.v1_record_structure_valid(key, record))
+        self.assertFalse(installer.record_structure_valid(key, record))
 
         # Positive control: the same record shape with a real agent string is admitted.
-        healthy = dict(record, agent="claude")
-        self.assertTrue(installer.v1_record_structure_valid(key, healthy))
+        self.assertTrue(installer.record_structure_valid(key, dict(record, agent="claude")))
 
     def test_the_entry_kind_docstring_states_the_authority_boundary(self) -> None:
         text = installer.entry_collection.__doc__ or ""

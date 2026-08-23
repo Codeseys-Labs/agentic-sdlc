@@ -3,7 +3,36 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml==6.0.3"]
 # ///
-"""Validate Agentic SDLC bundle metadata and lifecycle contracts."""
+"""Validate Agentic SDLC bundle metadata and the repository's trust-boundary pins.
+
+Scope rule, after the 2026-08-22 shrink (seed agentic-sdlc-ab6a, epic agentic-sdlc-3c90): a
+check earns its place here only if it guards the DELIVERED PAYLOAD or a TRUST BOUNDARY, and only
+if no runtime consumer already fails on the same input. The three payload guards are
+`validate_skills` (name==dirname, the Codex 1024-char description cap, and every
+`references/*.md` a skill instructs an agent to read — the installer symlinks skill directories
+without parsing a byte of frontmatter, so nothing else checks these), `bash -n` over the shipped
+shell CLI, and `compile()` over the shipped Python. The trust boundaries are the
+protected-role authority pins over shipped `agents/` bytes, the authority-projection scan and
+closed roster over all 31 of those role files, the Mermaid supply-chain digests
+(ADR-0006: that component downloads and executes a browser), the secrets-gate config,
+the release-candidate honesty disclosures, and the gate graph's own shape.
+
+What was deleted, and why it needed no replacement: nine policy documents were re-derived
+structurally here while their runtime consumers parsed the same files anyway and four of them
+were ALSO digest-pinned inside the very same function, so the digest strictly dominated the
+structure. `mise.toml` was re-stated as a Python dict; `mise.lock` — which carries the resolved
+version, backend, and per-platform checksum of every pin — is the integrity control, so only its
+bytes and the gate's own four leaf commands are pinned now. `policy/role-manifest.v1.json`
+existed only to be validated: `agents/` is the source of truth, its roster is closed here, and
+every one of its 31 files is digest-pinned by the normative runtime contract and scanned for
+authority-granting prose. The measured evidence for that class of deletion: setting
+`counts.delivery_roles = 99` in the role manifest failed the gate loudly while
+`mise run bundle:status` still reported `43 ok` — no operator-visible failure existed to prevent.
+
+Two things this file is not. It is not a review substitute: a policy bump that loses an encoded
+checklist is caught by reading the diff. And a passing run is evidence only — it authorizes no
+push, publication, merge, or deployment.
+"""
 
 from __future__ import annotations
 
@@ -90,37 +119,17 @@ REQUIRED_TASKS = {
     "setup",
 }
 MIN_MISE_VERSION = "2026.4.27"
-UV_VERSION = "0.12.5"
 PYTHON_VERSION = "3.12.11"
-LEFTHOOK_VERSION = "2.1.10"
 NODE_VERSION = "22.23.2"
-BUN_VERSION = "1.4.0"
-SEEDS_VERSION = "0.5.15"
-SEEDS_TOOL = "npm:@os-eco/seeds-cli"
-# Convenience tier. Pinned for identical resolution across hosts; no gate depends on them.
-RIPGREP_VERSION = "15.2.0"
-FD_VERSION = "10.4.2"
-JQ_VERSION = "1.8.2"
-GH_VERSION = "2.98.0"
-BETTERLEAKS_VERSION = "1.8.1"
-BETTERLEAKS_TOOL = "github:betterleaks/betterleaks"
 # The renderer's mmdc version. It is pinned by package-lock.json digest below, NOT by a mise
 # [tools] entry: that entry was removed 2026-08-07 (docs/adr/0002 amendment) because puppeteer's
 # postinstall came with it and needed a zip archiver mise does not install, failing the whole
 # `mise --locked install`. Nothing resolves mmdc through mise, so there is no lock/tool pin here.
 MERMAID_VERSION = "11.16.0"
-# Installed by default per docs/adr/0005. The packaging pin is convenience tier like the two
-# npm pins above; the boundary that matters is usage-level and lives in the launcher script,
-# not here (docs/adr/0003: non-Anthropic routing only, never subscription OAuth).
-OPENCODEX_VERSION = "2.28.0"
-OPENCODEX_TOOL = "npm:@bitkyc08/opencodex"
-# node 22.23.2 bundles npm 10.9.8, so the M0b renderer's npm identity is pinned as its own
-# tool. scripts/provision_mermaid_linux.py resolves exactly this version through `mise where`
-# to install the renderer's node_modules. Provisioning is an explicit operator step and no
-# gate leaf invokes it, so this pin never becomes a bootstrap prerequisite.
+# node 22.23.2 bundles npm 10.9.8, so the M0b renderer's npm identity is pinned in package.json
+# as its own `packageManager` value. Provisioning is an explicit operator step and no gate leaf
+# invokes it, so this pin never becomes a bootstrap prerequisite.
 MERMAID_NPM_VERSION = "10.8.1"
-MERMAID_NPM_TOOL = "npm"
-MERMAID_NPM_BACKEND = "npm:npm"
 # The renderer supply chain is pinned by exact digest, not by version range: the lock bytes and
 # the policy bytes are both hashed, so a dependency edit or a policy loosening fails the gate.
 MERMAID_PACKAGE_LOCK_SHA256 = "45d2b754f3b9ad65dd9b88aab2803912db32315eacf71cbd7635d28b088a892e"
@@ -144,25 +153,14 @@ MERMAID_BROWSER_IDENTITY = {
     "executable_sha256": "db4fe5b63d1b56729feb1eeebc82967768e66ef823ba942b2d4e506a34dc4a78",
     "cache_tree_sha256": "3afbf64662eb240f67e98b7f352532de67e09dc9dabfd5390172c0c630b7ecfa",
 }
-OPERATOR_TOOL_ARTIFACTS = frozenset(
-    {
-        "assets/claude/statusline-command.sh",
-        # Sourced by both launchers (ADR-0010). Registered here so the gate parses it: it lives
-        # under assets/, which the scripts/*.sh syntax glob does not reach.
-        "assets/claude/session-inheritance.sh",
-        "assets/launchers/ccodex.in",
-        "policy/ccodex-sdlc-read-report.v1.json",
-        "policy/ccodex-sdlc-read-report.v2.json",
-        "scripts/ccodex_sdlc.py",
-        "scripts/ccodex_sdlc_readonly.py",
-        "scripts/install_operator_tools.py",
-        "scripts/manage_claude_statusline.py",
-        "tests/test_claude_statusline.py",
-        "tests/test_manage_claude_statusline.py",
-        "tests/test_operator_tools.py",
-        "tests/test_ccodex_sdlc.py",
-        "tests/test_opencodex_claude.py",
-    }
+# The shipped CLI's shell payload. `bash -n` over these is a payload guard, not machinery
+# bookkeeping: a stray `fi` here kills `ccodex launch` on first invocation. They live under
+# assets/ or are sourced fragments, so the scripts/*.sh glob in validate_scripts misses them.
+SHELL_SYNTAX_PATHS = (
+    "assets/claude/statusline-command.sh",
+    "assets/claude/session-inheritance.sh",
+    "assets/launchers/ccodex.in",
+    "scripts/opencodex-claude.sh",
 )
 MERMAID_REQUIRED_ARTIFACTS = frozenset(
     {
@@ -178,64 +176,27 @@ MERMAID_REQUIRED_ARTIFACTS = frozenset(
 # Generated trees that are provisioned, not reviewed. Walking them would make the secret scan
 # and the gate-graph copy depend on whether a host has run provisioning.
 UNREVIEWED_TREES = frozenset({".git", "node_modules", ".mermaid-runtime", "__pycache__"})
-NPM_BACKED_TOOLS = frozenset({SEEDS_TOOL, OPENCODEX_TOOL, MERMAID_NPM_TOOL})
-# Every npm-backend pin resolves an arbitrary dependency tree whose postinstall scripts run on
-# install, so this is the reviewed allowlist for that backend, screened per docs/adr/0002's
-# 2026-08-07 amendment: a pin may not require a tool mise itself does not install. Reviewed
-# 2026-08-07 — Seeds runs no install script; opencodex runs one (transitive bun 1.3.14) that
-# extracts with Node's built-in zlib; bare npm is npm itself.
-# A pinned backend is part of the contract: it fixes WHERE a tool comes from, so a registry
-# alias cannot be silently repointed at a different upstream.
-EXPECTED_LOCK_BACKENDS = {
-    "uv": "aqua:astral-sh/uv",
-    "lefthook": "aqua:evilmartians/lefthook",
-    "node": "core:node",
-    "bun": "core:bun",
-    "ripgrep": "aqua:BurntSushi/ripgrep",
-    "fd": "aqua:sharkdp/fd",
-    "jq": "aqua:jqlang/jq",
-    "gh": "aqua:cli/cli",
-    SEEDS_TOOL: SEEDS_TOOL,
-    BETTERLEAKS_TOOL: BETTERLEAKS_TOOL,
-    OPENCODEX_TOOL: OPENCODEX_TOOL,
-    MERMAID_NPM_TOOL: MERMAID_NPM_BACKEND,
-}
+# The reviewed lock IS the toolchain integrity control: it carries the resolved version, the
+# backend, and a per-platform checksum for every pin, and `settings.locked` makes mise honor it.
+# Re-transcribing those 12 rows into Python said the same thing a second time in a weaker
+# language, so only the lock's own bytes are pinned here — an edit to a version, a backend, or a
+# checksum changes them.
 MISE_LOCK_SHA256 = "31ed02eb15e425253e90b3f3b4d117f0b5c3876fa9351e27b6b6375fd47d5b1c"
-TASK_COMMANDS = {
+# The reviewed allowlist for the npm backend. A pin here resolves an arbitrary dependency tree
+# whose postinstall scripts run during `mise --locked install`, so each name is screened per
+# docs/adr/0002's 2026-08-07 amendment: a pin may not require a tool mise itself does not install.
+# Reviewed 2026-08-07 — Seeds runs no install script; opencodex runs one (transitive bun) that
+# extracts with Node's built-in zlib; bare npm is npm itself. This catches an UNREVIEWED pin being
+# added; it cannot detect that a listed pin's upstream added a hostile postinstall.
+NPM_BACKED_TOOLS = frozenset({"npm", "npm:@os-eco/seeds-cli", "npm:@bitkyc08/opencodex"})
+# Only the gate's OWN leaves are pinned by exact command. `[tasks.validate] run = "true"` would
+# hollow every check in this file, and the same edit to test/self-test/secrets hollows the other
+# three leaves, so the four commands `check` depends on are part of the contract. The other ~25
+# task rows are convenience wiring: a wrong one is visible the first time an operator runs it.
+GATE_LEAF_COMMANDS = {
     "validate": "--script scripts/validate_bundle.py",
-    "bundle:install": "--script scripts/install_skill_bundle.py install",
-    "bundle:status": "--script scripts/install_skill_bundle.py status",
-    "bundle:uninstall": "--script scripts/install_skill_bundle.py uninstall",
-    "bundle:install:claude": "--script scripts/install_skill_bundle.py install --agent claude",
-    "bundle:install:codex": "--script scripts/install_skill_bundle.py install --agent codex",
-    "bundle:install:all-hosts": "--script scripts/run_all_hosts.py install",
-    "bundle:status:all-hosts": "--script scripts/run_all_hosts.py status",
-    "release:build": "--script scripts/build_release.py",
-    "research-os:install": "--script skills/codex-research-os/scripts/install_research_os.py",
-    "operator-tools:install": "--script scripts/install_operator_tools.py install",
-    "operator-tools:status": "--script scripts/install_operator_tools.py status",
-    "operator-tools:retire-aliases": "--script scripts/install_operator_tools.py retire-aliases",
-    "operator-tools:uninstall": "--script scripts/install_operator_tools.py uninstall",
-    "operator-tools:self-test": "--script scripts/install_operator_tools.py self-test",
-    "claude:statusline:status": "--script scripts/manage_claude_statusline.py status",
-    "claude:statusline:activate": "--script scripts/manage_claude_statusline.py activate",
-    "claude:statusline:deactivate": "--script scripts/manage_claude_statusline.py deactivate",
-    # Pinned like the operator-tools rows: same uv entrypoint on both platforms, so the exact
-    # command string is part of the contract. `install` carries no --yes here; the dry run is
-    # the default and the operator supplies --yes as a task argument.
-    "libraries:list": "--script scripts/install_external_libraries.py list",
-    "libraries:install": "--script scripts/install_external_libraries.py install",
-    "libraries:status": "--script scripts/install_external_libraries.py status",
-    "libraries:migrate": "--script scripts/install_external_libraries.py migrate",
-    "mermaid:linux-test": "--with pyyaml==6.0.3 python -m unittest discover -s tests_linux",
     "test": "--with pyyaml==6.0.3 python -m unittest discover -s tests",
     "self-test": "--script scripts/install_skill_bundle.py self-test",
-}
-# Pinned outside TASK_COMMANDS because the M0b boundary is Linux x64 only: a run_windows
-# variant would advertise a platform the renderer explicitly refuses (EXIT_UNSUPPORTED).
-MERMAID_PROVISION_TASK = {
-    "description": "Provision the pinned Linux Mermaid browser runtime (explicit, not a gate)",
-    "run": f"uv run --python {PYTHON_VERSION} --script scripts/provision_mermaid_linux.py",
 }
 # The secrets task runs one stdlib wrapper through the pinned Python. It asks Git for exactly
 # tracked + nonignored-untracked files, so ignored operator runtime state is absent without hiding
@@ -245,69 +206,21 @@ SECRETS_CONFIG_PATH = ".config/betterleaks.toml"
 SECRETS_SCRIPT_PATH = "scripts/secrets_scan.py"
 SECRETS_COMMAND = f"uv run --python {PYTHON_VERSION} --script {SECRETS_SCRIPT_PATH}"
 SECRETS_COMMAND_WINDOWS = f"uv.exe run --python {PYTHON_VERSION} --script {SECRETS_SCRIPT_PATH}"
-RECEIPT_POLICY_PATH = Path(__file__).parents[1] / "skills" / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
-NORMATIVE_CONTRACT_PATH = Path(__file__).parents[1] / "policy" / "runtime-assignment-normative-contract-v1.json"
-ROLE_MANIFEST_PATH = Path(__file__).parents[1] / "policy" / "role-manifest.v1.json"
 RELEASE_CONTRACT_RELATIVE_PATH = Path("policy") / "release-contract.v1.json"
 RELEASE_CANDIDATE_POLICY_RELATIVE_PATH = Path("policy") / "release-candidate.v1.json"
+NORMATIVE_CONTRACT_RELATIVE_PATH = Path("policy") / "runtime-assignment-normative-contract-v1.json"
+RECEIPT_POLICY_RELATIVE_PATH = (
+    Path("skills") / "model-tier-rightsizing" / "policy" / "runtime-assignment-receipt-v1.json"
+)
 RELEASE_CANDIDATE_POLICY_SCHEMA = "release-candidate-policy/v1"
-CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v1.json"
-CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA = "ccodex-sdlc-read-report-policy/v1"
-CCODEX_SDLC_READ_REPORT_SCHEMA = "ccodex-sdlc-read-report/v1"
-CCODEX_SDLC_CANDIDATE_REPORT_POLICY_RELATIVE_PATH = Path("policy") / "ccodex-sdlc-read-report.v2.json"
-CCODEX_SDLC_CANDIDATE_REPORT_POLICY_SHA256 = "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9"
-CCODEX_SDLC_READ_REPORT_TOP_LEVEL_FIELDS = [
-    "schema_version",
-    "command",
-    "checkout",
-    "runtime",
-    "operator_tools",
-    "bundle",
-    "recovery",
-    "future_dimensions",
-    "findings",
-    "overall",
-]
-CCODEX_SDLC_READ_REPORT_FIELDS = {
-    "bundle": ["entries", "findings", "recovery", "state", "state_paths"],
-    "checkout": ["certification_claim", "plane", "public_channel", "release", "release_topology_adr_status", "version"],
-    "command": ["dry_run", "verb"],
-    "finding": ["code", "component", "message", "path"],
-    "future_dimensions": ["activation", "release", "waves"],
-    "overall": ["exit_class", "state"],
-    "projection_entry": ["name", "path", "state"],
-    "recovery": ["effect", "proposals", "state"],
-    "recovery_item": ["action", "component", "path", "state"],
-    "runtime": ["interpreter", "isolated", "state", "version"],
-}
-CCODEX_SDLC_READ_REPORT_VOCABULARIES = {
-    "command_verbs": ["doctor", "inspect", "recover", "status"],
-    "component_states": ["absent", "blocked", "degraded", "healthy", "unreadable"],
-    "entry_states": ["absent", "foreign", "modified", "owned", "racy", "symlinked", "unreadable", "unsupported"],
-    "exit_classes": ["invariant-failure", "ok", "safe-refusal"],
-    "finding_codes": [
-        "checkout-contract-invalid",
-        "foreign-entry",
-        "foreign-state",
-        "owned-entry-conflict",
-        "owned-entry-racy",
-        "pending-invalid",
-        "pending-recovery",
-        "runtime-admission-refused",
-        "state-ambiguous",
-        "state-malformed",
-        "state-racy",
-        "state-symlinked",
-        "state-unsupported",
-        "state-unreadable",
-    ],
-    "finding_components": ["bundle", "checkout", "operator-tools", "runtime"],
-    "overall_states": ["absent", "blocked", "degraded", "healthy", "unreadable"],
-    "recovery_actions": ["lifecycle-dry-run"],
-    "recovery_effects": ["none"],
-    "recovery_item_states": ["pending"],
-    "recovery_states": ["not-needed", "pending", "proposed"],
-    "runtime_states": ["admitted", "refused"],
+# The two ccodex report descriptors are pinned by digest only. Their runtime consumer
+# (scripts/ccodex_sdlc.py) parses them on every invocation and must fail on malformed input
+# there, so a second structural re-derivation in a pre-commit linter proved nothing the digest
+# does not already prove — and the v2 pass measured that itself, running its structural lines and
+# then comparing the same bytes against a pin that strictly dominated them.
+CCODEX_SDLC_REPORT_POLICY_SHA256 = {
+    "policy/ccodex-sdlc-read-report.v1.json": "eadce0fd12af79be3727c1fdb8505a291805741d951e67baa35162dc4d18b7dd",
+    "policy/ccodex-sdlc-read-report.v2.json": "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9",
 }
 RELEASE_CONTRACT_TOP_LEVEL_KEYS = (
     "schema_version",
@@ -398,8 +311,6 @@ RELEASE_CLAIM_CATEGORIES = frozenset(
         "unsupported_renderer",
     }
 )
-PACKAGED_POLICY_DIR = Path(__file__).parents[1] / "skills" / "codex-research-os" / "policy"
-RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256 = "675c8799587b9b7151fd7f98f3424e5e9783986d2db9dc5488bb2a1a704b7794"
 RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 - Research Director is Seeds-read-only.
 - Use only the exact accepted Seeds inspection contract:
@@ -408,27 +319,31 @@ RESEARCH_DIRECTOR_SEEDS_AUTHORITY = """Seeds authority:
 - Do not create, claim, update, close, sync, or disposition Seeds.
 - For work that outlives the session, emit exactly one typed `SeedProposal { title: str, summary: str, acceptance_criteria: list[str], priority: str, blocking: bool, scope: list[str], evidence: list[str], dependencies: list[str], recommended_owner: str }` for conductor triage.
 """
-CLAUDE_GLOBAL_ROLE_FILENAMES = frozenset(
+PROTECTED_REVIEWER_PATHS = frozenset(
     {
-        "sdlc-cartographer.md",
-        "sdlc-critic.md",
-        "sdlc-implementer.md",
-        "sdlc-integrator.md",
-        "sdlc-planner.md",
-        "sdlc-researcher.md",
-        "sdlc-reviewer.md",
+        "agents/claude/sdlc-reviewer.md",
+        "agents/codex/sdlc-reviewer.toml",
+        "agents/codex/research/adversarial_reviewer.toml",
+        "agents/codex/research/replication_reviewer.toml",
+        "agents/codex/research/safety_reviewer.toml",
     }
 )
-CODEX_GLOBAL_ROLE_FILENAMES = frozenset(
-    {
-        "sdlc-cartographer.toml",
-        "sdlc-critic.toml",
-        "sdlc-implementer.toml",
-        "sdlc-integrator.toml",
-        "sdlc-planner.toml",
-        "sdlc-researcher.toml",
-        "sdlc-reviewer.toml",
-    }
+# The closed role roster. `install_skill_bundle.discover_entries` globs `agents/claude/*.md` and
+# `agents/codex/*.toml` without reading a byte of their content, so anything dropped in either
+# directory installs into the operator's home as a role — which is why the roster is a source
+# constant here and not derived from the tree it is meant to bound.
+GLOBAL_ROLE_STEMS = (
+    "cartographer",
+    "critic",
+    "implementer",
+    "integrator",
+    "planner",
+    "researcher",
+    "reviewer",
+)
+SOURCE_PINNED_GLOBAL_PATHS = frozenset(
+    {f"agents/claude/sdlc-{stem}.md" for stem in GLOBAL_ROLE_STEMS}
+    | {f"agents/codex/sdlc-{stem}.toml" for stem in GLOBAL_ROLE_STEMS}
 )
 RESEARCH_ROLE_IDS = frozenset(
     {
@@ -451,21 +366,6 @@ RESEARCH_ROLE_IDS = frozenset(
         "theorist",
     }
 )
-PROTECTED_REVIEWER_PATHS = frozenset(
-    {
-        "agents/claude/sdlc-reviewer.md",
-        "agents/codex/sdlc-reviewer.toml",
-        "agents/codex/research/adversarial_reviewer.toml",
-        "agents/codex/research/replication_reviewer.toml",
-        "agents/codex/research/safety_reviewer.toml",
-    }
-)
-SOURCE_PINNED_GLOBAL_PATHS = frozenset(
-    {
-        *(f"agents/claude/{filename}" for filename in CLAUDE_GLOBAL_ROLE_FILENAMES),
-        *(f"agents/codex/{filename}" for filename in CODEX_GLOBAL_ROLE_FILENAMES),
-    }
-)
 SOURCE_PINNED_RESEARCH_PATHS = frozenset(
     f"agents/codex/research/{role}.toml" for role in RESEARCH_ROLE_IDS
 )
@@ -475,97 +375,15 @@ REVIEWER_OUTWARD_AUTHORITY_PATTERN = re.compile(
     r".{0,100}\b(?:push|publish(?:ing|ation)?|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
 )
 SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
-    r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
+    r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to|has\s+permission\s+to"
+    r"|is\s+allowed\s+to|are\s+allowed\s+to|is\s+permitted\s+to|are\s+permitted\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
-RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "22c165551389b844fc46b8fcae2e7cd750254181ad2096b6884b0ee8f25b801c"
-SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256 = {
-    "agents/claude/sdlc-reviewer.md": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
-    "agents/codex/sdlc-reviewer.toml": "816f52d896821f4d5964e0d9fc8dd412b01e27800733613ace496eeec61dd003",
-    "agents/codex/research/adversarial_reviewer.toml": "f452a51a61cd043181443722077af7e41bfef8b558630c76b5003e52db43c0df",
-    "agents/codex/research/replication_reviewer.toml": "81d4038144782721c2df34d604df9af86d1a7e00628c9cb8f94c19610bf695c9",
-    "agents/codex/research/safety_reviewer.toml": "afe1a80ec71ebb03d62b438d188e8ebbd0670c6460e824dd418048a11165c5a3",
-}
-CANONICAL_RUNTIME_CONTRACT_SHA256 = "9399a0d9ebed19cefd020ac190ac772641e804e9f8a1632fb2b01059c94ba420"
-EXACT_MODEL_PROVIDER_MAP = {
-    "claude-fable-5": "anthropic",
-    "claude-opus-4-8": "anthropic",
-    "claude-sonnet-5": "anthropic",
-    "gpt-5.6-luna": "openai",
-    "gpt-5.6-sol": "openai",
-    "gpt-5.6-terra": "openai",
-}
-EXACT_MODEL_PAIRS = {
-    "frontier": ["gpt-5.6-sol", "claude-fable-5"],
-    "judgment": ["gpt-5.6-terra", "claude-opus-4-8"],
-    "volume": ["gpt-5.6-luna", "claude-sonnet-5"],
-}
-ALLOWED_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
-ALLOWED_CONTEXT_FORMS = ["base", "[1m]"]
-ALLOWED_EVIDENCE = {
-    "request_injection": {
-        "source_kinds": ["immutable_request_receipt"],
-        "statuses": ["verified"],
-        "schemas": ["launcher-request-evidence/v1"],
-    },
-    "model_mapping": {
-        "source_kinds": ["policy_exact_id_mapping"],
-        "statuses": ["unavailable"],
-        "schemas": ["runtime-assignment-policy-v1"],
-    },
-    "transport_readback": {
-        "source_kinds": ["transport_readback"],
-        "statuses": ["verified", "unavailable"],
-        "schemas": ["runtime-assignment-readback/v1"],
-    },
-}
-CERTIFIED_MODEL_ORDER = [
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "claude-fable-5",
-    "claude-opus-4-8",
-    "claude-sonnet-5",
-]
-CERTIFIED_CONTEXT_FORMS_BY_MODEL = {
-    "claude-fable-5": ["base"],
-    "claude-opus-4-8": ["base"],
-    "claude-sonnet-5": ["base"],
-    "gpt-5.6-luna": ["base", "[1m]"],
-    "gpt-5.6-sol": ["base", "[1m]"],
-    "gpt-5.6-terra": ["base", "[1m]"],
-}
-PRODUCTION_EFFORTS_BY_MODEL = {
-    "claude-fable-5": ["xhigh", "max"],
-    "claude-opus-4-8": ["high", "xhigh"],
-    "claude-sonnet-5": ["high", "xhigh"],
-    "gpt-5.6-luna": ["high", "xhigh"],
-    "gpt-5.6-sol": ["high", "xhigh"],
-    "gpt-5.6-terra": ["xhigh", "max"],
-}
-VALIDATION_ONLY_SEMANTICS = (
-    "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer "
-    "or prove external request injection, readback, spawn identity, or admission. The external authenticated "
-    "harness is the sole spawn and admission authority."
-)
-ONE_MILLION_CONTEXT_SEMANTICS = (
-    "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, "
-    "compaction, nor effort compliance."
-)
-SEEDS_READ_ONLY_SEMANTICS = (
-    "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: "
-    "managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or "
-    "otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal "
-    "values to the conductor."
-)
-RUNTIME_RECEIPT_SOURCE_FIELDS = frozenset(
-    {
-        "request_injection_source",
-        "model_readback_source",
-        "effort_readback_source",
-        "context_readback_source",
-    }
-)
+# Authority-granting prose the 31 shipped role projections must never carry: spawn/admission
+# authority claimed for a repository, role, receipt or local gate; `[1m]` used as proof of
+# capacity; Seeds mutation; a local gate substituting for outward authorization. The five run
+# against every role file, not only the digest-pinned reviewers, because the twelve
+# non-protected projections ship to the operator's home with no digest over them.
 FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS = (
     re.compile(
         r"(?i)\b(?:repository|role|agent|worker|receipt|local\s+validation|local\s+status|passing\s+(?:local\s+)?gate)\b"
@@ -588,46 +406,14 @@ FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS = (
         r"(?:push|publish(?:ing|ation)?|merge|deploy(?:ment)?|outward)\b"
     ),
 )
-
-ROLE_MANIFEST_SCHEMA_VERSION = "role-manifest/v1"
-ROLE_MANIFEST_RUNTIME_MODEL_SOURCE = "conductor-supplied-RuntimeAssignment"
-ROLE_MANIFEST_LANE_FAMILIES = frozenset(
-    {"frontier", "judgment", "volume", "mechanical-floor"}
-)
-ROLE_MANIFEST_ARTIFACTS = frozenset(
-    {"Map", "ResearchBrief", "SeedProposal", "Candidate", "ReviewFinding", "IntegrationReport"}
-)
-ROLE_MANIFEST_SUBMISSION_CONTRACTS = frozenset({"eight-heading", "research-ledger"})
-ROLE_MANIFEST_TOP_LEVEL_KEYS = frozenset(
-    {"schema_version", "generated_from", "counts", "roles"}
-)
-ROLE_MANIFEST_ROLE_KEYS = frozenset(
-    {
-        "kind",
-        "phase",
-        "purpose",
-        "delegation_limit",
-        "queue_authority",
-        "fan_in_authority",
-        "publication_authority",
-        "model",
-        "capabilities",
-        "artifacts",
-        "projections",
-        "advisory_only",
-        "cartography",
-    }
-)
-ROLE_MANIFEST_REQUIRED_ROLE_KEYS = ROLE_MANIFEST_ROLE_KEYS - {"advisory_only", "cartography"}
-# The seven delivery role IDs (logical), each carrying claude + codex projections.
-DELIVERY_ROLE_IDS = frozenset(
-    filename[len("sdlc-"):-len(".md")] for filename in CLAUDE_GLOBAL_ROLE_FILENAMES
-)
-# advisory_only=true is mandatory for the protected-reviewer roles and forbidden as an
-# authority-widening escape hatch elsewhere; the anti-bypass check keys off this set.
-ROLE_MANIFEST_ADVISORY_ONLY_ROLES = frozenset(
-    {"reviewer", "critic", "adversarial_reviewer", "replication_reviewer", "safety_reviewer"}
-)
+RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "22c165551389b844fc46b8fcae2e7cd750254181ad2096b6884b0ee8f25b801c"
+SOURCE_PINNED_PROTECTED_ROLE_CONTENT_SHA256 = {
+    "agents/claude/sdlc-reviewer.md": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
+    "agents/codex/sdlc-reviewer.toml": "816f52d896821f4d5964e0d9fc8dd412b01e27800733613ace496eeec61dd003",
+    "agents/codex/research/adversarial_reviewer.toml": "f452a51a61cd043181443722077af7e41bfef8b558630c76b5003e52db43c0df",
+    "agents/codex/research/replication_reviewer.toml": "81d4038144782721c2df34d604df9af86d1a7e00628c9cb8f94c19610bf695c9",
+    "agents/codex/research/safety_reviewer.toml": "afe1a80ec71ebb03d62b438d188e8ebbd0670c6460e824dd418048a11165c5a3",
+}
 
 VALIDATOR_WRAPPER = """#!/usr/bin/env bash
 # Compatibility entrypoint; the authoritative task is `mise run validate`.
@@ -650,40 +436,30 @@ command -v mise >/dev/null 2>&1 || {
 
 mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest" "$repo_root" "${1:-}" <<'PY'
 """
-EXPECTED_WORKFLOW = r"""name: validate-bundle
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-jobs:
-  check:
-    name: mise check (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - blacksmith-2vcpu-ubuntu-2404
-          - blacksmith-6vcpu-macos-latest
-          - blacksmith-2vcpu-windows-2025
-    runs-on: ${{ matrix.os }}
-    steps:
-      # actions/checkout v4.3.1
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      # jdx/mise-action v2.4.7
-      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
-        with:
-          install: true
-      # advisory forensics probe for seed agentic-sdlc-df5f (mechanisms A/B1/B2); remove once the runner's btime/ctime data is recorded
-      - name: Advisory host capability probe (never a gate leaf)
-        if: runner.os == 'Linux'
-        continue-on-error: true
-        timeout-minutes: 2
-        run: mise exec -- python3 -u .github/scripts/ci-capability-probe.py || true
-      - name: Run authoritative check
-        run: mise run check
-"""
+# CI workflow pin — KEPT as an exact-content pin, expressed as a digest instead of a 34-line
+# inline literal. The 2026-08-22 audit argued for shrinking it to "the file exists and contains
+# `mise run check`" because the pin is defeated by the exact edit it targets: on a `pull_request`
+# event GitHub runs the workflow from the PR's own merge ref, so a PR that deletes the check step
+# also deletes the run that would have caught it. That is true and it is not the whole threat
+# model. Three facts kept the pin:
+#   1. The same validator runs LOCALLY as the lefthook pre-commit hook and as `mise run validate`,
+#      which is where an honest CI edit is actually caught — before the push, not after it.
+#   2. Substring matching is measurably weaker here. tests/test_gate_graph.py carries a mutation
+#      that appends a bypass step spelled `run : curl ...`; YAML accepts the space, a `run:`-
+#      anchored regex does not see it, and byte equality does. The two action pins are 40-hex
+#      commit SHAs whose whole point is that a floating tag can be repointed upstream — an
+#      "exists and mentions mise run check" assertion would let `@v4` back in silently.
+#   3. Rank 3 of this demolition deferred a release workflow BECAUSE this pin makes a new CI
+#      surface an explicit, reviewed validator edit. Loosening it here would quietly grant the
+#      thing that rank deliberately did not take.
+# The digest form is the same predicate on the same bytes (`read_text` normalizes CRLF, so a
+# Windows checkout behaves as it did before), one line instead of thirty-four, and a legitimate
+# CI edit re-pins it in one line exactly as it re-pinned the literal. What is honestly lost is
+# readability: the expected workflow is no longer quotable from this file. Re-pin with
+# `python3 -c "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('.github/workflows/validate.yml').read_text(encoding='utf-8').encode()).hexdigest())"`
+# after reviewing the diff.
+CI_WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "validate.yml"
+CI_WORKFLOW_SHA256 = "9e8a1c3f9c142cc82ad42ee920d31151381b309488e6cf51bbca375ec9177dc5"
 
 
 class Validation:
@@ -850,20 +626,13 @@ def parse_frontmatter_metadata(text: str) -> dict[str, object]:
     return value
 
 
-def certified_request_tuples() -> list[list[str]]:
-    return [
-        [model, effort, context]
-        for model in CERTIFIED_MODEL_ORDER
-        for context in CERTIFIED_CONTEXT_FORMS_BY_MODEL[model]
-        for effort in ALLOWED_EFFORTS
-    ]
-
-
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
 def load_json_object(path: Path, label: str) -> dict[str, object]:
+    """Lenient policy-JSON reader, used by the two managed-role passes and loaded from this
+    module by tests/test_workflow_entry_kind.py."""
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -1502,10 +1271,6 @@ def _strict_json_object(raw: bytes, label: str) -> dict[str, object]:
     return value
 
 
-def _canonical_read_report_policy_json(value: object) -> str:
-    return json.dumps(value, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
-
-
 def _release_candidate_policy_path(value: object) -> bool:
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value or value.startswith("/"):
         return False
@@ -1622,149 +1387,48 @@ def validate_release_candidate_policy(root: Path, result: Validation) -> None:
         result.error(f"{relative}: private Python runtime contract is invalid")
 
 
-def validate_ccodex_sdlc_read_report_policy(root: Path, result: Validation) -> None:
-    """Keep the checkout-development reader's closed semantic report descriptor deterministic."""
-    relative = CCODEX_SDLC_READ_REPORT_POLICY_RELATIVE_PATH
-    path = root / relative
-    if path.is_symlink() or not path.is_file():
-        result.error(f"{relative}: required canonical read-report policy is missing or linked")
-        return
-    try:
-        raw = path.read_bytes()
-        policy = _strict_json_object(raw, str(relative))
-    except (OSError, ValueError) as exc:
-        result.error(str(exc))
-        return
-    if raw != _canonical_read_report_policy_json(policy).encode("utf-8"):
-        result.error(f"{relative}: policy must use canonical JSON")
-    expected = {
-        "canonical_serialization": {
-            "allow_nonfinite": False,
-            "ensure_ascii": True,
-            "indent": None,
-            "separators": [",", ":"],
-            "sort_keys": True,
-            "trailing_newline": True,
-        },
-        "field_vocabularies": CCODEX_SDLC_READ_REPORT_FIELDS,
-        "report_schema_version": CCODEX_SDLC_READ_REPORT_SCHEMA,
-        "report_top_level_fields": CCODEX_SDLC_READ_REPORT_TOP_LEVEL_FIELDS,
-        "schema_version": CCODEX_SDLC_READ_REPORT_POLICY_SCHEMA,
-        "vocabularies": CCODEX_SDLC_READ_REPORT_VOCABULARIES,
-    }
-    if policy != expected:
-        result.error(f"{relative}: closed schema/vocabulary descriptor differs from the read-report contract")
+def validate_packaged_policy_copies(root: Path, result: Validation) -> None:
+    """The Research OS ships copies of two canonical policies; they must be the same bytes.
+
+    `skills/codex-research-os/scripts/install_research_os.py` scaffolds a target repository from
+    the packaged copies, so a drift here hands a scaffolded repo a different runtime contract than
+    this bundle validates against — including a weaker runtime-authority block. This is byte
+    equality between two shipped payload files, not a structural re-derivation of either: the
+    75-line structural pass that used to assert it went with the rest of the transcription.
+    """
+    for relative in (NORMATIVE_CONTRACT_RELATIVE_PATH, RECEIPT_POLICY_RELATIVE_PATH):
+        canonical = root / relative
+        packaged = root / "skills" / "codex-research-os" / "policy" / relative.name
+        if not canonical.is_file():
+            result.error(f"{relative.as_posix()}: canonical runtime policy is required")
+            continue
+        if not packaged.is_file() or packaged.read_bytes() != canonical.read_bytes():
+            result.error(
+                f"skills/codex-research-os/policy/{relative.name} must be byte-identical to "
+                f"{relative.as_posix()}"
+            )
 
 
-def validate_ccodex_sdlc_candidate_report_policy(root: Path, result: Validation) -> None:
-    """Keep the ephemeral candidate-only v2 report schema closed and explicit."""
-    relative = CCODEX_SDLC_CANDIDATE_REPORT_POLICY_RELATIVE_PATH
-    path = root / relative
-    if path.is_symlink() or not path.is_file():
-        result.error(f"{relative}: required candidate read-report policy is missing or linked")
-        return
-    try:
-        raw = path.read_bytes()
-        policy = _strict_json_object(raw, str(relative))
-    except (OSError, ValueError) as exc:
-        result.error(str(exc))
-        return
-    if raw != _canonical_read_report_policy_json(policy).encode("utf-8"):
-        result.error(f"{relative}: policy must use canonical JSON")
-    if hashlib.sha256(raw).hexdigest() != CCODEX_SDLC_CANDIDATE_REPORT_POLICY_SHA256:
-        result.error(f"{relative}: exact closed schema/vocabulary descriptor differs from the candidate report contract")
+def validate_ccodex_sdlc_report_policies(root: Path, result: Validation) -> None:
+    """Pin the two ccodex report descriptors by digest, and nothing else.
 
-
-def runtime_receipt_policy() -> dict[str, object]:
-    return load_json_object(RECEIPT_POLICY_PATH, "runtime receipt policy")
-
-
-def normative_runtime_contract() -> dict[str, object]:
-    return load_json_object(NORMATIVE_CONTRACT_PATH, "normative runtime contract")
-
-
-def validate_runtime_policy_contract(root: Path, result: Validation) -> None:
-    try:
-        policy = runtime_receipt_policy()
-        normative = normative_runtime_contract()
-    except ValueError as exc:
-        result.error(str(exc))
-        return
-
-    policy_path = RECEIPT_POLICY_PATH
-    if normative.get("schema_version") != "runtime-assignment-normative-contract/v1":
-        result.error("normative runtime contract schema_version mismatch")
-    expected_values = {
-        "canonical_receipt_fields": list(runtime_receipt_fields()),
-        "exact_model_provider_map": EXACT_MODEL_PROVIDER_MAP,
-        "exact_model_pairs": EXACT_MODEL_PAIRS,
-        "allowed_efforts": ALLOWED_EFFORTS,
-        "allowed_context_forms": ALLOWED_CONTEXT_FORMS,
-        "allowed_evidence": ALLOWED_EVIDENCE,
-        "certified_context_forms_by_model": CERTIFIED_CONTEXT_FORMS_BY_MODEL,
-        "production_efforts_by_model": PRODUCTION_EFFORTS_BY_MODEL,
-        "validation_only_semantics": VALIDATION_ONLY_SEMANTICS,
-        "one_million_context_semantics": ONE_MILLION_CONTEXT_SEMANTICS,
-        "seeds_read_only_semantics": SEEDS_READ_ONLY_SEMANTICS,
-    }
-    for field, expected in expected_values.items():
-        if normative.get(field) != expected:
-            result.error(f"normative runtime contract {field} mismatch")
-
-    if policy.get("allowed_exact_model_ids") != EXACT_MODEL_PROVIDER_MAP:
-        result.error("runtime receipt policy exact model/provider map mismatch")
-    if policy.get("allowed_efforts") != ALLOWED_EFFORTS:
-        result.error("runtime receipt policy effort vocabulary mismatch")
-    if policy.get("allowed_context_forms") != ALLOWED_CONTEXT_FORMS:
-        result.error("runtime receipt policy context vocabulary mismatch")
-    if policy.get("allowed_evidence") != ALLOWED_EVIDENCE:
-        result.error("runtime receipt policy allowed_evidence vocabulary mismatch")
-    if normative.get("allowed_evidence") != ALLOWED_EVIDENCE:
-        result.error("normative runtime contract allowed_evidence vocabulary mismatch")
-    if normative.get("certified_request_tuples") != policy.get("certified_request_tuples"):
-        result.error("normative runtime contract certified request tuples mismatch")
-    if policy.get("certified_request_tuples") != certified_request_tuples():
-        result.error("runtime receipt policy certified request tuples differ from the source-pinned model/context matrix")
-
-    contract = policy.get("canonical_runtime_contract")
-    if not isinstance(contract, str):
-        result.error("runtime receipt policy must define a canonical runtime contract")
-        return
-    if normative.get("canonical_receipt_policy_sha256") != sha256_bytes(policy_path.read_bytes()):
-        result.error("normative runtime contract digest does not bind the canonical receipt policy")
-    if normative.get("canonical_runtime_contract_sha256") != sha256_bytes(contract.encode("utf-8")):
-        result.error("normative runtime contract digest does not bind the canonical runtime block")
-    if normative.get("canonical_runtime_contract_sha256") != CANONICAL_RUNTIME_CONTRACT_SHA256:
-        result.error("normative runtime contract digest does not match the source-pinned canonical runtime authority contract")
-    if normative.get("research_director_seeds_contract_sha256") != RESEARCH_DIRECTOR_SEEDS_CONTRACT_SHA256:
-        result.error("normative runtime contract digest does not bind the Research Director Seeds boundary")
-    packaged_receipt = PACKAGED_POLICY_DIR / RECEIPT_POLICY_PATH.name
-    packaged_normative = PACKAGED_POLICY_DIR / NORMATIVE_CONTRACT_PATH.name
-    if not packaged_receipt.is_file() or packaged_receipt.read_bytes() != policy_path.read_bytes():
-        result.error("packaged Research OS receipt policy must be byte-identical to the canonical policy")
-    if not packaged_normative.is_file() or packaged_normative.read_bytes() != NORMATIVE_CONTRACT_PATH.read_bytes():
-        result.error("packaged Research OS normative contract must be byte-identical to the canonical contract")
-    if VALIDATION_ONLY_SEMANTICS not in contract:
-        result.error("canonical runtime block must preserve validation-only semantics")
-    if ONE_MILLION_CONTEXT_SEMANTICS not in contract:
-        result.error("canonical runtime block must preserve evidence-qualified [1m] semantics")
-    if not any(
-        value in contract
-        for value in (
-            "external authenticated harness is the sole spawn and admission authority",
-            "external authenticated harness is solely responsible for spawn and admission",
-        )
-    ):
-        result.error("canonical runtime block must preserve the source-pinned canonical runtime authority contract")
-    if "Local validation authorizes push" in contract or "local validation authorizes push" in contract:
-        result.error("canonical runtime block must preserve the source-pinned canonical runtime authority contract")
-
-
-def managed_global_paths(root: Path) -> set[str]:
-    return {
-        *(path.relative_to(root).as_posix() for path in (root / "agents" / "claude").glob("*.md")),
-        *(path.relative_to(root).as_posix() for path in (root / "agents" / "codex").glob("*.toml")),
-    }
+    `scripts/ccodex_sdlc.py` parses both documents on every invocation and refuses a malformed
+    one there, which is where a runtime consumer must fail. This pass exists only so a reviewed
+    descriptor cannot drift silently in the checkout; the digest is a strictly stronger predicate
+    than the structural re-derivation it replaced.
+    """
+    for relative, digest in sorted(CCODEX_SDLC_REPORT_POLICY_SHA256.items()):
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            result.error(f"{relative}: required ccodex report policy is missing or linked")
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            result.error(f"{relative}: unreadable ccodex report policy: {exc}")
+            continue
+        if sha256_bytes(raw) != digest:
+            result.error(f"{relative}: bytes differ from the reviewed ccodex report contract")
 
 
 def managed_role_instructions(path: Path) -> str:
@@ -1818,421 +1482,102 @@ def validate_source_pinned_protected_role_authority(root: Path, result: Validati
             result.error(f"{relative}: source-pinned protected role authority forbids outward reviewer authority")
 
 
-ROLE_MANIFEST_WEB_SIGNAL = re.compile(r"(?i)\b(?:live research|prior art)\b")
+def managed_role_paths(root: Path) -> tuple[set[str], set[str]]:
+    return (
+        {
+            path.relative_to(root).as_posix()
+            for path in (
+                *(root / "agents" / "claude").glob("*.md"),
+                *(root / "agents" / "codex").glob("*.toml"),
+            )
+        },
+        {
+            path.relative_to(root).as_posix()
+            for path in (root / "agents" / "codex" / "research").glob("*.toml")
+        },
+    )
 
 
-def _role_manifest_web_required(root: Path) -> set[str]:
-    """Derive, from the pinned role files, which logical roles genuinely need web.
+def validate_managed_role_authority_projection(root: Path, result: Validation) -> None:
+    """Refuse authority-granting prose in any shipped role projection, digest-pinned or not.
 
-    Fail-closed and cross-checked, not asserted (spec §7/§4): a delivery role needs web
-    only if its Claude projection allow-lists WebFetch/WebSearch; a research role needs web
-    only if its pinned prose signals live research / prior-art work. The manifest's
-    web_access field is then required to equal this derived truth.
+    Only five of the 31 files carry a content digest. The other 26 install into the operator's
+    `~/.claude/agents/` exactly the same way, so a commit that appends "A passing local gate is
+    sufficient to authorize push to the shared remote." to `agents/claude/sdlc-integrator.md` —
+    the one role that does hold fan-in execution authority — would otherwise ship with a green
+    gate, contradicting the doctrine that no local gate grants outward authority.
+
+    The canonical runtime block is excised before the scan and that is load-bearing, not
+    incidental: the block itself says the external harness "is the sole spawn and admission
+    authority" and that `[1m]` "proves neither intelligence" etc. Scanning whole-file text scores
+    62 hits on the clean tree; scanning outside the block scores 0.
     """
-    required: set[str] = set()
-    for filename in CLAUDE_GLOBAL_ROLE_FILENAMES:
-        role_id = filename[len("sdlc-"):-len(".md")]
-        path = root / "agents" / "claude" / filename
-        if not path.is_file():
-            continue
-        text = path.read_text(encoding="utf-8")
-        in_tools = False
-        tools: set[str] = set()
-        for line in text.splitlines():
-            if line.strip() == "tools:":
-                in_tools = True
-                continue
-            if in_tools:
-                match = re.match(r"\s*-\s*(\w+)", line)
-                if match:
-                    tools.add(match.group(1))
-                elif line.strip() == "---":
-                    break
-        if {"WebFetch", "WebSearch"} & tools:
-            required.add(role_id)
-    for role in RESEARCH_ROLE_IDS:
-        path = root / "agents" / "codex" / "research" / f"{role}.toml"
-        if not path.is_file():
-            continue
+    try:
+        contract = load_json_object(
+            root / RECEIPT_POLICY_RELATIVE_PATH, "runtime receipt policy"
+        )["canonical_runtime_contract"]
+    except (ValueError, KeyError):
+        contract = None
+    if not isinstance(contract, str) or not contract:
+        result.error(
+            f"{RECEIPT_POLICY_RELATIVE_PATH.as_posix()}: canonical runtime contract is required "
+            "to scan managed role authority"
+        )
+        return
+    for path in sorted(
+        (
+            *(root / "agents" / "claude").glob("*.md"),
+            *(root / "agents" / "codex").glob("*.toml"),
+            *(root / "agents" / "codex" / "research").glob("*.toml"),
+        )
+    ):
+        relative = path.relative_to(root).as_posix()
         try:
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError):
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            result.error(f"{relative}: unreadable managed role projection: {exc}")
             continue
-        if ROLE_MANIFEST_WEB_SIGNAL.search(data.get("developer_instructions", "") or ""):
-            required.add(role)
-    return required
-
-
-def _role_manifest_pinned_digests(normative: dict[str, object]) -> tuple[dict[str, str], dict[str, str]]:
-    """Return (path -> content_digest, path -> sandbox_mode) drawn from the pinned contract.
-
-    Both maps are the SOLE source of truth for manifest cross-checks: the manifest may
-    only reference these bytes, never restate a different authority.
-    """
-    managed = normative["managed_roles"]
-    global_hashes = dict(managed["global"]["manifest_sha256"])
-    research_roles = managed["research"]["roles"]
-    digests = dict(global_hashes)
-    sandboxes: dict[str, str] = {}
-    for spec in research_roles.values():
-        if isinstance(spec, dict) and isinstance(spec.get("path"), str):
-            digests[spec["path"]] = spec.get("manifest_sha256")
-            sandboxes[spec["path"]] = spec.get("sandbox_mode")
-    return digests, sandboxes
-
-
-def validate_role_manifest(root: Path, result: Validation) -> None:
-    """Validate the versioned role-contract manifest against the source-pinned contract.
-
-    The manifest documents orchestration metadata for the 24 logical roles (7 delivery x2
-    projections + 17 research). Every authority-relevant field is either derived-and-
-    cross-checked against the digest-pinned normative contract or inert with respect to
-    runtime authority; the manifest can never widen authority the pinned prose forbids.
-    """
-    manifest_path = root / "policy" / "role-manifest.v1.json"
-    if not manifest_path.is_file():
-        result.error("policy/role-manifest.v1.json: missing versioned role-contract manifest")
-        return
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        result.error(f"policy/role-manifest.v1.json: invalid JSON: {exc}")
-        return
-    if not isinstance(manifest, dict):
-        result.error("policy/role-manifest.v1.json: manifest must be a JSON object")
-        return
-
-    # F1 — schema validity: exact top-level key set and schema version.
-    if set(manifest) != ROLE_MANIFEST_TOP_LEVEL_KEYS:
-        result.error("policy/role-manifest.v1.json: top-level keys must be exactly "
-                     f"{sorted(ROLE_MANIFEST_TOP_LEVEL_KEYS)}")
-    if manifest.get("schema_version") != ROLE_MANIFEST_SCHEMA_VERSION:
-        result.error("policy/role-manifest.v1.json: schema_version must be "
-                     f"{ROLE_MANIFEST_SCHEMA_VERSION!r}")
-
-    try:
-        normative = normative_runtime_contract()
-        pinned_digests, pinned_sandboxes = _role_manifest_pinned_digests(normative)
-    except (ValueError, KeyError, TypeError) as exc:
-        result.error(f"policy/role-manifest.v1.json: cannot bind pinned contract: {exc}")
-        return
-    web_required_roles = _role_manifest_web_required(root)
-
-    # F3/Q5 — the manifest is bound to a specific normative contract by digest; a drift
-    # here forces a manifest regen + digest refresh rather than a silent bypass.
-    generated_from = manifest.get("generated_from")
-    if not isinstance(generated_from, dict):
-        result.error("policy/role-manifest.v1.json: generated_from must be an object")
-        generated_from = {}
-    actual_normative_sha = sha256_bytes(NORMATIVE_CONTRACT_PATH.read_bytes())
-    if generated_from.get("normative_contract_sha256") != actual_normative_sha:
-        result.error("policy/role-manifest.v1.json: generated_from.normative_contract_sha256 "
-                     "does not bind the pinned normative contract")
-
-    roles = manifest.get("roles")
-    if not isinstance(roles, dict):
-        result.error("policy/role-manifest.v1.json: roles must be an object")
-        return
-
-    # F2 — roster completeness & counts (mirrors the 14 global + 17 research invariants).
-    expected_role_ids = DELIVERY_ROLE_IDS | RESEARCH_ROLE_IDS
-    if set(roles) != expected_role_ids:
-        result.error("policy/role-manifest.v1.json: roles must be exactly the 7 delivery "
-                     "and 17 Research OS logical roles")
-    counts = manifest.get("counts")
-    if not isinstance(counts, dict) or counts.get("delivery_roles") != 7 \
-            or counts.get("research_roles") != 17 or counts.get("projection_files") != 31:
-        result.error("policy/role-manifest.v1.json: counts must be 7 delivery, 17 research, "
-                     "31 projection files")
-
-    projection_paths: set[str] = set()
-    for role_id in sorted(roles):
-        role = roles[role_id]
-        if not isinstance(role, dict):
-            result.error(f"policy/role-manifest.v1.json: role {role_id} must be an object")
-            continue
-        extra = set(role) - ROLE_MANIFEST_ROLE_KEYS
-        missing = ROLE_MANIFEST_REQUIRED_ROLE_KEYS - set(role)
-        if extra:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} has unknown keys {sorted(extra)}")
-        if missing:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} missing keys {sorted(missing)}")
-
-        kind = role.get("kind")
-        is_delivery = role_id in DELIVERY_ROLE_IDS
-        if kind != ("delivery" if is_delivery else "research"):
-            result.error(f"policy/role-manifest.v1.json: role {role_id} kind mismatch")
-
-        # §3/§4 — publication authority is none for every managed role, always.
-        if role.get("publication_authority") != "none":
-            result.error(f"policy/role-manifest.v1.json: role {role_id} publication_authority must be none")
-
-        # §3.1/§4.2 — fan_in_authority=authorized-executor ONLY for the integrator.
-        fan_in = role.get("fan_in_authority")
-        if role_id == "integrator":
-            if fan_in != "authorized-executor":
-                result.error("policy/role-manifest.v1.json: integrator fan_in_authority must be authorized-executor")
-        elif fan_in != "none":
-            result.error(f"policy/role-manifest.v1.json: role {role_id} fan_in_authority must be none")
-
-        # §3.2/§4.2 — queue_authority is read-only for the research director, none otherwise;
-        # never a mutate value. This is checked against the role id, not the manifest's claim.
-        queue = role.get("queue_authority")
-        allowed_queue = {"read-only", "none"} if role_id == "research_director" else {"none"}
-        if queue not in allowed_queue:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} queue_authority must be "
-                         f"one of {sorted(allowed_queue)}")
-
-        # §3.3-4/§4.2 — advisory_only is mandatory-true for protected reviewers and the
-        # standing critic; asserting advisory_only=false there is the coordinated-repin bypass.
-        advisory = role.get("advisory_only", None)
-        if role_id in ROLE_MANIFEST_ADVISORY_ONLY_ROLES:
-            if advisory is not True:
-                result.error(f"policy/role-manifest.v1.json: role {role_id} must be advisory_only=true")
-        elif advisory is not None and advisory is not False:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} advisory_only must be boolean")
-
-        # §4.3/F5 — model lane is a family hint; the exact model comes from the conductor's
-        # RuntimeAssignment. Reject any resolved exact model ID or wrong runtime source.
-        model = role.get("model")
-        if not isinstance(model, dict):
-            result.error(f"policy/role-manifest.v1.json: role {role_id} model must be an object")
-            model = {}
-        if model.get("lane_family") not in ROLE_MANIFEST_LANE_FAMILIES:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} model.lane_family invalid")
-        if model.get("runtime_model_source") != ROLE_MANIFEST_RUNTIME_MODEL_SOURCE:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} model.runtime_model_source must be "
-                         f"{ROLE_MANIFEST_RUNTIME_MODEL_SOURCE!r}")
-        model_blob = json.dumps(model)
-        for exact_id in EXACT_MODEL_PROVIDER_MAP:
-            if exact_id in model_blob:
-                result.error(f"policy/role-manifest.v1.json: role {role_id} model block leaks exact model id {exact_id}")
-        if "resolved_model_id" in model:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} model must not carry a resolved_model_id")
-        if model.get("context_forms_eligible") != ["base"]:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} model.context_forms_eligible must be ['base']")
-
-        # §2/§2.2 — artifacts reference the six standard names; no new artifact format.
-        artifacts = role.get("artifacts")
-        if not isinstance(artifacts, dict):
-            result.error(f"policy/role-manifest.v1.json: role {role_id} artifacts must be an object")
-            artifacts = {}
-        for slot in ("accepted", "produced"):
-            names = artifacts.get(slot)
-            if not isinstance(names, list) or any(n not in ROLE_MANIFEST_ARTIFACTS for n in names):
-                result.error(f"policy/role-manifest.v1.json: role {role_id} artifacts.{slot} must be "
-                             "standard artifact names")
-
-        # §7/F6 — capabilities are default-closed and cross-checked; web=required implies
-        # network=required. Only researcher (delivery) and the web-consuming research roles
-        # may request web.
-        capabilities = role.get("capabilities")
-        if not isinstance(capabilities, dict):
-            result.error(f"policy/role-manifest.v1.json: role {role_id} capabilities must be an object")
-            capabilities = {}
-        web = capabilities.get("web_access")
-        network = capabilities.get("network")
-        if web not in {"required", "none"}:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} capabilities.web_access invalid")
-        if network not in {"required", "none"}:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} capabilities.network invalid")
-        if web == "required" and network != "required":
-            result.error(f"policy/role-manifest.v1.json: role {role_id} web_access=required implies network=required")
-        # Cross-check web against the pinned role files, not the manifest's own claim:
-        # a role may declare web=required only if its pinned surface genuinely needs it,
-        # and a genuinely web-needing role may not silently drop to none (fail-closed).
-        expected_web = "required" if role_id in web_required_roles else "none"
-        if web != expected_web:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} web_access must be "
-                         f"{expected_web!r} to match its pinned capability surface")
-
-        # §6/F7 — cartography discriminant: delivery cartographer is ephemeral/delivery,
-        # research repo_cartographer is durable/research_memory; present only for map roles.
-        cartography = role.get("cartography")
-        if role_id == "cartographer":
-            if cartography != {"map_kind": "delivery", "persistence": "ephemeral"}:
-                result.error("policy/role-manifest.v1.json: cartographer cartography must be delivery/ephemeral")
-        elif role_id == "repo_cartographer":
-            if cartography != {"map_kind": "research_memory", "persistence": "durable"}:
-                result.error("policy/role-manifest.v1.json: repo_cartographer cartography must be "
-                             "research_memory/durable")
-        elif cartography is not None:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} must not declare cartography")
-
-        # F3/F8 — projections: digest coexistence + sandbox equality + submission-contract tag.
-        projections = role.get("projections")
-        if not isinstance(projections, dict):
-            result.error(f"policy/role-manifest.v1.json: role {role_id} projections must be an object")
-            continue
-        expected_hosts = {"claude", "codex"} if is_delivery else {"codex"}
-        if set(projections) != expected_hosts:
-            result.error(f"policy/role-manifest.v1.json: role {role_id} projections must be {sorted(expected_hosts)}")
-        for host, projection in projections.items():
-            if not isinstance(projection, dict):
-                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} projection must be an object")
-                continue
-            path = projection.get("path")
-            projection_paths.add(path)
-            # F3 — content_digest MUST equal the pinned bytes; a mutated digest is an error,
-            # not a new source of truth. sandbox_mode MUST equal the pinned sandbox_mode.
-            if path not in pinned_digests:
-                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} path {path} not pinned")
-            elif projection.get("content_digest") != pinned_digests[path]:
-                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} content_digest differs "
-                             "from the source-pinned normative contract")
-            if host == "codex" and not is_delivery:
-                if projection.get("sandbox_mode") != pinned_sandboxes.get(path):
-                    result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} sandbox_mode differs "
-                                 "from the source-pinned normative contract")
-            # F8 — submission-contract tag: eight-heading for delivery, research-ledger for research.
-            expected_contract = "eight-heading" if is_delivery else "research-ledger"
-            if projection.get("submission_contract") != expected_contract:
-                result.error(f"policy/role-manifest.v1.json: role {role_id}/{host} submission_contract must be "
-                             f"{expected_contract!r}")
-
-    # F2 — the 31 pinned projection files are all referenced exactly once by the manifest.
-    if projection_paths != set(pinned_digests):
-        result.error("policy/role-manifest.v1.json: projections must reference exactly the 31 pinned role files")
+        outside_contract = text.replace(contract, "")
+        for pattern in FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS:
+            if pattern.search(outside_contract):
+                result.error(f"{relative}: contradictory runtime authority projection is forbidden")
+                break
 
 
 def validate_managed_role_contract(root: Path, result: Validation) -> None:
+    """Close the roster at 14 + 17, and make the contract's 31 recorded digests verify bytes.
+
+    Roster closure is what stops an unguarded addition: a role file whose stem is not `sdlc-*`
+    passes every other check in this file while the installer still ships it. The
+    `manifest_sha256` maps in the normative contract are the pins over those bytes, and a
+    recorded digest nothing compares is a pin in name only — so they are compared here, against
+    the on-disk role files, rather than left as data.
+    """
+    actual_global, actual_research = managed_role_paths(root)
+    if actual_global != SOURCE_PINNED_GLOBAL_PATHS:
+        result.error("managed role roster must contain exactly the 14 global SDLC roles")
+    if actual_research != SOURCE_PINNED_RESEARCH_PATHS:
+        result.error("managed role roster must contain exactly the 17 Research OS roles")
     try:
-        normative = normative_runtime_contract()
-        managed = normative["managed_roles"]
-        global_spec = managed["global"]
-        research_spec = managed["research"]
-    except (ValueError, KeyError, TypeError) as exc:
+        managed = load_json_object(
+            root / NORMATIVE_CONTRACT_RELATIVE_PATH, "normative runtime contract"
+        )["managed_roles"]
+        pinned = dict(managed["global"]["manifest_sha256"])
+        for spec in managed["research"]["roles"].values():
+            pinned[spec["path"]] = spec["manifest_sha256"]
+        if not all(isinstance(item, str) for pair in pinned.items() for item in pair):
+            raise TypeError("every pinned path and digest must be a string")
+    except (ValueError, AttributeError, KeyError, TypeError) as exc:
         result.error(f"invalid normative managed role contract: {exc}")
         return
-
-    global_paths = managed_global_paths(root)
-    actual_global = {
-        str(path.relative_to(root)).replace("\\", "/")
-        for path in (
-            *(root / "agents" / "claude").glob("*.md"),
-            *(root / "agents" / "codex").glob("*.toml"),
+    if set(pinned) != SOURCE_PINNED_GLOBAL_PATHS | SOURCE_PINNED_RESEARCH_PATHS:
+        result.error(
+            "normative managed role contract must pin exactly the 31 managed role projections"
         )
-    }
-    expected_global_hashes = global_spec.get("manifest_sha256", {})
-    if (
-        global_spec.get("count") != 14
-        or set(expected_global_hashes) != SOURCE_PINNED_GLOBAL_PATHS
-        or global_paths != SOURCE_PINNED_GLOBAL_PATHS
-        or actual_global != SOURCE_PINNED_GLOBAL_PATHS
-    ):
-        result.error("managed role roster must contain exactly the 14 global SDLC roles")
-    for relative in sorted(SOURCE_PINNED_GLOBAL_PATHS):
+    for relative, digest in sorted(pinned.items()):
         path = root / relative
-        if not path.is_file() or sha256_bytes(path.read_bytes()) != expected_global_hashes.get(relative):
-            result.error(f"{relative}: full manifest content differs from normative managed role contract")
-
-    expected_roles = research_spec.get("roles", {})
-    expected_research_paths = {
-        spec.get("path") for spec in expected_roles.values() if isinstance(spec, dict)
-    }
-    actual_research_paths = {
-        str(path.relative_to(root)).replace("\\", "/")
-        for path in (root / "agents" / "codex" / "research").glob("*.toml")
-    }
-    if (
-        research_spec.get("count") != 17
-        or set(expected_roles) != RESEARCH_ROLE_IDS
-        or expected_research_paths != SOURCE_PINNED_RESEARCH_PATHS
-        or actual_research_paths != SOURCE_PINNED_RESEARCH_PATHS
-    ):
-        result.error("managed role roster must contain exactly the 17 Research OS roles")
-    for role in sorted(RESEARCH_ROLE_IDS):
-        spec = expected_roles.get(role)
-        if not isinstance(spec, dict) or spec.get("path") != f"agents/codex/research/{role}.toml":
-            result.error(f"managed research role {role}: invalid normative specification")
-            continue
-        path = root / spec["path"]
-        if not path.is_file():
-            continue
-        try:
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
-        if data.get("name") != role:
-            result.error(f"{spec['path']}: managed role name mismatch")
-        if data.get("sandbox_mode") != spec.get("sandbox_mode"):
-            result.error(f"{spec['path']}: sandbox_mode differs from normative managed role contract")
-        description = data.get("description")
-        instructions = data.get("developer_instructions")
-        if not isinstance(description, str) or sha256_bytes(description.encode("utf-8")) != spec.get("description_sha256"):
-            result.error(f"{spec['path']}: description differs from normative managed role contract")
-        if not isinstance(instructions, str) or sha256_bytes(instructions.encode("utf-8")) != spec.get("developer_instructions_sha256"):
-            result.error(f"{spec['path']}: developer instructions differ from normative managed role contract")
-        if sha256_bytes(path.read_bytes()) != spec.get("manifest_sha256"):
-            result.error(f"{spec['path']}: full manifest content differs from normative managed role contract")
-
-    validate_source_pinned_protected_role_authority(root, result)
-
-
-def runtime_receipt_contract() -> str:
-    policy = runtime_receipt_policy()
-    contract = policy.get("canonical_runtime_contract")
-    if not isinstance(contract, str) or not contract:
-        raise ValueError("runtime receipt policy must define a canonical runtime contract")
-    return contract
-
-
-def runtime_receipt_fields() -> tuple[str, ...]:
-    try:
-        fields = runtime_receipt_policy()["canonical_receipt_fields"]
-    except (KeyError, TypeError) as exc:
-        raise ValueError(f"invalid runtime receipt policy: {exc}") from exc
-    if (
-        not isinstance(fields, list)
-        or len(fields) != 18
-        or not all(isinstance(field, str) and field for field in fields)
-        or len(set(fields)) != len(fields)
-    ):
-        raise ValueError("runtime receipt policy must define exactly 18 unique non-empty canonical fields")
-    return tuple(fields)
-
-
-def projected_runtime_receipt_fields(text: str) -> tuple[str, ...]:
-    marker = "canonical v1 top-level shape is exactly:\n"
-    if text.count(marker) != 1:
-        return ()
-    projection: list[str] = []
-    for line in text.split(marker, 1)[1].splitlines():
-        match = re.fullmatch(r"- `([a-z][a-z0-9_]*)`: .+", line)
-        if match:
-            projection.append(match.group(1))
-            continue
-        if projection:
-            break
-    return tuple(projection)
-
-
-def validate_runtime_receipt_projection(text: str, label: Path | str, result: Validation) -> None:
-    try:
-        required = runtime_receipt_fields()
-    except ValueError as exc:
-        result.error(str(exc))
-        return
-    projected = projected_runtime_receipt_fields(text)
-    missing = sorted(set(required) - set(projected))
-    if missing:
-        result.error(f"{label}: runtime receipt projection missing {', '.join(missing)}")
-    if projected != required:
-        result.error(f"{label}: runtime receipt projection must equal the exact policy-derived 18-field block")
-    try:
-        contract = runtime_receipt_contract()
-    except ValueError as exc:
-        result.error(str(exc))
-    else:
-        if text.count(contract) != 1:
-            result.error(f"{label}: runtime receipt projection must equal the exact policy-derived canonical runtime block")
-        else:
-            outside_contract = text.replace(contract, "", 1)
-            for pattern in FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS:
-                if pattern.search(outside_contract):
-                    result.error(f"{label}: contradictory runtime authority projection is forbidden")
-    if any(field in text for field in RUNTIME_RECEIPT_SOURCE_FIELDS):
-        result.error(f"{label}: stale runtime receipt source projection is forbidden")
+        if not path.is_file() or sha256_bytes(path.read_bytes()) != digest:
+            result.error(f"{relative}: bytes differ from the normative managed role contract pin")
 
 
 def validate_agents(root: Path, result: Validation) -> None:
@@ -2252,7 +1597,6 @@ def validate_agents(root: Path, result: Validation) -> None:
             result.error(f"{label}: static model is forbidden")
         if "model_reasoning_effort" in metadata:
             result.error(f"{label}: static model_reasoning_effort is forbidden")
-        validate_runtime_receipt_projection(text, label, result)
     for agent in sorted((root / "agents" / "codex").glob("**/*.toml")):
         try:
             data = tomllib.loads(agent.read_text(encoding="utf-8"))
@@ -2265,7 +1609,6 @@ def validate_agents(root: Path, result: Validation) -> None:
             result.error(f"{agent.relative_to(root)}: static model is forbidden")
         if "model_reasoning_effort" in data:
             result.error(f"{agent.relative_to(root)}: static model_reasoning_effort is forbidden")
-        validate_runtime_receipt_projection(agent.read_text(encoding="utf-8"), agent.relative_to(root).as_posix(), result)
 
 
 def validate_secrets_config(root: Path, result: Validation) -> None:
@@ -2350,20 +1693,24 @@ def validate_mermaid_renderer(root: Path, result: Validation) -> None:
 
 
 def validate_operator_tools(root: Path, result: Validation) -> None:
-    missing = sorted(path for path in OPERATOR_TOOL_ARTIFACTS if not (root / path).is_file())
-    if missing:
-        result.error(f"operator-tool artifacts missing: {', '.join(missing)}")
-        return
+    """Parse the shipped shell CLI. A stray `fi` here kills `ccodex launch` on first use.
+
+    This is the one check that reaches `assets/`, which the `scripts/*.sh` glob in
+    validate_scripts does not. A missing file is caught by the same run: `bash -n` on a path that
+    does not exist exits nonzero and names it.
+
+    Scope change to state plainly: the pre-shrink list also required 19 operator-tool artifacts to
+    exist, including `tests/test_operator_tools.py` and `tests/test_claude_statusline.py`. Deleting
+    a test module for the shipped operator CLI is therefore no longer a gate failure here. The two
+    remaining Python artifacts (`scripts/ccodex_sdlc_readonly.py`,
+    `scripts/manage_claude_statusline.py`) still have test-leaf importers, so their disappearance
+    still reddens the gate — through the test leaf, not this check.
+    """
     bash = shutil.which("bash")
     if bash is None:
         result.warn("bash is unavailable; operator-tool shell syntax was not checked")
         return
-    for relative in (
-        "assets/claude/statusline-command.sh",
-        "assets/claude/session-inheritance.sh",
-        "assets/launchers/ccodex.in",
-        "scripts/opencodex-claude.sh",
-    ):
+    for relative in SHELL_SYNTAX_PATHS:
         completed = subprocess.run(
             [bash, "-n", str(root / relative)], capture_output=True, text=True, check=False
         )
@@ -2372,6 +1719,35 @@ def validate_operator_tools(root: Path, result: Validation) -> None:
 
 
 def validate_mise(root: Path, result: Validation) -> None:
+    """Keep the GATE's own shape, not a transcription of mise.toml.
+
+    Four checks used to be twelve. What is pinned now: every task the bundle documents exists
+    (a renamed task is a dangling entry point), the minimum mise version, `settings.locked` and
+    the npm package-manager selection (they decide whether the lock is honored and which resolver
+    fetches the npm-backed pins), `check`'s exact composition, and the exact command of each of
+    the four leaves `check` depends on — `[tasks.validate] run = "true"` would hollow every check
+    in this file, and the same edit to test/self-test/secrets hollows the other three.
+
+    What is deliberately gone: the 197-line restatement of `[tools]`, the per-tool backend and
+    per-platform checksum walk, and the exact command of ~25 convenience tasks. `mise.lock` is
+    the integrity control — it carries the resolved version, backend, and per-platform checksum
+    of every pin, `settings.locked` makes mise honor it, and its bytes are pinned below, so an
+    edit to any of those facts fails here without a Python copy of them. A wrong convenience task
+    is visible the first time an operator runs it; a hollowed gate leaf is not.
+
+    The lock byte-pin alone would NOT have been enough, and the shrink measured that: `mise.toml`
+    is the REQUEST and `mise.lock` is the RESOLUTION, so editing `node = "22.23.1"` in the
+    request leaves the lock's bytes untouched and the pin sees nothing. So the two files are
+    cross-checked against each other — every requested tool must be resolved in the lock at the
+    requested version — which is derived agreement rather than a third Python copy of the
+    versions, and it also catches a tool added to the request without being locked and a backend
+    repointed by renaming its key (`ubi:` for `github:`). The npm-backend allowlist stays for the
+    same reason it was written: an npm pin runs arbitrary transitive install scripts during
+    `mise --locked install`, so each one is screened by name per docs/adr/0002's 2026-08-07
+    amendment. What is honestly lost is the `depends = ["node"]` edge on the npm-backed pins:
+    dropping it fails a fresh machine's first install loudly, which is a DevEx failure and not a
+    trust boundary.
+    """
     path = root / "mise.toml"
     if not path.is_file():
         result.error("mise.toml is required")
@@ -2384,7 +1760,6 @@ def validate_mise(root: Path, result: Validation) -> None:
         return
     for task in sorted(REQUIRED_TASKS - set(tasks)):
         result.error(f"mise.toml missing task {task}")
-
     if config.get("min_version") != MIN_MISE_VERSION:
         result.error(f"mise.toml must require mise {MIN_MISE_VERSION}")
     settings = config.get("settings", {})
@@ -2392,54 +1767,17 @@ def validate_mise(root: Path, result: Validation) -> None:
         result.error("mise.toml must enable locked tool resolution")
     if settings.get("npm", {}).get("package_manager") != "npm":
         result.error("mise.toml npm.package_manager must equal npm")
-    expected_tools = {
-        "uv": UV_VERSION,
-        "lefthook": LEFTHOOK_VERSION,
-        "node": NODE_VERSION,
-        "bun": BUN_VERSION,
-        # npm carries the node edge because its own installer IS npm: without it, a fresh
-        # machine's first `mise install` fails and then skips every other npm-backend pin.
-        MERMAID_NPM_TOOL: {"version": MERMAID_NPM_VERSION, "depends": ["node"]},
-        "ripgrep": RIPGREP_VERSION,
-        "fd": FD_VERSION,
-        "jq": JQ_VERSION,
-        "gh": GH_VERSION,
-        SEEDS_TOOL: {"version": SEEDS_VERSION, "depends": ["node"]},
-        BETTERLEAKS_TOOL: {"version": BETTERLEAKS_VERSION},
-        OPENCODEX_TOOL: {"version": OPENCODEX_VERSION, "depends": ["node"]},
-    }
-    if config.get("tools") != expected_tools:
-        result.error(f"mise.toml tools must equal {expected_tools}")
-    # Every npm-backend pin drags in a transitive dependency tree whose install scripts run
-    # during `mise --locked install`, so each one is reviewed by name against docs/adr/0002's
-    # 2026-08-07 screening rule before it is allowed. This catches an UNREVIEWED npm pin being
-    # added; it cannot detect that an already-listed pin's upstream added a hostile postinstall.
-    unreviewed = sorted(
-        name
-        for name in config.get("tools", {})
-        if name.startswith("npm:") and name not in NPM_BACKED_TOOLS
-    )
-    if unreviewed:
-        result.error(
-            "mise.toml npm-backend pins must be reviewed for install-script prerequisites "
-            f"per docs/adr/0002 before use: {unreviewed}"
-        )
-    seeds = config.get("tools", {}).get(SEEDS_TOOL, {})
-    if seeds.get("depends") != ["node"]:
-        result.error("mise.toml Seeds tool must depend on node")
 
-    for name, suffix in TASK_COMMANDS.items():
+    expected_check = {
+        "description": "Run validation, installer tests, lifecycle self-test, and the secrets scan",
+        "depends": ["validate", "test", "self-test", "secrets"],
+    }
+    if tasks.get("check") != expected_check:
+        result.error("mise.toml check must contain only its description and exact validate/test/self-test/secrets dependencies")
+    for name, suffix in GATE_LEAF_COMMANDS.items():
         task = tasks.get(name, {})
-        windows_suffix = suffix
-        if name == "bundle:install:all-hosts":
-            windows_suffix = "--script scripts/install_skill_bundle.py install"
-        elif name == "bundle:status:all-hosts":
-            windows_suffix = "--script scripts/install_skill_bundle.py status"
-        for field, executable, command_suffix in (
-            ("run", "uv", suffix),
-            ("run_windows", "uv.exe", windows_suffix),
-        ):
-            expected = f"{executable} run --python {PYTHON_VERSION} {command_suffix}"
+        for field, executable in (("run", "uv"), ("run_windows", "uv.exe")):
+            expected = f"{executable} run --python {PYTHON_VERSION} {suffix}"
             if task.get(field) != expected:
                 result.error(f"mise.toml task {name}.{field} must equal {expected!r}")
     expected_secrets = {
@@ -2455,62 +1793,6 @@ def validate_mise(root: Path, result: Validation) -> None:
     if not (root / SECRETS_SCRIPT_PATH).is_file():
         result.error(f"{SECRETS_SCRIPT_PATH} is required by the secrets task")
     validate_secrets_config(root, result)
-    expected_ocx_tasks = {
-        "ocx:launch": {
-            "description": "Launch a second Claude Code process through the opencodex gateway",
-            "run": "scripts/opencodex-claude.sh launch",
-        },
-        "ocx:ultracode": {
-            "description": "Launch opencodex Claude with Ultracode and optional explicit permission bypass",
-            "run": "scripts/opencodex-claude.sh launch-ultracode",
-        },
-        "ocx:status": {
-            "description": "Report opencodex gateway reachability and configured providers",
-            "run": "scripts/opencodex-claude.sh status",
-        },
-        "ocx:restart": {
-            "description": "Stop the opencodex gateway cleanly and ensure it is healthy again",
-            "run": "scripts/opencodex-claude.sh restart",
-        },
-        "ocx:configure": {
-            "description": "Configure opencodex providers through their own login flows",
-            "run": "scripts/opencodex-claude.sh configure",
-        },
-    }
-    for name, expected in expected_ocx_tasks.items():
-        if tasks.get(name) != expected:
-            result.error(f"mise.toml task {name} must contain only {expected}")
-    expected_contributor_setup = {
-        "description": "Install this host's bundle and contributor Git hooks",
-        "depends": ["bundle:install", "hooks:install"],
-    }
-    expected_setup_forwarder = {
-        "description": "Deprecated: use contributor:setup",
-        "depends": ["contributor:setup"],
-    }
-    if tasks.get("contributor:setup") != expected_contributor_setup:
-        result.error(
-            "mise.toml contributor:setup must contain only the bundle:install and hooks:install dependencies"
-        )
-    if tasks.get("setup") != expected_setup_forwarder:
-        result.error(
-            "mise.toml setup must be only the one-release deprecated contributor:setup forwarder"
-        )
-    if tasks.get("mermaid:provision") != MERMAID_PROVISION_TASK:
-        result.error(f"mise.toml mermaid:provision must contain only {MERMAID_PROVISION_TASK}")
-    expected_check = {
-        "description": "Run validation, installer tests, lifecycle self-test, and the secrets scan",
-        "depends": ["validate", "test", "self-test", "secrets"],
-    }
-    if tasks.get("check") != expected_check:
-        result.error("mise.toml check must contain only its description and exact validate/test/self-test/secrets dependencies")
-    # Provisioning downloads a pinned browser, so wiring either Mermaid task into the gate
-    # would turn a convenience surface into a bootstrap prerequisite and make the verdict
-    # depend on network reachability. The exact-dict check above already rejects that; this
-    # states the boundary where a future edit would look for it.
-    for leaf in expected_check["depends"]:
-        if leaf.startswith("mermaid:"):
-            result.error("mise.toml check must not depend on a Mermaid task: rendering is advisory")
 
     lock_path = root / "mise.lock"
     if not lock_path.is_file():
@@ -2521,51 +1803,40 @@ def validate_mise(root: Path, result: Validation) -> None:
     except OSError as exc:
         result.error(f"mise.lock is invalid: {exc}")
         return
-    if hashlib.sha256(lock_bytes).hexdigest() != MISE_LOCK_SHA256:
+    if sha256_bytes(lock_bytes) != MISE_LOCK_SHA256:
         result.error("mise.lock SHA-256 must equal the canonical generated lock")
     try:
-        lock = tomllib.loads(lock_bytes.decode("utf-8"))
+        locked_tools = tomllib.loads(lock_bytes.decode("utf-8")).get("tools", {})
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         result.error(f"mise.lock is invalid: {exc}")
         return
-    locked_tools = lock.get("tools", {})
-    expected_versions = {
-        "uv": UV_VERSION,
-        "lefthook": LEFTHOOK_VERSION,
-        "node": NODE_VERSION,
-        "bun": BUN_VERSION,
-        MERMAID_NPM_TOOL: MERMAID_NPM_VERSION,
-        "ripgrep": RIPGREP_VERSION,
-        "fd": FD_VERSION,
-        "jq": JQ_VERSION,
-        "gh": GH_VERSION,
-        SEEDS_TOOL: SEEDS_VERSION,
-        BETTERLEAKS_TOOL: BETTERLEAKS_VERSION,
-        OPENCODEX_TOOL: OPENCODEX_VERSION,
-    }
-    if set(locked_tools) != set(expected_versions):
-        result.error(f"mise.lock tools must equal {sorted(expected_versions)}")
-    for name, version in expected_versions.items():
-        entries = locked_tools.get(name, [])
-        if len(entries) != 1 or entries[0].get("version") != version:
-            result.error(f"mise.lock must resolve {name} {version}")
+
+    requested = config.get("tools", {})
+    if not isinstance(requested, dict) or not requested:
+        result.error("mise.toml must declare its pinned [tools]")
+        return
+    for name in sorted(requested):
+        request = requested[name]
+        version = request.get("version") if isinstance(request, dict) else request
+        entries = locked_tools.get(name)
+        if not isinstance(entries, list) or len(entries) != 1:
+            result.error(f"mise.toml tool {name} is not resolved exactly once in mise.lock")
             continue
-        entry = entries[0]
-        expected_backend = EXPECTED_LOCK_BACKENDS.get(name)
-        if expected_backend is not None and entry.get("backend") != expected_backend:
-            result.error(f"mise.lock {name} backend must equal {expected_backend}")
-        # npm-backed pins carry no per-platform record: the npm backend resolves one
-        # package for every platform, so version+backend is the whole integrity surface.
-        if name in NPM_BACKED_TOOLS:
-            if set(entry) != {"version", "backend"}:
-                result.error(f"mise.lock {name} must contain version and backend only")
-            continue
-        platform_keys = {key for key in entry if key.startswith("platforms.")}
-        if not platform_keys:
-            result.error(f"mise.lock {name} must record per-platform checksums")
-        for key in platform_keys:
-            if "checksum" not in entry[key]:
-                result.error(f"mise.lock {name} {key} must record a checksum")
+        if entries[0].get("version") != version:
+            result.error(
+                f"mise.toml tool {name} requests {version!r} but mise.lock resolves "
+                f"{entries[0].get('version')!r}"
+            )
+    if set(locked_tools) != set(requested):
+        result.error("mise.lock must resolve exactly the tools mise.toml requests")
+    unreviewed = sorted(
+        name for name in requested if name.startswith("npm:") and name not in NPM_BACKED_TOOLS
+    )
+    if unreviewed:
+        result.error(
+            "mise.toml npm-backend pins must be reviewed for install-script prerequisites "
+            f"per docs/adr/0002 before use: {unreviewed}"
+        )
 
 
 def validate_gate_graph(root: Path, result: Validation) -> None:
@@ -2602,12 +1873,18 @@ pre-push:
     if not hooks.is_file() or hooks.read_text(encoding="utf-8") != expected_hooks:
         result.error("lefthook.yml must contain the documented best-effort gate subsets")
 
-    workflow = root / ".github" / "workflows" / "validate.yml"
+    workflow = root / CI_WORKFLOW_RELATIVE_PATH
     if not workflow.is_file():
         result.error(".github/workflows/validate.yml is required")
     else:
-        workflow_text = workflow.read_text(encoding="utf-8")
-        if workflow_text != EXPECTED_WORKFLOW:
+        # Exact-content pin, digest form. See CI_WORKFLOW_SHA256 for why this stayed exact rather
+        # than becoming a substring check, and for the re-pin command.
+        try:
+            workflow_text = workflow.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            result.error(f"CI workflow is unreadable: {exc}")
+            return
+        if sha256_bytes(workflow_text.encode("utf-8")) != CI_WORKFLOW_SHA256:
             result.error("CI workflow must equal the single authoritative mise run check graph")
 
     claude = root / "CLAUDE.md"
@@ -2697,24 +1974,27 @@ def validate_policy(root: Path, result: Validation) -> None:
 
 def validate(root: Path) -> Validation:
     result = Validation()
+    # Payload guards first: these are the only checks whose absence produces a silent,
+    # host-undiagnosable failure for an operator.
     validate_skills(root, result)
     validate_workflows(root, result)
+    validate_agents(root, result)
     validate_python(root, result)
+    validate_scripts(root, result)
+    validate_operator_tools(root, result)
+    validate_manifests(root, result)
+    validate_versions(root, result)
+    # Trust boundaries over shipped bytes and the gate's own shape.
+    validate_source_pinned_protected_role_authority(root, result)
+    validate_managed_role_authority_projection(root, result)
+    validate_managed_role_contract(root, result)
+    validate_packaged_policy_copies(root, result)
+    validate_mermaid_renderer(root, result)
     validate_release_contract(root, result)
     validate_release_candidate_policy(root, result)
-    validate_ccodex_sdlc_read_report_policy(root, result)
-    validate_ccodex_sdlc_candidate_report_policy(root, result)
-    validate_runtime_policy_contract(root, result)
-    validate_agents(root, result)
-    validate_managed_role_contract(root, result)
-    validate_role_manifest(root, result)
-    validate_mermaid_renderer(root, result)
-    validate_operator_tools(root, result)
+    validate_ccodex_sdlc_report_policies(root, result)
     validate_mise(root, result)
     validate_gate_graph(root, result)
-    validate_versions(root, result)
-    validate_scripts(root, result)
-    validate_manifests(root, result)
     validate_policy(root, result)
     return result
 
