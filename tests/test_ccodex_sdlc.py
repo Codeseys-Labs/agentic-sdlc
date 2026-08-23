@@ -582,76 +582,73 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(completed.stdout, "GATEWAY-STATUS:status\n")
 
-    def test_validator_rejects_noncanonical_duplicate_or_drifted_read_report_policy(self) -> None:
+    def test_validator_pins_both_ccodex_report_policies_by_digest(self) -> None:
+        """The structural re-derivation collapsed to a digest; the predicate got stronger.
+
+        Both descriptors are parsed by `scripts/ccodex_sdlc.py` on every invocation, which is
+        where malformed input must fail. What this pass owes is drift detection in the checkout,
+        so the mutations below are the ones the old 85-line structural walk covered — a widened
+        vocabulary, a dropped field, a trailing byte — plus the two cases it could not express:
+        an unrelated byte anywhere in the document, and a symlinked policy.
+        """
         clean = validator.Validation()
-        validator.validate_ccodex_sdlc_read_report_policy(ROOT, clean)
-        validator.validate_ccodex_sdlc_candidate_report_policy(ROOT, clean)
+        validator.validate_ccodex_sdlc_report_policies(ROOT, clean)
         self.assertEqual(clean.errors, [])
 
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            policy_path = root / "policy" / "ccodex-sdlc-read-report.v1.json"
-            policy_path.parent.mkdir()
-            policy_path.write_text('{"schema_version":"one","schema_version":"two"}\n')
-            duplicate = validator.Validation()
-
-            validator.validate_ccodex_sdlc_read_report_policy(root, duplicate)
-
-            self.assertTrue(any("duplicate key" in error for error in duplicate.errors))
-
-            policy_path.write_text((ROOT / "policy" / "ccodex-sdlc-read-report.v1.json").read_text() + " ")
-            noncanonical = validator.Validation()
-            validator.validate_ccodex_sdlc_read_report_policy(root, noncanonical)
-            self.assertTrue(any("canonical JSON" in error for error in noncanonical.errors))
-
-        original = json.loads(
-            (ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text()
+        relatives = (
+            "policy/ccodex-sdlc-read-report.v1.json",
+            "policy/ccodex-sdlc-read-report.v2.json",
         )
-        mutations: list[tuple[str, dict[str, object]]] = []
-        for key in original:
-            changed = copy.deepcopy(original)
-            changed.pop(key)
-            mutations.append((f"top-level-{key}", changed))
-        for key in original["canonical_serialization"]:
-            changed = copy.deepcopy(original)
-            changed["canonical_serialization"].pop(key)
-            mutations.append((f"canonical-{key}", changed))
-        for key in original["field_vocabularies"]:
-            changed = copy.deepcopy(original)
-            changed["field_vocabularies"][key].append("drift")
-            mutations.append((f"field-vocabulary-{key}", changed))
-        for key in original["vocabularies"]:
-            changed = copy.deepcopy(original)
-            changed["vocabularies"][key].append("drift")
-            mutations.append((f"value-vocabulary-{key}", changed))
-        for key, value in (
-            ("schema_version", "drift"),
-            ("report_schema_version", "drift"),
-            ("report_top_level_fields", [*original["report_top_level_fields"], "drift"]),
-        ):
-            changed = copy.deepcopy(original)
-            changed[key] = value
-            mutations.append((f"identity-{key}", changed))
-        for label, changed in mutations:
-            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
-                root = Path(temp)
-                policy_path = root / "policy" / "ccodex-sdlc-read-report.v2.json"
-                policy_path.parent.mkdir()
-                policy_path.write_text(json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n")
-                drift = validator.Validation()
-                validator.validate_ccodex_sdlc_candidate_report_policy(root, drift)
-                self.assertTrue(drift.errors, label)
+        self.assertEqual(
+            sorted(validator.CCODEX_SDLC_REPORT_POLICY_SHA256), sorted(relatives)
+        )
 
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            policy_path = root / "policy" / "ccodex-sdlc-read-report.v2.json"
-            policy_path.parent.mkdir()
-            policy_path.write_text(
-                (ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").read_text() + " "
-            )
-            noncanonical_v2 = validator.Validation()
-            validator.validate_ccodex_sdlc_candidate_report_policy(root, noncanonical_v2)
-            self.assertTrue(any("canonical JSON" in error for error in noncanonical_v2.errors))
+        for relative in relatives:
+            original = json.loads((ROOT / relative).read_text())
+            mutations: list[tuple[str, str]] = [
+                ("trailing-byte", (ROOT / relative).read_text() + " "),
+                ("duplicate-member", '{"schema_version":"one","schema_version":"two"}\n'),
+            ]
+            for key in original:
+                changed = copy.deepcopy(original)
+                changed.pop(key)
+                mutations.append((f"dropped-{key}", json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n"))
+            for key, value in original.items():
+                if isinstance(value, list):
+                    changed = copy.deepcopy(original)
+                    changed[key] = [*value, "drift"]
+                    mutations.append((f"widened-{key}", json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n"))
+                if isinstance(value, dict):
+                    for inner, inner_value in value.items():
+                        if not isinstance(inner_value, list):
+                            continue
+                        changed = copy.deepcopy(original)
+                        changed[key][inner] = [*inner_value, "drift"]
+                        mutations.append((f"widened-{key}.{inner}", json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n"))
+            self.assertGreater(len(mutations), 10, relative)
+            for label, text in mutations:
+                with self.subTest(policy=relative, label=label), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    policy_path = root / relative
+                    policy_path.parent.mkdir(parents=True)
+                    policy_path.write_text(text)
+                    drift = validator.Validation()
+                    validator.validate_ccodex_sdlc_report_policies(root, drift)
+                    self.assertTrue(
+                        any("bytes differ from the reviewed ccodex report contract" in error for error in drift.errors),
+                        f"{relative} {label}: {drift.errors}",
+                    )
+
+            with self.subTest(policy=relative, label="symlinked"), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                policy_path = root / relative
+                policy_path.parent.mkdir(parents=True)
+                policy_path.symlink_to(ROOT / relative)
+                linked = validator.Validation()
+                validator.validate_ccodex_sdlc_report_policies(root, linked)
+                self.assertTrue(
+                    any("missing or linked" in error for error in linked.errors), linked.errors
+                )
 
     def test_generated_dispatcher_does_not_fall_back_to_poisoned_external_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

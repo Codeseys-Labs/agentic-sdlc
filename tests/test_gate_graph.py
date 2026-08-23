@@ -26,26 +26,33 @@ SECRETS_RUN_WINDOWS = "uv.exe run --python 3.12.11 --script scripts/secrets_scan
 
 
 class GateGraphTests(unittest.TestCase):
+    # Toolchain drift is caught by the mise.toml <-> mise.lock cross-check plus the lock's own
+    # byte pin, not by a Python restatement of `[tools]` (removed 2026-08-22, seed
+    # agentic-sdlc-ab6a). The diagnostics below are therefore the derived ones. Two rows that the
+    # old transcription carried are GONE ON PURPOSE and are recorded here rather than deleted
+    # silently: `npm = "10.8.1"` (dropping the `depends = ["node"]` edge) and
+    # `depends = []` on the Seeds pin now pass the validator. Both fail a fresh machine's first
+    # `mise --locked install` loudly — a DevEx failure, not a trust boundary — and neither
+    # changes which bytes get downloaded.
     TOOLCHAIN_MUTATIONS = (
-        ("mise.toml", 'node = "22.23.2"', 'node = "22.23.1"', "mise.toml tools must equal"),
-        ("mise.toml", 'bun = "1.4.0"', 'bun = "1.3.9"', "mise.toml tools must equal"),
+        ("mise.toml", 'node = "22.23.2"', 'node = "22.23.1"', "mise.toml tool node requests"),
+        ("mise.toml", 'bun = "1.4.0"', 'bun = "1.3.9"', "mise.toml tool bun requests"),
         # The renderer's npm identity is pinned separately from node, which bundles 10.9.8.
         # Drift here silently changes how the M0b node_modules tree is built.
-        ("mise.toml", 'npm = { version = "10.8.1", depends = ["node"] }', 'npm = { version = "10.8.0", depends = ["node"] }', "mise.toml tools must equal"),
-        # The depends edge is what makes a fresh-machine install succeed in one pass; dropping it
-        # reproduced the container failure, so it is pinned as its own mutation.
-        ("mise.toml", 'npm = { version = "10.8.1", depends = ["node"] }', 'npm = "10.8.1"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "0.5.15"', 'version = "0.5.14"', "mise.toml tools must equal"),
+        ("mise.toml", 'npm = { version = "10.8.1", depends = ["node"] }', 'npm = { version = "10.8.0", depends = ["node"] }', "mise.toml tool npm requests"),
+        ("mise.toml", 'version = "0.5.15"', 'version = "0.5.14"', "mise.toml tool npm:@os-eco/seeds-cli requests"),
         ("mise.toml", 'package_manager = "npm"', 'package_manager = "bun"', "npm.package_manager must equal npm"),
-        ("mise.toml", '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.15"\ndepends = ["node"]', '[tools."npm:@os-eco/seeds-cli"]\nversion = "0.5.15"\ndepends = []', "Seeds tool must depend on node"),
         # Convenience-tier drift must fail exactly like bootstrap-tier drift. These tools are
         # not gate inputs, but an unpinned version is still an unreviewed binary.
-        ("mise.toml", 'ripgrep = "15.2.0"', 'ripgrep = "14.1.1"', "mise.toml tools must equal"),
-        ("mise.toml", 'fd = "10.4.2"', 'fd = "10.4.1"', "mise.toml tools must equal"),
-        ("mise.toml", 'jq = "1.8.2"', 'jq = "1.8.1"', "mise.toml tools must equal"),
-        ("mise.toml", 'gh = "2.98.0"', 'gh = "2.96.0"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "1.8.1"', 'version = "1.7.2"', "mise.toml tools must equal"),
-        ("mise.toml", 'version = "2.28.0"', 'version = "2.10.2"', "mise.toml tools must equal"),
+        ("mise.toml", 'ripgrep = "15.2.0"', 'ripgrep = "14.1.1"', "mise.toml tool ripgrep requests"),
+        ("mise.toml", 'fd = "10.4.2"', 'fd = "10.4.1"', "mise.toml tool fd requests"),
+        ("mise.toml", 'jq = "1.8.2"', 'jq = "1.8.1"', "mise.toml tool jq requests"),
+        ("mise.toml", 'gh = "2.98.0"', 'gh = "2.96.0"', "mise.toml tool gh requests"),
+        ("mise.toml", 'version = "1.8.1"', 'version = "1.7.2"', "mise.toml tool github:betterleaks/betterleaks requests"),
+        ("mise.toml", 'version = "2.28.0"', 'version = "2.10.2"', "mise.toml tool npm:@bitkyc08/opencodex requests"),
+        # A tool dropped from the request is drift in the other direction: the lock would still
+        # resolve a pin nothing asks for.
+        ("mise.toml", 'gh = "2.98.0"\n', "", "mise.lock must resolve exactly the tools mise.toml requests"),
         # Re-adding the mermaid pin must fail. It was removed 2026-08-07 (docs/adr/0002
         # amendment): puppeteer's postinstall needs a zip archiver mise does not install, so
         # `mise --locked install` exited 1 on a slim image and took the other 12 tools with it.
@@ -54,7 +61,7 @@ class GateGraphTests(unittest.TestCase):
             "mise.toml",
             '[tools."npm:@bitkyc08/opencodex"]',
             '[tools."npm:@mermaid-js/mermaid-cli"]\nversion = "11.16.0"\ndepends = ["node"]\n\n[tools."npm:@bitkyc08/opencodex"]',
-            "mise.toml tools must equal",
+            "mise.toml tool npm:@mermaid-js/mermaid-cli is not resolved exactly once in mise.lock",
         ),
         # Any OTHER unreviewed npm pin is refused by name, not just the one that already bit us:
         # the npm backend runs arbitrary transitive install scripts, so each pin is screened.
@@ -65,12 +72,13 @@ class GateGraphTests(unittest.TestCase):
             "npm-backend pins must be reviewed for install-script prerequisites",
         ),
         # The betterleaks backend must stay github: — ubi: is deprecated in mise 2027.1.0 and
-        # locks version+backend only, losing per-platform checksums and attestation.
+        # locks version+backend only, losing per-platform checksums and attestation. Renaming the
+        # key is what changes the backend, so the lock stops resolving the requested name.
         (
             "mise.toml",
             '[tools."github:betterleaks/betterleaks"]',
             '[tools."ubi:betterleaks/betterleaks"]',
-            "mise.toml tools must equal",
+            "mise.toml tool ubi:betterleaks/betterleaks is not resolved exactly once in mise.lock",
         ),
     )
 
@@ -187,23 +195,11 @@ class GateGraphTests(unittest.TestCase):
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
         self.assertIn("* text=auto eol=lf", attributes)
 
+    # `contributor:setup`, the deprecated `setup` forwarder, and `mermaid:provision`'s exact
+    # command are no longer transcribed (2026-08-22 shrink): they are convenience wiring, and a
+    # wrong one is visible the first time an operator runs it. Their EXISTENCE is still required
+    # through REQUIRED_TASKS, which the two `missing task` rows below exercise.
     MUTATIONS = (
-        (
-            "mise.toml",
-            'description = "Install this host\'s bundle and contributor Git hooks"\n'
-            'depends = ["bundle:install", "hooks:install"]',
-            'description = "Install this host\'s bundle and contributor Git hooks"\n'
-            'depends = ["bundle:install"]',
-            "contributor:setup must contain only",
-        ),
-        (
-            "mise.toml",
-            'description = "Deprecated: use contributor:setup"\n'
-            'depends = ["contributor:setup"]',
-            'description = "Deprecated: use contributor:setup"\n'
-            'depends = ["bundle:install", "hooks:install"]',
-            "setup must be only the one-release deprecated",
-        ),
         ("mise.toml", 'depends = ["validate", "test", "self-test", "secrets"]', 'depends = ["validate", "test"]', "check must contain only"),
         ("mise.toml", 'depends = ["validate", "test", "self-test", "secrets"]', 'depends = ["validate", "test", "self-test", "secrets"]\nrun = "python3 -c \'print(999)\'"', "check must contain only"),
         # Dropping the secrets leaf hollows the gate exactly like dropping self-test does.
@@ -230,15 +226,12 @@ class GateGraphTests(unittest.TestCase):
             'depends = ["validate", "test", "self-test", "secrets", "mermaid:linux-test"]',
             "check must contain only",
         ),
-        # The provision task is Linux x64 only: a run_windows variant would advertise a
-        # platform the renderer explicitly refuses with EXIT_UNSUPPORTED.
-        (
-            "mise.toml",
-            'run = "uv run --python 3.12.11 --script scripts/provision_mermaid_linux.py"',
-            'run = "uv run --python 3.12.11 --script scripts/provision_mermaid_linux.py"\nrun_windows = "uv.exe run --python 3.12.11 --script scripts/provision_mermaid_linux.py"',
-            "mermaid:provision must contain only",
-        ),
         ("mise.toml", 'run = "uv run --python 3.12.11 --script scripts/validate_bundle.py"', 'run = "python3 scripts/validate_bundle.py"', "task validate.run must equal"),
+        # Every leaf `check` depends on is pinned by exact command, because hollowing any one of
+        # them to `true` leaves a green gate that ran nothing.
+        ("mise.toml", 'run = "uv run --python 3.12.11 --with pyyaml==6.0.3 python -m unittest discover -s tests"', 'run = "true"', "task test.run must equal"),
+        ("mise.toml", 'run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py self-test"', 'run = "true"', "task self-test.run must equal"),
+        ("mise.toml", "locked = true", "locked = false", "must enable locked tool resolution"),
         ("mise.toml", 'min_version = "2026.4.27"', 'min_version = "2025.1.0"', "must require mise 2026.4.27"),
         ("scripts/validate-bundle.sh", 'exec mise -C "$root" exec -- uv run --python 3.12.11', "exec python3", "exec-only pinned mise/uv wrapper"),
         ("scripts/bump-version.sh", 'mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest"', '# mise -C "$repo_root" exec -- uv run --python 3.12.11 python -\npython3 - "$manifest"', "bump-version.sh must use only"),
@@ -365,7 +358,7 @@ class GateGraphTests(unittest.TestCase):
             )
             result = self.run_validator(repo)
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("mise.lock tools must equal", result.stderr)
+            self.assertIn("mise.lock must resolve exactly the tools mise.toml requests", result.stderr)
 
     @unittest.skipUnless(shutil.which("mise"), "mise is required for install lock behavior")
     def test_runtime_install_preserves_reviewed_lock_bytes_and_validity(self) -> None:
