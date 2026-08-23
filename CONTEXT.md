@@ -100,16 +100,11 @@ Agentic SDLC may call a repository snapshot gate-passing. Hooks and partial task
 evidence, not substitutes.
 _Avoid_: CI-only gate, passing pre-commit hook, arbitrary test command
 
-**Repository contract manifest**:
-The tracked `.agentic-sdlc/repo.toml` document that declares portable activation intent, including
-guidance, queue, decision, gate, worktree, CI, and writing-policy choices. It is not ownership or
-machine-readiness evidence.
-_Avoid_: Local receipt, proof of activation
-
-**Local activation receipt**:
-Machine-local evidence under the ccodex XDG state directory that binds one physical clone or
-worktree to its approved activation plan, owned paths, hashes, tool versions, and trust state.
-_Avoid_: Tracked repository configuration, portable readiness claim
+**Repository activation diff**:
+The reviewed unified diff `instruction-generator.py apply` prints for one marked instruction block,
+approved and written in the same invocation. Its durable record is the repository's own Git
+history; there is no tracked contract manifest and no machine-local activation receipt.
+_Avoid_: Proof of activation, readiness claim, ownership evidence
 
 **Write custody**:
 The exclusive assignment of one write-capable workstream to one owner, branch, and worktree, with

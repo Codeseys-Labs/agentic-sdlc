@@ -37,8 +37,8 @@ copied verbatim off the verified baseline receipt this process loaded. Without t
 names no baseline at all — only which tests it failed with — so a consumer trusting a
 `non_worsening` verdict could be shown a comparison computed against another repository's baseline
 receipt, or a report hand-written to name no receipt whatsoever. A consumer that independently
-holds (or re-reads) that same receipt can re-derive both fields and refuse on disagreement; see
-`activation-result.py`'s `assess_gate`, which is exactly that consumer. The candidate side needs no
+holds (or re-reads) that same receipt can re-derive both fields and refuse on disagreement. The
+candidate side needs no
 matching digest, because its value is already bound elsewhere: the gate label plus the exact
 failing set and outcome a consumer compares against its own already-verified receipt. Stamping is
 additive to `SCHEMA_VERSION`, not a bump of it — see the constant below for why.
@@ -94,9 +94,8 @@ from scripts import gate_receipt  # noqa: E402 - resolved against the repository
 #: no gain. The two consumers this rule was written against (`wave-verdict.py`,
 #: `sdlc-observability-projection.py`) were removed by ADR-0030; the rule stands because it is the
 #: compatibility contract this schema offers any consumer. One that must distinguish a pre-stamp
-#: report from a stamped one (`activation-result.py`) does so by checking for the two keys directly,
-#: which is the only thing a stamped-vs-unstamped question can mean when the schema string itself
-#: does not change.
+#: report from a stamped one does so by checking for the two keys directly, which is the only thing
+#: a stamped-vs-unstamped question can mean when the schema string itself does not change.
 SCHEMA_VERSION = "gate-baseline-comparison/v1"
 
 #: The candidate's failing set is a subset of the baseline's.

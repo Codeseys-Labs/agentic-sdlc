@@ -12,11 +12,11 @@ nothing executable checked, before this tool, that a claimed custody destination
 `<target>/.worktrees/`, is free of a symlink/mount-crossing/special-node component, is either
 absent or an empty directory, and is not already an active or drifted git worktree registration.
 
-THE PRIMITIVE IS EXTRACTED, NOT INVENTED. `activation-planner.py` already owns exactly this shape
-of check for its own one-entry write set: `S_ISLNK` refusal (its `_assert_safe_parent`,
-`capture_prestate`), `st_dev` equality (`_assert_plane_device`, `_assert_cloneable_private_node`),
-and mount-id containment via Linux `statx(..., STATX_MNT_ID)` (`_mount_id_fd`, `open_root_chain`).
-This module is an INDEPENDENT re-expression of that primitive against a different write set --
+THE PRIMITIVE WAS EXTRACTED, NOT INVENTED. The retired activation planner owned exactly this shape
+of check for its own one-entry write set: `S_ISLNK` refusal, `st_dev` equality, and mount-id
+containment via Linux `statx(..., STATX_MNT_ID)`. This module was already an INDEPENDENT
+re-expression of that primitive rather than an import of it, so the deletion of the planner left
+this tool's own checks intact. The re-expression is against a different write set --
 a worktree custody directory rather than a private state root -- following this repository's own
 documented convention of re-expression across tool boundaries rather than a cross-tool import. The
 precedent is historical rather than live: `wave-plan-compiler.py`'s `_relative_path` restated
@@ -25,10 +25,10 @@ by ADR-0030, which is exactly why re-expression was the right call -- this modul
 `_custody_spelling_reason` still owns the rule in full and did not lose it when its two neighbours
 went. Each such tool is independently auditable without chasing an import across `tools/`, and none
 can be silently widened by editing a shared helper one of the others does not review. The one
-precedent for a cross-tool LOAD in this directory
-(`repository-contract-writer.py`'s `_load_reader`) is for a SCHEMA constant a diverging copy would
-make two competing definitions of one document shape; this is a validation PREDICATE, the kind the
-family already re-expresses.
+precedent for a cross-tool LOAD in this directory (the retired repository contract writer's
+`_load_reader`) was for a SCHEMA constant a diverging copy would have made two competing
+definitions of one document shape; this is a validation PREDICATE, the kind the family
+already re-expresses.
 
 WHY A NEW TOOL RATHER THAN A NEW VERB ON AN EXISTING ONE. The alternative considered was a verb on
 `wave-plan-admission.py`, which admitted a COMPILED `WavePlan` against sealed
@@ -37,12 +37,12 @@ snapshot, or mission was outside what it read, and folding this primitive into i
 every caller -- including a conductor about to run its very first `git worktree add` before any plan
 exists -- to assemble three sealed documents just to ask "is this one directory safe to create a
 worktree in". ADR-0030 has since removed that tool entirely, so the rejected host no longer exists
-and this module's independence is what kept the check. `activation-planner.py` is the primitive's
-origin but is scoped to one manifest entry's private state root and carries no notion of a Seed,
-a worktree, or a wave at all; adding worktree custody to a 4,300-line activation engine would widen
-its own selection surface for an unrelated concern. A small, single-purpose tool is this
-directory's own norm for a new primitive (`offline-inspect.py`, `pass-budget.py`,
-`repository-classifier.py`), not perpetual growth of one of the existing large ones.
+and this module's independence is what kept the check. The retired activation planner was the
+primitive's origin but was scoped to one manifest entry's private state root and carried no notion
+of a Seed, a worktree, or a wave at all; adding worktree custody to that 4,300-line engine would
+have widened its own selection surface for an unrelated concern, and it is gone while this question
+remains. A small, single-purpose tool is this directory's own norm for a new primitive
+(`offline-inspect.py`, `pass-budget.py`), not perpetual growth of one of the existing large ones.
 
 SEVEN CHECKS, EACH ITS OWN NAMED SLUG, NONE OF THEM SILENT ON AN UNEVALUATED PATH:
 
@@ -73,8 +73,8 @@ SEVEN CHECKS, EACH ITS OWN NAMED SLUG, NONE OF THEM SILENT ON AN UNEVALUATED PAT
                              conductor never asked to write. Refused, never silently passed, when
                              this host cannot answer the question for the target root OR for any
                              individual custody component (non-Linux, or `statx` without
-                             `STATX_MNT_ID`) -- matching `activation-planner.py`'s own
-                             `_mount_id_fd`, which raises rather than falling back to `st_dev` alone;
+                             `STATX_MNT_ID`) -- the retired planner's own `_mount_id_fd` raised
+                             rather than falling back to `st_dev` alone, and so does this one;
                              an unanswerable CHILD is named and refused, never silently treated as a
                              match against the root.
     registration-occupied     the exact custody path must not already be an ACTIVE `git worktree
@@ -158,7 +158,7 @@ class MountUnsupported(Exception):
 
 
 # ---- statx / mount-id plumbing --------------------------------------------------------------------
-# Re-expressed from `activation-planner.py`'s own `_Statx`/`_mount_id_fd` (see the module docstring's
+# Re-expressed from the retired planner's own `_Statx`/`_mount_id_fd` (see the module docstring's
 # provenance note). The struct layout is the Linux kernel's `struct statx` ABI, not this project's
 # own design, so an independent copy is a second binding to one fixed kernel contract rather than a
 # second definition of a rule that could drift from the first.
@@ -197,7 +197,7 @@ _LIBC.statx.restype = ctypes.c_int
 def _mount_id_fd(fd: int) -> int:
     """The exact kernel mount id backing `fd`, or a raised `MountUnsupported`.
 
-    Named and shaped like `activation-planner.py`'s own `_mount_id_fd` so the provenance is
+    Named and shaped like the retired planner's own `_mount_id_fd` so the provenance is
     legible, and monkeypatchable by a test importing this module directly -- the seam an
     unprivileged mount-crossing test needs, since no ordinary CI host can bind-mount a second real
     filesystem under a throwaway fixture repository.
@@ -260,8 +260,8 @@ def _open_target_root(target: Path) -> tuple[int, dict[str, int | None]]:
 
     `--target` is the caller's own established repository root -- the wave chain's own
     `git rev-parse --show-toplevel`, not a component this tool is asked to validate -- so it is
-    opened plainly rather than walked component-by-component from `/`; `activation-planner.py`'s
-    own `open_root_chain` does walk from `/`, but for its OWN target argument, which this module
+    opened plainly rather than walked component-by-component from `/`; the retired planner's own
+    `open_root_chain` did walk from `/`, but for its OWN target argument, which this module
     does not re-derive. Everything BELOW this root -- `.worktrees` and every custody segment -- is
     walked with `O_NOFOLLOW` and is what the two checks below actually decide.
     """
@@ -288,7 +288,7 @@ def _open_target_root(target: Path) -> tuple[int, dict[str, int | None]]:
 def _walk_custody(root_fd: int, root_identity: dict[str, int | None], segments: list[str]) -> dict[str, tuple[str, str | None]]:
     """Walk `segments` under `root_fd`, refusing the first symlink/special node or mount crossing.
 
-    Stops at the FIRST problem of either kind, matching `activation-planner.py`'s own style of
+    Stops at the FIRST problem of either kind, in the retired planner's own style of
     raising immediately rather than accumulating; the three checks below are then classified from
     why the walk stopped, so a check that never got the chance to look past an earlier refusal is
     reported `unevaluated`, never `met`. `destination-vacancy` is decided in the SAME iteration
@@ -436,7 +436,7 @@ def _walk_custody(root_fd: int, root_identity: dict[str, int | None], segments: 
 
 
 #: The only environment this tool reads, and only so a bare `git` name resolves to an executable.
-#: Re-expressed from `planning-snapshot.py`'s own `EXEC_RESOLUTION_ENV`/`child_environment`.
+#: Re-expressed from the retired planning snapshot's own `EXEC_RESOLUTION_ENV`/`child_environment`.
 _EXEC_RESOLUTION_ENV = ("PATH", "PATHEXT", "SYSTEMROOT")
 
 
@@ -466,8 +466,8 @@ def _child_environment() -> dict[str, str]:
 def _list_worktrees(git: str, target: Path) -> list[str]:
     """Every `worktree <path>` line `git worktree list --porcelain -z` reports, in order.
 
-    `-z` rather than the line form, exactly as `planning-snapshot.py`'s `observe_worktrees`: the
-    line form does not quote paths, so a path containing a newline would parse as two worktrees.
+    `-z` rather than the line form, exactly as the retired snapshot's `observe_worktrees` read it:
+    the line form does not quote paths, so a path containing a newline would parse as two worktrees.
     Only the path is read; HEAD, branch, and `prunable` are not this tool's question -- occupied
     versus drifted is decided by whether the reported path still exists on disk, checked
     separately and read-only.
@@ -735,9 +735,9 @@ def build_parser() -> argparse.ArgumentParser:
             "claimed custody destination resolves under <target>/.worktrees/, that no path "
             "component is a symlink, mount-crossing, or special node, that the destination itself "
             "is absent or an empty directory, and that the destination is neither an active nor a "
-            "drifted git worktree registration. Extracted from activation-planner.py's own custody "
-            "primitive (S_ISLNK, st_dev, mount-id containment); it runs no `git worktree add`, "
-            "writes nothing, and authorizes nothing."
+            "drifted git worktree registration. The custody primitive it re-expresses (S_ISLNK, "
+            "st_dev, mount-id containment) came from the retired activation planner; it runs no "
+            "`git worktree add`, writes nothing, and authorizes nothing."
         ),
         epilog=EPILOG,
     )

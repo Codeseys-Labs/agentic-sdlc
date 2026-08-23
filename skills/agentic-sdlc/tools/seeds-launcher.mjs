@@ -145,8 +145,8 @@ const EXITS = Object.freeze({
 });
 
 class LauncherError extends Error {
-  // `code` is positional and required. It was a keyword default on the sibling activation planner
-  // and 85 named refusals silently inherited it (`docs/plans/decision9-conformance-survey.md`,
+  // `code` is positional and required. It was a keyword default on the retired sibling activation
+  // planner and 85 named refusals silently inherited it (`docs/plans/decision9-conformance-survey.md`,
   // SP-2), so no spelling here lets a raise site stay silent about its class.
   constructor(code, message) {
     super(message);
@@ -181,8 +181,8 @@ function failInternal(message) {
 // escalated rather than reported: `admitUnprovenSurface` is called before the writer starts, every
 // refusal raised while it stands reports 4, and only `proveSurfaceUnchanged` --- a COMPLETED
 // byte-identical readback of the surface snapshotted before the writer ran --- takes it back down.
-// This mirrors the escalate-only ledger `activation-planner.py:2337` derives its effect from, and
-// it is why the readback divergence checks need no per-site bookkeeping: whether a refusal is
+// This is an escalate-only ledger, and it is why the readback divergence checks need no per-site
+// bookkeeping: whether a refusal is
 // pre-effect is a fact about when it happened, not about which message it carries.
 let UNPROVEN_SURFACE = null;
 

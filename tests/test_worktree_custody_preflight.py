@@ -7,8 +7,8 @@ surface. Every fixture is a REAL throwaway `git init` repository -- no privilege
 six of the seven checks. Only `mount-containment` cannot be exercised with a real second mount from
 an unprivileged CI host, so its tests import the tool directly via
 `importlib.util.spec_from_file_location` (its hyphenated filename means a plain `import` cannot
-name it) and monkeypatch its own `_mount_id_fd` seam in-process, exactly as
-`tests/test_activation_transaction.py` does for the primitive this tool re-expresses.
+name it) and monkeypatch its own `_mount_id_fd` seam in-process -- the technique the retired
+activation-transaction tests used for the primitive this tool re-expresses.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ wcp = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = wcp
 _spec.loader.exec_module(wcp)
 
-#: An ALLOWLIST, not an inheritance -- mirrors `tests/test_planning_snapshot.py`'s own
+#: An ALLOWLIST, not an inheritance -- mirrors the retired planning-snapshot tests' own
 #: `PASSTHROUGH_ENV`/`constructed_environment`, re-expressed rather than imported per this
 #: repository's own cross-test-module convention.
 PASSTHROUGH_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "SYSTEMROOT", "TMPDIR")
@@ -371,8 +371,8 @@ class DestinationVacancyTests(RepoCase):
 class MountContainmentTests(RepoCase):
     """No unprivileged CI host can bind-mount a second real filesystem under a throwaway fixture
     repository, so this calls `run_preflight` directly and monkeypatches `_mount_id_fd` -- the same
-    technique `tests/test_activation_transaction.py`'s
-    `test_manifest_on_a_foreign_mount_is_refused` uses for the primitive this tool re-expresses.
+    technique the retired activation-transaction tests' own foreign-mount refusal used for the
+    primitive this tool re-expresses.
     """
 
     def setUp(self) -> None:

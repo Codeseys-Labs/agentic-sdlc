@@ -125,11 +125,11 @@ racer — which is the only adversary that matters, because the conductor being 
 ## Compliance
 
 - No file under `skills/`, `scripts/`, `commands/`, `workflows/`, `agents/`, or `policy/` invokes,
-  imports, or instructs running any of the eight removed modules; the four files that still name
+  imports, or instructs running any of the eight removed modules; the three files that still name
   them (`skills/agentic-sdlc/references/readiness-composition.md`,
-  `skills/agentic-sdlc/tools/worktree-custody-preflight.py`,
-  `skills/agentic-sdlc/tools/activation-result.py`, `scripts/gate_baseline.py`) name them only as
-  removed by this ADR.
+  `skills/agentic-sdlc/tools/worktree-custody-preflight.py`, `scripts/gate_baseline.py`) name them
+  only as removed by this ADR. A fourth, `skills/agentic-sdlc/tools/activation-result.py`, carried
+  the same past-tense record until the ADR-0022 amendment deleted it in the same landing.
 - Every wave that claims acceptance has a `docs/evidence/waves/<wave-id>.md` naming an integration
   commit and a gate-receipt `self_digest` recorded on that commit.
 - No wave evidence file lists the same node as both implementer and reviewer of one workstream.

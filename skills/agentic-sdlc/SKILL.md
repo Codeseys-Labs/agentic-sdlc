@@ -155,14 +155,14 @@ mutation.
 Use this phase order unless the task is clearly smaller:
 
 1. Frame: define done, constraints, repo state, queue state, and allowed blast radius. Seal a
-   Mission-shaped Frame's durable objective with `tools/mission-contract.py define`, and capture
-   the observed repo/queue facts with `tools/planning-snapshot.py capture`.
+   Mission-shaped Frame's durable objective with `tools/mission-contract.py define`, and record
+   the observed repo/queue facts from Git and the queue directly.
 2. Discover: assign read-only workers across code areas. Require file/line evidence.
 3. Research: only for external or load-bearing unknowns — a deep-research pipeline if the
    host provides one, otherwise primary sources directly.
 4. Plan: emit workstreams, dependencies, worktree strategy, gates, rollback, and Seeds updates.
    Record the plan where the wave's later evidence can be read against it, and re-read the observed
-   repo state with `tools/planning-snapshot.py capture` before Act begins.
+   repo state from Git directly before Act begins.
 5. Act: launch workers in separate worktrees for independent workstreams.
 6. Review: review stable branch/worktree snapshots, not only worker summaries. Read what each node
    actually did from Git — `git log --format='%H %s' <base>..<branch>` and
@@ -274,8 +274,7 @@ Read only what is needed:
 - `references/research-team.md`: evidence-graded multi-agent research for standing research efforts — the evidence ladder (promote slowly, downgrade quickly), role separation-of-powers (scout ≠ novelty-judge; attacker ≠ fixer; writer ≠ originator), one-loop discipline with a recorded next-action, greenfield/brownfield loops, cheapest-decisive-experiment rule, gates-as-executables.
 - `references/evidence-discipline.md`: whether any advisory submission's claim may be made at all — the five-class evidence vocabulary, the anti-inflation rule (a class is assigned once and never raised later), disposition-row/gap-register discipline, and the receipt-is-not-a-control-when-author-equals-verifier rule.
 - `references/readiness-composition.md`: which surface owns each pre-effect readiness
-  dimension and in what order — `ccodex sdlc doctor` (host and install state),
-  `planning-snapshot capture` (observed repository state with named unknowns), and the
+  dimension and in what order — `ccodex sdlc doctor` (host and install state) and the
   Git-anchored wave-effect read at `/sdlc-wave` step 8 — plus why no unified readiness
   guard is queued (`agentic-sdlc-9857`).
 - `references/jj-vcs.md`: a one-release refusal pointer; Git worktrees are supported and no

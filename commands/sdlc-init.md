@@ -16,29 +16,20 @@ adopt, or surgically merge. Never overwrite an existing `mise.toml`, `lefthook.y
 cannot be merged without changing unrelated policy, report the conflict and stop before
 claiming wave readiness.
 
-**Plan before apply.** The canonical planner is
-`skills/agentic-sdlc/tools/activation-planner.py`; `scripts/activation_planner.py` is a
-compatibility loader that delegates to it. Read `--help` before invoking: the verb set and
-required arguments are narrower than this runbook once described, and a stale invocation dies in
-argument parsing rather than doing anything.
+**Two verbs cover the tooled part of this runbook**, both in
+`skills/agentic-sdlc/tools/instruction-generator.py`: `classify --target` for the repository class
+and `apply --target --manifest --entry` for the one marked instruction block. Everything else in
+this file — substrate selection, Seeds proof, trust decisions, gate falsifiability, CI parity,
+`wave_ready` — is conductor work performed and evidenced as reviewed manual steps, never claimed
+as a tool guarantee. Read `--help` before invoking either verb.
 
-Verified surface (2026-08-06): `plan`, `apply`, `status`, `recover`. `plan` requires
-`--target`, `--manifest`, and `--entry` — it plans **one** named entry from a reviewed manifest,
-not a whole-repository profile. There is **no `--profile` flag and no `deactivate` verb**; the
-module's own help states it "deliberately supports no greenfield, readiness, Seeds, trust, Git,
-or multi-file activation behavior," and it is Linux-only and single-entry by construction. Treat
-any broader activation — substrate profile selection, Seeds proof, trust decisions, `wave_ready`
-— as **not implemented**: it must be performed and evidenced by the conductor as reviewed manual
-steps, and must not be claimed as a planner guarantee.
-
-The plan writes nothing and records, per item, the proposed `create|adopt|merge|refuse|skip`
-action and whether each choice was `explicit`, `defaulted`, or `derived`. Cancellation at the
-confirmation step performs zero writes. Apply-phase writes go through the same tool's contracts,
-with instruction files rendered by the marker-aware `instruction-generator.py`, and a run that
-reaches the write phase records a receipt; refused, cancelled, and stopped runs write nothing at
-all, including no receipt. Rerunning against an activated tree must produce an empty
-`created`/`merged` result (observed idempotence). A procedural grant is a same-user, single-use
-record — it is not an authenticated approval, and no planner output authorizes an outward effect.
+`apply` prints a unified diff and writes only when the same invocation carries `--yes`, so the
+bytes approved are the bytes written. Without `--yes` it shows the diff and refuses at exit 3,
+having written nothing; a symlink or any non-regular node at the target refuses at exit 2, as does
+an entry whose parent directory does not exist in the target, because this tool creates no
+directory; a target already carrying the rendered block reports `no-op`, which is the idempotence
+proof.
+Approval of a diff is not authorization for any other effect.
 
 1. **Preflight and snapshot**
    - Load `agentic-sdlc` and the `repo-toolchain-gates` skill.
@@ -69,37 +60,29 @@ record — it is not an authenticated approval, and no planner output authorizes
    - No `.git` → `git init -b main`. Do this first: the classifier below classifies
      repositories and refuses a directory that is not one.
    - **Derive the class before asking.** Run the read-only
-     `skills/agentic-sdlc/tools/repository-classifier.py classify --target <absolute path>`.
-     It writes nothing, runs no subprocess, and answers with one of three verdicts at exit 0:
+     `skills/agentic-sdlc/tools/instruction-generator.py classify --target <absolute path>`. It
+     writes nothing and answers at exit 0 with one of three verdicts, each carrying `ask: true`:
      `brownfield` when it names an occupied guidance, queue, decision, toolchain, hook, CI, or
-     `.agentic-sdlc` contract surface — in the WORKING tree or in HEAD's COMMITTED tree, where a
-     committed one is named `HEAD:<path>`; `greenfield` only when the repository is provably
-     empty — no occupied surface in EITHER tree, no top-level entry outside a small allowlist of
-     regular files, and either one parentless commit whose committed tree is likewise clear or NO
-     commit in a repository whose object store and reflog are ALSO empty, which is the shape
-     `git init` leaves; `refuse-and-ask` otherwise, with each ambiguity named in the output.
-     Nothing along the chain from HEAD to that tree may answer "unreadable" as "empty": a
-     malformed `packed-refs` value, an emptied or non-regular `packed-refs`, a `refs` path that is
-     not a directory, a symref chain, a branch packed at two ids, a ref backend it does not read,
-     a packed or unparsable tree, an object that is not the tree its parent named, a submodule, an
-     unrecognized entry mode, or one of its walk bounds is each one of those named ambiguities and
-     never a silent absence. So a repository with history whose branch this tool cannot resolve is
-     refuse-and-ask, never greenfield. Exit 3 is a refusal to inspect at all (no `.git`, a
-     `.git` symlink, or a `gitdir:` redirect file, so run it against the repository root rather
-     than a linked worktree); exit 2 is a non-absolute `--target`.
+     `.agentic-sdlc` surface, read in Git's index and on disk; `greenfield` when nothing is
+     occupied, the repository holds at most one commit, and `git status --porcelain` is clean;
+     `refuse-and-ask` otherwise, with each reason named. An unusable `--target` — not absolute,
+     not a directory, not a Git repository, or not that repository's ROOT — refuses at exit 2
+     instead of guessing a class. The root is required because occupancy is read at the supplied
+     directory while commit count and cleanliness are repository-wide, and a subdirectory would
+     answer one verdict over two scopes.
    - **`brownfield` is the only verdict that settles the question by itself**, because it is a
      positive observation of something that is there. On `refuse-and-ask`, ask the
-     greenfield-or-existing-code question and QUOTE the named ambiguities — the human needs to
-     know what the classifier saw. On `greenfield`, do not re-ask the class, and do not read it
-     as a licence to write either: greenfield is precisely the verdict that would authorize a
-     baseline, so it still requires the confirmation in the next bullet before you propose one.
-   - The verdict is **advisory evidence, not a decision**. It reports what is on disk and
-     claims no readiness, ownership, trust, route, or tool identity, and it does not authorize
-     a write. Two occupied surfaces leave no trace on disk at all — a hosted tracker such as
-     GitHub Issues, Jira, or Linear, and a forge-side required check — so `greenfield` is
-     bounded by the commit-emptiness requirement rather than proven against the forge. Confirm
-     both with the user before proposing a baseline, and record the verdict with its evidence
-     in the plan rather than restating it as a fact about the project.
+     greenfield-or-existing-code question and QUOTE the named reasons — the human needs to know
+     what the classifier saw. `greenfield` is a **proposal**, not a licence to write: it is
+     precisely the verdict that would authorize a baseline, so it still requires the confirmation
+     in the next bullet before you propose one.
+   - The verdict is **advisory evidence, not a decision**. It reports what is on disk and in the
+     index, claims no readiness, ownership, trust, route, or tool identity, and authorizes no
+     write. Two occupied surfaces leave no trace in either place — a hosted tracker such as
+     GitHub Issues, Jira, or Linear, and a forge-side required check — so `greenfield` is bounded
+     by what Git can see rather than proven against the forge. Confirm both with the user before
+     proposing a baseline, and record the verdict with its evidence rather than restating it as a
+     fact about the project.
    - Greenfield: create a minimal README intent and commit it.
    - Existing code: inventory ignored, tracked, and untracked product files. Never make an
      empty commit and call the project wave-ready. Require the user to approve the initial
@@ -150,12 +133,16 @@ record — it is not an authenticated approval, and no planner output authorizes
      pass.
 
 5. **Shared agent guidance**
-   - `AGENTS.md` is the cross-host canonical project policy. Create or append only inside
-     `<!-- agentic-sdlc:start -->` / `<!-- agentic-sdlc:end -->` markers. Include project
-     intent, `mise run check`, Git-worktree substrate, Seeds commands, worktree ownership,
-     and the global doctrine pointer.
-   - `CLAUDE.md` remains thin: preserve existing content, add the same marked block only
-     when absent, and import/reference `AGENTS.md` plus Claude-specific command routing.
+   - `AGENTS.md` is the cross-host canonical project policy. Write it only through
+     `skills/agentic-sdlc/tools/instruction-generator.py apply --target <absolute path>
+     --manifest <reviewed manifest> --entry AGENTS.md`, which renders one manifest entry inside
+     `<!-- agentic-sdlc:start -->` / `<!-- agentic-sdlc:end -->` markers, preserves every byte
+     outside them, and splices in place when the block already exists. Review the printed diff,
+     then re-run the same command with `--yes` to write it. Include project intent,
+     `mise run check`, Git-worktree substrate, Seeds commands, worktree ownership, and the global
+     doctrine pointer.
+   - `CLAUDE.md` remains thin: the same `apply` with `--entry CLAUDE.md`, preserving existing
+     content and referencing `AGENTS.md` plus Claude-specific command routing.
    - Never duplicate the full orchestration doctrine into the repository.
 
 6. **Trust propagation and CI parity**
@@ -168,9 +155,11 @@ record — it is not an authenticated approval, and no planner output authorizes
    - Detect the forge/CI provider. If ambiguous, ask before creating a workflow. CI invokes
      the same `mise run check`; it does not reimplement the gate.
 
-7. **Commit and receipt**
+7. **Commit and evidence**
    - Re-run inventory and show exactly created, adopted, merged, skipped, and conflicted
-     items. A rerun with no repository changes is the idempotency proof.
+     items. A rerun with no repository changes, and `apply` reporting `no-op`, is the
+     idempotency proof. The evidence is the Git history and the printed diffs; no machine-local
+     activation receipt is written or read.
    - Commit only the enumerated activation files as one atomic commit after user approval.
      Never include the user’s pre-existing changes.
    - Report tracked-baseline evidence, gate fail→pass proof, initial Seeds, trust actions,

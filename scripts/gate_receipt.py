@@ -58,15 +58,15 @@ deployment.
 Every receipt also stamps the REPOSITORY HEAD its `cwd` was sitting on, as `head`. A receipt used
 to be anchored to a path and a toolchain but to no point in the repository's history, so a
 composer reading it beside another artifact could not tell whether the two were derived against the
-same tree: `activation-result.py` recorded exactly that as a named residual, and
-`agentic-sdlc-5ee7` is the seed that closed it. The anchor is head identity rather than a clock
+same tree: the retired activation-result composer recorded exactly that as a named residual,
+and `agentic-sdlc-5ee7` is the seed that closed it. The anchor is head identity rather than a clock
 because this host's clock legitimately steps backwards (agentic-sdlc-184b) while head identity is
 deterministic. `head` is `{commit, tree}` or `null`, and `null` is a first-class answer: the `cwd`
 is not a readable Git worktree, `git` is unavailable, or the head MOVED while the gate ran, in
 which case no single head is the one this receipt measured and saying so is the honest record. The
 tree comes from ONE `rev-parse <commit>^{tree}` derivation against the commit just read, never from
 a second independent `rev-parse HEAD^{tree}`, so the pair cannot straddle a head that moved between
-the two calls — the same atomic idiom `planning-snapshot.py` uses. Like `failures`, the field is
+the two calls. Like `failures`, the field is
 inside `self_digest`, so a stamp cannot be edited afterwards, and a receipt written before the
 stamp existed carries no such key and still verifies.
 
@@ -362,7 +362,7 @@ def observe_repository_head(cwd: Path) -> dict[str, str] | None:
     (`rev-parse <commit>^{tree}`) rather than by a second independent `rev-parse HEAD^{tree}`, so a
     head that moves between the two calls cannot produce a commit and a tree from different
     histories. A commit object names exactly one tree, so the pair is atomic by construction. This
-    is `planning-snapshot.py`'s idiom, re-expressed rather than imported.
+    is one atomic read, owned here rather than borrowed from another tool.
     """
     commit = _git_object_name(cwd, "rev-parse", "HEAD")
     if commit is None:
@@ -378,10 +378,9 @@ def stable_repository_head(cwd: Path, observed: dict[str, str] | None) -> dict[s
 
     `observed` is the head read BEFORE the gate started. If the second read disagrees, the gate
     straddled a head change and no single head is the one it measured, so the receipt records
-    `null` rather than picking the earlier or the later value. This is the same rule
-    `planning-snapshot.py`'s seal applies, with the one difference the evidence posture forces: a
-    snapshot may refuse, while this producer must still write the receipt for a gate that really
-    ran.
+    `null` rather than picking the earlier or the later value. The evidence posture forces one
+    difference from a refusing observer: this producer must still write the receipt for a gate
+    that really ran.
     """
     if observed is None:
         return None
