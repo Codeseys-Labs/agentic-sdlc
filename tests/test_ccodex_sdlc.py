@@ -591,7 +591,6 @@ class CcodexSdlcTests(unittest.TestCase):
         clean = validator.Validation()
         validator.validate_ccodex_sdlc_read_report_policy(ROOT, clean)
         validator.validate_ccodex_sdlc_candidate_report_policy(ROOT, clean)
-        validator.validate_release_candidate_execution_policy(ROOT, clean)
         self.assertEqual(clean.errors, [])
 
         with tempfile.TemporaryDirectory() as temp:

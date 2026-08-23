@@ -110,6 +110,11 @@ description = "Report lifecycle status on WSL and the paired native Windows host
 run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 
+[tasks."release:build"]
+description = "Build the deterministic release archive of the committed HEAD tree into dist/"
+run = "uv run --python 3.12.11 --script scripts/build_release.py"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/build_release.py"
+
 [tasks."research-os:install"]
 description = "Install the repo-scoped Codex Research OS"
 run = "uv run --python 3.12.11 --script skills/codex-research-os/scripts/install_research_os.py"

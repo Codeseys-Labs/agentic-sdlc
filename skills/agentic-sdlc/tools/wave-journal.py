@@ -69,8 +69,8 @@ A DISPLAY CHANNEL MAY NOT COST A VERDICT. `sys.stderr` here is advisory: `2>&-` 
 every write EPIPE *and* leaves bytes pending that the interpreter flushes again while finalizing --
 replacing the honest exit code with 120, which is outside the closed set above. The sink is therefore
 settled once, guarded, and retired on its first failure, and the failed stream is dropped so the
-shutdown flush cannot retry it. `scripts/gate_receipt.py` and `scripts/release_candidate_acquisition.py`
-landed this same rule; it is RE-EXPRESSED here rather than imported, because these tools are
+shutdown flush cannot retry it. `scripts/gate_receipt.py` landed this same rule; it is
+RE-EXPRESSED here rather than imported, because these tools are
 standalone scripts loaded by absolute path (this one's name has a hyphen in it and cannot be
 imported at all), and importing across them to reach a display helper would drag one tool's side
 conditions into another's.
