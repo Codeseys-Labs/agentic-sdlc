@@ -712,7 +712,7 @@ function gitDistribution(distribution) {
     const commit = capture(git, ['rev-parse', '--verify', 'HEAD^{commit}'], 'reviewed distribution must have an exact Git commit', environment);
     const expectedTree = capture(git, ['rev-parse', '--verify', 'HEAD^{tree}'], 'reviewed distribution must have an exact Git tree', environment);
     const indexTree = capture(git, ['write-tree'], 'reviewed distribution index must match its exact Git tree', environment);
-    if (indexTree !== expectedTree) failRefusal('reviewed distribution must have a clean Git tree and index');
+    if (indexTree !== expectedTree) failRefusal('reviewed distribution index disagrees with its HEAD commit tree: a staged change is present');
     const indexed = captureBytes(git, ['ls-files', '--stage', '-z'], 'cannot enumerate indexed distribution files', environment);
     for (const record of indexed.toString('utf8').split('\0')) {
       if (!record) continue;
@@ -724,17 +724,27 @@ function gitDistribution(distribution) {
       // is read with lstat/readlink and never followed: a tracked link may point at a directory
       // (EISDIR through readFileSync) or outside the tree. A node type disagreeing with the index
       // mode is a working-tree change even when the bytes on the other side would match.
+      //
+      // Each of the three ways this loop can refuse says which check fired. They used to share one
+      // wording with the staged-change refusal above, and an intermittent then cost a multi-agent
+      // investigation that a readable message would have partitioned in one line (agentic-sdlc-6818).
       const workingPath = join(distribution, path);
+      const expectedLink = metadata[0] === '120000';
+      let node = null;
+      try {
+        node = lstatSync(workingPath);
+      } catch {
+        failRefusal(`reviewed distribution has a tracked path its working copy cannot inspect: ${path}`);
+      }
+      if (node.isSymbolicLink() !== expectedLink) failRefusal(`reviewed distribution working-copy node type disagrees with its index mode ${metadata[0]}: ${path}`);
       let bytes = null;
       try {
-        const link = lstatSync(workingPath).isSymbolicLink();
-        if (link === (metadata[0] === '120000')) bytes = link ? readlinkSync(workingPath, 'buffer') : readFileSync(workingPath);
+        bytes = expectedLink ? readlinkSync(workingPath, 'buffer') : readFileSync(workingPath);
       } catch {
-        bytes = null;
+        failRefusal(`reviewed distribution has a tracked path its working copy cannot read: ${path}`);
       }
-      if (bytes === null) failRefusal(`reviewed distribution must have a clean Git tree and index: ${path}`);
       const actual = capture(git, ['hash-object', '--no-filters', '--stdin'], 'cannot hash tracked distribution file', environment, bytes);
-      if (actual !== metadata[1]) failRefusal(`reviewed distribution must have a clean Git tree and index: ${path}`);
+      if (actual !== metadata[1]) failRefusal(`reviewed distribution working-copy bytes disagree with the index blob ${metadata[1]}: ${path}`);
     }
     const untracked = capture(git, ['ls-files', '--others', '--exclude-standard'], 'cannot enumerate untracked distribution files', environment);
     const ignored = capture(git, ['ls-files', '--others', '--ignored', '--exclude-standard'], 'cannot enumerate ignored distribution files', environment);

@@ -77,6 +77,8 @@ class Config:
     # Test-only seam for the interpreter rendered into the `ccodex sdlc` route. Production
     # installations leave this unset and resolve it through the already-bound uv executable.
     sdlc_python_path: Path | None = None
+    # Declared last so the positional Config(...) calls that predate it keep their meaning.
+    node_path: Path | None = None
 
     @property
     def state_path(self) -> Path:
@@ -238,7 +240,13 @@ def bash_interpreter(candidates: tuple[Path, ...] | None = None) -> Path:
 
 
 def mise_executable(config: Config, tool: str) -> Path:
-    if configured := {"ocx": config.ocx_path, "jq": config.jq_path, "uv": config.uv_path}[tool]:
+    configured_paths = {
+        "ocx": config.ocx_path,
+        "jq": config.jq_path,
+        "uv": config.uv_path,
+        "node": config.node_path,
+    }
+    if configured := configured_paths[tool]:
         path = absolute(configured)
     else:
         try:
@@ -323,6 +331,12 @@ def desired_files(config: Config) -> dict[str, bytes]:
     ocx = mise_executable(config, "ocx")
     jq = mise_executable(config, "jq")
     uv = mise_executable(config, "uv")
+    # The pinned `ocx` is a `#!/usr/bin/env node` script, so binding its path is not the whole
+    # binding: the kernel resolves `node` from the CHILD's PATH, and a fresh container with mise's
+    # shim directory off PATH killed every gateway verb while the bound ocx sat there executable
+    # (agentic-sdlc-21f4). Resolved through the same reviewed toolchain as the other three, so the
+    # interpreter is the tree's pinned node rather than whatever the caller happens to have.
+    node = mise_executable(config, "node")
     sdlc_python = sdlc_python_executable(config, uv)
     # The dispatcher resolves its root at run time from AGENTIC_SDLC_ROOT, falling back to this
     # install-time value, so a clone that later moves to a managed path can be pointed at without a
@@ -342,6 +356,7 @@ def desired_files(config: Config) -> dict[str, bytes]:
         .replace("@PINNED_OCX@", shell_quote(str(ocx)))
         .replace("@PINNED_JQ@", shell_quote(str(jq)))
         .replace("@PINNED_UV@", shell_quote(str(uv)))
+        .replace("@PINNED_NODE@", shell_quote(str(node)))
         .replace("@PINNED_SDLC_PYTHON@", shell_quote(str(sdlc_python)))
     )
     # An unsubstituted placeholder is exactly the defect class the shebang pin exists to close: it

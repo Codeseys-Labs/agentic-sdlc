@@ -87,9 +87,10 @@ first tool-needing verb on an untrusted root is refused at exit 3 with the exact
 this command never runs \`mise trust\` on your behalf.
 
 Help is never a side-effecting operation. \`ccodex <verb> --help\` prints that verb's own help
-and runs nothing. To reach the help of the tool BEHIND a launch verb, end this command's
-options with \`--\`:
-  ccodex launch -- --help     Claude Code's own help, through a prepared session
+and runs nothing. Ending this command's options with \`--\` prepares a real session and forwards
+everything after it to \`ocx claude\` verbatim; what Claude Code then sees is ocx's decision, and
+on 2.28.0 this one answers with ocx claude's OWN help:
+  ccodex launch -- --help     forwarded to ocx claude, which decides what Claude Code sees
 
 Maintenance tasks (test, validate, check, secrets, mermaid, hooks) are deliberately absent:
 they belong to working ON the repository, not to using what it installed.

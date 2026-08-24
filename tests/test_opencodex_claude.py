@@ -597,6 +597,52 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 self.assertExactTracedOcxRoute(log, "claude", *forwarded)
                 self.assertNotIn("OCX_SETTINGS_VALUE", result.stdout + result.stderr)
 
+    def test_a_prompt_after_either_separator_reaches_ocx_claude_with_both_tokens(self) -> None:
+        """agentic-sdlc-c773's regression case: `launch -- -p <string>` must deliver BOTH tokens.
+
+        Two live observations had a prompt arrive at the model as a bare `-p`, and `-- --help`
+        answered with the wrong program's help. This pins the half this repository owns — what the
+        wrapper hands to `ocx claude` — and it holds: the leading wrapper `--` is consumed exactly
+        once and a LATER literal `--` is forwarded in place with everything after it. Anything lost
+        beyond this boundary is lost inside `ocx claude`, which this test cannot reach and the
+        wrapper cannot fix; see the launcher's own note on the forwarded-shape banner.
+        """
+        prompt = "Reply with exactly: OCX_ROUTER_SENTINEL"
+        cases = {
+            "wrapper separator then a prompt": (("--", "-p", prompt), ("-p", prompt)),
+            "later literal terminator": (
+                ("--model", "gpt-5.4-mini", "--", "-p", prompt),
+                ("--model", "gpt-5.4-mini", "--", "-p", prompt),
+            ),
+            "wrapper separator then a literal help request": (("--", "--help"), ("--help",)),
+            "no separator at all": (("-p", prompt), ("-p", prompt)),
+        }
+        for name, (arguments, expected) in cases.items():
+            with self.subTest(case=name):
+                result, log = self.run_launcher("launch", *arguments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTracedOcxRoute(log, "claude", *expected)
+                # The prompt is a value: the banner must describe the shape and never echo it.
+                self.assertNotIn("OCX_ROUTER_SENTINEL", result.stdout + result.stderr)
+
+    def test_the_launch_banner_reports_the_forwarded_shape_without_any_value(self) -> None:
+        # "[forwarded arguments withheld]" hid the defect above: from the outside there was no way
+        # to see how many arguments the wrapper sent, or where the literal `--` sat among them.
+        prompt = "Reply with exactly: OCX_BANNER_SENTINEL"
+        result, _log = self.run_launcher("launch", "--model", "gpt-5.4-mini", "--", "-p", prompt)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"[5 forwarded: --model <value:12 chars> -- -p <value:{len(prompt)} chars>]", result.stdout)
+        self.assertNotIn("OCX_BANNER_SENTINEL", result.stdout + result.stderr)
+        self.assertNotIn("withheld", result.stdout)
+
+        # Positive control: a launch with nothing forwarded says so, rather than printing an
+        # empty list that reads the same as a suppressed one.
+        bare, _bare_log = self.run_launcher("launch")
+        self.assertEqual(bare.returncode, 0, bare.stderr)
+        self.assertIn("[no forwarded arguments]", bare.stdout)
+
     def test_ordinary_launch_keeps_readable_settings_file_arguments(self) -> None:
         payload = '{"custom":"OCX_SETTINGS_FILE_VALUE"}'
         for setting_argument in ("--settings", "--settings=selected-settings.json"):
@@ -3059,6 +3105,116 @@ class OpenCodexClaudeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("<ocx><help><provider>", log.read_text())
+
+
+@unittest.skipIf(
+    BASH is None or os.name == "nt",
+    "bash launcher fixtures require a POSIX bash; Git Bash's MSYS path/argv conversion"
+    " rewrites argv and paths",
+)
+class BoundOcxInterpreterTests(unittest.TestCase):
+    """agentic-sdlc-21f4: a bound `ocx` whose INTERPRETER is unreachable, and what it says.
+
+    Deliberately not on the harness above, which drives the direct-checkout `mise exec` route and so
+    can never reach this branch: `mise exec` puts the pinned node on PATH for free, and the defect
+    exists only where an operator-tools install binds the ocx PATH and execs it itself. The fixture
+    is the real shape from the container that found it — a `#!/usr/bin/env node` script that is
+    present and executable, on a PATH with no node.
+    """
+
+    def plane(self, root: Path, *, body: str = '#!/usr/bin/env node\nconsole.log("2.28.0");\n') -> Path:
+        bin_dir = root / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        (root / "home").mkdir(exist_ok=True)
+        ocx = bin_dir / "ocx"
+        ocx.write_text(body, encoding="utf-8")
+        ocx.chmod(0o755)
+        # A PATH with the handful of utilities the script itself needs and NO node, so "node is
+        # unreachable" is a property of the fixture rather than of the machine running the suite.
+        for utility in ("printf", "cat", "env", "sh", "bash", "dirname", "grep", "tr", "sed"):
+            resolved = shutil.which(utility)
+            if resolved:
+                (bin_dir / utility).symlink_to(resolved)
+        return ocx
+
+    def ensure(self, root: Path, ocx: Path, **extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(BASH), str(SCRIPT), "ensure"],
+            env={
+                "HOME": str(root / "home"),
+                "PATH": str(root / "bin"),
+                "AGENTIC_SDLC_OCX": str(ocx),
+                **extra,
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_an_unreachable_interpreter_is_named_instead_of_blaming_the_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ocx = self.plane(root)
+
+            result = self.ensure(root, ocx)
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("its interpreter `node` is not reachable", result.stderr)
+            self.assertIn(str(ocx), result.stderr)
+            # The wrong remedy is the defect, so its absence is the assertion: `mise --locked
+            # install` had already succeeded on the host that hit this.
+            self.assertNotIn("pinned opencodex is not installed", result.stderr)
+            self.assertIn("operator-tools:install", result.stderr)
+
+    def test_a_bound_interpreter_makes_the_same_fixture_start(self) -> None:
+        # Positive control for the binding: nothing about the ocx script changed, only that the
+        # install bound an interpreter, and the same invocation now gets past require_ocx.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ocx = self.plane(root)
+            node_dir = root / "node" / "bin"
+            node_dir.mkdir(parents=True)
+            (node_dir / "node").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (node_dir / "node").chmod(0o755)
+
+            result = self.ensure(root, ocx, AGENTIC_SDLC_NODE=str(node_dir / "node"))
+
+            self.assertNotIn("is not reachable", result.stderr)
+            self.assertNotIn("pinned opencodex is not installed", result.stderr)
+
+    def test_an_absolute_shebang_is_checked_as_a_file_not_as_a_name(self) -> None:
+        # A `#!/abs/path/node` names one exact file, so PATH is irrelevant to whether it can start.
+        # This fixture DOES have a working `node` on PATH: resolving the shebang by basename would
+        # find it, call the interpreter reachable, and fall back to the wrong remedy again.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ocx = self.plane(root, body="#!/opt/absent-node/bin/node\nconsole.log('x');\n")
+            real_node = shutil.which("node")
+            if real_node:
+                (root / "bin" / "node").symlink_to(real_node)
+            else:
+                (root / "bin" / "node").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                (root / "bin" / "node").chmod(0o755)
+
+            result = self.ensure(root, ocx)
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("its interpreter `/opt/absent-node/bin/node` is not reachable", result.stderr)
+            self.assertIn("restore that exact file", result.stderr)
+            self.assertNotIn("pinned opencodex is not installed", result.stderr)
+
+    def test_an_ocx_that_is_broken_for_any_other_reason_keeps_the_original_message(self) -> None:
+        # The split must not become a blanket replacement: an executable that runs and fails has a
+        # reachable interpreter, so it is still reported as the install problem it is.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ocx = self.plane(root, body="#!/bin/sh\nexit 3\n")
+
+            result = self.ensure(root, ocx)
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("pinned opencodex is not installed", result.stderr)
+            self.assertNotIn("is not reachable", result.stderr)
 
 
 if __name__ == "__main__":

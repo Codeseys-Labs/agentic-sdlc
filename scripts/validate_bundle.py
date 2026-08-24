@@ -424,7 +424,7 @@ SOURCE_PINNED_RESEARCH_PATHS = frozenset(
 REVIEWER_NO_OUTWARD_AUTHORITY = "You never decide release status, authorize a mutation, merge, push, or edit code."
 REVIEWER_OUTWARD_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|is\s+authorized\s+to|are\s+authorized\s+to|is\s+permitted\s+to|are\s+permitted\s+to)\b"
-    r".{0,100}\b(?:push|publish(?:ing|ation)?|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
+    r".{0,100}\b(?:push|publi(?:sh(?:e[sd]|ing)?|cations?)|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
 )
 SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to|has\s+permission\s+to"
@@ -455,7 +455,7 @@ FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS = (
     re.compile(
         r"(?i)\b(?:local\s+validation|passing\s+(?:local\s+)?gate|local\s+status)\b.{0,80}\b"
         r"(?:sufficient|authori[sz](?:e|es|ed)?|grant(?:s|ed)?|permit(?:s|ted)?)\b.{0,80}\b"
-        r"(?:push|publish(?:ing|ation)?|merge|deploy(?:ment)?|outward)\b"
+        r"(?:push|publi(?:sh(?:e[sd]|ing)?|cations?)|merge|deploy(?:ment)?|outward)\b"
     ),
 )
 RESEARCH_DIRECTOR_PROTECTED_INSTRUCTIONS_SHA256 = "22c165551389b844fc46b8fcae2e7cd750254181ad2096b6884b0ee8f25b801c"
@@ -583,6 +583,38 @@ def validate_skills(root: Path, result: Validation) -> None:
         for reference in sorted(set(re.findall(r"\breferences/[A-Za-z0-9._-]+\.md", text))):
             if not (skill.parent / reference).is_file():
                 result.error(f"{directory}: missing {reference}")
+        for scratch in sorted(scratch_payload_siblings(skill.parent)):
+            result.error(
+                f"{directory}: {scratch.relative_to(skill.parent).as_posix()} is a scratch sibling "
+                "of a payload file; a skill payload installs into the operator's home, and a "
+                "derived file with no consumer drifts from its source under any regeneration"
+            )
+
+
+#: Suffixes an editor, a patch tool, or a one-off shell pipeline leaves behind. A skill payload is
+#: INSTALLED, so such a file ships to the operator's home; `SKILL.md.words` (a `sort | uniq -c` dump
+#: of SKILL.md) landed in b4b12dd on 2026-08-07 and shipped inside the flagship skill with zero
+#: consumers until agentic-sdlc-baee removed it. The set is closed on purpose: a suffix denylist can
+#: be read and argued with, where "anything unexpected" would guess at the payload's own contract.
+SCRATCH_PAYLOAD_SUFFIXES = (".words", ".bak", ".orig", ".rej", ".tmp", ".save", ".swp")
+
+
+def scratch_payload_siblings(payload: Path) -> list[Path]:
+    """Every file under `payload` whose name is another present file's name plus a scratch suffix.
+
+    Anchored on an EXISTING sibling rather than on the suffix alone, so a file that legitimately
+    ends in one of these strings is not condemned for its name: what is refused is specifically a
+    second copy derived from a payload file this skill still ships.
+    """
+    found: list[Path] = []
+    for candidate in payload.rglob("*"):
+        if not candidate.is_file():
+            continue
+        for suffix in SCRATCH_PAYLOAD_SUFFIXES:
+            if candidate.name.endswith(suffix) and candidate.with_name(candidate.name[: -len(suffix)]).is_file():
+                found.append(candidate)
+                break
+    return found
 
 
 def _skip_meta_whitespace(source: str, position: int) -> int:

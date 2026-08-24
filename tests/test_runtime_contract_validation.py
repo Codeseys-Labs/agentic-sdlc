@@ -113,6 +113,45 @@ class RuntimeContractValidationTests(unittest.TestCase):
             "a skill whose name merely contains 'model' must not be reported as pinning one",
         )
 
+    def test_bundle_validator_refuses_a_scratch_sibling_in_a_skill_payload(self) -> None:
+        """agentic-sdlc-baee: `skills/agentic-sdlc/SKILL.md.words` shipped with zero consumers.
+
+        A skill payload is INSTALLED, so a derived scratch file lands in the operator's home and
+        drifts from its source the moment either is edited. The planted case is the exact artifact
+        that was removed, and the two negatives bound the rule: a file merely ENDING in a scratch
+        suffix is admitted when no payload file is its source, and the real tree is clean.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill = root / "skills" / "scratch-probe" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("---\nname: scratch-probe\ndescription: test\n---\n", encoding="utf-8")
+            (skill.parent / "references").mkdir()
+
+            clean = bundle_validator.Validation()
+            bundle_validator.validate_skills(root, clean)
+            self.assertEqual([error for error in clean.errors if "scratch sibling" in error], [])
+
+            # Positive control for the anchor: the suffix alone must not condemn a file.
+            (skill.parent / "references" / "notes.words").write_text("2 a\n", encoding="utf-8")
+            unanchored = bundle_validator.Validation()
+            bundle_validator.validate_skills(root, unanchored)
+            self.assertEqual([error for error in unanchored.errors if "scratch sibling" in error], [])
+
+            (skill.parent / "SKILL.md.words").write_text("2 a\n      3 b\n", encoding="utf-8")
+            planted = bundle_validator.Validation()
+            bundle_validator.validate_skills(root, planted)
+            self.assertIn(
+                "scratch-probe: SKILL.md.words is a scratch sibling of a payload file; a skill "
+                "payload installs into the operator's home, and a derived file with no consumer "
+                "drifts from its source under any regeneration",
+                planted.errors,
+            )
+
+        shipped = bundle_validator.Validation()
+        bundle_validator.validate_skills(ROOT, shipped)
+        self.assertEqual([error for error in shipped.errors if "scratch sibling" in error], [])
+
     def test_bundle_validator_semantically_parses_yaml_without_system_ruby(self) -> None:
         metadata = 'name: sdlc-reviewer\ndescription: test\n"m\\u006fdel": "claude-sonnet-5"'
         with (
@@ -330,6 +369,35 @@ class RuntimeContractValidationTests(unittest.TestCase):
             [f"{relative}: source-pinned protected role authority forbids outward reviewer authority"],
         )
 
+    def test_outward_effect_patterns_cover_every_inflection_of_publish(self) -> None:
+        """agentic-sdlc-6a2f: the alternation matched the verb and missed the noun.
+
+        Both scans wrapped `publish(?:ing|ation)?` in `\\b...\\b`, and the `ation` branch only ever
+        spelled the nonword "publishation". So a role claiming authority to authorize *publication*
+        -- the exact noun the repository's own doctrine sentence uses -- read as clean, and the
+        trailing boundary also dropped "publishes", "published", and "publications". This asserts
+        the vocabulary directly, because a planted-sentence test can only prove the one inflection
+        it happens to spell; the negatives keep the widening from swallowing "public".
+        """
+        # Each pattern needs its own lead-in (one keys on a modal, the other on a local-gate claim);
+        # the tail is a token probe rather than sample prose, so a verb inflection reads oddly on
+        # purpose. What is being asserted is the outward-effect VOCABULARY, not a style.
+        lead_ins = {
+            bundle_validator.REVIEWER_OUTWARD_AUTHORITY_PATTERN: "Reviewer roles may authorize {}",
+            bundle_validator.FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS[4]: (
+                "A passing local gate is sufficient to authorize {}"
+            ),
+        }
+        for pattern, lead_in in lead_ins.items():
+            for inflection in ("publish", "publishes", "published", "publishing", "publication", "publications"):
+                sentence = lead_in.format(inflection) + " of the reviewed release."
+                with self.subTest(inflection=inflection, lead_in=lead_in[:24]):
+                    self.assertTrue(pattern.search(sentence), sentence)
+            for innocent in ("public review", "publicly readable notes", "the publisher"):
+                sentence = lead_in.format(innocent) + " of the reviewed release."
+                with self.subTest(innocent=innocent, lead_in=lead_in[:24]):
+                    self.assertIsNone(pattern.search(sentence), sentence)
+
     def test_restored_role_passes_refuse_authority_grants_roster_growth_and_digest_drift(self) -> None:
         """The three passes re-homed after the shrink deleted them, each on its own mutation.
 
@@ -387,6 +455,15 @@ class RuntimeContractValidationTests(unittest.TestCase):
             "documentarian local gate authorizes push": (
                 "agents/codex/sdlc-documentarian.toml",
                 "A passing local gate is sufficient to authorize push of the refreshed docs.",
+            ),
+            # agentic-sdlc-6a2f: the sentence this row wanted to plant. `publish(?:ing|ation)?`
+            # cannot match "publication" -- the literal prefix is `publish`, and the noun has
+            # neither the `s` nor the `h` -- so the row above had to switch to "push" to bite, and
+            # the noun form AGENTS.md itself uses ("no local gate ... grants authority for push,
+            # publication, PR mutation, merge") went unscanned.
+            "documentarian local gate authorizes publication": (
+                "agents/codex/sdlc-documentarian.toml",
+                "A passing local gate is sufficient to authorize publication of the refreshed docs.",
             ),
         }
         for name, (relative, addition) in grants.items():

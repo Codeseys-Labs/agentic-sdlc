@@ -92,16 +92,58 @@ class MermaidRendererTests(unittest.TestCase):
         # Positive control bounding the new help branch: `--help` is the 0-class query only as
         # the WHOLE argv. With a second argument the call has the renderer's exact arity, so it
         # is a render request whose definition path happens to be spelled `--help`, and it must
-        # be refused as an unusable input instead of being answered with usage on stdout.
+        # be refused as an unusable input instead of being answered with usage on STDOUT. The
+        # refusal is now the input class (2, agentic-sdlc-4e2e) and its text goes to stderr, so
+        # the distinction this test protects — a question answered versus a request refused — is
+        # still the empty stdout, not the code.
         with tempfile.TemporaryDirectory() as temp:
             destination = Path(temp) / "destination.svg"
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = renderer.main(["--help", str(destination)])
-        self.assertEqual(code, renderer.EXIT_ERROR)
+        self.assertEqual(code, renderer.EXIT_USAGE)
         self.assertIn("input path must be absolute and traversal-free", err.getvalue())
         self.assertEqual(out.getvalue(), "", "usage must not be printed for a render request")
         self.assertFalse(destination.exists())
+
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
+    def test_a_supplied_but_missing_definition_exits_two_not_one(self) -> None:
+        """agentic-sdlc-4e2e: the survey's input axis forbids landing this operand on 1.
+
+        `render <missing> <out>` completed no work and refused because the operand the caller
+        supplied is not a usable definition file. Exiting 1 made that indistinguishable from the
+        sandbox or the browser failing mid-render — the same defect the sibling manifest refusal
+        closed in agentic-sdlc-f83f. The negative control below is the one that matters: a
+        RendererError raised BELOW the input admission must still be 1, so this is a reclassified
+        input class rather than a blanket remap of the wrapper's failures onto 2.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            destination = root / "destination.svg"
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = renderer.main([str(root / "no-such-definition.mmd"), str(destination)])
+            self.assertEqual(code, renderer.EXIT_USAGE)
+            stderr = err.getvalue()
+            self.assertIn("render_mermaid_linux.py <definition> <final-svg>", stderr)
+            self.assertIn("cannot inspect input", stderr)
+            self.assertIn("no-such-definition.mmd", stderr)
+            self.assertNotIn("Traceback", stderr)
+            self.assertFalse(destination.exists())
+
+            # Negative control: a real definition, refused after admission, is still EXIT_ERROR.
+            source = root / "definition.mmd"
+            source.write_text("flowchart TD\nA-->B\n", encoding="utf-8")
+            with mock.patch.object(
+                renderer,
+                "_private_workspace",
+                side_effect=renderer.RendererError("workspace refused (test double)"),
+            ):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(
+                        renderer.main([str(source), str(destination)]), renderer.EXIT_ERROR
+                    )
+            self.assertFalse(destination.exists())
 
     def test_wrong_arity_exits_two_and_names_the_reason_on_stderr(self) -> None:
         buffer = io.StringIO()

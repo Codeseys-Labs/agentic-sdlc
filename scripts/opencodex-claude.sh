@@ -261,10 +261,14 @@ turn, never by this wrapper's output. `ocx observe logs --jsonl` is a bounded ro
 rows appear and disappear and tail order is not time order, so re-query, sort by timestamp, and
 read an absent row as UNKNOWN rather than as proof that nothing routed.
 
-THIS TEXT IS THIS WRAPPER'S. To reach Claude Code's OWN --help, end this wrapper's options
-with `--`, which prepares a real session and forwards everything after it verbatim:
+THIS TEXT IS THIS WRAPPER'S. Ending this wrapper's options with `--` prepares a real session and
+forwards everything after it to `ocx claude` verbatim:
   ccodex launch -- --help
-Or run `claude --help` inside a launched session.
+What `ocx claude` then does with those arguments is ITS decision, not this wrapper's, and measured
+on opencodex 2.28.0 it does not always hand them on: `-- --help` printed ocx claude's own help, and
+`-- -p '<prompt>'` reached the model as a bare `-p`. So for Claude Code's own --help, run
+`claude --help` inside a launched session. The launch banner prints the forwarded argument SHAPE
+(count, option names, a literal `--` in place) so this is visible rather than guessed at.
 
 exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (a boundary declined it)
 EOF
@@ -375,17 +379,32 @@ usage: opencodex-claude.sh <ensure|launch|launch-ultracode|status|restart|config
 
 Per-verb help prints this wrapper's own text and runs nothing:
   opencodex-claude.sh launch --help
-To reach Claude Code's own --help through a real prepared session, end this wrapper's
-options with `--`:
+Ending this wrapper's options with `--` prepares a real session and forwards everything after
+it to `ocx claude` verbatim; whether ocx hands those arguments on to Claude Code is its own
+decision, and on 2.28.0 `-- --help` answers with ocx claude's help instead:
   opencodex-claude.sh launch -- --help
 
 exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (the gateway route would not be used)
 EOF
 }
 
+# The bound `ocx` is a `#!/usr/bin/env node` script: an absolute path to it does not make its
+# INTERPRETER reachable, and the kernel looks `node` up by name in the child's PATH. An
+# operator-tools install binds the pinned node alongside ocx and exports it, so its directory goes
+# first here; the direct-checkout branch below needs nothing, because `mise exec` already puts the
+# pinned node on PATH. Guarded rather than required, so an install predating the binding keeps its
+# current behaviour and gets the named diagnostic in require_ocx instead (agentic-sdlc-21f4).
+ocx_child_path() {
+  if [ -n "${AGENTIC_SDLC_NODE:-}" ]; then
+    printf '%s' "${AGENTIC_SDLC_NODE%/*}:$PATH"
+  else
+    printf '%s' "$PATH"
+  fi
+}
+
 ocx() {
   if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
-    "$AGENTIC_SDLC_OCX" "$@"
+    PATH="$(ocx_child_path)" "$AGENTIC_SDLC_OCX" "$@"
   else
     mise -C "$root" exec -- ocx "$@"
   fi
@@ -395,14 +414,18 @@ ocx() {
 # daily launch neither re-evaluates repo-scoped mise nor changes cwd. Direct checkout use keeps a
 # mise fallback, but resolves the executable first and then starts it from the caller workspace.
 launch_ocx_claude() {
-  local executable="${AGENTIC_SDLC_OCX:-}"
+  local executable="${AGENTIC_SDLC_OCX:-}" interpreter="${AGENTIC_SDLC_NODE:-}"
   if [ -z "$executable" ]; then
     executable="$(mise -C "$root" which ocx 2>/dev/null || true)"
+    # This route execs the resolved path DIRECTLY rather than through `mise exec`, so unlike ocx()
+    # above it gets no interpreter on PATH for free and has to ask for one (agentic-sdlc-21f4).
+    [ -n "$interpreter" ] || interpreter="$(mise -C "$root" which node 2>/dev/null || true)"
   fi
   [ -n "$executable" ] && [ -x "$executable" ] || {
     printf 'error: the pinned opencodex executable is unavailable\n' >&2
     exit 1
   }
+  [ -z "$interpreter" ] || PATH="${interpreter%/*}:$PATH"
   "$executable" claude "$@"
 }
 
@@ -472,6 +495,38 @@ jq_available() {
   jq --version >/dev/null 2>&1
 }
 
+# The interpreter a `#!`-script names, or empty for a file that names none. `#!/usr/bin/env node`
+# carries it in the first ARGUMENT and is a NAME to be resolved; `#!/path/to/node` is the program
+# itself and is a path. The distinction is preserved rather than collapsed to a basename, because
+# the two are checked differently below. Used only to explain a failure, never to decide how to run
+# anything.
+#
+# Always exits 0 with an empty answer for anything it cannot read or parse: it runs inside a
+# diagnostic, and under `set -e` a nonzero return here would replace the message it exists to
+# produce with a silent exit. `2>` precedes `<` so an unreadable path cannot leak a shell error.
+shebang_interpreter() {
+  local first
+  IFS= read -r first 2>/dev/null < "$1" || return 0
+  case "$first" in '#!'*) ;; *) return 0 ;; esac
+  # shellcheck disable=SC2086 # deliberate word splitting: the shebang's own fields
+  set -- ${first#\#!}
+  case "${1:-}" in
+    */env|env) [ "$#" -ge 2 ] && printf '%s' "$2" ;;
+    ?*) printf '%s' "$1" ;;
+  esac
+  return 0
+}
+
+# True when the named interpreter cannot start the script. An absolute shebang names one exact file,
+# so PATH has nothing to do with it; a bare name is resolved the way the kernel would, through the
+# PATH the ocx child would actually get.
+interpreter_unreachable() {
+  case "$1" in
+    /*) [ ! -x "$1" ] ;;
+    *) ! PATH="$(ocx_child_path)" command -v "$1" >/dev/null 2>&1 ;;
+  esac
+}
+
 require_ocx() {
   if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
     [ -x "$AGENTIC_SDLC_OCX" ] || {
@@ -483,6 +538,25 @@ require_ocx() {
     exit 1
   fi
   if ! ocx --version >/dev/null 2>&1; then
+    # `-x` above passes for a script whose INTERPRETER is gone, so this call is where that host
+    # fails -- and it cannot tell "not installed" from "installed and cannot start". Sending the
+    # operator to `mise --locked install` in a checkout where that install already succeeded is a
+    # false remedy, so the shebang is read and the missing interpreter named instead
+    # (agentic-sdlc-21f4).
+    local interpreter=''
+    if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
+      interpreter="$(shebang_interpreter "$AGENTIC_SDLC_OCX")"
+    fi
+    if [ -n "$interpreter" ] && interpreter_unreachable "$interpreter"; then
+      printf 'error: the pinned opencodex at %s cannot start: its interpreter `%s` is not reachable.\n' "$AGENTIC_SDLC_OCX" "$interpreter" >&2
+      printf 'opencodex is installed -- `mise --locked install` will not change this. Re-run\n' >&2
+      printf '`mise run operator-tools:install` from the reviewed distribution so the interpreter is\n' >&2
+      case "$interpreter" in
+        /*) printf 'bound alongside it, or restore that exact file.\n' >&2 ;;
+        *) printf 'bound alongside it, or put a `%s` on PATH.\n' "$interpreter" >&2 ;;
+      esac
+      exit 1
+    fi
     printf 'error: pinned opencodex is not installed; run `mise --locked install` in %s\n' "$root" >&2
     exit 1
   fi
@@ -1582,6 +1656,30 @@ cmd_ensure() {
   printf 'not authorization, and it does not launch Claude Code.\n'
 }
 
+# A SHAPE, never contents: the argument count, each option NAME up to its `=`, a literal `--` as
+# itself, and every other token as an opaque `<value:N chars>`. The banner used to read
+# "[forwarded arguments withheld]", and that is how a real defect stayed invisible from the outside:
+# `launch --model X -- -p '<prompt>'` reached the model as a bare `-p` with its companion string
+# gone, and nothing in the launch output could show whether the wrapper or the program behind it
+# had dropped it (agentic-sdlc-c773). An option name and a length carry no secret; a value does, so
+# no value is ever echoed here.
+forwarded_argv_shape() {
+  local rendered='' argument value
+  [ "$#" -gt 0 ] || {
+    printf '[no forwarded arguments]'
+    return 0
+  }
+  for argument in "$@"; do
+    case "$argument" in
+      --) rendered="$rendered --" ;;
+      -?*=*) value="${argument#*=}"; rendered="$rendered ${argument%%=*}=<value:${#value} chars>" ;;
+      -?*) rendered="$rendered $argument" ;;
+      *) rendered="$rendered <value:${#argument} chars>" ;;
+    esac
+  done
+  printf '[%d forwarded: %s]' "$#" "${rendered# }"
+}
+
 cmd_launch() {
   local permission_profile="$1"
   shift
@@ -1646,7 +1744,7 @@ cmd_launch() {
   # Accepted Claude arguments retain their exact bytes and boundaries. They can still contain
   # settings and secrets, so validation never becomes an excuse to echo raw argv.
   printf '  workspace : %s\n' "$caller_working_dir"
-  printf '  command   : pinned ocx claude [forwarded arguments withheld]\n\n'
+  printf '  command   : pinned ocx claude %s\n\n' "$(forwarded_argv_shape "$@")"
   # ocx claude re-checks liveness, then execs `claude` with stdio inherited. It injects a marker
   # token ONLY when markerMode resolves to "proxy" (cli/claude.ts:133) or an admission key is
   # configured (:115); with a detected login neither fires, so Claude Code keeps its own OAuth

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import os
@@ -340,6 +341,56 @@ class ProvisionExitSplitTests(unittest.TestCase):
             (0, 1, 2, 3, 4),
         )
         self.assertTrue(issubclass(provisioner.ProvisionPartialError, provisioner.ProvisionError))
+
+    def test_no_exit_site_can_choose_the_reserved_internal_failure_code(self) -> None:
+        """agentic-sdlc-8c3f: `EXIT_ERROR = 1` is documented "reserved ... no refusal returns it".
+
+        A docstring cannot enforce that. This is the source census that can: an AST walk over every
+        `return`, `raise SystemExit(...)`, and `sys.exit(...)` in the module, asserting `EXIT_ERROR`
+        appears in none of them, so the code is reachable only the way its reservation says — an
+        uncaught exception, which the interpreter reports as 1 on its own. The planted control is
+        what makes the census more than a spelling check: a `return EXIT_ERROR` grafted into the
+        parsed source must be FOUND, otherwise a walk that misses every site would read as clean.
+        """
+        source = Path(provisioner.__file__).read_text(encoding="utf-8")
+
+        def exit_sites_naming(text: str, name: str) -> list[int]:
+            found: list[int] = []
+            for node in ast.walk(ast.parse(text)):
+                chosen: list[ast.expr] = []
+                if isinstance(node, ast.Return) and node.value is not None:
+                    chosen = [node.value]
+                elif isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                    if getattr(node.exc.func, "id", None) == "SystemExit":
+                        chosen = list(node.exc.args)
+                elif isinstance(node, ast.Call):
+                    target = node.func
+                    if getattr(target, "attr", None) == "exit" or getattr(target, "id", None) == "exit":
+                        chosen = list(node.args)
+                for expression in chosen:
+                    if any(
+                        isinstance(inner, ast.Name) and inner.id == name
+                        for inner in ast.walk(expression)
+                    ):
+                        found.append(node.lineno)
+            return sorted(found)
+
+        self.assertEqual(exit_sites_naming(source, "EXIT_ERROR"), [])
+
+        # Positive control: the walk does reach the sites it claims to cover.
+        planted = source.replace(
+            "    try:\n        provision()",
+            '    if argv == ["census-control"]:\n        return EXIT_ERROR\n    try:\n        provision()',
+            1,
+        )
+        self.assertNotEqual(planted, source, "the anchor the control grafts onto has moved")
+        self.assertNotEqual(exit_sites_naming(planted, "EXIT_ERROR"), [])
+
+        # ...and the other four codes ARE chosen at explicit sites, so an empty result is a fact
+        # about EXIT_ERROR rather than about the census.
+        for name in ("EXIT_OK", "EXIT_REFUSED", "EXIT_PARTIAL"):
+            with self.subTest(constant=name):
+                self.assertNotEqual(exit_sites_naming(source, name), [])
 
 
 if __name__ == "__main__":

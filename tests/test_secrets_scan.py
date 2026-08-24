@@ -383,7 +383,7 @@ class SecretsScanExitSplitTests(unittest.TestCase):
 
     def test_a_found_leak_still_exits_one_because_the_gate_reads_that_code(self) -> None:
         # Positive control for the whole split: moving a refusal to 3 must not have moved the
-        # finding code, which `mise run check` depends on.
+        # finding code.
         module = self.module()
         self.assertEqual(module.EXIT_FINDING, 1)
         with mock.patch.object(module.shutil, "which", return_value="/stub/betterleaks"):
@@ -396,6 +396,39 @@ class SecretsScanExitSplitTests(unittest.TestCase):
             with mock.patch.object(module, "run_scanner_batch", return_value=7):
                 code = module.scan_paths(Path("/repo"), ["leaky.txt"], Path("/repo/config.toml"))
         self.assertEqual(code, 7)
+
+    def test_the_finding_code_is_the_scanners_own_and_every_other_code_is_ambiguous(self) -> None:
+        """agentic-sdlc-8c3f: what actually holds a found leak on Decision 9's 1.
+
+        The docstring used to say `mise run check` depends on the exact value. It does not — the
+        task is reached through `depends` and lefthook runs `mise run secrets`, so both consumers
+        read nonzero and nothing in the tree compares this status to a literal. The real constraint
+        is the pass-through: every scanner code outside {0, 1} reaches the caller unchanged, so a
+        wrapper verdict placed anywhere in that space cannot be told apart from betterleaks
+        returning the same number for its own reasons. 1 is the only value where the two mean the
+        same event. This asserts that structurally rather than restating the number.
+        """
+        module = self.module()
+        scanner_finding_code = 1
+
+        # The wrapper's own verdict and the scanner's report of a finding are one code.
+        self.assertEqual(module.EXIT_FINDING, scanner_finding_code)
+
+        # ...and every other nonzero is already spoken for by the scanner, which is what makes any
+        # of them an ambiguous home for the verdict rather than a free slot.
+        for scanner_code in (2, 3, 4, 5, 6, 7, 8):
+            with self.subTest(scanner_code=scanner_code):
+                with mock.patch.object(module.shutil, "which", return_value="/stub/betterleaks"):
+                    with mock.patch.object(module, "run_scanner_batch", return_value=scanner_code):
+                        observed = module.scan_paths(
+                            Path("/repo"), ["leaky.txt"], Path("/repo/config.toml")
+                        )
+                self.assertEqual(observed, scanner_code)
+                self.assertNotEqual(
+                    module.EXIT_FINDING,
+                    scanner_code,
+                    "the finding verdict must not occupy a code the scanner can also return",
+                )
 
 
 if __name__ == "__main__":

@@ -9,8 +9,9 @@ Exit table. This is the single derivation point for every code this module produ
 | exit | name              | meaning                                                      |
 | ---- | ----------------- | ------------------------------------------------------------ |
 | 0    | EXIT_OK           | the scan ran and no batch reported a finding                  |
-| 1    | EXIT_FINDING      | the scan ran and betterleaks reported a finding. `mise run    |
-|      |                   | check` depends on this code, so it must never move            |
+| 1    | EXIT_FINDING      | the scan ran and betterleaks reported a finding: the SAME     |
+|      |                   | code betterleaks itself uses for one, and that identity is    |
+|      |                   | what keeps it here (see below)                               |
 | 2    | EXIT_USAGE        | argparse rejected the argv, or an enumerated path cannot fit  |
 |      |                   | the scanner's argv ceiling (`path-exceeds-scanner-argv-limit`) |
 | 3    | EXIT_PRECONDITION | refusal before any file is scanned: every reason in           |
@@ -19,6 +20,20 @@ Exit table. This is the single derivation point for every code this module produ
 A scanner exit other than 0 or 1 is passed through unchanged, so betterleaks' own codes stay
 legible and outrank a finding. `--help` is the only 0-class query and never enumerates.
 `refusal_exit_code` is the only place a raised `SecretsScanError` becomes an exit code.
+
+Why a FOUND LEAK stays on 1, which Decision 9 otherwise reserves for an unexpected internal
+failure (agentic-sdlc-8c3f, after surveying the consumers the seed asked about first). The
+consumers do NOT pin it: `mise run check` reaches this task through `depends`, and lefthook's
+pre-push hook runs `mise run secrets` — both fail on ANY nonzero, and nothing in the tree compares
+this surface's status to a literal. So the earlier note here, "`mise run check` depends on this
+code, so it must never move", claimed more than was true and is corrected above. What actually
+holds 1 in place is the PASS-THROUGH stated two paragraphs up: every scanner code other than 0 and 1
+reaches the caller unchanged, so any value this wrapper picked for itself out of that space would
+become indistinguishable from betterleaks returning the same number for its own reasons. 1 is the
+one code with no such ambiguity, because there the wrapper and the scanner are reporting the same
+event — a finding — rather than two different ones. Moving the verdict outside the reserved block
+(the `gate_baseline.py` `EXIT_WORSENED` idiom) would satisfy Decision 9's letter and create a
+collision the current mapping does not have; that trade is recorded rather than taken.
 """
 
 from __future__ import annotations

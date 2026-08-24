@@ -535,7 +535,10 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         (self.distribution / "mise.toml").write_text("[tools]\nnode = '22.22.4'\n", encoding="utf-8")
         dirty = self.bootstrap()
         self.assertNotEqual(dirty.returncode, 0)
-        self.assertIn("clean Git tree", dirty.stderr)
+        # An UNSTAGED edit to a tracked file: content drift on a named path, which is a different
+        # check from a staged change and says so (agentic-sdlc-6818).
+        self.assertIn("working-copy bytes disagree with the index blob", dirty.stderr)
+        self.assertIn("mise.toml", dirty.stderr)
 
         self._run(["git", "restore", "mise.toml"], cwd=self.distribution)
         (self.distribution / "UNREVIEWED").write_text("untracked\n", encoding="utf-8")
@@ -579,12 +582,18 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         plugin = self._commit_tracked_symlinks()
 
         # A retargeted link differs from the recorded target string; the refusal must come from
-        # comparing the link itself, so a dangling target must not turn it into a read error.
+        # comparing the link itself, so a dangling target must not turn it into a read error. The
+        # byte-disagreement wording is the assertion, not a shared "unclean tree" string: reading
+        # the link as unreadable would be a DIFFERENT defect that the old single message hid
+        # (agentic-sdlc-6818).
         (plugin / "skills").unlink()
         os.symlink("../nowhere", plugin / "skills")
         retargeted = self.bootstrap()
         self.assertNotEqual(retargeted.returncode, 0)
-        self.assertIn("clean Git tree and index", retargeted.stderr)
+        self.assertIn("working-copy bytes disagree with the index blob", retargeted.stderr)
+        self.assertIn("plugin/skills", retargeted.stderr)
+        self.assertNotIn("cannot inspect", retargeted.stderr)
+        self.assertNotIn("node type disagrees", retargeted.stderr)
 
         # A regular file holding exactly the recorded target string is a typechange, not a clean
         # checkout. Both links are replaced so no OTHER symlink can mask the hole: a byte-level
@@ -595,10 +604,19 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         (self.distribution / "skills" / "alias.md").write_text("entry.md", encoding="utf-8")
         typechanged = self.bootstrap()
         self.assertNotEqual(typechanged.returncode, 0)
-        self.assertIn("clean Git tree and index", typechanged.stderr)
+        self.assertIn("node type disagrees with its index mode 120000", typechanged.stderr)
+        self.assertIn("plugin/skills", typechanged.stderr)
+        self.assertNotIn("bytes disagree", typechanged.stderr)
 
-        # The mirror typechange: a tracked regular file replaced by a link to identical bytes
-        # must not be read THROUGH to a false byte match.
+        # The mirror typechange: a tracked regular file replaced by a link to identical bytes must
+        # not be read THROUGH to a false byte match. The two links are RESTORED first, because with
+        # one message per check the refusal must be able to name `twin.lock`: while `plugin/skills`
+        # stayed typechanged it answered for this fixture, so nothing here was ever proven about a
+        # link standing in for a regular file.
+        (plugin / "skills").unlink()
+        os.symlink("../skills", plugin / "skills")
+        (self.distribution / "skills" / "alias.md").unlink()
+        os.symlink("entry.md", self.distribution / "skills" / "alias.md")
         (self.distribution / "twin.lock").write_text("locked fixture\n", encoding="utf-8")
         self._run(["git", "add", "twin.lock"], cwd=self.distribution)
         self._run(["git", "commit", "-qm", "twin"], cwd=self.distribution)
@@ -606,8 +624,21 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         os.symlink("mise.lock", self.distribution / "twin.lock")
         mirrored = self.bootstrap()
         self.assertNotEqual(mirrored.returncode, 0)
-        self.assertIn("clean Git tree and index", mirrored.stderr)
+        self.assertIn("node type disagrees with its index mode 100644", mirrored.stderr)
+        self.assertIn("twin.lock", mirrored.stderr)
         self.assertFalse(self.active_receipt_path().exists())
+
+        # The third of the three checks that shared one message: a tracked path the working copy
+        # cannot inspect at all. No fixture reached it before, so its wording was unproven. The
+        # index still matches HEAD here -- deleting a tracked file changes neither -- so this
+        # refusal can only come from the per-file loop.
+        (self.distribution / "twin.lock").unlink()
+        removed = self.bootstrap()
+        self.assertNotEqual(removed.returncode, 0)
+        self.assertIn("cannot inspect", removed.stderr)
+        self.assertIn("twin.lock", removed.stderr)
+        self.assertNotIn("bytes disagree", removed.stderr)
+        self.assertNotIn("node type disagrees", removed.stderr)
 
     @unittest.skipIf(HOSTILE_NODE is None, "a non-22.23.2 Node is required for interpreter rejection fixture")
     def test_bootstrap_and_inspect_reject_launcher_process_running_under_wrong_node(self) -> None:
@@ -936,7 +967,10 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self._run(["git", "add", "dirty.txt"], cwd=self.distribution)
         dirty = self.bootstrap()
         self.assertEqual(dirty.returncode, 3, dirty.stderr)
-        self.assertIn("clean Git tree and index", dirty.stderr)
+        # The staged-change check, named as itself: it shared one wording with the two per-file
+        # checks, and the three cannot be told apart from a log (agentic-sdlc-6818).
+        self.assertIn("index disagrees with its HEAD commit tree", dirty.stderr)
+        self.assertNotIn("working-copy", dirty.stderr)
 
         missing_distribution = self.launcher("bootstrap", "--distribution", str(self.root / "no such distribution"))
         self.assertEqual(missing_distribution.returncode, 2, missing_distribution.stderr)

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 from contextlib import contextmanager
 import copy
 import errno
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import socket
@@ -176,6 +178,83 @@ class DryRunParityTests(unittest.TestCase):
             return_value={"research/status.md": "skipped-foreign"},
         ), mock.patch.object(sys, "argv", [str(SCRIPT), "--target", "."]):
             self.assertNotEqual(installer.main(), 0)
+
+    def test_a_completed_partial_install_is_not_reported_at_the_internal_failure_code(self) -> None:
+        """agentic-sdlc-00e7: a run that completed and reported honestly exited 1.
+
+        Three outcomes, and the split is what makes each honest. `assertNotEqual(main(), 0)` above
+        cannot see any of it — it passes for 1, 4, and 5 alike — so the codes are named here, and
+        each is paired with the state that produces it:
+
+        * effect + skip  -> 4, the admitted partial: the target now carries a scaffold this run
+          knows to be incomplete.
+        * skip, no effect -> 5, outside the reserved block. `--dry-run` wrote nothing at all, so 4
+          would claim a partial effect that never happened and 3 would claim a refusal the run
+          never made.
+        * no skip -> 0, the positive control that keeps the nonzero assertions from being vacuous.
+        """
+        files = {"research/status.md": "CANONICAL\n", "research/claims.md": "CANONICAL\n"}
+
+        def run(root: Path, *extra: str) -> tuple[int, str]:
+            buffer = io.StringIO()
+            with mock.patch.object(installer, "build_files", return_value=files), mock.patch.object(
+                sys, "argv", [str(SCRIPT), "--target", str(root), *extra]
+            ), contextlib.redirect_stdout(buffer):
+                return installer.main(), buffer.getvalue()
+
+        # One foreign file at an owned path; the OTHER path is genuinely written, so the run has a
+        # real, admitted partial effect behind its report.
+        with tempfile.TemporaryDirectory() as directory, isolated_state():
+            root = Path(directory)
+            (root / "research").mkdir()
+            (root / "research" / "status.md").write_text("FOREIGN\n", encoding="utf-8")
+
+            planned_code, planned_output = run(root, "--dry-run")
+            self.assertEqual(planned_code, installer.EXIT_SKIPPED)
+            self.assertIn("WOULD SKIP 1 owned path(s); nothing was written:", planned_output)
+            self.assertIn("research/status.md", planned_output)
+            self.assertFalse((root / "research" / "claims.md").exists())
+
+            code, output = run(root)
+            self.assertEqual(code, installer.EXIT_PARTIAL)
+            self.assertIn("PARTIAL: 1 path(s) written or removed, 1 owned path(s) SKIPPED", output)
+            self.assertIn("skipped-foreign research/status.md", " ".join(output.split()))
+            self.assertEqual(
+                (root / "research" / "status.md").read_text(encoding="utf-8"), "FOREIGN\n"
+            )
+            self.assertEqual(
+                (root / "research" / "claims.md").read_text(encoding="utf-8"), "CANONICAL\n"
+            )
+
+            # Positive control on the same target: with the foreign file gone and every path
+            # already canonical, the completed run is a plain 0.
+            (root / "research" / "status.md").unlink()
+            clean_code, clean_output = run(root)
+            self.assertEqual(clean_code, installer.EXIT_OK)
+            self.assertNotIn("PARTIAL", clean_output)
+            self.assertNotIn("WOULD SKIP", clean_output)
+
+        # A real run whose EVERY planned path is skipped changed nothing, so it is the no-effect
+        # class too. Mocked, because a target where nothing at all can be written is otherwise
+        # only reachable by making the whole tree foreign.
+        with mock.patch.object(
+            installer, "apply_install", return_value={"research/status.md": "skipped-foreign"}
+        ), tempfile.TemporaryDirectory() as directory:
+            code, output = run(Path(directory))
+        self.assertEqual(code, installer.EXIT_SKIPPED)
+        self.assertIn("SKIPPED 1 owned path(s); nothing was written or removed:", output)
+        self.assertNotIn("PARTIAL", output)
+
+    def test_the_exit_table_constants_hold_their_documented_values(self) -> None:
+        # The module comment block is the derivation point; pin the numbers so a renamed constant
+        # cannot silently move an operator-visible code, and pin 5's reason for being outside the
+        # reserved block by asserting it is not one of 0-4.
+        self.assertEqual(
+            (installer.EXIT_OK, installer.EXIT_INPUT, installer.EXIT_PARTIAL, installer.EXIT_SKIPPED),
+            (0, 2, 4, 5),
+        )
+        self.assertNotIn(installer.EXIT_SKIPPED, range(5))
+        self.assertEqual(installer.PARTIAL_ACTIONS & installer.EFFECTING_ACTIONS, frozenset())
 
     def test_missing_target_refuses_before_any_scaffold_is_planned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

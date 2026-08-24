@@ -81,7 +81,7 @@ RESEARCH_ROLE_IDS = frozenset(
 )
 REVIEWER_OUTWARD_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|is\s+authorized\s+to|are\s+authorized\s+to|is\s+permitted\s+to|are\s+permitted\s+to)\b"
-    r".{0,100}\b(?:push|publish(?:ing|ation)?|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
+    r".{0,100}\b(?:push|publi(?:sh(?:e[sd]|ing)?|cations?)|outward(?:\s+effect)?|merge|deploy(?:ment)?)\b"
 )
 SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+"
@@ -664,7 +664,7 @@ contradictory_runtime = re.compile(r"(?i)\b(?:RuntimeAssignment|request_injectio
 contradictory_authority = re.compile(r"(?i)\b(?:repository|role|agent|worker|receipt|local\s+validation|local\s+status|passing\s+(?:local\s+)?gate)\b.{0,80}\b(?:may|can|is\s+authorized\s+to|authori[sz](?:e|es|ed)?|grant(?:s|ed)?)\b.{0,80}\b(?:external\s+)?(?:spawn|admission|readback)\b")
 contradictory_capacity = re.compile(r"(?i)\[1m\].{0,100}\bproves?\b.{0,100}\b(?:capacity|intelligence|compaction|effort)\b")
 contradictory_seeds = re.compile(r"(?i)\b(?:may|can|should|will|is\s+authorized\s+to)\s+(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b")
-contradictory_publication = re.compile(r"(?i)\b(?:local\s+validation|passing\s+(?:local\s+)?gate|local\s+status)\b.{0,80}\b(?:sufficient|authori[sz](?:e|es|ed)?|grant(?:s|ed)?|permit(?:s|ted)?)\b.{0,80}\b(?:push|publish(?:ing|ation)?|merge|deploy(?:ment)?|outward)\b")
+contradictory_publication = re.compile(r"(?i)\b(?:local\s+validation|passing\s+(?:local\s+)?gate|local\s+status)\b.{0,80}\b(?:sufficient|authori[sz](?:e|es|ed)?|grant(?:s|ed)?|permit(?:s|ted)?)\b.{0,80}\b(?:push|publi(?:sh(?:e[sd]|ing)?|cations?)|merge|deploy(?:ment)?|outward)\b")
 forbidden_seed_authority_addition = re.compile(r"(?i)\b(?:seeds?|seedproposal|sd)\b")
 errors = []
 files = sorted(agents_dir.glob("*.toml")) if agents_dir.exists() else []
@@ -1160,12 +1160,29 @@ class TargetRootError(ResearchOSError):
 # currently-classified refusal is an unusable `--target`; every other `ResearchOSError` this
 # module raises describes a state this survey has not mapped yet and stays an unexpected
 # internal failure (1) until a later change gives it its own class.
-#: `main` completed: the scaffold ran (or a dry run reported what it would do) and no
-#: `TargetRootError` was raised.
+#: `main` completed: the scaffold ran (or a dry run reported what it would do), no owned path was
+#: skipped, and no `TargetRootError` was raised.
 EXIT_OK = 0
 #: A `TargetRootError` was raised: the supplied `--target` could not be opened as a safe
 #: existing directory. Nothing was opened; nothing was written.
 EXIT_INPUT = 2
+#: The install ran, wrote or removed at least one entry, and SKIPPED at least one owned path
+#: because a foreign or modified file occupies it. Decision 9's admitted-partial code: the target
+#: carries a scaffold this run knows to be incomplete, and the summary says which paths and why.
+EXIT_PARTIAL = 4
+#: The same finding with NO effect behind it: a `--dry-run` projection, or a real run whose every
+#: planned path was skipped. Nothing was created, updated, restored, or removed, so 4 would claim
+#: a partial effect that did not happen and 3 would claim a refusal the run never made. Deliberately
+#: outside the reserved 0-4 block, exactly as `scripts/gate_baseline.py`'s `EXIT_WORSENED` and
+#: `scripts/check-agentic-sdlc-prereqs.sh`'s `EXIT_MISSING` are: a completed read-only check that
+#: names a problem is a result, and both consumers of this code (a `&&` chain and a wrapper task)
+#: read nonzero, never the exact value.
+EXIT_SKIPPED = 5
+#: Actions that leave an owned path unwritten because the target's own file must be preserved.
+PARTIAL_ACTIONS = frozenset({"skipped-foreign", "skipped-modified", "skipped-remove-modified"})
+#: Actions that CHANGED the target. Membership is what separates EXIT_PARTIAL from EXIT_SKIPPED,
+#: and it is read only on a real run: in a dry run these labels describe a plan, not an effect.
+EFFECTING_ACTIONS = frozenset({"created", "updated", "restored", "removed"})
 
 
 class _LinuxStatxTimestamp(ctypes.Structure):
@@ -3576,8 +3593,38 @@ def main() -> int:
     print("  make validate-claims")
     print("  make validate-experiments")
     print("  make review-gates")
-    partial_actions = {"skipped-foreign", "skipped-modified", "skipped-remove-modified"}
-    return 1 if any(action in partial_actions for action in actions.values()) else 0
+    # The run completed. Its outcome is a RESULT, so it does not report itself at Decision 9's
+    # unexpected-internal-failure code, and the message states what was and was not done rather
+    # than leaving the operator to diff the table above (agentic-sdlc-00e7).
+    skipped = sorted(rel for rel, action in actions.items() if action in PARTIAL_ACTIONS)
+    if not skipped:
+        return EXIT_OK
+    # A dry run's labels are a PLAN, never an effect, so it can never be the partial class: effect
+    # is read from the requested mode first and from the action vocabulary only after that.
+    effected = (
+        []
+        if args.dry_run
+        else sorted(rel for rel, action in actions.items() if action in EFFECTING_ACTIONS)
+    )
+    print()
+    if args.dry_run:
+        print(f"WOULD SKIP {len(skipped)} owned path(s); nothing was written:")
+    elif effected:
+        print(
+            f"PARTIAL: {len(effected)} path(s) written or removed, "
+            f"{len(skipped)} owned path(s) SKIPPED and left as the target had them:"
+        )
+    else:
+        # Same finding, no effect: the label must not read PARTIAL over a run that changed nothing.
+        print(f"SKIPPED {len(skipped)} owned path(s); nothing was written or removed:")
+    for rel in skipped:
+        print(f"  {actions[rel]:>22} {rel}")
+    print(
+        "The scaffold is incomplete at those paths, by design: each is occupied by a foreign or\n"
+        "modified file this installer preserves rather than overwrites. Re-run with --force to\n"
+        "restore a MODIFIED owned file; a foreign file is never replaced."
+    )
+    return EXIT_PARTIAL if effected else EXIT_SKIPPED
 
 
 if __name__ == "__main__":

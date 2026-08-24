@@ -38,10 +38,10 @@
 #     starts; the distribution root selects code and tools, not the project Claude works on. The
 #     root is resolved at run time (env override, then the installed default), not baked into an
 #     exec line, so a managed clone at a stable path can be pointed at without reinstalling this file.
-#   * Launch-time mise activation is NOT required. Installation binds the exact pinned `ocx`,
-#     `jq`, and `uv` executables below; daily routes call those paths directly and preserve the
-#     caller cwd. Re-run the explicit operator-tools install after a reviewed toolchain upgrade to
-#     refresh them.
+#   * Launch-time mise activation is NOT required. Installation binds the exact pinned `ocx`, `jq`,
+#     `uv`, and the `node` that ocx's own shebang needs; daily routes call those paths directly and
+#     preserve the caller cwd. Re-run the explicit operator-tools install after a reviewed toolchain
+#     upgrade to refresh them.
 set -euo pipefail
 
 # Repository root. AGENTIC_SDLC_ROOT wins, so an operator or a managed-clone installer can move
@@ -54,11 +54,23 @@ installed_root=@CANONICAL_ROOT@
 installed_ocx=@PINNED_OCX@
 installed_jq=@PINNED_JQ@
 installed_uv=@PINNED_UV@
+installed_node=@PINNED_NODE@
 installed_sdlc_python=@PINNED_SDLC_PYTHON@
 root="${AGENTIC_SDLC_ROOT:-$installed_root}"
 launcher="$root/scripts/opencodex-claude.sh"
 export AGENTIC_SDLC_OCX="$installed_ocx"
 export AGENTIC_SDLC_JQ="$installed_jq"
+# The bound `ocx` is a `#!/usr/bin/env node` script, so an absolute path to it is not enough: the
+# kernel resolves `node` by NAME from this process's PATH, and on a host where node exists only
+# inside mise's install tree every gateway verb died with a message blaming the install
+# (agentic-sdlc-21f4). Installation binds the pinned node too, and its directory goes FIRST so the
+# interpreter is the reviewed one rather than whichever copy the caller happens to have. This is
+# what the direct-checkout `mise exec` route has always done; the consequence worth naming is that
+# the same directory's `npm`/`npx`/`corepack` also precede the caller's for every child of this
+# command, including a launched Claude Code session.
+export AGENTIC_SDLC_NODE="$installed_node"
+PATH="${installed_node%/*}:$PATH"
+export PATH
 
 usage() {
   cat <<EOF
@@ -111,9 +123,13 @@ Checkout-development lifecycle (mutating verbs; each is admitted or refused by i
   version                     Report this command's resolved repository root and dependencies.
 
 Help is never a side-effecting operation. \`ccodex <verb> --help\` prints that verb's own help
-and runs nothing -- it starts no gateway and writes no session state. To reach the help of the
-tool BEHIND a launch verb, end this command's options with \`--\`:
-  ccodex launch -- --help     Claude Code's own help, through a prepared session
+and runs nothing -- it starts no gateway and writes no session state. Ending this command's
+options with \`--\` prepares a real session and forwards everything after it to \`ocx claude\`
+verbatim:
+  ccodex launch -- --help     forwarded to ocx claude, which decides what Claude Code sees
+On opencodex 2.28.0 that particular one answers with ocx claude's OWN help, so for Claude Code's
+help run \`claude --help\` inside a launched session. The launch banner prints the forwarded
+argument shape (count, option names, a literal \`--\` in place) rather than withholding it.
 
 Maintenance tasks (test, validate, check, secrets, mermaid, hooks) are deliberately absent:
 they belong to working ON the repository, not to using what it installed. Run them with
@@ -186,6 +202,15 @@ require_ocx() {
   require_root
   [ -x "$AGENTIC_SDLC_OCX" ] || {
     printf 'error: the installed pinned ocx executable is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+    exit 1
+  }
+  # Checked as its own fact, because an executable ocx whose interpreter is gone fails LATER with
+  # a message about ocx (agentic-sdlc-21f4). `-x` on the interpreter is the cheap local half; the
+  # launcher's require_ocx reads the shebang for the case where nothing is bound at all.
+  [ -x "$AGENTIC_SDLC_NODE" ] || {
+    printf 'error: the installed pinned node interpreter is unavailable: %s\n' "$AGENTIC_SDLC_NODE" >&2
+    printf 'The pinned ocx is a node script, so it cannot start without it. Refresh operator tools\n' >&2
+    printf 'from the reviewed distribution to rebind both.\n' >&2
     exit 1
   }
 }
@@ -472,6 +497,7 @@ case "$route" in
     printf '  repository root : %s%s\n' "$root" "$([ -d "$root" ] || printf ' (MISSING)')"
     printf '  root source     : %s\n' "$([ -n "${AGENTIC_SDLC_ROOT:-}" ] && printf 'AGENTIC_SDLC_ROOT' || printf 'install-time default')"
     printf '  pinned ocx             : %s%s\n' "$AGENTIC_SDLC_OCX" "$([ -x "$AGENTIC_SDLC_OCX" ] || printf ' (MISSING)')"
+    printf '  pinned node (interp)   : %s%s\n' "$AGENTIC_SDLC_NODE" "$([ -x "$AGENTIC_SDLC_NODE" ] || printf ' (MISSING)')"
     printf '  pinned jq              : %s%s\n' "$AGENTIC_SDLC_JQ" "$([ -x "$AGENTIC_SDLC_JQ" ] || printf ' (MISSING)')"
     printf '  pinned uv              : %s%s\n' "$installed_uv" "$([ -x "$installed_uv" ] || printf ' (MISSING)')"
     printf '  pinned sdlc Python     : %s%s\n' "$installed_sdlc_python" "$([ -x "$installed_sdlc_python" ] || printf ' (MISSING)')"

@@ -1,5 +1,27 @@
 #!/usr/bin/env python3
-"""Render one Mermaid definition through the Linux-only M0b safety boundary."""
+"""Render one Mermaid definition through the Linux-only M0b safety boundary.
+
+Exit table (product-spec Implementation Decision 9), the single derivation point for every code
+this wrapper produces:
+
+| exit | name            | meaning                                                            |
+| ---- | --------------- | ------------------------------------------------------------------ |
+| 0    | EXIT_OK         | `--help`, or the final SVG was published at the requested path     |
+| 1    | EXIT_ERROR      | every other `RendererError`: policy, the render lock, sandbox      |
+|      |                 | admission, a mid-flight input identity change, mmdc, the          |
+|      |                 | sanitizer, or publication                                          |
+| 2    | EXIT_USAGE      | the argv or the supplied `<definition>` operand is unusable, so    |
+|      |                 | nothing was rendered. Every 2 goes through `_usage_error` and      |
+|      |                 | names why                                                          |
+| 3    | EXIT_UNSUPPORTED| not Linux x64: rendering is uncertified there and is not claimed   |
+
+`<definition>` is part of the command's input contract, so a supplied-but-missing, unreadable,
+non-absolute, symlinked, or over-ceiling operand is a 2 and never a 1 — the survey's input-axis
+rule (`docs/plans/decision9-conformance-survey.md`, row 46) forbids landing a supplied-but-missing
+operand on the unexpected-internal-failure code, exactly as the sibling instruction-generator
+manifest refusal does (agentic-sdlc-f83f). `<final-svg>` is deliberately NOT in that class: it is
+written after a successful render, so a failure there is a real failure of work already done.
+"""
 
 from __future__ import annotations
 
@@ -581,7 +603,14 @@ def main(argv: list[str] | None = None) -> int:
         policy = load_policy()
         lock_descriptor = _render_lock(policy)
         source, destination = Path(values[0]), Path(values[1])
-        descriptor, identity = _open_regular_input(source, policy["limits"]["max_input_bytes"])
+        # Admitting the supplied definition is the input axis, so its refusals are class 2. The
+        # `except` is placed at the call rather than inside the helper because `_deny_symlink` and
+        # `_safe_parent_chain` are shared with the sandbox paths, where the same wording is an
+        # internal failure and must stay a 1 (agentic-sdlc-4e2e).
+        try:
+            descriptor, identity = _open_regular_input(source, policy["limits"]["max_input_bytes"])
+        except RendererError as exc:
+            return _usage_error(str(exc))
         input_bytes = _read_admitted_input(descriptor, policy["limits"]["max_input_bytes"])
         _revalidate_input(descriptor, identity)
         workspace = _private_workspace()

@@ -145,9 +145,9 @@ for that surface by construction, not that it went unprobed.
 | 43 | `scripts/manage_claude_statusline.py` | 0 | 2 | 2 | 0 for all five read-only states, distinguished in the returned message rather than the code (was 1) | CONFORMING (closed by agentic-sdlc-d0a4) |
 | 44 | `scripts/install_operator_tools.py` | 0 | 2 | 2 | 3 for the host precondition (`bin directory is not on PATH`), a new `HostPreconditionError` subclass so `main()` can tell it apart; 2 preserved for a genuine caller-input error (was 2 for both) | CONFORMING (closed by agentic-sdlc-92ff) |
 | 45 | **`skills/agentic-sdlc/tools/instruction-generator.py`** | 0 | 2 | **1 + traceback for a supplied-but-missing manifest** | — | **NONCONFORMING** (SP-8) |
-| 46 | **`scripts/render_mermaid_linux.py`** | **2 for `--help`, with no diagnostic at all** | 2 (silent) | 1 | 3 = unsupported platform | **NONCONFORMING** (SP-9) — help/grammar closed by `agentic-sdlc-61ce`; input axis still 1 (queued) |
+| 46 | `scripts/render_mermaid_linux.py` | 0 (`--help`; **was** 2 with no diagnostic at all) | 2, naming the reason (**was** silent) | 2, naming the path, no traceback (**was** 1) | 3 = unsupported platform | **CONFORMING** — help/grammar closed by `agentic-sdlc-61ce`, input axis by `agentic-sdlc-4e2e` |
 | 47 | `skills/agentic-sdlc/tools/offline-inspect.py` | 0 | 2 | 2 | **was 1 for a derived NOT_READY** | **FIXED HERE** (worked example) |
-| 48 | `skills/codex-research-os/scripts/install_research_os.py` | 0 | 2 | 2, naming the target, no traceback (**was** 1 with a raw `FileNotFoundError` traceback for `--target <missing> --dry-run`, `:1441` `_open_root` reached via `_apply_locked` `:2783`) | **1** for a completed partial install (skipped-foreign/skipped-modified, `:2904`); no 3 or 4 exists (**was** recorded as "3 declared", disproved by AST census) | **NONCONFORMING** (SP-10) — grammar/input axes closed by `agentic-sdlc-4bf8`; partial-install axis still 1 (queued) |
+| 48 | `skills/codex-research-os/scripts/install_research_os.py` | 0 | 2 | 2, naming the target, no traceback (**was** 1 with a raw `FileNotFoundError` traceback for `--target <missing> --dry-run`, `:1441` `_open_root` reached via `_apply_locked` `:2783`) | 4 for a partial install that wrote something, 5 for the same finding with no effect (`--dry-run`, or every planned path skipped); **was** 1 for both, and **was** recorded as "3 declared", disproved by AST census | **CONFORMING** — grammar/input axes closed by `agentic-sdlc-4bf8`, partial-install axis by `agentic-sdlc-00e7` |
 | 49 | `skills/model-tier-rightsizing/scripts/receipt_admission.py` | 0, printing usage without reading stdin (**was** none — argv ignored; `main()` (`:871`) read stdin (`:874`) unconditionally, so `--help` returned `{"status":"invalid"}` at 2) | 2, usage on stderr before stdin is read (**was** 2 for `--zzz-not-a-flag`, but only by falling through to the same stdin-read path) | 2 | — | **CONFORMING** — closed by `agentic-sdlc-8bd1` |
 | 50 | `skills/model-tier-rightsizing/scripts/rightsize.py` | 0 | 2 | 2 | 3 declared (`evaluate` digest refusal) | CONFORMING |
 
@@ -318,6 +318,31 @@ failure below it — including a `RendererError` from the npm shim check — is 
 `ProvisionPartialError` and reported as 4. Thirteen executed mutants (both directions per axis,
 including re-mapping a pre-effect refusal back to 1, restoring the pre-move ordering, and moving the
 finding code off 1) each killed a named test.
+
+RESIDUALS CLOSED (2026-08-24, `agentic-sdlc-8c3f`). Both were questions rather than defects, and both
+are answered here rather than left as open prose.
+
+*The found-leak exit stays 1, and for a different reason than the one written down.* The seed
+required the consumers be surveyed before any remap, so they were: `mise run check` reaches this task
+through `depends` and lefthook's pre-push hook runs `mise run secrets`; both fail on ANY nonzero, and
+nothing in the tree compares this surface's status to a literal. So the docstring's "`mise run check`
+depends on this code, so it must never move" claimed more than was true and is corrected. What
+actually holds 1 in place is the pass-through: `scan_paths` returns every scanner code outside
+{0, 1} unchanged, so any value the wrapper picked for itself out of that space would be
+indistinguishable from betterleaks returning the same number for its own reasons. 1 is the one code
+without that ambiguity, because there the wrapper and the scanner report the SAME event. Moving the
+verdict outside the reserved block (the `gate_baseline.py` `EXIT_WORSENED` idiom) would satisfy
+Decision 9's letter and buy a collision; the trade is recorded, not taken. Pinned by a test that
+asserts the identity structurally and walks the pass-through space, and mutation-proved: moving
+`EXIT_FINDING` to 5 kills it.
+
+*`provision_mermaid_linux.py`'s `EXIT_ERROR = 1` is confirmed unreachable by choice.* The census the
+seed asked for is now a test rather than a reading: an AST walk over every `return`, `raise
+SystemExit`, and `sys.exit` in the module asserts `EXIT_ERROR` appears in none of them, so the code
+is reachable only the way its reservation says — an uncaught exception the interpreter reports as 1.
+Two controls keep that from being a vacuous empty result: a `return EXIT_ERROR` grafted into the
+parsed source must be FOUND, and the other three constants must each be found at real sites.
+Mutation-proved: pointing one refusal at `EXIT_ERROR` makes the census name its line.
 
 ### SP-4 — `check-agentic-sdlc-prereqs.sh` reports a named missing prerequisite as an internal failure
 
@@ -521,10 +546,23 @@ Half-closed. The help and grammar axes are closed by `agentic-sdlc-61ce`: `USAGE
 (`scripts/render_mermaid_linux.py:556-574`). `agentic-sdlc-bcdd` added the boundary controls for
 that branch — one test drives the `argv is None` dispatch through the real `sys.argv`, and one
 asserts `main(["--help", "<absolute-out>"])` is a *render request* whose definition path is spelled
-`--help`, refused at 1 naming `input path must be absolute and traversal-free` with nothing on
-stdout, so the 0-class query stays exactly the whole-argv form. Row 46 is **not** flipped: the input
-axis is still 1, because every `RendererError` — including an unusable supplied path — lands on
-`EXIT_ERROR`. That remains queued.
+`--help`, refused naming `input path must be absolute and traversal-free` with nothing on
+stdout, so the 0-class query stays exactly the whole-argv form.
+
+REMEDIATION (2026-08-24, `agentic-sdlc-4e2e`): the input axis is closed and row 46 is flipped to
+CONFORMING. Admitting the supplied `<definition>` is the input contract, so the single
+`_open_regular_input` call in `main` is wrapped and its `RendererError` returned through
+`_usage_error` — a supplied-but-missing, unreadable, non-absolute, symlinked, or over-ceiling
+operand is now 2 with `cannot inspect input: …` and the path named, instead of 1. The `except` sits
+at the CALL rather than inside the helper on purpose: `_deny_symlink` and `_safe_parent_chain` are
+shared with the sandbox admission paths, where the same wording is a genuine internal failure and
+must stay 1. `<final-svg>` is deliberately not in the input class — it is written after a successful
+render, so a failure there is a failure of work already done. The module docstring gained the
+wrapper's first written exit table as the derivation point. Mutation both directions: deleting the
+`except` reproduced exit 1 and killed both the new missing-definition test and the
+`--help <absolute-out>` boundary test (`1 != 2`); the negative control in the same test forces a
+`RendererError` from `_private_workspace` — below the admission — and asserts it is still
+`EXIT_ERROR`, so this is a reclassified input class and not a blanket remap onto 2.
 
 ### SP-10 — `install_research_os.py` leaks a traceback for a supplied-but-missing target
 
@@ -562,6 +600,33 @@ corrected accordingly rather than left as a silent residual: its refusal/partial
 that measured 1 in place of the disproved "3 declared", and its verdict is **NONCONFORMING**
 (this SP), not CONFORMING — grammar and input are closed by this seed, but the unrelated
 partial-install axis stays open and queued.
+
+REMEDIATION (2026-08-24, `agentic-sdlc-00e7`): the partial-install axis is closed and row 48 is
+flipped to CONFORMING. The seed asked whether a completed partial install is Decision 9's 4 or a
+documented non-reserved code; measured, it is **both, and which one depends on whether an effect
+happened** — the question had one answer per state rather than one answer:
+
+* Real run, at least one path written or removed AND at least one owned path skipped ->
+  `EXIT_PARTIAL = 4`. The target carries a scaffold the run knows to be incomplete. This is the
+  admitted-partial class as written.
+* `--dry-run`, or a real run whose every planned path was skipped -> `EXIT_SKIPPED = 5`. Nothing was
+  created, updated, restored, or removed, so 4 would claim a partial effect that did not happen,
+  and 3 would claim a refusal the run never made — it completed and reported. 5 follows the same
+  precedent SP-4's remediation used for a completed read-only check that names a problem
+  (`gate_baseline.py`'s `EXIT_WORSENED`, `check-agentic-sdlc-prereqs.sh`'s `EXIT_MISSING`), and it
+  is admissible under this survey's derived rule because it is named and justified outside the
+  reserved block. A dry run's action labels are a PLAN, so effect is read from `args.dry_run` first
+  and from the action vocabulary second; the provisioner's positional 3-versus-4 split is the same
+  reasoning applied to the same distinction.
+
+Both consumers were surveyed before the remap, as the seed required, and neither reads the exact
+value: nothing in the tree compares this surface's status to a literal. The summary now states what
+was and was not done — a `PARTIAL`/`SKIPPED`/`WOULD SKIP` line, the count written versus skipped,
+each skipped path with its action, and why the installer preserved it — instead of leaving the
+operator to diff the action table. Mutation both directions: restoring the single
+`return 1 if any(action in partial_actions ...)` reproduced `1 != 5` and killed the new test; the
+positive control drives the same target with the foreign file removed and asserts a plain 0, so the
+nonzero assertions distinguish three real states rather than asserting one number.
 
 ### SP-11 — `receipt_admission.py` ignores argv entirely, so no 0-class query exists
 

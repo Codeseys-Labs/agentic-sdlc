@@ -32,7 +32,7 @@ class OperatorToolsTests(unittest.TestCase):
     def config(self, root: Path, *, dry_run: bool = False) -> object:
         runtime = root / "runtime"
         runtime.mkdir(parents=True, exist_ok=True)
-        for name in ("ocx", "jq", "uv"):
+        for name in ("ocx", "jq", "uv", "node"):
             path = runtime / name
             if not path.exists():
                 path.write_text("#!/bin/sh\nexit 0\n")
@@ -48,6 +48,7 @@ class OperatorToolsTests(unittest.TestCase):
             runtime / "jq",
             runtime / "uv",
             Path(sys.executable),
+            node_path=runtime / "node",
         )
 
     def test_install_status_uninstall_lifecycle(self) -> None:
@@ -354,6 +355,46 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertIn('export AGENTIC_SDLC_JQ="$installed_jq"', body)
             self.assertNotIn('mise -C "$root" exec -- ocx', body)
             self.assertNotIn('exec uv run', body)
+
+    def test_ccodex_binds_the_node_the_pinned_ocx_shebang_needs(self) -> None:
+        """agentic-sdlc-21f4: binding `ocx` alone left it unable to start.
+
+        `ocx` is `#!/usr/bin/env node`, so the kernel resolves the interpreter by NAME from the
+        child's PATH. On a fresh container with mise's shim directory off PATH every gateway verb
+        died while the bound ocx sat there executable, and the message blamed an install that had
+        already succeeded. So the install binds node like the other three AND the dispatcher puts
+        its directory first, which is what makes the name resolvable.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            operator_tools.install(config)
+            body = (config.bin_dir / "ccodex").read_text()
+
+            self.assertIn(f"installed_node='{config.node_path}'", body)
+            self.assertIn('export AGENTIC_SDLC_NODE="$installed_node"', body)
+            # The binding is only half of it: the interpreter has to be findable by name.
+            self.assertIn('PATH="${installed_node%/*}:$PATH"', body)
+            self.assertNotIn("@PINNED_NODE@", body)
+            self.assertEqual(
+                subprocess.run(["bash", "-n", str(config.bin_dir / "ccodex")], capture_output=True).returncode,
+                0,
+            )
+
+    def test_install_refuses_when_the_pinned_node_is_not_an_executable_file(self) -> None:
+        # Positive control for the binding above: node goes through the same admission as ocx/jq/uv,
+        # so a present-but-unusable interpreter is refused at install time by name rather than
+        # rendered into a dispatcher that cannot start.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            config.node_path.chmod(0o644)
+
+            with self.assertRaises(operator_tools.OperatorToolsError) as raised:
+                operator_tools.desired_files(config)
+
+            self.assertIn("pinned node is not an executable file", str(raised.exception))
+            self.assertFalse((config.bin_dir / "ccodex").exists())
 
     def test_ccodex_binds_the_injected_sdlc_python_at_install_time(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1379,7 +1420,7 @@ class DispatcherInterpreterTests(unittest.TestCase):
     def config(self, root: Path) -> object:
         runtime = root / "runtime"
         runtime.mkdir(parents=True, exist_ok=True)
-        for name in ("ocx", "jq", "uv"):
+        for name in ("ocx", "jq", "uv", "node"):
             path = runtime / name
             path.write_text("#!/bin/sh\nexit 0\n")
             path.chmod(0o755)
@@ -1394,6 +1435,7 @@ class DispatcherInterpreterTests(unittest.TestCase):
             runtime / "jq",
             runtime / "uv",
             Path(sys.executable),
+            node_path=runtime / "node",
         )
 
     def test_the_installed_shebang_is_the_resolved_interpreter_and_it_can_exec(self) -> None:
@@ -1535,7 +1577,7 @@ class DispatcherInterpreterTests(unittest.TestCase):
             template = shadow / "assets" / "launchers" / "ccodex.in"
             runtime = root / "runtime"
             runtime.mkdir()
-            for name in ("ocx", "jq", "uv"):
+            for name in ("ocx", "jq", "uv", "node"):
                 (runtime / name).write_text("#!/bin/sh\nexit 0\n")
                 (runtime / name).chmod(0o755)
             config = operator_tools.Config(
@@ -1549,6 +1591,7 @@ class DispatcherInterpreterTests(unittest.TestCase):
                 runtime / "jq",
                 runtime / "uv",
                 Path(sys.executable),
+                node_path=runtime / "node",
             )
 
             template.write_text("#!@PINNED_BASH@\nexit 0\n")

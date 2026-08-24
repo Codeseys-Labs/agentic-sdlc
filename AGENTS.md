@@ -456,7 +456,17 @@ reported as required or absent.
 the distribution checkout and directly execute the absolute `ocx` path bound by the last explicit
 `operator-tools:install`; the same install binds `jq` and `uv` for catalog/config and Python-backed
 routes, so ordinary installed use does not invoke repository-scoped mise or substitute caller-PATH
-copies. A DIRECT source-checkout launch carries no such binding and therefore resolves `jq` through
+copies. That property did not hold for the ONE tool no absolute path can pin: the pinned `ocx` is a
+`#!/usr/bin/env node` script, so the kernel resolves its interpreter by NAME from the child's PATH,
+and a host where node existed only inside mise's install tree killed every gateway verb while the
+bound ocx sat there executable — with a diagnostic blaming an install that had already succeeded
+(agentic-sdlc-21f4). The install therefore binds the pinned `node` too and the dispatcher puts its
+directory FIRST, which makes the name resolve to the reviewed interpreter rather than to whatever
+the caller has; the consequence to know is that the same directory's `npm`/`npx`/`corepack` also
+precede the caller's for every child, including a launched Claude Code. When nothing is bound, the
+launcher reads ocx's shebang and names the unreachable interpreter instead of the install.
+
+A DIRECT source-checkout launch carries no such binding and therefore resolves `jq` through
 the pinned `mise -C <root> exec -- jq` route: no `jq` NAME is ever looked up, and `$AGENTIC_SDLC_JQ`
 is admitted only as an absolute path or the literal pinned sentinel, so a bare or relative binding
 is refused instead of resolved through ambient PATH. That `jq` classifies
@@ -496,8 +506,15 @@ tier slot, or `ANTHROPIC_SMALL_FAST_MODEL`. Explicit
 `--settings` values must be one JSON object or a readable file containing one; every occurrence is
 inspected before gateway startup and accepted argv is forwarded unchanged. An `sk-ant-oat*` login
 is accepted wherever it is stored. Verb-level `--help` prints the launcher's own help and prepares
-nothing; the leading wrapper `--` forwards the remaining arguments, while a later literal `--` ends
-Claude's own option parsing.
+nothing; the leading wrapper `--` is consumed exactly once and every remaining argument, INCLUDING a
+later literal `--` and everything after it, reaches `ocx claude` byte-for-byte. What Claude Code
+then sees is `ocx claude`'s decision, not the wrapper's, and on opencodex 2.28.0 it is not always a
+passthrough: measured 2026-08-23 (agentic-sdlc-c773), `-- --help` answered with ocx claude's own
+help and `-- -p '<prompt>'` reached the model as a bare `-p`. Do not describe a later literal `--`
+as ending Claude's option parsing — nothing in this repository can make that true, because there is
+an extra program between the wrapper and Claude Code. The launch banner therefore prints the
+forwarded argument SHAPE (count, option names, a literal `--` in place, values as opaque lengths)
+instead of "withheld", so the wrapper's half of the boundary is observable.
 
 `/sdlc-init` is a reviewed runbook, not a deterministic activation engine. It must stop on
 ambiguous ownership, conflicts, unsupported capability, or missing evidence; do not claim
