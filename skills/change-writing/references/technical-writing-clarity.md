@@ -32,6 +32,16 @@ Four constraints on how this file may be used, and they are not negotiable:
    repository. That is precisely the licensed material, and reconstructing it piecemeal is the
    same act as copying it.
 
+This file's status is **STE-inspired**, and that is the strongest status it can ever have.
+Conformance to ASD-STE100 is a certification statement against a licensed aerospace specification
+with its own controlled dictionary. Nothing in this repository can support that claim. The product
+specification records that as an explicit non-goal in its out-of-scope list
+(`docs/plans/claude-code-first-harness/agentic-sdlc-product-spec.md`). The release contract
+enforces the same boundary: `policy/release-contract.v1.json` lists the `asd_conformance` category
+under `claim_lint.forbidden_claims`. Release-claim text that asserts conformance therefore fails
+`mise run validate`. An edit that drifts this file toward a conformance claim is wrong even when it
+satisfies every rule below. Delete the claim, not this paragraph.
+
 ## Two rule classes, and they are not equal
 
 **Countable rules** are mechanically checkable by reading and counting. They are this file's real
@@ -58,7 +68,7 @@ The caps and the required mood differ by type, so classify before writing.
 | Type | What it is | Mood |
 |---|---|---|
 | **Procedural** | Steps a reader performs | Imperative, active, always |
-| **Descriptive** | Explanation a reader understands | Active by default |
+| **Descriptive** | Explanation a reader understands | Active by default; simple present |
 | **Safety** | A warning or caution | Command first, then the explanation |
 | **Message** | Error, log, or CLI output | Imperative; state cause and next action |
 
@@ -71,11 +81,12 @@ The caps and the required mood differ by type, so classify before writing.
 | Compound nouns | At most 3 words in a row acting as one noun | Count consecutive nouns; break the fourth with a preposition | Both |
 | One instruction per sentence | Exactly one | Count imperative verbs; split compound steps | Procedural |
 | Verb forms | Infinitive, imperative, simple present, simple past, simple future; past participle as an adjective only | Scan for stacked auxiliaries — "will have been processed" | Both |
+| Descriptive tense | Simple present, unless the sentence states a real past event or a real future change | Scan descriptive text for "will", "was", "were", and other past or future forms; keep each only for an actual time fact | Descriptive |
 | `-ing` words | Only as a noun or a noun modifier, never as a present-participle verb | Scan every word ending in `-ing` | Both |
 | Voice | Active. Passive only in descriptive text, and only when the actor is genuinely unknown | Scan for a form of "be" followed by a past participle | Procedural: always active |
 | Completeness | Do not drop the subject, the verb, or the article to shorten a sentence | Check each sentence has all three | Both |
 | Vertical lists | Use a list for complex or coordinated material | Any sentence with three or more coordinated items | Both |
-| One term per concept | One word, one meaning, one part of speech | Build a term list for the document; grep each variant | Both |
+| One term per concept | One word, one meaning, one part of speech | Build a term list for the document; grep each variant, then grep each term for hits that mean something else | Both |
 | Safety order | The command comes first, the explanation second | Check the first clause is the imperative | Safety |
 
 ### The compound-noun rule, worked
@@ -99,6 +110,20 @@ whether a different word means a different thing.
 The mechanical check: list the document's concepts, then grep each variant. Every hit on a synonym
 is either an error or an undeclared second concept.
 
+### One meaning per word, worked
+
+The same rule, run in the other direction: one term per concept, and one concept per term. A word
+that means two things in one document turns every occurrence into a guess.
+
+- Overloaded: "check" as the repository gate ("run the check") and "check" as the verb to verify
+  ("check the receipt").
+- Split: keep "check" for the gate; write "verify the receipt".
+
+The mechanical check reuses the term list: grep each term and read every hit. A hit that means
+something else is either an error or a missing second term. Check the part-of-speech clause the
+same way. When one term serves as both a noun and a verb for different things, rename one of the
+two uses.
+
 ## Apply while writing, not afterwards
 
 The rules are cheap during composition and expensive as a rewrite pass. Before emitting each
@@ -109,7 +134,8 @@ paragraph:
 3. Count the words against the type's cap.
 4. Count consecutive nouns in each compound.
 5. Scan for "be" plus a past participle, and for `-ing` used as a verb.
-6. Confirm the subject, verb, and article are all present.
+6. In descriptive text, keep the simple present unless the sentence states a real time fact.
+7. Confirm the subject, verb, and article are all present.
 
 ## The self-audit pass
 
@@ -120,8 +146,10 @@ the cap, longest 34 words" is actionable; "a bit wordy" is not.
 2. **Paragraph sentence counts.** Anything over six, and anything covering two topics.
 3. **Noun clusters.** Every run of three or more consecutive nouns; flag the fours and up.
 4. **Verb form and voice.** Every stacked auxiliary, every `-ing` verb, every passive in
-   procedural text.
-5. **Term consistency.** The concept list, with a grep per variant.
+   procedural text, and every past or future form in descriptive text that states no real time
+   fact.
+5. **Term consistency.** The concept list, with a grep per variant and a grep per term for hits
+   that mean something else.
 
 ## What these rules must never do
 
@@ -138,7 +166,7 @@ the cap, longest 34 words" is actionable; "a bit wordy" is not.
 
 ## Rewrite patterns
 
-One per countable rule. All examples written for this file.
+Worked before/after pairs for the rules that need them. All examples written for this file.
 
 **Sentence over cap → split at the conjunction.**
 Before: "If the receipt is missing or the digest does not match the recorded value, the command
@@ -157,6 +185,12 @@ After: "Review the configuration file before you start the install."
 **`-ing` as a verb → simple present.**
 Before: "The validator is checking each reference and is reporting the missing files."
 After: "The validator checks each reference and reports the missing files."
+
+**Past or future tense for present behavior → simple present.**
+Before: "The validator will reject a broken reference."
+After: "The validator rejects a broken reference."
+Keep "will" for a real future change and the past for a real past event — "an earlier revision of
+this file lacked this rule" — never for how the thing behaves today.
 
 **Dropped article and subject → complete sentence.**
 Before: "Missing receipt causes failure."
