@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -41,8 +42,21 @@ def _load(name: str, path: Path):
 installer = _load("workflow_kind_installer", INSTALLER_PATH)
 validator = _load("workflow_kind_validator", VALIDATOR_PATH)
 
-DOCUMENT = "// workflow: wave\nconst plan = await agent('map the wave', options);\nreturn plan;\n"
-REVISED = "// workflow: wave\nconst plan = await agent('map the wave twice', options);\nreturn plan;\n"
+def meta_line(name: str = "wave") -> str:
+    """The host-required first statement, in the smallest shape the validator admits."""
+    return f"export const meta = {{ name: '{name}', description: 'map one wave' }};\n"
+
+
+DOCUMENT = (
+    "// workflow: wave\n"
+    + meta_line()
+    + "const plan = await agent('map the wave', options);\nreturn plan;\n"
+)
+REVISED = (
+    "// workflow: wave\n"
+    + meta_line()
+    + "const plan = await agent('map the wave twice', options);\nreturn plan;\n"
+)
 
 
 class WorkflowLifecycleTests(unittest.TestCase):
@@ -449,19 +463,160 @@ class WorkflowValidatorTests(unittest.TestCase):
                 errors = self.check(name=name, text=f"// workflow: {stem}\nreturn 1;\n")
                 self.assertIn(f"workflows/{name}: workflow name must be a lowercase slug", errors)
         self.assertEqual(
-            self.check(name="wave-scout-2.js", text="// workflow: wave-scout-2\nreturn 1;\n"), []
+            self.check(
+                name="wave-scout-2.js",
+                text=f"// workflow: wave-scout-2\n{meta_line('wave-scout-2')}return 1;\n",
+            ),
+            [],
         )
 
     def test_a_missing_or_mismatched_header_is_rejected(self) -> None:
         self.assertEqual(
-            self.check(text="const plan = 1;\nreturn plan;\n"),
+            self.check(text=f"{meta_line()}const plan = 1;\nreturn plan;\n"),
             ["workflows/wave.js: missing a leading '// workflow: <name>' header"],
         )
         self.assertEqual(
-            self.check(text="// workflow: other\nreturn 1;\n"),
+            self.check(text=f"// workflow: other\n{meta_line()}return 1;\n"),
             ["workflows/wave.js: declared workflow name does not match the file name"],
         )
-        self.assertEqual(self.check(text="// workflow: wave\r\nreturn 1;\n"), [])
+        self.assertEqual(self.check(text=f"// workflow: wave\r\n{meta_line()}return 1;\n"), [])
+
+    META_FIRST_STATEMENT_ERROR = (
+        "workflows/wave.js: the first statement must be an 'export const meta = {...}' literal"
+        " (only '//' comments and blank lines may precede it)"
+    )
+    META_PURE_LITERAL_ERROR = (
+        "workflows/wave.js: meta must be a pure object literal"
+        " (no variables, calls, spreads, or interpolation)"
+    )
+
+    def test_the_pre_fix_scout_shape_is_rejected_and_the_fixed_scout_passes(self) -> None:
+        """The live host refused the meta-less scout at LOAD (agentic-sdlc-60f0); the gate must
+        refuse the same shape. The negative fixture is the shipped scout with its meta statement
+        stripped, which restores the pre-fix shape whose first statement is `const STAGES`.
+        """
+        shipped = SHIPPED_WORKFLOW.read_text(encoding="utf-8")
+        stripped = re.sub(r"export const meta = \{.*?\};\n", "", shipped, count=1, flags=re.DOTALL)
+        self.assertNotEqual(stripped, shipped, "the shipped scout must carry a meta export to strip")
+        # The comment above the shipped statement may still QUOTE the phrase; what must be gone
+        # is the statement itself.
+        self.assertNotIn("export const meta = {", stripped)
+        self.assertEqual(
+            self.check(name="sdlc-wave-scout.js", text=stripped),
+            [
+                "workflows/sdlc-wave-scout.js: the first statement must be an"
+                " 'export const meta = {...}' literal"
+                " (only '//' comments and blank lines may precede it)"
+            ],
+        )
+        # Positive control: the fixed shipped bytes pass the same check under the same name.
+        self.assertEqual(self.check(name="sdlc-wave-scout.js", text=shipped), [])
+
+    def test_a_document_without_a_leading_meta_export_is_rejected(self) -> None:
+        self.assertEqual(
+            self.check(text="// workflow: wave\nconst plan = 1;\nreturn plan;\n"),
+            [self.META_FIRST_STATEMENT_ERROR],
+        )
+        # A meta export declared after another statement is the same load failure: the host
+        # requires it as the FIRST statement, not merely present.
+        self.assertEqual(
+            self.check(text=f"// workflow: wave\nconst first = 1;\n{meta_line()}return first;\n"),
+            [self.META_FIRST_STATEMENT_ERROR],
+        )
+
+    def test_a_non_literal_meta_is_rejected(self) -> None:
+        self.assertEqual(
+            self.check(text="// workflow: wave\nexport const meta = { ...base };\nreturn 1;\n"),
+            [self.META_PURE_LITERAL_ERROR],
+        )
+        self.assertEqual(
+            self.check(
+                text="// workflow: wave\nexport const meta = { name: `wave`, description: 'x' };\nreturn 1;\n"
+            ),
+            [self.META_PURE_LITERAL_ERROR],
+        )
+        self.assertEqual(
+            self.check(
+                text="// workflow: wave\nexport const meta = { name: NAME, description: 'x' };\nreturn 1;\n"
+            ),
+            ["workflows/wave.js: meta.name must be a string literal"],
+        )
+        self.assertEqual(
+            self.check(
+                text="// workflow: wave\nexport const meta = { name: 'wave', description: describe() };\nreturn 1;\n"
+            ),
+            ["workflows/wave.js: meta.description must be a string literal"],
+        )
+
+    def test_meta_fields_are_a_closed_set_without_duplicates(self) -> None:
+        self.assertEqual(
+            self.check(
+                text=(
+                    "// workflow: wave\n"
+                    "export const meta = { name: 'wave', description: 'x', title: 'y' };\n"
+                    "return 1;\n"
+                )
+            ),
+            ["workflows/wave.js: meta field 'title' is not one of name, description, phases"],
+        )
+        self.assertEqual(
+            self.check(
+                text=(
+                    "// workflow: wave\n"
+                    "export const meta = { name: 'wave', name: 'wave', description: 'x' };\n"
+                    "return 1;\n"
+                )
+            ),
+            ["workflows/wave.js: meta declares 'name' more than once"],
+        )
+
+    def test_meta_must_declare_a_matching_name_and_a_nonempty_description(self) -> None:
+        self.assertEqual(
+            self.check(
+                text="// workflow: wave\nexport const meta = { name: 'other', description: 'x' };\nreturn 1;\n"
+            ),
+            ["workflows/wave.js: meta.name must be the string 'wave'"],
+        )
+        self.assertEqual(
+            self.check(text="// workflow: wave\nexport const meta = { name: 'wave' };\nreturn 1;\n"),
+            ["workflows/wave.js: meta must declare both name and description"],
+        )
+        self.assertEqual(
+            self.check(
+                text="// workflow: wave\nexport const meta = { name: 'wave', description: ' ' };\nreturn 1;\n"
+            ),
+            ["workflows/wave.js: meta.description must be a nonempty string literal"],
+        )
+
+    def test_meta_phases_must_be_an_array_of_string_literals(self) -> None:
+        for phases in ("'cartography'", "[plan()]"):
+            with self.subTest(phases=phases):
+                errors = self.check(
+                    text=(
+                        "// workflow: wave\n"
+                        f"export const meta = {{ name: 'wave', description: 'x', phases: {phases} }};\n"
+                        "return 1;\n"
+                    )
+                )
+                self.assertEqual(
+                    errors, ["workflows/wave.js: meta.phases must be an array of string literals"]
+                )
+        # Positive control: the documented optional field in its admitted shape.
+        self.assertEqual(
+            self.check(
+                text=(
+                    "// workflow: wave\n"
+                    "export const meta = { name: 'wave', description: 'x',"
+                    " phases: ['cartography', 'wave graph'] };\n"
+                    "return 1;\n"
+                )
+            ),
+            [],
+        )
+
+    def test_an_unterminated_meta_export_is_rejected(self) -> None:
+        errors = self.check(text="// workflow: wave\nexport const meta = { name: 'wave',\n")
+        self.assertIn("workflows/wave.js: the meta export is unterminated", errors)
 
     def test_module_loading_is_rejected(self) -> None:
         for body in (
@@ -472,7 +627,9 @@ class WorkflowValidatorTests(unittest.TestCase):
             with self.subTest(body=body.split("\n", 1)[0]):
                 errors = self.check(text=f"// workflow: wave\n{body}")
                 self.assertIn("workflows/wave.js: a workflow document must not load modules", errors)
-        self.assertEqual(self.check(text="// workflow: wave\nreturn agent('go', {});\n"), [])
+        self.assertEqual(
+            self.check(text=f"// workflow: wave\n{meta_line()}return agent('go', {{}});\n"), []
+        )
 
     def test_a_static_model_or_effort_pin_is_rejected(self) -> None:
         for body in (
@@ -486,7 +643,8 @@ class WorkflowValidatorTests(unittest.TestCase):
             self.check(
                 text=(
                     "// workflow: wave\n"
-                    "return agent('go', { model: assignment.requested_model_id, "
+                    + meta_line()
+                    + "return agent('go', { model: assignment.requested_model_id, "
                     "effort: assignment.requested_effort });\n"
                 )
             ),
@@ -503,13 +661,19 @@ class WorkflowValidatorTests(unittest.TestCase):
                 errors = self.check(text=f"// workflow: wave\n{body}")
                 self.assertIn("workflows/wave.js: user-specific paths are forbidden", errors)
         self.assertEqual(
-            self.check(text="// workflow: wave\n// see ~/.claude/workflows and $HOME/.claude\nreturn 1;\n"),
+            self.check(
+                text=(
+                    "// workflow: wave\n// see ~/.claude/workflows and $HOME/.claude\n"
+                    + meta_line()
+                    + "return 1;\n"
+                )
+            ),
             [],
         )
 
     @unittest.skipIf(shutil.which("node") is None, "node is unavailable for the parse probe")
     def test_an_unparseable_document_is_rejected(self) -> None:
-        errors = self.check(text="// workflow: wave\nconst broken = ;\n")
+        errors = self.check(text=f"// workflow: wave\n{meta_line()}const broken = ;\n")
         self.assertEqual(len(errors), 1, errors)
         self.assertTrue(errors[0].startswith("workflows/wave.js does not parse: "), errors)
         # The real child's `.message` for this input is single-line, so this is a genuine
@@ -526,14 +690,17 @@ class WorkflowValidatorTests(unittest.TestCase):
         with mock.patch.object(validator.shutil, "which", return_value="node"), mock.patch.object(
             validator.subprocess, "run", return_value=fake
         ):
-            escaped_errors = self.check(text="// workflow: wave\nconst broken = ;\n")
+            escaped_errors = self.check(text=f"// workflow: wave\n{meta_line()}const broken = ;\n")
         self.assertEqual(len(escaped_errors), 1, escaped_errors)
         self.assertNotIn("\n", escaped_errors[0])
         self.assertIn("\\n", escaped_errors[0])
-        # Positive control: the documented async-body shape (top-level await plus a terminal
-        # return) parses, so the failure above is the syntax error and not the shape.
+        # Positive control: the documented shape (the meta export, then top-level await plus a
+        # terminal return) parses, so the failure above is the syntax error and not the shape.
         self.assertEqual(
-            self.check(text="// workflow: wave\nconst x = await agent('go', {});\nreturn x;\n"), []
+            self.check(
+                text=f"// workflow: wave\n{meta_line()}const x = await agent('go', {{}});\nreturn x;\n"
+            ),
+            [],
         )
 
     @unittest.skipIf(shutil.which("node") is None, "node is unavailable for the parse probe")
@@ -541,10 +708,14 @@ class WorkflowValidatorTests(unittest.TestCase):
         """Validating a workflow must not run it, and the check has to be able to tell."""
         # Executing this body would end the probe's child with status 7, which the validator would
         # report as a parse failure. Silence is therefore evidence that it was only compiled.
-        self.assertEqual(self.check(text="// workflow: wave\nprocess.exit(7);\nreturn 1;\n"), [])
+        self.assertEqual(
+            self.check(text=f"// workflow: wave\n{meta_line()}process.exit(7);\nreturn 1;\n"), []
+        )
         # Positive control: the same probe still reports a genuine syntax error, so the silence
         # above is compile-only behaviour and not a probe that never ran.
-        self.assertEqual(len(self.check(text="// workflow: wave\nconst broken = ;\n")), 1)
+        self.assertEqual(
+            len(self.check(text=f"// workflow: wave\n{meta_line()}const broken = ;\n")), 1
+        )
 
     def test_the_whole_validator_runs_the_workflow_checks(self) -> None:
         """The registration is load-bearing: a check nothing calls is a check nothing enforces."""
@@ -581,7 +752,9 @@ class WorkflowValidatorTests(unittest.TestCase):
         with mock.patch.object(validator.shutil, "which", return_value=None), mock.patch.object(
             validator.subprocess, "run", side_effect=AssertionError("node was invoked")
         ):
-            self.assertEqual(self.check(text="// workflow: wave\nconst broken = ;\n"), [])
+            self.assertEqual(
+                self.check(text=f"// workflow: wave\n{meta_line()}const broken = ;\n"), []
+            )
 
 
 class WorkflowPayloadTests(unittest.TestCase):
@@ -636,7 +809,11 @@ class WorkflowPayloadTests(unittest.TestCase):
         probe = (
             "const fs = require('fs');"
             "const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;"
-            "const body = fs.readFileSync(process.argv[1], 'utf8');"
+            # `export` cannot appear in a function body; demote the meta statement to a plain
+            # `const` exactly as the validator's parse probe does before wrapping the body
+            # (line-anchored, because a comment may quote the phrase).
+            "const body = fs.readFileSync(process.argv[1], 'utf8')"
+            ".replace(/^([ \\t]*)export(?=[ \\t]+const[ \\t]+meta\\b)/m, '$1');"
             "const run = new AsyncFunction('agent', body);"
             "run(() => { throw new Error('dispatched'); })"
             ".then(() => { process.stdout.write('DISPATCHED'); })"
@@ -679,7 +856,11 @@ class WorkflowPayloadTests(unittest.TestCase):
             probe = (
                 "const fs = require('fs');"
                 "const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;"
-                "const body = fs.readFileSync(process.argv[1], 'utf8');"
+                # `export` cannot appear in a function body; demote the meta statement to a plain
+            # `const` exactly as the validator's parse probe does before wrapping the body
+            # (line-anchored, because a comment may quote the phrase).
+            "const body = fs.readFileSync(process.argv[1], 'utf8')"
+            ".replace(/^([ \\t]*)export(?=[ \\t]+const[ \\t]+meta\\b)/m, '$1');"
                 "const run = new AsyncFunction('agent', body);"
                 "run(() => { throw new Error('dispatched'); })"
                 ".then(() => { process.stdout.write('DISPATCHED'); })"

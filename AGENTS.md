@@ -75,9 +75,12 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   authorized user-configuration effect. The shipped `sdlc-wave-scout` is a read-only two-stage
   scout that proposes a wave graph and refuses before dispatch until the conductor supplies a
   resolved `RuntimeAssignment` per stage, because the distributed bytes carry no model or effort
-  pin. Adding one = adding `workflows/<name>.js` whose first line is `// workflow: <name>`; the
-  validator checks that pairing, the lowercase-slug name, module-free parseability, the absence of
-  a static model/effort pin, and the absence of user-specific paths.
+  pin. Adding one = adding `workflows/<name>.js` whose first line is `// workflow: <name>` and
+  whose first STATEMENT is the host-required pure-literal `export const meta = {...}` declaring
+  the same name plus a description (no variables, calls, spreads, or interpolation; only comments
+  and blank lines before it); the validator checks both pairings, the lowercase-slug name, the
+  meta literal's closed shape, module-free parseability, the absence of a static model/effort
+  pin, and the absence of user-specific paths.
 - `hooks/` — agent-CLI hook scripts (Claude Code first), installed as ordinary owned bytes into
   `<claude-home>/.claude/hooks/` by the same lifecycle and under the same preservation rules as
   workflows; Codex owns no record of them. That directory is not an auto-discovery surface —

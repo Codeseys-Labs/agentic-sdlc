@@ -61,6 +61,25 @@ TEXT_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".ps1", ".toml", ".json", ".yml", 
 # drifting. This is a bundle-local authoring convention, not a claim about a host's file schema.
 WORKFLOW_STEM_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 WORKFLOW_HEADER_PREFIX = "// workflow: "
+# The host's workflow loader admits a script only when its FIRST STATEMENT is
+# `export const meta = {...}` as a PURE literal — no variables, calls, spreads, or
+# interpolation — declaring `name` and `description` (`phases` optional), with nothing before it
+# but comments and blank lines; the live host refused the shipped scout at load for exactly this
+# (agentic-sdlc-60f0). The rules here mirror that contract as a closed grammar: leading
+# commentary is `//` line comments only (the required header line already is one), values are
+# single-line string literals, and `phases` is an array of them. Stricter than the host refuses
+# closed rather than open.
+WORKFLOW_META_OPEN_PATTERN = re.compile(r"export[ \t]+const[ \t]+meta[ \t]*=[ \t]*\{")
+WORKFLOW_META_KEYS = ("name", "description", "phases")
+WORKFLOW_META_KEY_PATTERN = re.compile(r"([A-Za-z_$][A-Za-z0-9_$]*)[ \t\r\n]*:")
+WORKFLOW_META_STRING_PATTERN = re.compile(r"'(?:[^'\\\n]|\\[^\n])*'|\"(?:[^\"\\\n]|\\[^\n])*\"")
+WORKFLOW_META_FIRST_STATEMENT_ERROR = (
+    "the first statement must be an 'export const meta = {...}' literal"
+    " (only '//' comments and blank lines may precede it)"
+)
+WORKFLOW_META_PURE_LITERAL_ERROR = (
+    "meta must be a pure object literal (no variables, calls, spreads, or interpolation)"
+)
 # A workflow script cannot load modules in its documented runtime, so shipping one that tries is
 # shipping a document that cannot run.
 WORKFLOW_MODULE_LOAD_PATTERN = re.compile(r"\brequire\s*\(|\bimport\s*\(|^[ \t]*import[ \t]", re.MULTILINE)
@@ -78,7 +97,15 @@ WORKFLOW_USER_PATH_PATTERN = re.compile(
 WORKFLOW_PARSE_PROBE = (
     "const fs = require('fs');"
     "const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;"
-    "try { new AsyncFunction(fs.readFileSync(process.argv[1], 'utf8')); }"
+    # `export` is a module-only keyword that cannot appear in a function body, and the host
+    # extracts the required meta statement before it wraps the body. The probe mirrors that by
+    # demoting the first `export const meta` to a plain `const` (a non-global regex substitutes
+    # once). The pattern is anchored at line start because a `//` comment may quote the phrase
+    # without being the statement; it tolerates the same whitespace WORKFLOW_META_OPEN_PATTERN
+    # does.
+    "const body = fs.readFileSync(process.argv[1], 'utf8')"
+    ".replace(/^([ \\t]*)export(?=[ \\t]+const[ \\t]+meta\\b)/m, '$1');"
+    "try { new AsyncFunction(body); }"
     "catch (error) { process.stderr.write(String((error && error.message) || error)); process.exit(1); }"
 )
 # The agent-hook script's authored shape mirrors the workflow header pairing, shifted one line
@@ -551,14 +578,122 @@ def validate_skills(root: Path, result: Validation) -> None:
                 result.error(f"{directory}: missing {reference}")
 
 
+def _skip_meta_whitespace(source: str, position: int) -> int:
+    while position < len(source) and source[position] in " \t\r\n":
+        position += 1
+    return position
+
+
+def workflow_meta_violation(text: str, stem: str) -> str | None:
+    """Return the first host-meta-contract violation in a workflow document, or None.
+
+    The live host refuses to LOAD a script whose first statement is not the pure-literal
+    `export const meta = {...}` declaring name and description, so the gate holds the authored
+    bytes to the same closed shape rather than discovering the refusal at activation time.
+    """
+    statement_start = None
+    position = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("//"):
+            statement_start = position + len(line) - len(line.lstrip(" \t"))
+            break
+        position += len(line)
+    if statement_start is None:
+        return WORKFLOW_META_FIRST_STATEMENT_ERROR
+    opened = WORKFLOW_META_OPEN_PATTERN.match(text, statement_start)
+    if opened is None:
+        return WORKFLOW_META_FIRST_STATEMENT_ERROR
+    # Extract the object literal by matching its closing brace, string-aware so a brace inside a
+    # quoted value cannot end the scan early. A backtick outside a string is a template literal,
+    # which is the interpolation channel the pure-literal rule exists to refuse.
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    close_index = None
+    for index in range(opened.end() - 1, len(text)):
+        character = text[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in "'\"":
+            quote = character
+        elif character == "`":
+            return WORKFLOW_META_PURE_LITERAL_ERROR
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                close_index = index
+                break
+    if close_index is None:
+        return "the meta export is unterminated"
+    body = text[opened.end() : close_index]
+    fields: dict[str, object] = {}
+    position = _skip_meta_whitespace(body, 0)
+    while position < len(body):
+        key_match = WORKFLOW_META_KEY_PATTERN.match(body, position)
+        if key_match is None:
+            return WORKFLOW_META_PURE_LITERAL_ERROR
+        key = key_match.group(1)
+        if key not in WORKFLOW_META_KEYS:
+            return f"meta field '{key}' is not one of name, description, phases"
+        if key in fields:
+            return f"meta declares '{key}' more than once"
+        position = _skip_meta_whitespace(body, key_match.end())
+        if key == "phases":
+            if position >= len(body) or body[position] != "[":
+                return "meta.phases must be an array of string literals"
+            position = _skip_meta_whitespace(body, position + 1)
+            titles: list[str] = []
+            while position < len(body) and body[position] != "]":
+                title_match = WORKFLOW_META_STRING_PATTERN.match(body, position)
+                if title_match is None:
+                    return "meta.phases must be an array of string literals"
+                titles.append(title_match.group(0)[1:-1])
+                position = _skip_meta_whitespace(body, title_match.end())
+                if position < len(body) and body[position] == ",":
+                    position = _skip_meta_whitespace(body, position + 1)
+            if position >= len(body):
+                return "meta.phases must be an array of string literals"
+            position += 1
+            fields[key] = titles
+        else:
+            value_match = WORKFLOW_META_STRING_PATTERN.match(body, position)
+            if value_match is None:
+                return f"meta.{key} must be a string literal"
+            fields[key] = value_match.group(0)[1:-1]
+            position = value_match.end()
+        position = _skip_meta_whitespace(body, position)
+        if position < len(body):
+            if body[position] != ",":
+                return WORKFLOW_META_PURE_LITERAL_ERROR
+            position = _skip_meta_whitespace(body, position + 1)
+    if "name" not in fields or "description" not in fields:
+        return "meta must declare both name and description"
+    if fields["name"] != stem:
+        return f"meta.name must be the string '{stem}'"
+    description = fields["description"]
+    if not isinstance(description, str) or not description.strip():
+        return "meta.description must be a nonempty string literal"
+    return None
+
+
 def validate_workflows(root: Path, result: Validation) -> None:
     """Check the shape of every workflow overlay document the bundle ships.
 
     These are the shape rules that make sense for a document the lifecycle owns as BYTES: it must
-    be discoverable by the installer, self-declare the name it will be installed under, parse in
-    the runtime shape it will be handed to, load no modules, pin no model or effort, and name no
-    user-specific path. Nothing here executes a workflow or asserts that a host will accept one;
-    enabling the real overlay stays a separately authorized user-configuration effect.
+    be discoverable by the installer, self-declare the name it will be installed under, open with
+    the host-required pure-literal meta statement, parse in the runtime shape it will be handed
+    to, load no modules, pin no model or effort, and name no user-specific path. Nothing here
+    executes a workflow or asserts that a host will accept one; enabling the real overlay stays a
+    separately authorized user-configuration effect.
     """
     directory = root / "workflows"
     if not directory.is_dir():
@@ -587,6 +722,9 @@ def validate_workflows(root: Path, result: Validation) -> None:
             result.error(f"{label}: missing a leading '{WORKFLOW_HEADER_PREFIX}<name>' header")
         elif first_line[len(WORKFLOW_HEADER_PREFIX) :].strip() != stem:
             result.error(f"{label}: declared workflow name does not match the file name")
+        meta_violation = workflow_meta_violation(text, stem)
+        if meta_violation:
+            result.error(f"{label}: {meta_violation}")
         if WORKFLOW_MODULE_LOAD_PATTERN.search(text):
             result.error(f"{label}: a workflow document must not load modules")
         if WORKFLOW_ROUTE_PIN_PATTERN.search(text):

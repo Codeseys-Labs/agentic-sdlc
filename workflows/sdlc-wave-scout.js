@@ -16,6 +16,15 @@
 // activation time by the conductor. Until then every stage refuses before dispatch, and the
 // refusal is one SeedProposal rather than a host-default fallback.
 
+// The host loads this literal before it executes anything below: `export const meta` must be
+// the first STATEMENT in the script (only comments may precede it) and a pure literal — no
+// variables, calls, spreads, or interpolation. The body drives its stages through agent()
+// rather than phase(), so the optional `phases` field is omitted.
+export const meta = {
+  name: 'sdlc-wave-scout',
+  description: 'Advisory read-only two-stage wave scout that proposes a cartography map and one wave graph, and refuses before dispatch until the conductor supplies a resolved RuntimeAssignment per stage.',
+};
+
 const STAGES = ['cartography', 'wave-graph'];
 
 // The conductor's certified assignments, keyed by stage name. Deliberately empty here: a
