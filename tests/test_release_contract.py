@@ -85,7 +85,7 @@ class ReleaseContractIdentityTests(unittest.TestCase):
 
         contract = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
         self.assertEqual(contract["schema_version"], "release-contract/v1")
-        self.assertEqual(contract["checkout"]["version"], "0.7.3")
+        self.assertEqual(contract["checkout"]["version"], "0.7.4")
         self.assertEqual(contract["checkout"]["plane"], "checkout-development")
         self.assertIsNone(contract["checkout"]["public_channel"])
         self.assertEqual(contract["checkout"]["certification_claim"], "none")

@@ -34,7 +34,7 @@ EXPECTED_CHECKOUT = {
     "plane": "checkout-development",
     "public_channel": None,
     "release_topology_adr_status": "proposed",
-    "version": "0.7.3",
+    "version": "0.7.4",
 }
 READER_VERBS = ("inspect", "status", "doctor", "recover")
 # The three mutating lifecycle verbs. This file stays a reader: it parses the closed grammar and
@@ -314,7 +314,7 @@ def load_release_contract(root: Path) -> dict[str, Any]:
 def checkout_identity(contract: dict[str, Any]) -> dict[str, Any]:
     checkout = contract.get("checkout")
     if contract.get("schema_version") != "release-contract/v1" or checkout != EXPECTED_CHECKOUT:
-        raise ReportInvariantError("release contract does not establish the checkout-development 0.7.3 identity")
+        raise ReportInvariantError("release contract does not establish the checkout-development 0.7.4 identity")
     return {
         "certification_claim": checkout["certification_claim"],
         "plane": checkout["plane"],

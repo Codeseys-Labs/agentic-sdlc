@@ -1024,15 +1024,15 @@ def _validate_release_checkout(
 
     if version == (0, 7, 3):
         if plane != "checkout-development":
-            result.error("policy/release-contract.v1.json: 0.7.3 must remain checkout-development")
+            result.error("policy/release-contract.v1.json: 0.7.4 must remain checkout-development")
         if public_channel is not None:
-            result.error("policy/release-contract.v1.json: 0.7.3 must not have a public channel")
+            result.error("policy/release-contract.v1.json: 0.7.4 must not have a public channel")
         if certification_claim != "none":
-            result.error("policy/release-contract.v1.json: 0.7.3 must not make a certification claim")
+            result.error("policy/release-contract.v1.json: 0.7.4 must not make a certification claim")
         if adr_status != "proposed":
-            result.error("policy/release-contract.v1.json: 0.7.3 keeps the release-topology ADR proposed")
+            result.error("policy/release-contract.v1.json: 0.7.4 keeps the release-topology ADR proposed")
         if rows:
-            result.error("policy/release-contract.v1.json: 0.7.3 checkout-development has no support rows")
+            result.error("policy/release-contract.v1.json: 0.7.4 checkout-development has no support rows")
 
 
 def _validate_release_dated_references(

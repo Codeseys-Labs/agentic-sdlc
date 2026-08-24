@@ -178,3 +178,26 @@ clone-dependency premise here no longer holds and should be re-litigated.
 This record is evidence for a conductor to cite; it authorizes no clone, fetch,
 network call, config trust, toolchain install, credential use, push,
 publication, merge, deployment, or other outward effect on its own.
+
+## Amendment — 2026-08-24: the first prerelease exists, and the mise `github:` acquisition leg is executed evidence
+
+The archive builder, copy activation, and clean-host journey this record was waiting on now have
+executed evidence, and the first release artifact exists: `v0.7.3` was published as a
+`--prerelease` (tag at `4c7f7c2`, archive sha256 `fc820fc2…711349`, notes inside the claim plane —
+`release_claim: "none"`, no support tuple, disclosures verbatim). Container proof the same day:
+`mise install` of the exact version resolved the prerelease-flagged release and re-hashed 231/231
+manifest entries clean, and the receipted activation journey ran end to end from the downloaded
+bytes (26/26 digests, clean post-uninstall status). Two measured facts bound the claim: the
+UNVERSIONED `mise use -g` form fails for two reasons (prerelease exclusion and mise's built-in
+`minimum_release_age` filter) and stays unclaimed, and mise exposed the whole `scripts/` directory
+as the tool's bin path — resolved by committing `bin/ccodex`, a self-locating dispatcher, so the
+release tree exposes exactly one command (adopted per the operator's 2026-08-24 direction; the
+first release carrying it is `v0.7.4`).
+
+This publication amends the Install-UX plan's implementation order (its publish step ran before
+its steps 3, 5, and 7) rather than following it; the plan document remains the UX record. The
+managed clone stays the supported distribution for gates, Seeds, and contribution — the release
+tree carries no `.git`, so those surfaces refuse there by design, which is the copy-versus-link
+boundary executing as recorded. ADR-0021 remains proposed: runtimes are auto-installed from the
+tree's pins, not packaged, and its self-contained-artifact legs are unexecuted. This amendment
+records executed evidence and authorizes nothing further.
