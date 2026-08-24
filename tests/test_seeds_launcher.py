@@ -452,6 +452,65 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self.assertIn("ignored", ignored.stderr)
         self.assertFalse(self.active_receipt_path().exists())
 
+    def _commit_tracked_symlinks(self) -> Path:
+        """The pristine-clone shape: a plugin/ directory of tracked mode-120000 symlinks whose
+        targets are payload DIRECTORIES, plus one file-target link. Git records each link as a
+        blob holding the target string."""
+        payload = self.distribution / "skills"
+        payload.mkdir()
+        (payload / "entry.md").write_text("payload\n", encoding="utf-8")
+        plugin = self.distribution / "plugin"
+        plugin.mkdir()
+        os.symlink("../skills", plugin / "skills")
+        os.symlink("entry.md", payload / "alias.md")
+        self._run(["git", "add", "."], cwd=self.distribution)
+        self._run(["git", "commit", "-qm", "tracked symlinks"], cwd=self.distribution)
+        stage = self._run(["git", "ls-files", "--stage", "plugin/skills"], cwd=self.distribution).stdout
+        assert stage.startswith("120000 "), stage
+        return plugin
+
+    def test_bootstrap_admits_a_clean_tree_with_tracked_symlinks(self) -> None:
+        # Reading the working copy THROUGH a directory-target link EISDIRs, so a pristine clone
+        # was misread as dirty; the link itself, compared by lstat/readlink, matches the index.
+        self._commit_tracked_symlinks()
+        result = self.bootstrap()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.active_receipt_path().exists())
+
+    def test_bootstrap_refuses_symlink_drift_without_following_links(self) -> None:
+        plugin = self._commit_tracked_symlinks()
+
+        # A retargeted link differs from the recorded target string; the refusal must come from
+        # comparing the link itself, so a dangling target must not turn it into a read error.
+        (plugin / "skills").unlink()
+        os.symlink("../nowhere", plugin / "skills")
+        retargeted = self.bootstrap()
+        self.assertNotEqual(retargeted.returncode, 0)
+        self.assertIn("clean Git tree and index", retargeted.stderr)
+
+        # A regular file holding exactly the recorded target string is a typechange, not a clean
+        # checkout. Both links are replaced so no OTHER symlink can mask the hole: a byte-level
+        # comparison that reads the working copy without checking the node type admits this tree.
+        (plugin / "skills").unlink()
+        (plugin / "skills").write_text("../skills", encoding="utf-8")
+        (self.distribution / "skills" / "alias.md").unlink()
+        (self.distribution / "skills" / "alias.md").write_text("entry.md", encoding="utf-8")
+        typechanged = self.bootstrap()
+        self.assertNotEqual(typechanged.returncode, 0)
+        self.assertIn("clean Git tree and index", typechanged.stderr)
+
+        # The mirror typechange: a tracked regular file replaced by a link to identical bytes
+        # must not be read THROUGH to a false byte match.
+        (self.distribution / "twin.lock").write_text("locked fixture\n", encoding="utf-8")
+        self._run(["git", "add", "twin.lock"], cwd=self.distribution)
+        self._run(["git", "commit", "-qm", "twin"], cwd=self.distribution)
+        (self.distribution / "twin.lock").unlink()
+        os.symlink("mise.lock", self.distribution / "twin.lock")
+        mirrored = self.bootstrap()
+        self.assertNotEqual(mirrored.returncode, 0)
+        self.assertIn("clean Git tree and index", mirrored.stderr)
+        self.assertFalse(self.active_receipt_path().exists())
+
     @unittest.skipIf(HOSTILE_NODE is None, "a non-22.23.2 Node is required for interpreter rejection fixture")
     def test_bootstrap_and_inspect_reject_launcher_process_running_under_wrong_node(self) -> None:
         result = subprocess.run(

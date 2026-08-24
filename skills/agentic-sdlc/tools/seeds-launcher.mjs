@@ -720,14 +720,21 @@ function gitDistribution(distribution) {
       const metadata = separator === -1 ? [] : record.slice(0, separator).split(' ');
       const path = separator === -1 ? '' : record.slice(separator + 1);
       if (metadata.length !== 3 || !/^[0-7]{6}$/.test(metadata[0]) || !/^[0-9a-f]{40,64}$/.test(metadata[1]) || metadata[2] !== '0' || !path) failRefusal('reviewed distribution index is not an exact ordinary file tree');
-      let bytes;
+      // Git records a mode-120000 entry as a blob holding the target STRING, so the working copy
+      // is read with lstat/readlink and never followed: a tracked link may point at a directory
+      // (EISDIR through readFileSync) or outside the tree. A node type disagreeing with the index
+      // mode is a working-tree change even when the bytes on the other side would match.
+      const workingPath = join(distribution, path);
+      let bytes = null;
       try {
-        bytes = readFileSync(join(distribution, path));
+        const link = lstatSync(workingPath).isSymbolicLink();
+        if (link === (metadata[0] === '120000')) bytes = link ? readlinkSync(workingPath, 'buffer') : readFileSync(workingPath);
       } catch {
-        failRefusal('reviewed distribution must have a clean Git tree and index');
+        bytes = null;
       }
+      if (bytes === null) failRefusal(`reviewed distribution must have a clean Git tree and index: ${path}`);
       const actual = capture(git, ['hash-object', '--no-filters', '--stdin'], 'cannot hash tracked distribution file', environment, bytes);
-      if (actual !== metadata[1]) failRefusal('reviewed distribution must have a clean Git tree and index');
+      if (actual !== metadata[1]) failRefusal(`reviewed distribution must have a clean Git tree and index: ${path}`);
     }
     const untracked = capture(git, ['ls-files', '--others', '--exclude-standard'], 'cannot enumerate untracked distribution files', environment);
     const ignored = capture(git, ['ls-files', '--others', '--ignored', '--exclude-standard'], 'cannot enumerate ignored distribution files', environment);
