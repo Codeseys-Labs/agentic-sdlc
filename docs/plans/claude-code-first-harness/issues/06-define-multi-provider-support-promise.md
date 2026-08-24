@@ -75,3 +75,35 @@ same route only under a bounded, predeclared policy. A fallback route must be pr
 reviewed workflow plan, independently qualified, and approved before execution. Otherwise the
 affected node stops and reports the route, failure class, attempts, and retained artifacts; the
 operator may then retry, choose another qualified route, or continue through native Claude.
+
+### Certificate identity and post-failure route changes
+
+**Spec-alignment decisions, 2026-08-24.** These two decisions constrain the routed-model profile
+work — Slice 7 of the [product specification](../agentic-sdlc-product-spec.md), whose scope
+carries the rightsizing qualification handoff — and they govern wherever they disagree with the
+shorter statements above.
+
+1. **The certificate binds the canonical exact route tuple by reference.** The field list under
+   "Qualification and failure behavior" is not the certificate's identity. That identity is the
+   exact route identity of Implementation Decision 34 — transport, route kind, provider lane,
+   endpoint/region where relevant, credential slot, exact model, effort, context, tools,
+   auth/billing basis, and identity readback basis — recorded canonically as the exact route tuple
+   in [the rightsizing and task-map answer](15-refine-model-rightsizing-and-task-map.md), whose
+   route ID digests the whole tuple, together with the task pack, harness, runtime, settings,
+   class, and verifier that a class qualification binds under Implementation Decision 36.
+   Re-enumerating those fields here would drift from that tuple, so this answer defers to it
+   instead of restating it. Nominally equal models on different tuples qualify separately, so a
+   certificate is evidence for its own tuple and class only and can never be read across to
+   another entitlement, credential slot, effort, or context.
+
+2. **Continuing through native Claude after a routed failure needs its own approved plan.** Native
+   Claude is a distinct credential and support surface (Implementation Decision 47) and a separate
+   route family that cannot be created, shadowed, or relabeled as an OCX provider profile
+   ([the provider-onboarding answer](19-define-provider-onboarding-and-route-control-ux.md)), so
+   selecting it after a stop is a route change rather than a retry. Implementation Decision 51
+   admits a change of provider, model, slot, effort, context, or route only through an already
+   qualified and approved alternative, and Implementation Decision 39 requires every fallback to
+   be exact, qualified, plan-declared, and preapproved. The operator's options after the stop above
+   are therefore a bounded same-route retry, an alternative the reviewed plan already predeclared
+   and that is currently qualified, or a new approved plan. A native-Claude continuation the plan
+   did not predeclare is the last of those, and the node stays stopped until that approval exists.

@@ -21,6 +21,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
@@ -269,6 +270,69 @@ class RefusalTest(BuilderFixture):
         )
         self.assertEqual(completed.returncode, builder.EXIT_REFUSED, completed.stdout + completed.stderr)
         self.assertIn("refused:", completed.stderr)
+
+
+class HeadAnchorTest(BuilderFixture):
+    """agentic-sdlc-4b0f: the recorded source is ONE derivation from ONE commit, not three reads.
+
+    A settled repository answers ``rev-parse HEAD``, ``rev-parse HEAD^{tree}``, and ``git archive
+    HEAD`` for the same commit, so a builder that reads the reference three times looks correct in
+    every ordinary test here. These drive the window where it is not: the head moves after the
+    commit has been recorded. The dirty-tree refusal does not close that window, because a commit
+    landing in another worktree on the same repository moves ``HEAD`` without leaving anything to
+    report as dirty.
+    """
+
+    def _move_the_head(self) -> str:
+        """Land a commit whose tree really differs from the fixture's, and return it."""
+        (self.repo / "LICENSE").write_text("relicensed\n", encoding="utf-8")
+        self.git("add", "LICENSE")
+        self.git("commit", "--quiet", "--no-verify", "-m", "moved")
+        moved = self.git("rev-parse", "HEAD").strip()
+        self.assertNotEqual(moved, self.commit)
+        return moved
+
+    def test_a_head_that_moves_between_the_reads_cannot_split_the_recorded_pair(self) -> None:
+        real, moved = builder.git, []
+
+        def moving(root: Path, *arguments: str) -> str:
+            answer = real(root, *arguments)
+            if arguments == ("rev-parse", "HEAD") and not moved:
+                # The commit has just been recorded. Moving the head HERE is the whole test: it is
+                # the only point at which a second independent read would answer differently.
+                moved.append(self._move_the_head())
+            return answer
+
+        with mock.patch.object(builder, "git", moving):
+            commit, tree = builder.require_clean(self.repo)
+
+        self.assertEqual(moved, [self.git("rev-parse", "HEAD").strip()], "the head did not actually move")
+        self.assertEqual(commit, self.commit)
+        # The tree belongs to the commit that was RECORDED, not to the one that replaced it.
+        self.assertEqual(tree, self.git("rev-parse", f"{self.commit}^{{tree}}").strip())
+        # POSITIVE CONTROL: the head really did move to a commit with a DIFFERENT tree, so the
+        # equality above is not two spellings of one value.
+        self.assertNotEqual(tree, self.git("rev-parse", f"{moved[0]}^{{tree}}").strip())
+
+    def test_the_archive_bytes_come_from_the_recorded_commit_and_not_from_head(self) -> None:
+        prefix = "fixture/"
+        allowlist = [*POLICY["payload"]["files"], *POLICY["payload"]["trees"]]
+        moved = self._move_the_head()
+
+        def licence_archived_from(commit: str) -> bytes:
+            destination = Path(self.temporary.name) / f"{commit}.tar"
+            builder.archive_tar(self.repo, prefix, allowlist, destination, commit)
+            with tarfile.open(destination) as tar:
+                extracted = tar.extractfile(f"{prefix}LICENSE")
+                assert extracted is not None
+                return extracted.read()
+
+        # HEAD sits at `moved`, so a builder that archived `HEAD` would serve the edited licence for
+        # the recorded commit too, and the manifest would name a source the bytes do not come from.
+        self.assertEqual(licence_archived_from(self.commit), b"licence\n")
+        # POSITIVE CONTROL: the commit argument really is what selects the content, so the assertion
+        # above is about the pin and not about a fixture carrying only one version of the file.
+        self.assertEqual(licence_archived_from(moved), b"relicensed\n")
 
 
 if __name__ == "__main__":

@@ -70,6 +70,25 @@ First-party optional capabilities use
 names and disclose surface cost, destinations, collisions, egress, and mutations before approval.
 External libraries never become owned profiles or uninstall dependencies.
 
+### External-library verb boundary
+
+**Spec-alignment decision, 2026-08-24.** `ccodex libraries` is a discovery and upstream-delegation
+surface, never an installer. `list`, `status`, and `plan` inspect and disclose; `install` invokes
+the upstream library's own front door; and `migrate` retires another channel's copies of the same
+upstream through that channel's own removal path before installing. Core does not vendor bytes,
+install an external library itself, or own what a library writes — anything a library writes
+belongs to that library — which is how the current `libraries:*` tasks already behave under
+ADR-0009: explicitly named libraries only with no verb that installs everything, dry run by
+default with `--yes` as the only thing that runs a command, a per-library collision precheck that
+refuses rather than overwrites, and no deletion primitive in the module itself. ADR-0009
+supersedes only ADR-0008's first decision item and restates the rest, so the
+never-vendor-a-foreign-byte rule still holds. This matches Implementation Decision 70 of the
+[product specification](../agentic-sdlc-product-spec.md), which keeps the closed catalog external
+and opt-in through each upstream front door and forbids vendoring bytes, installing through Core,
+or treating name presence as ownership; installing an external library through Core, setup, hooks,
+or gates is out of scope. Agentic SDLC supports its own catalog and integration behavior, while
+upstream content and behavior remain the library author's responsibility.
+
 ### Update, rollback, diagnosis, and recovery
 
 Mise alone acquires and selects CLI versions; the first release has no `ccodex` self-updater.

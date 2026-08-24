@@ -9,12 +9,16 @@ CONTRACT.
 
   * The payload is exactly ``policy/release-candidate.v1.json`` -> ``payload.files`` and
     ``payload.trees``.  Nothing else is archived and the allowlist is never widened here.
-  * The bytes come from ``git archive`` over the committed HEAD tree, never from the working
-    tree.  ``git archive`` supplies the commit epoch as every member's mtime, uid/gid 0, and
+  * The bytes come from ``git archive`` over the committed tree, never from the working tree.
+    ``git archive`` supplies the commit epoch as every member's mtime, uid/gid 0, and
     fixed modes, so two builds of one commit are byte-identical and the digest in
     ``dist/SHA256SUMS`` genuinely names that commit's content.  ``tar`` over a working tree
     records the checkout's own mtimes and the caller's ownership, and the digest then means
     nothing; that substitution is the one-line defect this module exists to prevent.
+  * ``HEAD`` is resolved EXACTLY ONCE, by ``require_clean``, and every later step is pinned to
+    the commit it returned -- the tree it names and the bytes ``git archive`` reads.  Re-reading
+    ``HEAD`` per step would let a head that moved mid-build produce a manifest whose recorded
+    source, recorded tree, and member bytes came from up to three different commits.
   * ``manifest.json`` is appended to git's own tar as the single member this process writes.
     Every other member's bytes are git's, untouched.  The manifest inventories every member by
     relative path with a sha256 for each file and a target for each symlink, and it does not
@@ -75,6 +79,17 @@ def git(root: Path, *arguments: str) -> str:
 
 
 def require_clean(root: Path) -> tuple[str, str]:
+    """Refuse a dirty tree, then read the head ONCE as an atomic `(commit, tree)` pair.
+
+    The tree is resolved from the commit this function just read (``rev-parse <commit>^{tree}``),
+    never by a second independent ``rev-parse HEAD^{tree}``.  A commit object names exactly one
+    tree, so the pair is atomic by construction; two independent reads of ``HEAD`` can straddle a
+    head that moved between them and produce a commit and a tree from different histories, which is
+    a manifest naming a source that never existed.  The dirty-tree check above does not close that
+    window -- a commit made in another worktree on the same repository moves ``HEAD`` without
+    dirtying anything here (agentic-sdlc-4b0f, the idiom ``scripts/gate_receipt.py``'s
+    ``observe_repository_head`` owns).
+    """
     status = git(root, "status", "--porcelain")
     if status.strip():
         listed = ", ".join(sorted(line[3:] for line in status.splitlines())[:10])
@@ -82,7 +97,8 @@ def require_clean(root: Path) -> tuple[str, str]:
             f"the tree at {root} is dirty ({listed}); this build archives the committed HEAD tree,"
             " so a digest built here would name a commit whose content is not what you are looking at"
         )
-    return git(root, "rev-parse", "HEAD").strip(), git(root, "rev-parse", "HEAD^{tree}").strip()
+    commit = git(root, "rev-parse", "HEAD").strip()
+    return commit, git(root, "rev-parse", f"{commit}^{{tree}}").strip()
 
 
 def read_policy(root: Path) -> dict[str, Any]:
@@ -103,9 +119,15 @@ def read_policy(root: Path) -> dict[str, Any]:
     return policy
 
 
-def archive_tar(root: Path, prefix: str, allowlist: list[str], destination: Path) -> None:
+def archive_tar(root: Path, prefix: str, allowlist: list[str], destination: Path, commit: str) -> None:
+    """Archive the EXACT commit `require_clean` recorded, never ``HEAD`` re-resolved here.
+
+    ``HEAD`` would be a third independent read of a moving reference: the manifest would name one
+    commit while the member bytes came from whichever commit ``HEAD`` pointed at by the time this
+    ran, and the digest would then name content the recorded source does not describe.
+    """
     completed = subprocess.run(
-        ["git", "-C", str(root), "archive", "--format=tar", f"--prefix={prefix}", "HEAD", "--", *allowlist],
+        ["git", "-C", str(root), "archive", "--format=tar", f"--prefix={prefix}", commit, "--", *allowlist],
         capture_output=True,
         check=False,
     )
@@ -209,7 +231,7 @@ def _build_into(
     commit: str,
     tree: str,
 ) -> dict[str, Any]:
-    archive_tar(root, prefix, allowlist, tar_path)
+    archive_tar(root, prefix, allowlist, tar_path, commit)
     rows, epoch = inventory(tar_path, prefix)
 
     manifest = {

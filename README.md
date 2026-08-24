@@ -554,7 +554,7 @@ changed, foreign, and adopted copies are preserved. Every gateway command remain
 
 | Command | What it does |
 |---|---|
-| `ccodex providers` | Configured providers, and which are LIVE in the running gateway. A provider in the config file is **not** live until synced and restarted — check here rather than trusting an add's success message. |
+| `ccodex providers` | Configured providers, and which are LIVE in the running gateway. A provider in the config file is **not** live until `ccodex restart` has published it — check here rather than trusting an add's success message. |
 | `ccodex models` | The running gateway's flat live catalog. Muse models appear as ordinary namespaced entries, not as a separate plane. |
 | `ccodex set-fast-model [<exact-model-id\|->]` | With no argument, choose a Claude Code family or a model in the gateway's live OCX catalog, or clear the override to use the normal subscription Haiku slot. One argument preserves the exact noninteractive path; `-` clears. The write goes through OpenCodex and is **not** Auto mode's permission classifier. Claude families are entitlement-checked when used; only the OCX rows are proven live when the menu is built. |
 | `ccodex configure` | With no arguments, print the admitted configuration surface in detail. |
@@ -627,30 +627,45 @@ it reports the file that a function is hiding.
 `provider add` writes the provider's SHAPE only. **It accepts no key** — it has no `--api-key`
 flag and it does not read stdin, so a key piped to it is silently dropped and every later request
 fails with `401 invalid_api_key` while the routing itself looks correct in the attribution log.
-The key goes in through a different verb, and the gateway must already be running when it does.
-Verified end to end on a fresh host (2026-08-08):
+The key goes in through a different verb, and the gateway must already be running **and already
+restarted** when it does. Measured end to end in one clean run on 2026-08-23:
 
 ```bash
-# 1. the provider's shape. No key here.
+# 1. the gateway must be UP: add-key stores nothing against a stopped proxy.
+ccodex ensure
+
+# 2. the provider's shape. No key here.
 ccodex configure provider add muse --adapter openai-responses \
   --base-url https://api.meta.ai/v1 --default-model muse-spark-1.2
 
-# 2. the gateway must be UP before a key can be stored.
-ccodex ensure
-
-# 3. the key, read only from piped stdin -- never argv, which `ps` exposes host-wide.
-printf '%s' "$YOUR_KEY" | ccodex configure account add-key muse --label my-key
-
-# 4. a restart puts the key into the running routing table.
+# 3. the PUBLISH step: step 2 wrote the config file, not the running catalog.
 ccodex restart
+
+# 4. the key, read only from piped stdin -- never argv, which `ps` exposes host-wide.
+printf '%s' "$YOUR_KEY" | ccodex configure account add-key muse --label my-key
 
 # 5. confirm, then use it.
 ccodex providers                    # muse should be LIVE, not merely configured
 ccodex launch --model muse/muse-spark-1.2
 ```
 
-After step 3 the provider carries `apiKey` and `apiKeyPool`; before it, only `adapter`, `baseUrl`,
-and `defaultModel`. Check with `ccodex providers` rather than trusting step 1's success message.
+After step 4 the provider carries `apiKey` and `apiKeyPool`; before it, only `adapter`, `baseUrl`,
+and `defaultModel`. Check with `ccodex providers` rather than trusting step 2's success message.
+
+**Step 3 is the publish step, and step 4 is why it has to come first.** `add-key` validates the
+provider against what the RUNNING gateway serves rather than against the config file, so run
+between steps 2 and 3 it fails `Error: unknown provider` for a provider `ccodex providers` listed
+as configured one command earlier, and against a stopped proxy it fails `Proxy not reachable`.
+Measured 2026-08-23 in one container with no Codex installed and `ocx sync` never run: the restart
+alone took the live catalog from 7 ids serving none of the new provider to 420 serving 413 of it,
+and the key then stored on the first try. Both constraints are upstream opencodex behavior,
+reproduced against the raw pinned binary, and neither is in the configure help — the message says
+`unknown provider` where it means *configured but not yet published*. What `add-key` needs is a
+running gateway whose catalog already includes the provider, and a restart after the provider add
+is the only order that guarantees it. The older 2026-08-08 sequence in
+[`docs/research/2026-08-08-fresh-host-install-verification.md`](docs/research/2026-08-08-fresh-host-install-verification.md)
+stored a key before its restart because its `ensure` came after the provider add and started a
+gateway that was down — a cold start rather than a stale one.
 
 Two upstream notes. `ocx sync` — which the post-mutation notice names — needs Codex installed and
 reports `Codex config not found` on a host without it; the gateway still starts and still routes,

@@ -212,6 +212,17 @@ ccodex launch --model muse/muse-spark-1.2
 
 After step 3 the provider carries `["adapter","baseUrl","defaultModel","apiKeyPool","apiKey"]`.
 
+> **The ORDER above was superseded on 2026-08-23 (seed `agentic-sdlc-d353`). Do not copy it.**
+> `account add-key` validates the provider against what the RUNNING gateway serves rather than
+> against the config file, so a key stored between the `provider add` and a restart fails
+> `Error: unknown provider` — measured 2026-08-23 in one clean container, and reproduced against
+> the raw pinned binary, so it is upstream behavior rather than the wrapper's. The order that holds
+> either way is `ccodex ensure`, `provider add`, `ccodex restart`, then `add-key`; the restart is
+> the publish step, and the same run took the live catalog from 7 ids serving none of the new
+> provider to 420 serving 413 of it with `ocx sync` never run at all. The sequence above worked
+> because its `ensure` came AFTER the provider add and started a gateway that was down — a cold
+> start rather than a stale one. Finding 3 above stands unchanged: the gateway must also be up.
+
 ## Two upstream observations, neither a defect in this bundle
 
 **`ocx sync` requires Codex installed.** On a host with no `~/.codex/config.toml` it reports

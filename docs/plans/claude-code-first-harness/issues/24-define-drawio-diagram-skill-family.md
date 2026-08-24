@@ -150,8 +150,8 @@ The first-party skill is `drawio-diagrams`, parallel to the planned `mermaid-dia
 names the artifact format rather than the product. Core installation includes the skill, but its
 selector activates only for matching work.
 
-Install preflight audits exact names and materially overlapping selection descriptions. An
-official `drawio` skill or equivalent foreign surface is preserved. A meaningful overlap becomes
+Install preflight decides on exact names and only reports description overlap, under the rule below.
+An official `drawio` skill or equivalent foreign surface is preserved. A name collision becomes
 `selection-conflict`; Agentic SDLC skips its selector until the operator chooses a channel, while
 unrelated bundle entries continue. No lifecycle operation silently migrates, disables, updates, or
 removes a foreign plugin.
@@ -167,3 +167,35 @@ path. Retirement removes only unchanged owned selectors and optional owned runti
 preserves repository diagrams, sidecars, renders, receipts, operator libraries, and foreign assets.
 Every retired format retains a documented read or migration path rather than becoming silently
 unreadable.
+
+### Collision rule: exact name decides, description overlap is deferred
+
+“Materially overlapping selection descriptions” is not a rule. It names no compared field, no
+normalization, no comparison, and no threshold, so two implementers would build different
+preflights and neither could be shown wrong — and the effect it gates is skipping a first-party
+selector the core just installed. Version 1 therefore splits the axis rather than implementing a
+phrase.
+
+Exact name decides, and that half is specified now. The compared field is the entry name alone:
+the directory name a host records for a skill, which `validate_skills` binds to the skill's own
+`name`. Normalization is surrounding-whitespace strip plus case-fold, because a case-only
+difference is the same directory on a case-insensitive filesystem. The comparison is equality after
+that normalization; there is no distance, score, or threshold. The three cases resolve as: equal
+name is `selection-conflict` and skips exactly that selector while every other bundle entry
+continues; a different name with an overlapping description is reported to the operator and
+classifies nothing; an unrelated entry produces neither a report nor an effect. The preflight ships
+with fixtures for those three cases when it is built.
+
+Description overlap stays report-only. No automatic classification, skip, or deferral may follow
+from comparing description text until the rule itself exists: the exact normalized fields, the
+comparison function, a threshold calibrated against a fixture corpus of real skill descriptions,
+and those fixtures passing. No implementation may derive that rule from the phrase “materially
+overlapping”.
+
+Specifying it is deferred rather than written here because the calibration input does not exist:
+`drawio-diagrams` is unbuilt by decision, so there is no shipped description to measure against and
+any threshold chosen today would be invented precision. The report-only default is also the
+fail-safe one — a missed overlap costs the operator one visible duplicate selector they can resolve,
+while a wrong automatic skip silently withdraws a capability the core installed. Issue 17 carries
+the same unspecified phrase for role IDs; the same split applies there and needs the same explicit
+specification before any description comparison acquires an effect.

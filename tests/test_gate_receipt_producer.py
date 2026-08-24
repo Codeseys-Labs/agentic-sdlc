@@ -3190,6 +3190,48 @@ class RepositoryHeadStampTests(_ProducerTestCase):
         first = self._git("rev-parse", "HEAD~1")
         self.assertNotEqual(self._git("rev-parse", f"{first}^{{tree}}"), head["tree"])
 
+    def test_the_tree_is_derived_from_the_commit_just_read_and_never_from_head_again(self) -> None:
+        """The single derivation, isolated (agentic-sdlc-4b0f).
+
+        The test above cannot fail a producer that reads `HEAD` twice: in a settled repository both
+        reads answer for the same commit, so the pair agrees however it was derived, and reverting
+        `observe_repository_head` to `rev-parse HEAD^{tree}` left the whole suite green. The ABBA
+        window its docstring describes is only reachable when the head MOVES between the two reads,
+        so that is what this drives -- the second read answers differently depending on which
+        revision it names. A producer asking for `<commit>^{tree}` gets the tree of the commit it
+        already recorded; one asking for `HEAD^{tree}` gets the tree of the commit that replaced it,
+        and the receipt then names a commit and a tree from two different histories with nothing
+        downstream able to see it.
+        """
+        first, replacement = "a" * 40, "c" * 40
+        tree_of_first, tree_of_replacement = "b" * 40, "d" * 40
+        asked: list[tuple[str, ...]] = []
+
+        def answer(_cwd: Path, *arguments: str) -> str | None:
+            asked.append(arguments)
+            if arguments == ("rev-parse", "HEAD"):
+                return first
+            if arguments == ("rev-parse", f"{first}^{{tree}}"):
+                return tree_of_first
+            # The head moved once the commit above had been read, so any read that resolves `HEAD`
+            # a second time now answers for `replacement` instead.
+            if arguments == ("rev-parse", "HEAD^{tree}"):
+                return tree_of_replacement
+            return None
+
+        with mock.patch.object(gate_receipt, "_git_object_name", answer):
+            observed = gate_receipt.observe_repository_head(self.repository)
+
+        self.assertEqual(observed, {"commit": first, "tree": tree_of_first})
+        # The derivation is NAMED, not merely consistent: the second read asked about the commit the
+        # first read returned, which is the property a reverted producer cannot satisfy.
+        self.assertEqual(asked, [("rev-parse", "HEAD"), ("rev-parse", f"{first}^{{tree}}")])
+        # POSITIVE CONTROL: the stub really would have served a DIFFERENT tree to a second
+        # independent `HEAD` read, so the assertions above are about the derivation rather than
+        # about a fixture that could only ever answer one way.
+        self.assertNotEqual(tree_of_replacement, tree_of_first)
+        self.assertEqual(answer(self.repository, "rev-parse", "HEAD^{tree}"), tree_of_replacement)
+
     def test_a_non_repository_cwd_records_a_null_head_and_still_writes_the_receipt(self) -> None:
         # Null is a first-class answer, not a refusal: a gate that ran outside a repository is still
         # honest evidence about that gate.

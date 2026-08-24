@@ -131,9 +131,19 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   scanning stays a separate, explicitly consented pre-publish step. A passing gate
   is evidence only; it does not authorize an outward effect.
 - Run `./scripts/install-skill-bundle.sh self-test` after installer changes.
-- Version bumps: `./scripts/bump-version.sh <version>` updates every manifest in one
-  shot; `--check` exits 1 on drift, and the validator raises a disagreeing manifest as an error,
-  so the gate and CI both fail closed on it. Never hand-edit a single manifest's version.
+- Version bumps: `./scripts/bump-version.sh <version>` updates every manifest declared in
+  `.version-bump.json` in one shot; `--check` exits 1 on drift, and the validator raises a
+  disagreeing manifest as an error, so the gate and CI both fail closed on it. Never hand-edit a
+  single manifest's version. The bump is NOT the whole transition, and the remainder is deliberate:
+  `policy/release-contract.v1.json`, `policy/release-candidate.v1.json`'s `product_version`, and
+  `scripts/ccodex_sdlc.py`'s `EXPECTED_CHECKOUT["version"]` are a REVIEWED edit rather than bump
+  targets, because moving the contract silently would let a routine bump ship a mislabeled archive.
+  What the gate owes you is the complete list, and it now names each of the three by file with its
+  own error, so a forgotten one fails closed at `mise run validate` instead of surfacing later as
+  dozens of reader assertions quoting the version being REPLACED (agentic-sdlc-3174). Every other
+  `0.7.x` string in the tree — AGENTS.md's and README.md's container-proof sentences, ADR-0011's
+  first-release note, the validator's transition comment — is dated evidence about one specific
+  release and must NOT move with a bump.
 - Adding a skill = adding `skills/<name>/SKILL.md` (name must equal the directory
   name; description ≤1024 chars). The installer/validator/planes pick it up
   automatically.
@@ -333,7 +343,16 @@ model selection as policy.
   re-points that model family to the gateway's default provider instead of Anthropic (a plain
   `claude-*` alias or a gateway id in those slots stays fine). Every selected settings value is inspected
   before gateway startup, then accepted arguments are forwarded unchanged. An `sk-ant-oat*` login
-  is accepted; no credential value or selected settings path is printed. A healthy launch is still
+  is accepted; no credential value or selected settings path is printed. ACCEPTED IS NOT REQUIRED:
+  no predicate anywhere looks for a login, because the wrapper reads no credential at all, so a
+  MISSING or expired login is not in the exit-3 set and a no-login host is not treated as a route
+  that would not be used. Measured 2026-08-23 in a fresh container with no Claude login and no
+  provider credentials: every settings predicate passed, the gateway STARTED — a real effect —
+  and `claude` was exec'd, so the first routed turn failed downstream at exit 1 with a provider
+  `401` naming the gateway's DEFAULT provider rather than Anthropic. Do not read the exit-3 contract
+  as covering an unauthenticated host: every exit-3 refusal here is a route, billing, or
+  permission-control condition the wrapper can see WITHOUT reading a credential, and a login's
+  absence is not one of them. A healthy launch is still
   not model-identity evidence.
   `launch` and `ultracode` ALSO refuse (exit 3) a `--model` whose `<provider>/` prefix the RUNNING
   gateway does not serve, checked against its own `GET /v1/models` after the health probe, because
@@ -351,10 +370,20 @@ model selection as policy.
   make the misroute fail closed for every client. See
   `docs/research/2026-08-24-gateway-default-provider-misroute.md`.
   `ocx:configure` admits only reviewed non-Anthropic provider/account routes, and a mutation there
-  writes the CONFIG FILE only: the wrapper prints the required `ocx sync` plus `ccodex restart` and
-  runs neither, because until both have run a request naming the new provider is classified
+  writes the CONFIG FILE only: the wrapper prints `ocx sync` plus `ccodex restart` and
+  runs neither, because until the provider is published a request naming it is classified
   `routeKind: "default-provider"` and billed against the DEFAULT provider instead of failing
-  closed. By opencodex 2.28.0 (absent in 2.11.1) the sync is not always a `~/.codex` config write — with the Codex
+  closed. THE RESTART IS THE PUBLISH STEP, and the notice names both because that is what the
+  notice says rather than what the gateway needs: measured 2026-08-23 on a fresh host with NO Codex
+  installed and `ocx sync` never run, the restart alone took the live catalog from 7 ids serving
+  none of the new provider to 420 serving 413 of it, and a routed turn then billed that provider's
+  own credential. So the order is `ccodex ensure`, `provider add`, `ccodex restart`, then
+  `account add-key`, and add-key LAST is not cosmetic: it validates the provider against the
+  RUNNING gateway rather than against the config file, so run before the restart it fails
+  `unknown provider` for a provider `provider list` showed as configured one command earlier, and
+  with the proxy down it fails `Proxy not reachable`. Both constraints are upstream behavior,
+  reproduced against the raw pinned binary, and neither appears in the configure help.
+  By opencodex 2.28.0 (absent in 2.11.1) the sync is not always a `~/.codex` config write — with the Codex
   integration off, or an external `model_provider` owning `config.toml`, it reports a
   `CodexSyncResult` status of `catalog-only`, leaving `config.toml`, the journal, and history untouched (the catalog and models-cache files under `~/.codex` may still refresh), and a `validateOnly`
   injection preflight fails a bad config before any partial rewrite. That narrows the blast radius,

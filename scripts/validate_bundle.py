@@ -37,6 +37,7 @@ push, publication, merge, or deployment.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -2210,6 +2211,63 @@ def validate_versions(root: Path, result: Validation) -> None:
             f".version-bump.json current = {expected!r} but policy/release-contract.v1.json "
             f"checkout.version = {contract_version!r}; bump both in one reviewed change"
         )
+    _validate_reader_pinned_version(root, expected, result)
+
+
+#: The reader's pinned checkout identity, which the reviewed version edit must move with the
+#: contract. Named here so the gate can report the file by name.
+READER_RELATIVE_PATH = Path("scripts") / "ccodex_sdlc.py"
+READER_IDENTITY_NAME = "EXPECTED_CHECKOUT"
+
+
+def _reader_pinned_version(path: Path) -> object:
+    """`EXPECTED_CHECKOUT["version"]` read from the reader's SOURCE, never by importing it.
+
+    The reader refuses to run outside its own isolated `-I -B` admission, so importing it here to
+    read one constant is not available; `ast` reads the literal without executing a line of it, which
+    is the same no-import idiom the cross-plane vocabulary checks use. A pin this function cannot
+    find is returned as None and reported, because "the guard could not read it" and "the guard read
+    it and it agreed" must not share an outcome.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+        return None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == READER_IDENTITY_NAME for t in node.targets):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            return None
+        for key, value in zip(node.value.keys, node.value.values):
+            if isinstance(key, ast.Constant) and key.value == "version":
+                return value.value if isinstance(value, ast.Constant) else None
+    return None
+
+
+def _validate_reader_pinned_version(root: Path, expected: object, result: Validation) -> None:
+    """Name `scripts/ccodex_sdlc.py` when its pinned identity did not move with the bump.
+
+    agentic-sdlc-3174: the two policy documents above are each reported by name, but this pin was
+    not, and it is the one the gate stayed GREEN on. Left behind it fails only later, as dozens of
+    reader assertions whose message quotes the version it still EXPECTS -- so the diagnostic names
+    the version being replaced rather than the file that needs the edit. This check closes the
+    enumeration: after a bump, every file the reviewed edit must touch reports itself.
+    """
+    pinned = _reader_pinned_version(root / READER_RELATIVE_PATH)
+    if pinned == expected:
+        return
+    if pinned is None:
+        result.error(
+            f"{READER_RELATIVE_PATH.as_posix()}: cannot read {READER_IDENTITY_NAME}['version'], so "
+            "the reader's pinned checkout identity cannot be compared with .version-bump.json"
+        )
+        return
+    result.error(
+        f".version-bump.json current = {expected!r} but {READER_RELATIVE_PATH.as_posix()} "
+        f"{READER_IDENTITY_NAME}['version'] = {pinned!r}; bump both in one reviewed change"
+    )
 
 
 def validate_scripts(root: Path, result: Validation) -> None:

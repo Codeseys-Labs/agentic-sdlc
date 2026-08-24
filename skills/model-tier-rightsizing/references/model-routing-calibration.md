@@ -528,9 +528,15 @@ gateway route carries the `muse/` prefix**: prefix *and* catalog membership, not
 A bare ID is not a stylistic choice there; it is a wrong-provider dispatch.
 
 **G1 — a configured provider is not a live provider, and the gap fails OPEN.** `ocx provider
-add` writes the config file only. Until `ocx sync` **and** a gateway restart have both run, a
+add` writes the config file only. Until a gateway **restart** has published it, a
 request naming the new provider's model is attempted and billed against the **default**
-provider while the attribution log names the wrong provider. This is the canary's C1/C5
+provider while the attribution log names the wrong provider. The restart is the publish step and
+`ocx sync` is not part of the gateway route: measured 2026-08-23 on a host with no Codex installed
+and sync never run, the restart alone took the live catalog from 7 ids serving none of the new
+provider to 420 serving 413 of it, and a routed turn then billed that provider's own credential.
+The wrapper's notice still names both because sync is the Codex-integration half, and
+`account add-key` must come AFTER the restart: it validates against the RUNNING gateway rather than
+the config file, so before it the key store fails "unknown provider". This is the canary's C1/C5
 fail-open reached through a routine *successful* configuration command rather than through a
 typo, so `routeKind: "default-provider"` on a Muse-intended request is an alarm (**G4**) meaning
 either this window or a bare ID. Liveness is checkable because the two facts have separate

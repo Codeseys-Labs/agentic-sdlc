@@ -61,6 +61,14 @@ a fresh container and once on this host.
 7 to 420 ids (container) and 10 to 423 ids (host) only after `ccodex restart`. Running `add-key`
 before the restart fails with "unknown provider" (measured 2026-08-23).
 
+**Why step 4 is last.** `add-key` validates the provider against what the RUNNING gateway serves,
+not against the config file, so before the restart it reports the provider as *unknown* rather than
+as configured-but-unpublished — for a name `provider list` showed as configured one command earlier.
+It also needs the gateway UP: against a stopped proxy it fails "Proxy not reachable" and persists
+nothing. Both are upstream opencodex behavior, reproduced 2026-08-23 against the raw pinned binary
+(`mise -C <checkout> exec -- ocx account add-key`), and neither ordering constraint appears in the
+configure help, so the message is the only signal an operator gets and it names the wrong cause.
+
 The wrapper prints `ocx sync` plus restart after a successful mutation and runs neither
 (`scripts/opencodex-claude.sh:1976-1980`). Measured 2026-08-23: `ocx sync` was not needed for
 gateway routing; restart alone published the provider. Sync concerns the Codex-integration half

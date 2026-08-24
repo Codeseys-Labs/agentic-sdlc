@@ -134,6 +134,15 @@ RESIDUALS, STATED EXACTLY.
     caller who never looked.
   * The envelope's own field set is checked here only as far as this kind needs; the skills-plane
     checker remains the authority on the envelope and on the correlation graph.
+  * THE BODY CARRIES NO REPOSITORY-HEAD ANCHOR (agentic-sdlc-5ee7, agentic-sdlc-41b5). `candidate_id`
+    names the payload this activation drew from and `plan_sha256` names the intent, but neither is a
+    point in the repository's own history, so nothing in this body says which commit the activation
+    was observed against. `scripts/gate_receipt.py` stamps `{commit, tree}` because it observes a
+    gate running in a worktree; this producer observes nothing — it seals what the caller supplies —
+    so an anchor here would be a caller-asserted field, not a reading, and one this module could not
+    check. The consequence to know is that this receipt beside another artifact does not establish
+    that the two describe one tree; a consumer needing that pairs the receipt with a producer that
+    really did read a head and refuses the pair whose anchors disagree.
   * A sealed or validated receipt is EVIDENCE. It grants no approval, admission, completion, or
     outward authority, and it authorizes no push, publication, merge, or deployment.
 """
@@ -318,6 +327,10 @@ RESIDUALS = (
     "receipt-envelope checker remains the authority on the envelope and on the correlation graph",
     "public_channel is null and release_claim is none because ADR-0021's evidence condition has not "
     "fired: no output of this producer may state that a published release exists",
+    "the body carries no repository-head anchor, so nothing here says which commit this activation "
+    "was observed against: candidate_id names the payload and plan_sha256 names the intent, and "
+    "neither is a point in the repository's own history, so a consumer holding this receipt beside "
+    "another artifact cannot tell from these fields alone that the two describe one tree",
     "a sealed or validated receipt is evidence: it grants no approval, admission, completion, or "
     "outward authority, and it authorizes no push, publication, merge, or deployment",
 )

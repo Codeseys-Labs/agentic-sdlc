@@ -179,6 +179,14 @@ def _approve(state: State) -> State:
         state["last_result"] = "Nothing is awaiting approval."
         return state
     action = pending["action"]
+    # Staging only proved the rule held when the effect was described. State can drift while an
+    # approval waits, so the same rule decides the mutation and a destination that became
+    # modified/conflict is preserved instead of removed.
+    allowed, reason = _allowed(state, action)
+    if not allowed:
+        state["pending"] = None
+        state["last_result"] = f"REFUSED: {reason}"
+        return state
     if action == "quick":
         state.update(
             distribution="versioned-release",
@@ -225,7 +233,9 @@ def _approve(state: State) -> State:
     elif action == "remove-core":
         state.update(core="absent", core_version=None)
     elif action == "remove-dist":
+        providers = state["providers"]
         state = initial_state()
+        state["providers"] = providers
         state["last_result"] = "Distribution removed; operator/provider-owned state was not touched."
         _receipt(state, "approved: remove selected distribution")
         return state

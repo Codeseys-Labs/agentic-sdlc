@@ -136,6 +136,16 @@ RESIDUALS, STATED EXACTLY.
     reported `dangling`, because this module reads no file it was not given.
   * `body` is OPAQUE. This module proves a payload is sealed and unchanged; it never proves the
     payload is well-formed for its family, and it reads no field inside it.
+  * THE ENVELOPE CARRIES NO REPOSITORY-HEAD ANCHOR, and a clean graph therefore does not say the
+    receipts in it were derived against one tree (agentic-sdlc-5ee7, agentic-sdlc-41b5). `cwd`,
+    `toolchain_digest`, and `head` are `scripts/gate_receipt.py`'s fields, not this envelope's:
+    ancestry orders these receipts, and ancestry is silent about which commit each was observed on.
+    So two receipts can resolve, expect the right kinds, and carry re-deriving digests while
+    describing two different states of the repository. A composer that needs that anchor reads it
+    from a family payload that records one and refuses the receipt that does not, rather than
+    inferring it here; the anchor becomes checkable when a payload carries it, or as
+    `receipt-envelope@2`. It is deliberately absent rather than optional, because an optional
+    head field would let a producer omit it and still be admitted.
   * A verified receipt and a clean graph are EVIDENCE. They grant no approval, admission, completion,
     or outward authority, and no finding here authorizes a repair.
 """
@@ -270,6 +280,10 @@ RESIDUALS = (
     "the graph is exactly the supplied set: a reference to a receipt recorded in another file is "
     "reported dangling, because this module reads no file it was not given",
     "the body is opaque: a sealed payload is not a payload proved well-formed for its family",
+    "the envelope carries no repository-head anchor, so a clean graph does not say these receipts "
+    "were derived against one tree: ancestry orders them and is silent about which commit each was "
+    "observed on, and a composer that needs the anchor reads it from a family payload that records "
+    "one rather than inferring it here",
     "a verified receipt and a clean graph are evidence: they grant no approval, admission, "
     "completion, or outward authority, and no finding authorizes a repair",
 )

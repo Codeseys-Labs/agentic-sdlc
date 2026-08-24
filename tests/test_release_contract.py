@@ -353,5 +353,77 @@ class ReleaseContractPreviewAndClaimTests(unittest.TestCase):
         self.assertFalse(any("claim lint [" in error for error in errors), errors)
 
 
+class ReaderPinnedVersionTests(unittest.TestCase):
+    """agentic-sdlc-3174: the reviewed version edit is ENUMERATED, and the reader belongs to it.
+
+    ``bump-version.sh`` moves the four manifests; the release contract, the candidate policy, and
+    the reader's own pinned identity are a reviewed edit the gate must fail closed on. The first two
+    were already reported by name. This one was not, and it is the pin the gate stayed GREEN on --
+    measured at the 0.7.4 -> 0.7.5 simulation, where ``mise run validate`` passed with the reader
+    still pinned to the old version and the skew surfaced only as reader assertions quoting the
+    version being replaced.
+    """
+
+    READER = Path("scripts") / "ccodex_sdlc.py"
+
+    def _version_errors(self, *, bump: str, contract: str, reader_source: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "policy").mkdir()
+            document = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+            document["checkout"]["version"] = contract
+            (root / "policy" / "release-contract.v1.json").write_text(
+                bundle_validator.canonical_release_contract_json(document), encoding="utf-8"
+            )
+            (root / ".version-bump.json").write_text(
+                json.dumps({"current": bump, "targets": []}), encoding="utf-8"
+            )
+            (root / self.READER).parent.mkdir(parents=True)
+            (root / self.READER).write_text(reader_source, encoding="utf-8")
+            result = bundle_validator.Validation()
+            bundle_validator.validate_versions(root, result)
+            return result.errors
+
+    @staticmethod
+    def _reader_pinning(version: str) -> str:
+        return (
+            "EXPECTED_CHECKOUT = {\n"
+            '    "plane": "checkout-development",\n'
+            f'    "version": "{version}",\n'
+            "}\n"
+        )
+
+    def test_a_reader_pin_left_behind_by_a_bump_is_reported_by_name(self) -> None:
+        errors = self._version_errors(bump="0.9.9", contract="0.9.9", reader_source=self._reader_pinning("0.7.4"))
+        self.assertTrue(
+            any(
+                "scripts/ccodex_sdlc.py EXPECTED_CHECKOUT['version'] = '0.7.4'" in error
+                for error in errors
+            ),
+            errors,
+        )
+        # POSITIVE CONTROL: the identical tree with the pin moved reports NOTHING, so the error above
+        # is the skew rather than a fixture this check can never accept.
+        self.assertEqual(
+            self._version_errors(bump="0.9.9", contract="0.9.9", reader_source=self._reader_pinning("0.9.9")),
+            [],
+        )
+
+    def test_a_pin_the_guard_cannot_read_is_reported_instead_of_passing_as_agreement(self) -> None:
+        # "The guard could not read it" and "the guard read it and it agreed" must not share an
+        # outcome, or deleting the constant would silently retire this check.
+        errors = self._version_errors(
+            bump="0.9.9", contract="0.9.9", reader_source="OTHER_CONSTANT = {}\n"
+        )
+        self.assertTrue(
+            any("cannot read EXPECTED_CHECKOUT['version']" in error for error in errors), errors
+        )
+
+    def test_the_tracked_reader_pin_agrees_with_the_tracked_bump_manifest(self) -> None:
+        # The shipped tree's own consistency, which is what a bump has to preserve.
+        expected = json.loads((ROOT / ".version-bump.json").read_text(encoding="utf-8"))["current"]
+        self.assertEqual(bundle_validator._reader_pinned_version(ROOT / self.READER), expected)
+
+
 if __name__ == "__main__":
     unittest.main()

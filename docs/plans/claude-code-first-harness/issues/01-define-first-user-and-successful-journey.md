@@ -34,3 +34,22 @@ whole product value.
 The first journey does not require complete brownfield cleanup, installation of optional
 companion libraries, support for every provider, feature parity on companion hosts, automatic
 commit/push/PR/merge actions, or proof of the entire long-running SDLC lifecycle in one session.
+
+**Spec-alignment decision, 2026-08-24.** The minimum journey above abbreviates the primary
+acceptance seam of the [product specification](../agentic-sdlc-product-spec.md), and that seam is
+authoritative for what completing it means: acquire the release, inspect it, activate Claude,
+activate the repository, compile a plan, approve and run one native-Claude wave, review, authorized
+fan-in, and a terminal receipt (Implementation Decision 3, whose greenfield and brownfield variants
+share that seam). Establishing the tooling on a greenfield repository and finishing the first
+prioritized remediation slice on a brownfield one are intermediate milestones inside that seam, not
+alternative places to declare success: the greenfield journey must reach a reviewed activation
+commit and one accepted Core wave, while the brownfield journey may land with named remediation
+Seeds and a non-worsening `remediation-progress` wave (Testing Decision 4).
+
+The `write-ready` and `write-readiness` naming in this answer is historical. ADR-0022 as amended
+2026-08-22 retired the write-ready/remediation-ready terminal vocabulary, and Implementation
+Decisions 12 and 17 carry that retirement; bounded hygiene work is tracked as Seeds instead.
+Complete brownfield write-readiness in the first successful journey stays out of scope, so the
+terminal state of that first wave is one of the six wave outcomes (Implementation Decision 61) —
+an honest `accepted` or an intended `remediation-progress` for a journey that succeeds — rather
+than a readiness label.

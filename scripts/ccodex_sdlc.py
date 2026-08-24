@@ -312,9 +312,16 @@ def load_release_contract(root: Path) -> dict[str, Any]:
 
 
 def checkout_identity(contract: dict[str, Any]) -> dict[str, Any]:
+    # The version is INTERPOLATED from the pin above, never spelled again here: a second literal is
+    # a second place a bump has to reach, and the one that rots quotes the version being REPLACED --
+    # so the message would name 0.7.4 while refusing a 0.7.5 contract, pointing a reader at the
+    # wrong side of the mismatch (agentic-sdlc-3174).
     checkout = contract.get("checkout")
     if contract.get("schema_version") != "release-contract/v1" or checkout != EXPECTED_CHECKOUT:
-        raise ReportInvariantError("release contract does not establish the checkout-development 0.7.4 identity")
+        raise ReportInvariantError(
+            "release contract does not establish the checkout-development "
+            f"{EXPECTED_CHECKOUT['version']} identity"
+        )
     return {
         "certification_claim": checkout["certification_claim"],
         "plane": checkout["plane"],
