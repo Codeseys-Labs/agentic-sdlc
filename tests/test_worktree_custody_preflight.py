@@ -621,7 +621,7 @@ class OffLinuxImportTests(unittest.TestCase):
     def test_positive_control_the_linux_import_binds_statx(self) -> None:
         if sys.platform != "linux":
             self.skipTest("the statx binding exists only on Linux")
-        self.assertIsNotNone(wcp._LIBC)
+        self.assertIsNotNone(wcp._LIBC_STATX)
 
 
 if __name__ == "__main__":
