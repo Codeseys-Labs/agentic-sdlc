@@ -595,6 +595,68 @@ class EndToEndInstallTest(TemporaryRoot):
         self.assertEqual(1, len(fixture.activation_receipts()))
 
 
+class UninstallStatusSymmetryTest(TemporaryRoot):
+    """A real install then a real uninstall leaves zero owned-entry conflicts (agentic-sdlc-42ec).
+
+    Wave f194-w1's FINDING-1: the install writes one installer ownership row per activated entry,
+    and a retirement that removed only the bytes left ``ccodex sdlc status`` reporting
+    ``bundle.state degraded`` with one ``owned-entry-conflict`` per entry, contradicting the
+    terminal receipt the same plane had just sealed.  This drives the real neighbouring verb
+    against a real activation -- the same posture as the install-then-update tests above -- and
+    asserts the projection the reader renders agrees with the retirement.
+    """
+
+    def test_a_receipted_uninstall_leaves_no_owned_entry_conflict_in_the_projection(self) -> None:
+        fixture = self.fixture()
+        outcome = call_main(fixture)
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        read_config = bundle.Config(
+            fixture.candidate_root,
+            fixture.home,
+            fixture.config.codex_home,
+            "auto",
+            True,
+            "all",
+            fixture.installer_state_root,
+        )
+        before = bundle.readonly_projection(read_config)
+        self.assertEqual("healthy", before["state"], before)
+        self.assertEqual(len(CLAUDE_DESTINATIONS), len(before["entries"]), before)
+
+        uninstall = _load(
+            ROOT / "scripts" / "ccodex_sdlc_uninstall.py", "ccodex_sdlc_install_then_uninstall"
+        )
+        config = uninstall.Config(
+            scripts_dir=ROOT / "scripts",
+            home=fixture.home,
+            state_root=fixture.installer_state_root,
+            activation_root=fixture.state_home / "agentic-sdlc" / "activation",
+            platform_system="Linux",
+            stated_at=LATER_INSTANT,
+        )
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = uninstall.execute(bundle, receipts, config)
+        self.assertEqual(0, code, out.getvalue() + err.getvalue())
+        for relative in CLAUDE_DESTINATIONS:
+            self.assertFalse(fixture.destination(relative).exists(), relative)
+
+        after = bundle.readonly_projection(read_config)
+        self.assertEqual(
+            [finding for finding in after["findings"] if finding["code"] == "owned-entry-conflict"],
+            [],
+            after,
+        )
+        self.assertNotEqual("degraded", after["state"], after)
+        state = json.loads(
+            (fixture.installer_state_root / "agentic-sdlc-installer" / "state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual({}, state["entries"])
+        self.assertIsNone(state["pending"])
+
+
 class PreservationTest(TemporaryRoot):
     def test_foreign_entry_is_preserved_and_named(self) -> None:
         fixture = self.fixture()

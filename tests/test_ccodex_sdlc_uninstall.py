@@ -877,6 +877,258 @@ class Interruption(Harness):
         self.assertEqual(code_two, EXIT_RETIRED, report_two)
 
 
+# ---- the installer ownership rows ------------------------------------------------------------------
+
+
+def installer_write_config(plane: Plane, payload_root: Path) -> Any:
+    """A copy-mode installer Config over this plane: the shape the install verb activates with."""
+    return bundle.Config(
+        payload_root, plane.home, plane.home / ".codex", "copy", False, "claude", plane.state_root
+    )
+
+
+def installer_read_config(plane: Plane, payload_root: Path) -> Any:
+    """The read-only Config the reader's projection uses over the same shared state document."""
+    return bundle.Config(
+        payload_root, plane.home, plane.home / ".codex", "auto", True, "all", plane.state_root
+    )
+
+
+def owned_entry_conflicts(plane: Plane, payload_root: Path) -> list[dict[str, str]]:
+    projection = bundle.readonly_projection(installer_read_config(plane, payload_root))
+    return [finding for finding in projection["findings"] if finding["code"] == "owned-entry-conflict"]
+
+
+def activate_with_ownership_rows(plane: Plane, payload_root: Path) -> list[dict[str, Any]]:
+    """Publish the standard two entries exactly as ``ccodex sdlc install`` does.
+
+    The rows land in the shared installer state through the installer's own
+    ``transactional_create`` -- the machinery the install verb reuses -- so what these tests
+    exercise is the real correlation: rows keyed by ``destination_for`` spellings against a
+    retirement that resolves the receipt's entry names back to the same destinations.
+    """
+    (payload_root / "agents").mkdir(parents=True, exist_ok=True)
+    (payload_root / "agents" / "sdlc-implementer.md").write_text("# implementer\n", encoding="utf-8")
+    skill = payload_root / "skills" / "agentic-sdlc"
+    (skill / "references").mkdir(parents=True, exist_ok=True)
+    (skill / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    (skill / "references" / "a.md").write_text("a\n", encoding="utf-8")
+    config = installer_write_config(plane, payload_root)
+    state = bundle.load_config_state(config)
+    for entry in (
+        bundle.Entry("claude", "agent", "sdlc-implementer.md", payload_root / "agents" / "sdlc-implementer.md"),
+        bundle.Entry("claude", "skill", "agentic-sdlc", skill),
+    ):
+        destination = bundle.destination_for(entry, config)
+        bundle.ensure_collection(entry, destination, config)
+        bundle.transactional_create(entry, destination, config, state)
+    return [
+        entry_record("agents/sdlc-implementer.md", plane.entry_digest("agents/sdlc-implementer.md")),
+        entry_record("skills/agentic-sdlc", plane.entry_digest("skills/agentic-sdlc")),
+    ]
+
+
+class OwnershipRows(Harness):
+    """The rows the activation wrote are retired with the bytes (agentic-sdlc-42ec).
+
+    Wave f194-w1's FINDING-1: after a complete receipted uninstall, ``ccodex sdlc status`` reported
+    ``bundle.state degraded`` with one ``owned-entry-conflict`` per removed entry, because the
+    install verb writes ownership rows into the shared installer state and the retirement removed
+    only the bytes.  These tests pin the symmetric half: a retirement retires the rows it proved,
+    through the installer's own pending slot, and every window crash-resolves per that doctrine.
+    """
+
+    def state_path(self, plane: Plane | None = None) -> Path:
+        return (plane or self.plane).state_root / "agentic-sdlc-installer" / "state.json"
+
+    def state_document(self, plane: Plane | None = None) -> dict[str, Any]:
+        return json.loads(self.state_path(plane).read_text(encoding="utf-8"))
+
+    def test_a_complete_retirement_leaves_zero_owned_entry_conflicts(self) -> None:
+        """The missing post-uninstall status proof: install rows, uninstall, projection clean."""
+        payload = self.plane.root / "payload"
+        entries = activate_with_ownership_rows(self.plane, payload)
+        self.plane.seal_active(entries)
+        before = self.state_document()
+        self.assertEqual(len(before["entries"]), 2, before)
+        # Control half one: with rows and bytes both present, the projection is already clean, so a
+        # clean projection after the run is not a vacuous truth about a plane that never had rows.
+        self.assertEqual(owned_entry_conflicts(self.plane, payload), [])
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        after = self.state_document()
+        self.assertEqual(after["entries"], {})
+        self.assertIsNone(after["pending"])
+        projection = bundle.readonly_projection(installer_read_config(self.plane, payload))
+        self.assertEqual(
+            [finding for finding in projection["findings"] if finding["code"] == "owned-entry-conflict"],
+            [],
+            projection,
+        )
+        self.assertNotEqual(projection["state"], "degraded", projection)
+
+    def test_the_conflict_detector_bites_on_bytes_removed_with_rows_left(self) -> None:
+        """POSITIVE CONTROL for the projection assertion above.
+
+        The exact pre-fix end state -- bytes gone, rows left -- must read as
+        ``owned-entry-conflict``/``degraded``.  Without this, a projection that stopped detecting
+        absence would make the zero-conflict assertion vacuous.
+        """
+        payload = self.plane.root / "payload"
+        activate_with_ownership_rows(self.plane, payload)
+        (self.plane.plane_root / "agents" / "sdlc-implementer.md").unlink()
+        shutil.rmtree(self.plane.plane_root / "skills" / "agentic-sdlc")
+
+        projection = bundle.readonly_projection(installer_read_config(self.plane, payload))
+
+        conflicts = [
+            finding for finding in projection["findings"] if finding["code"] == "owned-entry-conflict"
+        ]
+        self.assertEqual(len(conflicts), 2, projection)
+        self.assertTrue(all(finding["message"] == "owned bundle entry is absent" for finding in conflicts))
+        self.assertEqual(projection["state"], "degraded")
+
+    def test_the_row_retirement_mechanism_is_what_produces_the_clean_status(self) -> None:
+        """The executable form of 'revert the fix and the test fails'.
+
+        With the matching seam disabled the run still retires every byte at exit 0 -- the pre-fix
+        behaviour exactly -- and the stale rows then read as conflicts, so the clean projection in
+        the first test is produced by the retirement mechanism and by nothing else.
+        """
+        payload = self.plane.root / "payload"
+        entries = activate_with_ownership_rows(self.plane, payload)
+        self.plane.seal_active(entries)
+
+        with mock.patch.object(target, "matched_ownership_row", lambda *args: (None, None)):
+            code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertEqual(len(self.state_document()["entries"]), 2)
+        conflicts = owned_entry_conflicts(self.plane, payload)
+        self.assertEqual(len(conflicts), 2, conflicts)
+        self.assertEqual(
+            bundle.readonly_projection(installer_read_config(self.plane, payload))["state"], "degraded"
+        )
+
+    def test_an_interruption_between_byte_removal_and_row_retirement_recovers_per_the_pending_slot(self) -> None:
+        """The chosen path's crash case: killed after the rename, before the row commit.
+
+        The armed slot must survive the crash, be NAMED by the projection as pending recovery, and
+        resolve through ``recover_pending`` from the live bytes: the destination is absent, so the
+        armed ``uninstall`` transition COMMITS and the row retires.
+        """
+        payload = self.plane.root / "payload"
+        entries = activate_with_ownership_rows(self.plane, payload)
+        self.plane.seal_active(entries)
+        victim = str(self.plane.plane_root / "agents" / "sdlc-implementer.md")
+
+        def interrupt(point: str, detail: dict[str, Any]) -> None:
+            if point == "after-quarantined" and detail["destination"] == victim:
+                raise KeyboardInterrupt("simulated crash between the rename and the row commit")
+
+        code, report = self.plane.run(checkpoint=interrupt)
+
+        self.assertEqual(code, EXIT_UNKNOWN, report)
+        state = self.state_document()
+        pending = state["pending"]
+        self.assertIsNotNone(pending, state)
+        self.assertEqual(pending["operation"], "uninstall")
+        self.assertEqual(pending["path"], victim)
+        self.assertIsNone(pending["after"])
+        self.assertEqual(state["entries"][victim], pending["before"])
+        self.assertFalse(Path(victim).exists())
+        # The projection names the interrupted transition rather than reporting a clean plane.
+        projection = bundle.readonly_projection(installer_read_config(self.plane, payload))
+        self.assertEqual(
+            [finding["code"] for finding in projection["findings"] if finding["code"] == "pending-recovery"],
+            ["pending-recovery"],
+            projection,
+        )
+        self.assertEqual(projection["state"], "blocked")
+        # Recovery resolves the slot from the live bytes, through the installer's own resolver. The
+        # read-only form proposes the same outcome first, without writing it.
+        write_config = installer_write_config(self.plane, payload)
+        dry_state = bundle.load_config_state(write_config)
+        proposals, unresolved = bundle.recover_pending(write_config, dry_state, read_only=True)
+        self.assertTrue(any(line.startswith("would recover commit") for line in proposals), proposals)
+        self.assertTrue(unresolved)
+        live_state = bundle.load_config_state(write_config)
+        messages, unresolved = bundle.recover_pending(write_config, live_state, read_only=False)
+        self.assertTrue(any(line.startswith("recovered commit") for line in messages), messages)
+        self.assertFalse(unresolved)
+        final = self.state_document()
+        self.assertIsNone(final["pending"])
+        self.assertNotIn(victim, final["entries"])
+
+    def test_a_rename_failure_after_arming_rolls_the_armed_row_back(self) -> None:
+        """The other half of the window: armed but nothing moved resolves as an abort in-run."""
+        payload = self.plane.root / "payload"
+        entries = activate_with_ownership_rows(self.plane, payload)
+        self.plane.seal_active(entries)
+        victim = self.plane.plane_root / "agents" / "sdlc-implementer.md"
+        real_rename = bundle.rename_absent
+
+        def failing(source: Path, destination: Path) -> None:
+            if source == victim:
+                raise OSError("simulated rename failure")
+            real_rename(source, destination)
+
+        with mock.patch.object(bundle, "rename_absent", failing):
+            code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_PARTIAL, report)
+        state = self.state_document()
+        self.assertIsNone(state["pending"])
+        self.assertIn(str(victim), state["entries"])
+        self.assertTrue(victim.is_file())
+        # Positive control in the same run: the untouched entry WAS removed and its row retired.
+        self.assertNotIn(str(self.plane.plane_root / "skills" / "agentic-sdlc"), state["entries"])
+        self.assertFalse((self.plane.plane_root / "skills" / "agentic-sdlc").exists())
+
+    def test_a_row_recording_other_bytes_is_preserved_and_named(self) -> None:
+        """Preservation is not weakened: a row that records other bytes is never guessed retired."""
+        payload = self.plane.root / "payload"
+        entries = activate_with_ownership_rows(self.plane, payload)
+        victim = str(self.plane.plane_root / "agents" / "sdlc-implementer.md")
+        state = self.state_document()
+        state["entries"][victim]["digest"] = hexof("some other bytes entirely")
+        self.state_path().write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.plane.seal_active(entries)
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertIn("does not record the bytes this retirement proved", report)
+        final = self.state_document()
+        self.assertIn(victim, final["entries"])
+        self.assertNotIn(str(self.plane.plane_root / "skills" / "agentic-sdlc"), final["entries"])
+
+    def test_an_outstanding_installer_transition_refuses_before_any_effect(self) -> None:
+        """An armed slot someone else owns is never overwritten: recovery is a separate operation."""
+        payload = self.plane.root / "payload"
+        entries = activate_with_ownership_rows(self.plane, payload)
+        self.plane.seal_active(entries)
+        victim = str(self.plane.plane_root / "agents" / "sdlc-implementer.md")
+        state = self.state_document()
+        state["pending"] = {
+            "operation": "uninstall",
+            "path": victim,
+            "before": state["entries"][victim],
+            "after": None,
+        }
+        self.state_path().write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("outstanding lifecycle transition", report)
+        self.assertTrue((self.plane.plane_root / "agents" / "sdlc-implementer.md").is_file())
+        self.assertTrue((self.plane.plane_root / "skills" / "agentic-sdlc").is_dir())
+        self.assertFalse((self.plane.activation_root / "receipts").exists())
+
+
 # ---- refusals ------------------------------------------------------------------------------------
 
 
@@ -1269,6 +1521,17 @@ class Boundary(unittest.TestCase):
             "state_directory",
             "Config",
             "InstallerError",
+            # The ownership-row retirement (agentic-sdlc-42ec) reuses the installer's own state
+            # machinery rather than a private spelling of it.
+            "load_config_state",
+            "validate_state",
+            "destination_is_configured",
+            "entry_matches_record",
+            "arm_pending",
+            "commit_pending",
+            "resolved_pending_state",
+            "persist_state",
+            "recover_pending",
         ):
             with self.subTest(name=name):
                 self.assertTrue(hasattr(bundle, name), f"install_skill_bundle exports no {name}")

@@ -32,6 +32,24 @@ authorizes nothing: an entry outside the inventory is never removed, adopted, re
 as owned, and the collection directories themselves are never removed even when the last inventory
 child leaves one empty.
 
+THE OWNERSHIP ROWS THE ACTIVATION WROTE ARE RETIRED WITH THE BYTES
+------------------------------------------------------------------
+``ccodex sdlc install`` records every activated entry as one row in the shared installer ownership
+document through ``install_skill_bundle``'s own transactions, and the read-only projection honestly
+reports an owned row whose destination is absent as ``owned-entry-conflict``.  A retirement that
+removed the bytes and left the rows therefore made the very next ``ccodex sdlc status`` contradict
+the terminal receipt it had just sealed (agentic-sdlc-42ec, wave f194-w1 FINDING-1).  So each
+removal that proves an entry owned ALSO retires the matching row, through the installer's own
+crash-consistent pending slot and never by a hand-edit of the document: the transition is armed
+durably before the quarantine rename and committed once the destination has left the plane, which
+is ``transactional_delete``'s own order.  An interruption between the two leaves the armed slot,
+and ``install_skill_bundle.recover_pending`` resolves it from the live bytes -- a destination still
+matching ``before`` aborts, an absent one commits -- exactly as it resolves every other transition
+in that document.  Preservation is never weakened for entries that are NOT part of the retirement:
+a row is retired only when it names this exact destination under this configured home AND
+``entry_matches_record`` proves the live bytes are the bytes the row records; a row for another
+home or for other bytes is preserved and NAMED, and a destination with no row retires nothing.
+
 WHAT IS NEVER TOUCHED
 ---------------------
 Credentials, the Claude login, user settings, plugins, external skill libraries, repositories, Seeds
@@ -601,6 +619,115 @@ class Journal:
             return None
 
 
+# ---- the installer ownership rows ------------------------------------------------------------------
+
+
+@dataclass
+class RowRetirement:
+    """One matched installer ownership row, retired through the installer's own pending slot.
+
+    ``armed`` is True exactly while the shared state document carries this row's armed ``uninstall``
+    transition.  A crash in that window is the recoverable state, not a defect:
+    ``install_skill_bundle.recover_pending`` resolves the slot from the live bytes -- a destination
+    still matching ``before`` aborts, an absent destination commits -- so the row and the bytes can
+    never silently disagree for longer than one recovery.
+    """
+
+    installer_config: Any
+    state: dict[str, Any]
+    record: dict[str, Any]
+    entry_name: str
+    armed: bool = False
+
+
+def admit_ownership_state(bundle: ModuleType, installer_config: Any) -> dict[str, Any]:
+    """Admit the shared installer ownership document whose rows this retirement must keep truthful.
+
+    ``ccodex sdlc install`` writes one row per activated entry into this document through the
+    installer's own transactions, so removing the bytes while leaving the rows would make the very
+    next ``ccodex sdlc status`` contradict the terminal receipt this run seals: the projection
+    honestly reports an owned row whose destination is absent as a conflict (agentic-sdlc-42ec).
+    Admission happens BEFORE any effect, with the same three named refusals the install verb
+    applies: an unreadable document, an inadmissible one, and an outstanding armed transition --
+    recovery is a separate explicit operation, and arming this run's transitions over an
+    outstanding one would silently discard the record recovery needs.
+    """
+    try:
+        state = bundle.load_config_state(installer_config)
+        bundle.validate_state(installer_config, state)
+    except (bundle.InstallerError, OSError) as exc:
+        raise Refusal(
+            "the installer ownership state is not readable, so the ownership rows of the entries "
+            f"this retirement would remove cannot be retired with their bytes: {dar_escape(str(exc))}"
+        ) from exc
+    if isinstance(state.get("pending"), dict):
+        raise Refusal(
+            "the installer ownership state holds an outstanding lifecycle transition; recovery is a "
+            "separate explicit operation and this retirement never resolves or overwrites one"
+        )
+    return state
+
+
+def matched_ownership_row(
+    bundle: ModuleType, installer_config: Any, state: dict[str, Any], row: dict[str, Any]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return the one ownership row this removal may retire, or NAME why a present row is preserved.
+
+    Three facts must agree before a row is armed, because retiring on fewer would weaken the
+    preservation the installer promises for entries that are NOT part of this retirement: the row
+    is keyed by exactly this destination, it still describes THIS configured home (the installer
+    deliberately retains rows for earlier homes), and ``entry_matches_record`` proves the live
+    bytes are the bytes the row records -- the same proof ``transactional_delete`` demands before
+    it removes anything.  A destination with no row retires nothing and raises no attention: a
+    plane activated before rows existed is healthy, not suspect.
+    """
+    record = state["entries"].get(row["destination"])
+    if not isinstance(record, dict):
+        return None, None
+    if not bundle.destination_is_configured(row["destination"], record, installer_config):
+        return None, (
+            f"the installer ownership row for {dar_escape(row['entry_name'])} describes another "
+            "configured home, so the row is preserved rather than retired"
+        )
+    if not bundle.entry_matches_record(Path(row["destination"]), record):
+        return None, (
+            f"the installer ownership row for {dar_escape(row['entry_name'])} does not record the "
+            "bytes this retirement proved on disk, so the row is preserved rather than retired"
+        )
+    return record, None
+
+
+def roll_back_row_retirement(
+    bundle: ModuleType, journal: Journal, retirement: RowRetirement | None
+) -> None:
+    """Resolve one armed row retirement as an abort, after a removal that moved nothing.
+
+    A roll-back that itself fails is NAMED in the journal's attention and left for the installer's
+    own recovery, which reads the untouched destination as ``before`` and aborts; escalating it
+    here would turn a self-resolving bookkeeping state into a second failure mode.
+    """
+    if retirement is None or not retirement.armed:
+        return
+    try:
+        bundle.persist_state(
+            retirement.installer_config,
+            retirement.state,
+            bundle.resolved_pending_state(retirement.state, "abort"),
+        )
+    except Exception as exc:  # noqa: BLE001 - the armed slot is recoverable; the failure is recorded
+        journal.document["attention"].append(
+            {
+                "entry_name": retirement.entry_name,
+                "reason": (
+                    "the armed ownership-row retirement could not be rolled back; the installer's "
+                    f"own recovery resolves it against the untouched destination: {exc!r}"
+                ),
+            }
+        )
+    else:
+        retirement.armed = False
+
+
 # ---- the removal walk ----------------------------------------------------------------------------
 
 
@@ -618,6 +745,7 @@ def remove_one(
     outcome: dict[str, bool],
     *,
     nothing_moved_yet: bool,
+    retirement: RowRetirement | None = None,
 ) -> None:
     """Quarantine one proved-owned entry, then delete the quarantined copy. Reused primitives only.
 
@@ -628,6 +756,12 @@ def remove_one(
     the rename moved nothing and is reported as attention;
     a failure AFTER it is an unknown effect, because the entry has left the plane and this module will
     not claim where it ended up.
+
+    ``retirement`` is the matched installer ownership row, when one exists (agentic-sdlc-42ec).  Its
+    transitions bracket the rename in ``transactional_delete``'s own order -- armed immediately
+    before it, committed once the destination has left the plane -- so every crash window resolves
+    through ``recover_pending`` against the live bytes, and the row can never survive the bytes it
+    described.
 
     ``outcome`` is filled rather than returned, because the caller needs to know whether this entry
     left the plane even on the paths that raise -- and an exception carries no return value.  EVERY
@@ -670,11 +804,37 @@ def remove_one(
                 f"the entry {dar_escape(row['entry_name'])} changed after its transaction was armed, "
                 "so it was preserved untouched"
             )
+        if retirement is not None:
+            # The row's retirement is armed in the shared installer state IMMEDIATELY before the
+            # rename, mirroring `transactional_delete`: an interruption from here to the commit
+            # below is resolved by `recover_pending` from the live bytes.
+            try:
+                bundle.arm_pending(
+                    retirement.installer_config,
+                    retirement.state,
+                    "uninstall",
+                    row["destination"],
+                    retirement.record,
+                    None,
+                )
+            except Exception as exc:  # noqa: BLE001 - nothing moved; the entry is preserved by name
+                raise Refusal(
+                    f"the ownership row of {dar_escape(row['entry_name'])} could not be armed for "
+                    f"retirement, so the entry was preserved untouched: {exc!r}"
+                ) from exc
+            retirement.armed = True
         bundle.rename_absent(destination, artifact.payload)
         moved = True
         outcome["moved"] = True
         journal.write("quarantined")
         checkpoint(config, "after-quarantined", dict(journal.document["pending"]))
+        if retirement is not None and retirement.armed:
+            # The destination has left the plane, so the row describes nothing there any more: the
+            # commit lands exactly where `transactional_delete` commits its own.  A failure here
+            # falls to the unknown-effect classification below with the slot still armed, and
+            # recovery commits it from the absent destination.
+            bundle.commit_pending(retirement.installer_config, retirement.state)
+            retirement.armed = False
         if safe_digest(bundle, artifact.payload) != expected:
             raise UnknownEffect(
                 f"the quarantined copy of {dar_escape(row['entry_name'])} no longer matches its proved "
@@ -690,6 +850,7 @@ def remove_one(
                 f"stopped, so its effect is unknown: {str(artifact.container)!r}"
             ) from None
         cleanup_unused_container(bundle, artifact)
+        roll_back_row_retirement(bundle, journal, retirement)
         journal.document["pending"] = None
         journal.write("planned", before_any_effect=nothing_moved_yet)
         raise
@@ -704,6 +865,7 @@ def remove_one(
                 f"its effect is unknown: {str(artifact.container)!r} ({exc!r})"
             ) from exc
         cleanup_unused_container(bundle, artifact)
+        roll_back_row_retirement(bundle, journal, retirement)
         journal.document["pending"] = None
         journal.write("planned", before_any_effect=nothing_moved_yet)
         if not isinstance(exc, Exception):
@@ -1025,12 +1187,35 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
     outstanding: set[str] = set()
     attention: list[str] = []
     unknown: str | None = None
-    with bundle.installer_lock(bundle_config(bundle, config)):
+    installer_config = bundle_config(bundle, config)
+    with bundle.installer_lock(installer_config):
+        # The ownership document is admitted only when this run will remove something: a walk that
+        # removes nothing retires no rows, so a plane whose installer state is broken can still
+        # have its all-preserved assessment sealed.
+        ownership = admit_ownership_state(bundle, installer_config) if plan["remove"] else None
         journal.write("planned", before_any_effect=True)
         for row in plan["remove"]:
             outcome: dict[str, bool] = {"moved": False, "settled": False}
+            retirement: RowRetirement | None = None
+            if ownership is not None:
+                record, preserved_row = matched_ownership_row(bundle, installer_config, ownership, row)
+                if preserved_row is not None:
+                    attention.append(preserved_row)
+                    journal.document["attention"].append(
+                        {"entry_name": row["entry_name"], "reason": preserved_row}
+                    )
+                if record is not None:
+                    retirement = RowRetirement(installer_config, ownership, record, row["entry_name"])
             try:
-                remove_one(bundle, config, journal, row, outcome, nothing_moved_yet=not ledger["moved"])
+                remove_one(
+                    bundle,
+                    config,
+                    journal,
+                    row,
+                    outcome,
+                    nothing_moved_yet=not ledger["moved"],
+                    retirement=retirement,
+                )
                 if not outcome["settled"]:
                     # `remove_one` returns normally only after it records settlement (agentic-sdlc-
                     # 7c7d): a normal return that never flipped this flag is not a state this function
@@ -1132,10 +1317,12 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
 
 
 def bundle_config(bundle: ModuleType, config: Config) -> Any:
-    """The installer Config this module borrows for ONE purpose: the shared lifecycle lock.
+    """The installer Config this module borrows for TWO purposes: the shared lifecycle lock, and
+    the ownership rows the activation wrote.
 
-    Both this plane and ``bundle:install`` write into the same Claude collections, so they must
-    serialize on the same lock file rather than on two private ones.
+    Both this plane and ``bundle:install`` write into the same Claude collections and the same
+    ownership document, so they must serialize on the same lock file and retire rows through the
+    same pending slot rather than through two private spellings (agentic-sdlc-42ec).
     """
     return bundle.Config(
         config.scripts_dir.parent,
