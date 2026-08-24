@@ -262,14 +262,18 @@ The detailed command flow lives in [`/sdlc-frame`](commands/sdlc-frame.md) and
 
 ## Install and run the bundle
 
-The commands below describe the **current** checkout-backed distribution. A versioned,
-self-contained GitHub release is the agreed next distribution boundary, with
-`mise use -g github:Codeseys-Labs/agentic-sdlc` as the primary quick install and this managed
-checkout retained for customization, contribution, gates, and release building. That quick path is
-not available yet: the repository has no release artifact for mise to resolve. The exact proposed
-contract, payload split, activation boundary, and implementation sequence are recorded in
-[`docs/plans/2026-08-14T163833Z-Install-UX.md`](docs/plans/2026-08-14T163833Z-Install-UX.md).
-Do not present the planned command as working until its release workflow and clean-host tests land.
+The commands below describe the **current** checkout-backed distribution, which stays the home
+for customization, contribution, gates, and release building. A prerelease quick install exists
+and is container-proven (2026-08-24, v0.7.4), EXACT-VERSION ONLY: declare
+`[tools."github:Codeseys-Labs/agentic-sdlc"]` with `version = "0.7.4"` and `prerelease = true`,
+run `mise install`, and the installed tree exposes exactly one command, `ccodex`. Running
+`mise trust` on that tree's reviewed `mise.toml` is a persistent mutation needing your explicit
+operation-specific approval; after it, `ccodex bundle install --agent claude`
+activates the plugin. The unversioned `mise use -g github:Codeseys-Labs/agentic-sdlc` does not
+resolve a prerelease and is not claimed to work. The release tree carries no `.git`; gates and
+Seeds stay on the managed checkout. Contract, payload split, and boundaries:
+[`docs/plans/2026-08-14T163833Z-Install-UX.md`](docs/plans/2026-08-14T163833Z-Install-UX.md) and
+ADR-0011 as amended.
 
 ### Managed fetch, without cloning by hand
 

@@ -168,14 +168,21 @@ hashes), so loosening the sanitizer allowlist or the sandbox limits fails the ga
 
 ## Installing this bundle
 
-The current supported distribution is checkout-backed and follows the steps below. A future
-self-contained GitHub release will make
-`mise use -g github:Codeseys-Labs/agentic-sdlc` the primary quick install while retaining this
-managed checkout for customization, contribution, gates, and release building. Do not claim that
-path works before a release artifact exists. Its proposed payload, explicit host-plane activation,
-copy-versus-link boundary, platform limits, and implementation order are recorded in
-`docs/plans/2026-08-14T163833Z-Install-UX.md`; ADR-0011 remains current until a later ADR supersedes
-it with executed release evidence.
+The supported distribution for customization, contribution, gates, and release building remains
+this managed checkout. A quick install exists as prerelease evidence, EXACT-VERSION ONLY
+(container-proven 2026-08-24 against v0.7.4): a mise config carrying
+`[tools."github:Codeseys-Labs/agentic-sdlc"]` with `version = "0.7.4"` and `prerelease = true`
+resolves the published prerelease, and the installed tree's `bin/ccodex` is the single exposed
+command — `ccodex version`/`--help` answer tool-free, the first tool-needing verb refuses at
+exit 3 naming the `mise trust <tree>/mise.toml` remedy, and after that explicit reviewed step
+`ccodex bundle install --agent claude` activates the plugin (proven: 27 entries, five commands
+digest-matched, receipted uninstall reading clean). The UNVERSIONED
+`mise use -g github:Codeseys-Labs/agentic-sdlc` does not resolve a prerelease (prerelease listing
+exclusion plus mise's built-in `minimum_release_age` filter while a release is young) and stays
+unclaimed. The release tree carries no `.git`, so gates, Seeds bootstrap, and `ccodex sdlc`
+copy-activation stay on the managed checkout and the operator-tools plane. Payload, activation
+boundary, and limits are recorded in `docs/plans/2026-08-14T163833Z-Install-UX.md`; ADR-0011 as
+amended 2026-08-24 carries the executed evidence.
 
 mise 2026.4.27+ is the only bootstrap prerequisite. It is the managed-tool bootstrap, not the
 sole readiness prerequisite. It pins uv, consumes the checked-in cross-platform `mise.lock`, and
