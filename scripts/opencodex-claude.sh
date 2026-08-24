@@ -310,6 +310,15 @@ Admitted: inspected non-Anthropic login/account/provider mutations, and masked
 provider/account/config inspection. Interactive setup, GUI, arbitrary config
 mutation/import/export, and unknown future upstream routes fail closed with exit 3.
 
+ONE exception on the config plane, because config is its only route -- a `provider` field in
+a request body is dropped before it reaches OpenRouter:
+  config set providers.<name>.modelOpenRouterRouting '<json>'
+  config unset providers.<name>.modelOpenRouterRouting
+The path shape, the provider's adapter and baseUrl, and the JSON payload are all validated
+against upstream's own rules before the route is forwarded, and the grammar is exact: no
+other argument may ride along. The write needs only `ccodex restart` to go live -- no `ocx
+sync` -- and this route prints that and never runs it.
+
 A provider add/edit/remove writes the CONFIG FILE only. It is NOT in the running gateway
 until `ocx sync` plus a restart, and until then a request naming it falls through to the
 DEFAULT provider. This route prints that sequence after a successful mutation and never
@@ -1996,8 +2005,82 @@ EOF
   exit 3
 }
 
+# The admitted surface, printed by both the unbounded-route refusal and `refuse_unknown_route`.
+# ONE definition, because two spellings of "what is admitted instead" are free to drift into
+# disagreeing about it, and the refusal an operator reads is the only place that answer appears.
+print_admitted_configuration_routes() {
+  cat >&2 <<'EOF'
+Admitted instead, each reviewed on its own:
+  provider add|edit|update|remove|set-default <name> ...  (non-Anthropic providers only)
+  account add-key|login|reauth|use|remove <name> ...      (key from piped stdin)
+  login|logout <name>
+  provider list|show|presets|selected · account list|current · models list|show
+  config show | config get <path> | config validate       (read-only, masked)
+
+ONE config-plane WRITE is admitted, because config is its only route -- a caller-supplied
+`provider` field in a request body is dropped by opencodex's chat passthrough whitelist:
+  ccodex configure config set providers.<name>.modelOpenRouterRouting '<json>'
+  ccodex configure config unset providers.<name>.modelOpenRouterRouting
+EOF
+}
+
+# THE DEFECT (agentic-sdlc-4518, observed 2026-08-23): every configure refusal delegated to
+# `refuse`, whose body is the ADR-0014 LAUNCH-route explanation -- provider-routing variables,
+# apiKeyHelper, Console keys, model slots. So refusing `config set` told the reader to go inspect
+# four things that have nothing to do with the verb they typed. The refusal was correct; only the
+# explanation was mismatched.
+#
+# The unbounded-route arm gets its own body here, because that is the one an operator collides
+# with: it covers the whole general configuration plane plus the interactive surfaces. It names
+# the exact refused route, says the plane is deliberately unadmitted rather than missing, and
+# lists what IS admitted. The first line keeps the shape `refuse` prints, since that is where the
+# reason token is read from.
+#
+# The provider-boundary reasons still take `refuse`: a reader who hits one is at the same
+# ADR-0003/0014 credential boundary that body describes, so there the text is on topic.
 refuse_configuration() {
-  refuse "opencodex configuration route refused ($1); this split plane admits only reviewed non-Anthropic provider operations"
+  local reason="$1" route="${2:-}"
+  if [ "$reason" != unbounded-route ]; then
+    refuse "opencodex configuration route refused ($reason); this split plane admits only reviewed non-Anthropic provider operations"
+  fi
+  printf '\nREFUSED: opencodex configuration route refused (%s); this split plane admits only reviewed non-Anthropic provider operations\n\n' "$reason" >&2
+  [ -z "$route" ] || printf 'The refused route is `ocx %s`.\n\n' "$route" >&2
+  case "$route" in
+    config*)
+      cat >&2 <<'EOF'
+The general configuration plane is deliberately unadmitted, not missing. `config set`,
+`config unset`, `config import`, and `config export` reach EVERY key in the file -- API keys,
+auth modes, provider base URLs, the Codex integration -- through one free-form dotted path, so
+admitting the verb admits all of them unreviewed. There is no allowlist inside the verb to lean
+on.
+
+EOF
+      ;;
+    *)
+      cat >&2 <<'EOF'
+`init`, `setup`, and `gui` are interactive whole-config surfaces: they write keys this wrapper
+never reviewed, and the GUI opens a management surface with its own auth. Nothing about the
+intended edit appears in argv, so there is nothing here to admit narrowly.
+
+EOF
+      ;;
+  esac
+  print_admitted_configuration_routes
+  # The upstream escape hatch is named for the config verbs and only for them: it is the route the
+  # operator actually wanted, and hiding it would not stop them, only leave them guessing. It
+  # would be noise under `setup`/`gui`, whose subject is not a key.
+  case "$route" in
+    config*)
+      cat >&2 <<EOF
+
+Every other key stays operator-owned. To edit one, run the upstream tool yourself and own the
+result -- this wrapper declines to be the thing that did it:
+  mise -C $root exec -- ocx config set <path> <value>
+EOF
+      ;;
+  esac
+  printf '\nNothing was changed.\n' >&2
+  exit 3
 }
 
 # HARVESTED from the retired muse direct-route launcher (ADR-0007 amendment): refuse to read a
@@ -2077,8 +2160,275 @@ Reviewed mutations (non-Anthropic providers only):
 
 Inspect the full upstream surface without running it:
   mise exec -- ocx help <verb>
+
+One config-plane write is admitted (see `ccodex configure` with no arguments):
+  config set providers.<name>.modelOpenRouterRouting '<json>' | config unset <same path>
 EOF
   exit 3
+}
+
+# --- the one admitted config-plane write: OpenRouter provider pinning ----------------------
+#
+# WHY A CONFIG WRITE IS ADMITTED AT ALL, when the rest of the plane is not (agentic-sdlc-c508).
+# OpenRouter chooses which upstream serves a model unless the request body carries a `provider`
+# field, and opencodex builds that field from configuration ALONE: `openai-chat` composes it at
+# src/adapters/openai-chat.ts:116-117 out of `resolveOpenRouterRouting`, and a caller-supplied
+# `provider` in the incoming body is DROPPED by CHAT_PASSTHROUGH_FIELDS (openai-chat.ts:50-74).
+# Two separate live measurements, 2026-08-23. A groq-only pin sent in the request BODY was
+# dropped: `openrouter/openai/gpt-oss-120b` still served from Amazon Bedrock. A pin written to
+# THIS CONFIG FIELD was honored end-to-end: the same model served from Cerebras where the same
+# day's baseline was Bedrock, a control model on the same provider still answered from Alibaba
+# (so the pin is scoped to the exact model id), and the unset returned routing to the baseline
+# and left the key absent. Do not read those as one run with one payload -- the body-drop probe
+# and the config probe pinned different upstreams. There is no other route: `provider add|edit`
+# carries a closed flag set with no routing field, and the management PATCH mask has no
+# openRouterRouting entry, so the general config plane was the only door and it was shut.
+#
+# WHY IT DOES NOT REOPEN THE PLANE. Exactly one dotted path shape is admitted, the payload is
+# validated against upstream's own rules before it is forwarded, and the grammar is closed: no
+# extra flag rides along. `providers.<name>.apiKey` and every other key are still refused as
+# unbounded-route. The ADR-0003 provider boundary needs no separate check here and is not
+# skipped: the canonical-target requirement below admits exactly one origin,
+# https://openrouter.ai, which is a strictly stronger statement than "this provider is not
+# Anthropic" -- the registry allowlist could only ever have weakened it.
+openrouter_pin_provider=
+
+refuse_openrouter_pinning() {
+  printf '\nREFUSED: OpenRouter provider pinning refused (%s)\n\n' "$1" >&2
+  printf '%s\n\n' "$2" >&2
+  cat >&2 <<'EOF'
+This is the ONE config-plane write this wrapper admits, so its grammar is exact rather than
+forgiving. Nothing was changed.
+
+  ccodex configure config set providers.<name>.modelOpenRouterRouting '<json>'
+  ccodex configure config unset providers.<name>.modelOpenRouterRouting
+
+<name> must already exist in the provider config, spelled exactly as it is stored there, and
+must use the `openai-chat` adapter with the canonical https://openrouter.ai/api/v1 baseUrl --
+upstream refuses routing preferences on any other provider shape.
+
+<json> is an object keyed by EXACT model id, each value carrying at least one of:
+  order           1-64 unique nonblank provider slugs, in preference order
+  only            1-64 unique nonblank provider slugs, as an exclusive set
+  allowFallbacks  boolean
+
+  ccodex configure config set providers.openrouter.modelOpenRouterRouting \
+    '{"openai/gpt-oss-120b":{"only":["cerebras"],"allowFallbacks":false}}'
+
+Read what is there now with the admitted read-only route:
+  ccodex configure config get providers.<name>.modelOpenRouterRouting
+EOF
+  exit 3
+}
+
+# Prints `ok`, `absent`, `adapter`, or `baseurl` for the named provider. Exit 2 when the config
+# cannot be read or parsed, 4 when no admitted jq route runs -- kept distinct for the same reason
+# `configured_provider_class` keeps them distinct: one is about the provider, the other about this
+# host's installation.
+#
+# The lookup is EXACT-KEY and deliberately not case-folded, unlike `configured_provider_class`.
+# Upstream's `setPath` walks `providers` then `<name>` as literal object keys
+# (src/cli/config-command.ts), so `providers.OpenRouter....` against a config storing
+# `openrouter` is a parent-path miss upstream. Case-folding here would admit a route that then
+# fails inside the tool, which reads as this wrapper having approved something broken.
+#
+# The canonical-baseUrl test mirrors `isCanonicalOpenRouterTarget`
+# (src/providers/openrouter-routing.ts) in TWO checks that both earn their place, verified by
+# deleting each and watching a test die:
+#
+#   * the anchored scheme+host+optional-default-port match, case-insensitive exactly where WHATWG
+#     URL parsing folds. It is what rejects userinfo, a foreign host, a non-default port, a
+#     `openrouter.ai`-PREFIXED host, and -- the case only it catches -- a SCHEMELESS `/api/v1`,
+#     which the path check below would otherwise admit because `sub` leaves a non-matching string
+#     untouched. Upstream's `new URL()` throws on that one.
+#   * the case-SENSITIVE `/api/v1` path, trailing slashes allowed as upstream strips them.
+#
+# A separate query/fragment check was written and then DELETED as dead: with the anchor in place,
+# nothing carrying `?` or `#` can survive the path match, and no test could tell its presence from
+# its absence. So the ONE deliberate narrowing left is enforced by the path anchor rather than by a
+# check of its own -- a bare trailing `?` or `#` parses to an empty search/hash that upstream
+# accepts and this refuses, which is the right direction for an ambiguous URL at a trust boundary.
+# `.baseUrl` only, matching upstream's own read -- a provider carrying just `baseURL` is refused
+# here and would be refused there too.
+openrouter_pinning_provider_class() {
+  local provider="$1" config result
+  config="$(ocx config show --json 2>/dev/null)" || return 2
+  jq_available || return 4
+  result="$(jq -r --arg provider "$provider" '
+    (.providers // {}) as $providers
+    | if ($providers | type) != "object" then "unreadable"
+      elif ($providers | has($provider) | not) then "absent"
+      elif ($providers[$provider] | type) != "object" then "absent"
+      else $providers[$provider] as $p
+      | (($p.baseUrl // "") | tostring) as $url
+      | if ($p.adapter // "") != "openai-chat" then "adapter"
+        elif ($url | test("^https://openrouter\\.ai(:443)?(/|$)"; "i") | not) then "baseurl"
+        elif (($url | sub("^https://openrouter\\.ai(:443)?"; ""; "i")) | test("^/api/v1/*$") | not) then "baseurl"
+        else "ok" end
+      end
+  ' 2>/dev/null <<<"$config")" || return 2
+  case "$result" in
+    ok|absent|adapter|baseurl) printf '%s' "$result" ;;
+    *) return 2 ;;
+  esac
+}
+
+# Prints upstream's own error text for a nonconforming payload and nothing at all for a
+# conforming one, mirroring `openRouterRoutingConfigError`/`routingPreferenceError` rule for rule
+# so the refusal an operator reads here is the message they would have got from the tool. Exit 2
+# means the payload is not JSON, 4 that no admitted jq route runs.
+#
+# Upstream would reject a nonconforming payload too -- `config set` validates the whole candidate
+# config -- so this is not the only guard. It is what makes the ADMISSION explicit: the wrapper
+# decides, by rule, rather than forwarding an unreviewed value and letting the tool sort it out.
+# Two residuals, stated rather than hidden: JS `String.trim()` strips Unicode spaces this `\s`
+# does not, and `length` counts codepoints where JS counts UTF-16 units, so a payload padded with
+# U+00A0 or keyed past 128 astral characters passes here and is refused upstream. Both err toward
+# upstream being stricter, which is the safe direction -- nothing unvalidated lands either way.
+openrouter_routing_payload_error() {
+  local payload="$1"
+  jq_available || return 4
+  jq empty >/dev/null 2>&1 <<<"$payload" || return 2
+  jq -r '
+    def trimmed: sub("^\\s+"; "") | sub("\\s+$"; "");
+    def slug_error($list; $field):
+      if ($list | type) != "array" then "\($field) must contain 1-64 provider slugs"
+      elif ($list | length) < 1 or ($list | length) > 64 then "\($field) must contain 1-64 provider slugs"
+      elif ([$list[] | select(type != "string")] | length) > 0
+        then "\($field) must contain nonblank trimmed provider slugs up to 128 characters"
+      elif ([$list[] | select((trimmed) == "" or . != (trimmed) or length > 128)] | length) > 0
+        then "\($field) must contain nonblank trimmed provider slugs up to 128 characters"
+      elif ($list | unique | length) != ($list | length)
+        then "\($field) must not contain duplicate provider slugs"
+      else null end;
+    def preference_error($value; $field):
+      if ($value | type) != "object" then "\($field) must be a plain object"
+      else (($value | keys_unsorted) - ["order", "only", "allowFallbacks"]) as $unknown
+      | if ($unknown | length) > 0 then "\($field) contains unknown field \"\($unknown[0])\""
+        elif ([$value | has("order"), has("only"), has("allowFallbacks")] | any) == false
+          then "\($field) must define order, only, or allowFallbacks"
+        else (if $value | has("order") then slug_error($value.order; "\($field).order") else null end)
+          // (if $value | has("only") then slug_error($value.only; "\($field).only") else null end)
+          // (if ($value | has("allowFallbacks")) and (($value.allowFallbacks | type) != "boolean")
+              then "\($field).allowFallbacks must be a boolean" else null end)
+        end
+      end;
+    if type != "object" then "modelOpenRouterRouting must be a plain object"
+    else (keys_unsorted | map(select((trimmed) == "" or . != (trimmed))) | length) as $badkeys
+    | if $badkeys > 0 then "modelOpenRouterRouting keys must be nonblank trimmed model ids"
+      else ([to_entries[] | preference_error(.value; "modelOpenRouterRouting.\(.key)")]
+            | map(select(. != null)) | first) // ""
+      end
+    end
+  ' 2>/dev/null <<<"$payload"
+}
+
+# Admits or refuses ONE pinning route, and on admission leaves the provider name in
+# `$openrouter_pin_provider`. Called with the normalized action (`set`/`unset`) and every
+# argument from the path onward, so the argument COUNT is part of the grammar: an unreviewed flag
+# cannot ride in behind a valid path. Upstream's `rejectArgs` would refuse an extra argument too,
+# but that would be the tool refusing a route this wrapper had already approved.
+admit_openrouter_pinning() {
+  local action="$1" path="$2" provider payload class status=0
+  shift 2
+  case "$action" in
+    set)
+      [ "$#" -eq 1 ] || refuse_openrouter_pinning "grammar" \
+        "\`config set\` takes exactly the path and one JSON value; $(($# + 2)) arguments were given."
+      payload="$1"
+      ;;
+    unset)
+      [ "$#" -eq 0 ] || refuse_openrouter_pinning "grammar" \
+        "\`config unset\` takes exactly the path; $(($# + 2)) arguments were given."
+      ;;
+  esac
+  provider="${path#providers.}"
+  provider="${provider%.modelOpenRouterRouting}"
+  # A plain identifier and nothing else: no dot (which would make this a deeper path), no `*` or
+  # `?` (no wildcard reaches more than one provider here), and no leading or trailing separator,
+  # which is also what keeps `__proto__` out of the shape upstream's BLOCKED_SEGMENTS guards.
+  case "$provider" in
+    ''|*[!a-zA-Z0-9_-]*|[!a-zA-Z0-9]*|*[!a-zA-Z0-9])
+      refuse_openrouter_pinning "provider-name" \
+        "The provider segment of the path is not a plain provider name: \`$provider\`."
+      ;;
+  esac
+  class="$(openrouter_pinning_provider_class "$provider")" || status=$?
+  case "$status" in
+    0) ;;
+    4) refuse_missing_jq ;;
+    *) refuse_openrouter_pinning "unreadable-config" \
+         "The provider config could not be read or parsed, so \`$provider\` could not be qualified." ;;
+  esac
+  case "$class" in
+    ok) ;;
+    absent)
+      refuse_openrouter_pinning "provider-absent" \
+        "No provider is stored under exactly \`$provider\`. Add it first, then pin it -- upstream resolves this path's parent as a literal key, so the spelling must match the config." ;;
+    adapter)
+      refuse_openrouter_pinning "provider-adapter" \
+        "Provider \`$provider\` does not use the \`openai-chat\` adapter. Upstream refuses routing preferences on any other adapter, because no other one composes OpenRouter's provider payload." ;;
+    baseurl)
+      refuse_openrouter_pinning "provider-base-url" \
+        "Provider \`$provider\` does not target the canonical https://openrouter.ai/api/v1 baseUrl. Upstream refuses routing preferences otherwise, and a pin sent anywhere else would mean nothing." ;;
+  esac
+  if [ "$action" = set ]; then
+    local payload_error payload_status=0
+    payload_error="$(openrouter_routing_payload_error "$payload")" || payload_status=$?
+    case "$payload_status" in
+      0) ;;
+      4) refuse_missing_jq ;;
+      *) refuse_openrouter_pinning "payload-not-json" \
+           "The value is not JSON. Upstream would store it as a bare string and then refuse the whole config." ;;
+    esac
+    [ -z "$payload_error" ] || refuse_openrouter_pinning "payload-shape" \
+      "The value does not conform to the upstream routing shape: $payload_error"
+  fi
+  openrouter_pin_provider="$provider"
+}
+
+# Printed after an admitted pin write, and DELIBERATELY NOT `print_sync_required_notice`. The
+# provider notice's body is a false instruction here in both halves: it says the provider is not
+# in the running gateway's routing table, and it names an `ocx sync`.
+#
+#   * The provider is already live -- it had to be, or the pin would have been refused. What is
+#     not live is the pin, so a request does NOT misroute to the default provider. It reaches
+#     OpenRouter unpinned and is served by whatever upstream OpenRouter picks, which is the exact
+#     state the pin exists to prevent (measured 2026-08-23 on this host: Amazon Bedrock unpinned,
+#     Cerebras once the pin was live).
+#   * There is no sync step. `ocx sync` republishes the Codex integration's ~/.codex config and
+#     the model catalog; the pin is read from the gateway's OWN provider config while composing
+#     the outbound body. Naming a sync would send an operator to authorize a shared ~/.codex
+#     rewrite this write does not need, and upstream's own `config set` instructs none.
+#
+# The restart IS required and is not run: `startServer` calls `loadConfig()` exactly once
+# (src/server/index.ts:497), so the running process serves the provider config it read at
+# startup. A restart interrupts in-flight turns in every routed session, so it stays its own
+# authorized operation.
+print_pin_publish_notice() {
+  local action="$1" provider="$2"
+  cat <<EOF
+
+NOT LIVE YET: \`ocx config $action\` wrote the pin for \`$provider\` to the config file. The
+RUNNING gateway is still serving the provider config it loaded at startup, so the outbound body
+carries the OLD routing preference until it restarts:
+
+  ccodex restart
+
+Until then the request does not fail closed and does not misroute to another provider either --
+it reaches OpenRouter with the previous pin, or unpinned, and is served by whichever upstream
+OpenRouter itself picks. That is the state the pin exists to prevent.
+
+The restart is not run for you: it interrupts in-flight turns in every session routed through
+the gateway, so it is its own authorized operation. There is no \`ocx sync\` step here, unlike a
+provider add or edit -- this value is read from the gateway's own provider config, not from the
+Codex integration's ~/.codex config or the model catalog.
+
+What is IN THE FILE is readable now:
+  ccodex configure config get providers.$provider.modelOpenRouterRouting
+Whether the RUNNING process has it is a different fact, and \`ccodex status\` does not answer it:
+that shows up only in which upstream actually serves a turn.
+EOF
 }
 
 cmd_configure() {
@@ -2088,6 +2438,17 @@ cmd_configure() {
     printf 'Supported: inspected non-Anthropic login/account/provider mutations and masked\n'
     printf 'provider/account/config inspection. Interactive setup, GUI, arbitrary config\n'
     printf 'mutation/import/export, and unknown future routes fail closed.\n\n'
+    printf 'ONE config-plane write is admitted, because config is its only route -- a `provider`\n'
+    printf 'field in a request body is dropped by the gateway before it reaches OpenRouter:\n\n'
+    printf "  config set providers.<name>.modelOpenRouterRouting '<json>'\n"
+    printf '  config unset providers.<name>.modelOpenRouterRouting\n\n'
+    printf '<json> is keyed by exact model id, each value carrying at least one of order (1-64\n'
+    printf 'unique provider slugs in preference order), only (the same, as an exclusive set), and\n'
+    printf 'allowFallbacks (boolean). The named provider must already be stored, spelled exactly,\n'
+    printf 'on the openai-chat adapter with the canonical https://openrouter.ai/api/v1 baseUrl.\n'
+    printf 'The value is validated against those rules here before it is forwarded, and the write\n'
+    printf 'is not live until `ccodex restart`, which this route prints and never runs. Every\n'
+    printf 'other config path stays refused.\n\n'
     printf 'A provider add/edit/remove writes the CONFIG FILE only. It is not in the running\n'
     printf 'gateway until `ocx sync` plus a restart; until then requests naming it fall through\n'
     printf 'to the DEFAULT provider. This route prints that sequence after a successful\n'
@@ -2098,7 +2459,7 @@ cmd_configure() {
     return 0
   fi
 
-  local verb subcommand provider route mutates_providers=false
+  local verb subcommand provider route mutates_providers=false pins_openrouter=false
   verb="$(normalize_identifier "${1:-}")"
   subcommand="$(normalize_identifier "${2:-}")"
   route="$verb${subcommand:+ $subcommand}"
@@ -2109,8 +2470,25 @@ cmd_configure() {
     # sent readers to the credential notice for what is really a help request.
     "account "|"provider "|"models "|"config ")
       ;;
-    "init "|"setup "|"gui "|"config set"|"config unset"|"config import"|"config export")
-      refuse_configuration "unbounded-route"
+    "init "|"setup "|"gui "|"config import"|"config export")
+      refuse_configuration "unbounded-route" "$route"
+      ;;
+    # THE ONE ADMITTED CONFIG-PLANE WRITE, and the split is where it earns its narrowness. A path
+    # that is not even pinning-SHAPED takes the plane's ordinary unbounded-route refusal, exactly
+    # as before -- `providers.openrouter.apiKey` is still refused there. A pinning-shaped path
+    # that fails admission gets the pinning refusal instead, because sending an operator who
+    # mistyped a slug to "the general config plane is unadmitted" would be a wrong answer.
+    #
+    # `$3` is the RAW path. `$verb`/`$subcommand` are normalized identifiers, and that normalizer
+    # maps `.` to `-`, so reading the path out of either one would see `providers-openrouter-...`.
+    "config set"|"config unset")
+      case "${3:-}" in
+        providers.*.modelOpenRouterRouting) ;;
+        *) refuse_configuration "unbounded-route" "$route" ;;
+      esac
+      admit_openrouter_pinning "$subcommand" "${@:3}"
+      provider="$openrouter_pin_provider"
+      pins_openrouter=true
       ;;
     "login "*|"logout "*)
       provider="${2:-}"
@@ -2152,6 +2530,11 @@ cmd_configure() {
   # and telling an operator to sync a write that did not land would be a false instruction.
   if [ "$status" -eq 0 ] && $mutates_providers; then
     print_sync_required_notice "$route"
+  fi
+  # Same success-only rule, different notice: a pin write's publish step is a restart alone. See
+  # print_pin_publish_notice for why reusing the provider notice would be a false instruction.
+  if [ "$status" -eq 0 ] && $pins_openrouter; then
+    print_pin_publish_notice "$subcommand" "$provider"
   fi
   return "$status"
 }

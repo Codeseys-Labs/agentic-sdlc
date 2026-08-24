@@ -363,6 +363,33 @@ model selection as policy.
   absent from the config file is admitted only by name against the registry roster the wrapper
   pins (2.28.0 adds `chutes`, `featherless`, `nous`, `novita`, `xiaomi-mimo`); an unlisted name is
   refused, never admitted by absence.
+  The general config plane stays unadmitted with EXACTLY ONE narrow exception, and the closed list
+  is `config set`/`config unset` of `providers.<name>.modelOpenRouterRouting` and nothing else.
+  It exists because config is that field's only route: `openai-chat` composes OpenRouter's
+  outbound `provider` payload from configuration alone (`src/adapters/openai-chat.ts:116-117`) and
+  a caller-supplied `provider` in the request body is dropped by `CHAT_PASSTHROUGH_FIELDS`, while
+  `provider add|edit` carries no routing flag and the management PATCH mask has no
+  `openRouterRouting` entry. Verified live 2026-08-23 end-to-end, not merely transmitted: the same
+  `openrouter/openai/gpt-oss-120b` turn served from Amazon Bedrock unpinned and from Cerebras once
+  the pin was live, a control model on the same provider still answered from Alibaba, and the unset
+  returned routing to the baseline. Admission is by shape, not by trust: exactly three dotted
+  segments with a plain-identifier provider (no wildcard, no deeper path), that provider already
+  stored under that EXACT case-sensitive key on the `openai-chat` adapter with the canonical
+  `https://openrouter.ai/api/v1` baseUrl, an exact argument count so no unreviewed flag rides
+  along, and a payload validated against upstream's own `openRouterRoutingConfigError` rules
+  (exact-model keys; each value carrying at least one of `order`, `only`, `allowFallbacks`; 1-64
+  unique nonblank trimmed slugs; boolean `allowFallbacks`) before it is forwarded. Every other
+  config path — `providers.<name>.apiKey`, `baseUrl`, the sibling default `openRouterRouting`, any
+  top-level key — is still refused as `unbounded-route`, and `config import`/`config export` plus
+  `init`/`setup`/`gui` are untouched. The publish step for a pin is `ccodex restart` ALONE and the
+  wrapper prints it without running it: `startServer` calls `loadConfig()` once
+  (`src/server/index.ts:497`), so the running process serves its startup snapshot, and there is no
+  `ocx sync` here because the value is read from the gateway's own provider config rather than
+  republished into `~/.codex`. An unpublished pin does not misroute to the default provider — the
+  provider is already live — it reaches OpenRouter unpinned, which is the state the pin exists to
+  prevent. A refused configuration route now explains the CONFIG plane instead of reprinting the
+  ADR-0014 launch-route text: it names the exact refused verb and lists the admitted alternatives,
+  while the provider-boundary refusals keep the launch-route body, where it is on topic.
   Muse Spark has no tasks of its own: it is one provider registered in the gateway, whose models
   appear in the single flat live catalog as namespaced ids, so
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a

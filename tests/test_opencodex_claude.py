@@ -1990,6 +1990,403 @@ class OpenCodexClaudeTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 3)
                 self.assertOnlyReadOnlyOcxRoutes(log)
 
+    # --- the ONE admitted config-plane write: OpenRouter provider pinning ---------------
+    #
+    # `modelOpenRouterRouting` is the only way to pin which upstream OpenRouter serves a model
+    # from: `openai-chat` composes the outbound `provider` field from configuration alone, and a
+    # caller-supplied `provider` in the request body is dropped by CHAT_PASSTHROUGH_FIELDS. So the
+    # general config plane being shut left NO route, and exactly this path shape is now admitted.
+    #
+    # EVERY REFUSAL BELOW HAS AN ADMITTED TWIN, because a refusal test alone cannot tell "the
+    # wrapper checked this and declined" from "the wrapper refuses the whole shape". The twin is
+    # the same call with only the refused element corrected, and it must reach the tool.
+
+    PIN_PATH = "providers.openrouter.modelOpenRouterRouting"
+    PIN_PAYLOAD = '{"openai/gpt-oss-120b":{"only":["cerebras"],"allowFallbacks":false}}'
+    # The qualifying provider: upstream requires BOTH the openai-chat adapter and the canonical
+    # baseUrl before it will accept a routing preference at all.
+    PIN_CONFIG: dict[str, object] = {
+        "providers": {
+            "openrouter": {"adapter": "openai-chat", "baseUrl": "https://openrouter.ai/api/v1"},
+            "wrong-adapter": {
+                "adapter": "openai-responses", "baseUrl": "https://openrouter.ai/api/v1",
+            },
+            "wrong-base-url": {
+                "adapter": "openai-chat", "baseUrl": "https://models.example.test/v1",
+            },
+        }
+    }
+    # The one read-only route this arm legitimately makes: it must read the provider config to
+    # qualify the named provider's adapter and baseUrl.
+    PIN_CONFIG_READ = "<ocx><config><show><--json>"
+
+    def test_configure_admits_the_openrouter_pin_write_and_forwards_the_exact_upstream_route(
+        self,
+    ) -> None:
+        result, log = self.run_launcher(
+            "configure", "config", "set", self.PIN_PATH, self.PIN_PAYLOAD, config=self.PIN_CONFIG,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The EXACT upstream argv, payload byte-for-byte included. A wrapper that reformatted or
+        # re-serialized the JSON would change what lands in the config file, and exit 0 plus a
+        # printed notice cannot tell that apart from a faithful forward.
+        self.assertExactTracedOcxRoute(log, "config", "set", self.PIN_PATH, self.PIN_PAYLOAD)
+        # AND NOTHING ELSE RAN. This is what holds "prints the publish step, never runs it" to
+        # account: an `ocx sync` or a restart forwarded here would be an unauthorized outward
+        # effect, and `also_admitted` can only widen by exact line, so neither can hide.
+        self.assertOnlyReadOnlyOcxRoutes(
+            log,
+            self.PIN_CONFIG_READ,
+            self.traced_ocx_route("config", "set", self.PIN_PATH, self.PIN_PAYLOAD),
+        )
+        self.assertIn("NOT LIVE YET", result.stdout)
+        self.assertIn("ccodex restart", result.stdout)
+        # NEITHER HALF of the provider notice, because both are false instructions here. The
+        # provider arms print `exec -- ocx sync` as a command to run and explain that the provider
+        # is not in the routing table so requests fall through to `default-provider`; this write is
+        # to an ALREADY-live provider, and the value is read from the gateway's own provider config
+        # rather than republished into ~/.codex. Matching the command form, not the bare words, so
+        # the notice can still explain in prose that there is no sync step.
+        self.assertNotIn("exec -- ocx sync", result.stdout)
+        self.assertNotIn("default-provider", result.stdout)
+
+    def test_configure_admits_the_openrouter_pin_unset(self) -> None:
+        result, log = self.run_launcher(
+            "configure", "config", "unset", self.PIN_PATH, config=self.PIN_CONFIG,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertExactTracedOcxRoute(log, "config", "unset", self.PIN_PATH)
+        self.assertOnlyReadOnlyOcxRoutes(
+            log,
+            self.PIN_CONFIG_READ,
+            self.traced_ocx_route("config", "unset", self.PIN_PATH),
+        )
+        self.assertIn("NOT LIVE YET", result.stdout)
+        self.assertIn("ccodex restart", result.stdout)
+
+    def test_a_failed_pin_write_prints_no_publish_notice(self) -> None:
+        # Same rule as the provider arms: "restart to publish this" over a write that did not land
+        # is a false instruction. Without this, the notice assertions above pass with the whole
+        # passthrough gutted.
+        result, _ = self.run_launcher(
+            "configure", "config", "set", self.PIN_PATH, self.PIN_PAYLOAD,
+            config=self.PIN_CONFIG, ocx_exit=1,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("NOT LIVE YET", result.stdout)
+
+    def test_a_config_path_that_is_not_the_pin_path_is_still_refused_as_unbounded(self) -> None:
+        # THE TWIN of the admitted test above: only the PATH differs. Each of these is a key the
+        # pinning route must not have opened -- a credential, a base URL, the provider's whole
+        # object, a sibling routing field that is NOT the exact-model map, and an unrelated
+        # top-level key.
+        for path in (
+            "providers.openrouter.apiKey",
+            "providers.openrouter.baseUrl",
+            "providers.openrouter",
+            "providers.openrouter.openRouterRouting",
+            "codexAccountPriorities",
+        ):
+            for action in ("set", "unset"):
+                with self.subTest(path=path, action=action):
+                    arguments = ["configure", "config", action, path]
+                    if action == "set":
+                        arguments.append(self.PIN_PAYLOAD)
+                    result, log = self.run_launcher(*arguments, config=self.PIN_CONFIG)
+
+                    self.assertEqual(result.returncode, 3)
+                    # Not even the config READ: a non-pinning path is refused on its shape alone,
+                    # before anything about the provider is looked up.
+                    self.assertOnlyReadOnlyOcxRoutes(log)
+                    self.assertIn("unbounded-route", result.stderr)
+
+    def test_a_wildcard_or_deeper_provider_segment_is_refused(self) -> None:
+        # The admission is one provider, named exactly. A glob would reach every provider through
+        # one write, and a deeper path would reach a key inside the routing map.
+        for path in (
+            "providers.*.modelOpenRouterRouting",
+            "providers.open?outer.modelOpenRouterRouting",
+            "providers.openrouter.extra.modelOpenRouterRouting",
+            "providers..modelOpenRouterRouting",
+            "providers.__proto__.modelOpenRouterRouting",
+            "providers.-openrouter.modelOpenRouterRouting",
+        ):
+            with self.subTest(path=path):
+                result, log = self.run_launcher(
+                    "configure", "config", "set", path, self.PIN_PAYLOAD, config=self.PIN_CONFIG,
+                )
+
+                self.assertEqual(result.returncode, 3)
+                self.assertIn("provider-name", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
+    def test_a_provider_absent_from_the_config_is_refused_by_exact_spelling(self) -> None:
+        # Upstream resolves this path's parent as a LITERAL object key, so a case-folded match
+        # would admit a route that then fails inside the tool -- which reads as this wrapper
+        # having approved something broken. `OpenRouter` is the positive control's own name in a
+        # different case, so this pair also pins the case sensitivity.
+        for provider in ("nosuch-provider", "OpenRouter"):
+            with self.subTest(provider=provider):
+                result, log = self.run_launcher(
+                    "configure", "config", "set",
+                    f"providers.{provider}.modelOpenRouterRouting", self.PIN_PAYLOAD,
+                    config=self.PIN_CONFIG,
+                )
+
+                self.assertEqual(result.returncode, 3)
+                self.assertIn("provider-absent", result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log, self.PIN_CONFIG_READ)
+
+    def test_a_provider_whose_adapter_or_base_url_disqualifies_it_is_refused(self) -> None:
+        # Both are upstream preconditions (openRouterRoutingConfigError): no other adapter
+        # composes OpenRouter's provider payload, and a pin sent to any other endpoint means
+        # nothing. Refusing here rather than forwarding is what keeps the wrapper's approval
+        # honest -- the twin above shows the same call is admitted once the provider qualifies.
+        for provider, reason in (
+            ("wrong-adapter", "provider-adapter"),
+            ("wrong-base-url", "provider-base-url"),
+        ):
+            with self.subTest(provider=provider):
+                result, log = self.run_launcher(
+                    "configure", "config", "set",
+                    f"providers.{provider}.modelOpenRouterRouting", self.PIN_PAYLOAD,
+                    config=self.PIN_CONFIG,
+                )
+
+                self.assertEqual(result.returncode, 3)
+                self.assertIn(reason, result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log, self.PIN_CONFIG_READ)
+
+    def test_a_near_canonical_openrouter_base_url_is_refused(self) -> None:
+        # `isCanonicalOpenRouterTarget` is narrow on purpose, and each of these would silently
+        # send a pinned request somewhere the pin does not apply. The admitted spellings are the
+        # positive controls in the same loop, so a check that refused everything would fail here.
+        refused = (
+            "http://openrouter.ai/api/v1",            # not https
+            "https://openrouter.ai/API/v1",           # pathname is case-sensitive upstream
+            "https://openrouter.ai/api/v2",
+            "https://openrouter.ai",
+            "https://openrouter.ai:8443/api/v1",      # a port that changes the origin
+            # Host is a PREFIX of the canonical one, not the canonical one. Also the sentinel for
+            # the never-echo assertion below, so it is spelled distinctively.
+            "https://openrouter.ai.not-a-real-host.test/api/v1",
+            "https://api.openrouter.ai/api/v1",
+            # USERINFO, which upstream rejects via `url.username`/`url.password`. Deliberately the
+            # username-only spelling: a `user:pass@` fixture is a credential-shaped string that the
+            # repository's own secrets gate flags (measured -- `generic-credential-uri`), and it
+            # would exercise nothing extra, since the anchored host match rejects every `...@`
+            # prefix identically rather than parsing the userinfo apart.
+            "https://user@openrouter.ai/api/v1",
+            "https://openrouter.ai/api/v1?x=1",
+            "https://openrouter.ai/api/v1#f",
+            # A bare `?` parses to an EMPTY search that upstream accepts and this refuses -- a
+            # deliberate narrowing, pinned so a later "simplification" cannot widen it silently.
+            "https://openrouter.ai/api/v1?",
+            # SCHEMELESS, and the only case the anchored host match is the sole guard for: the
+            # path check alone would admit it, because a non-matching prefix leaves the string
+            # untouched and `/api/v1` then matches the path anchor exactly. Upstream's `new URL()`
+            # throws on a relative URL. MEASURED: dropping that anchor kills only this subTest.
+            "/api/v1",
+            "//openrouter.ai/api/v1",
+        )
+        admitted = (
+            "https://openrouter.ai/api/v1",
+            "https://openrouter.ai/api/v1/",          # upstream strips trailing slashes
+            "https://openrouter.ai:443/api/v1",       # the default port drops out of the origin
+            "HTTPS://OpenRouter.AI/api/v1",           # scheme and host fold, as URL parsing does
+        )
+        for base_url in refused + admitted:
+            with self.subTest(base_url=base_url):
+                result, log = self.run_launcher(
+                    "configure", "config", "set", self.PIN_PATH, self.PIN_PAYLOAD,
+                    config={"providers": {
+                        "openrouter": {"adapter": "openai-chat", "baseUrl": base_url},
+                    }},
+                )
+                if base_url in admitted:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertExactTracedOcxRoute(
+                        log, "config", "set", self.PIN_PATH, self.PIN_PAYLOAD
+                    )
+                else:
+                    self.assertEqual(result.returncode, 3)
+                    self.assertIn("provider-base-url", result.stderr)
+                    self.assertOnlyReadOnlyOcxRoutes(log, self.PIN_CONFIG_READ)
+                    # A REFUSED BASE URL IS NEVER ECHOED, which is this launcher's standing rule
+                    # because a base URL can carry userinfo. The refusal names the provider and
+                    # the canonical target it needed instead.
+                    #
+                    # Asserted on the two DISTINCTIVE fragments above rather than on `base_url`
+                    # itself: several fixtures here are substrings of the canonical
+                    # `https://openrouter.ai/api/v1` that the refusal legitimately prints as
+                    # guidance, so a blanket `assertNotIn(base_url, ...)` fails on the guidance
+                    # rather than on an echo (measured: it failed 3 of these subTests). These two
+                    # cannot appear in the guidance, so they can only appear by being echoed.
+                    output = result.stdout + result.stderr
+                    self.assertNotIn("not-a-real-host", output)
+                    self.assertNotIn("user@", output)
+
+    def test_a_nonconforming_pin_payload_is_refused_with_the_upstream_rule_it_broke(self) -> None:
+        # Mirrors `routingPreferenceError` rule for rule, so the operator reads the message the
+        # tool would have given. The conforming payloads in the same loop are the positive
+        # controls: a validator that rejected everything would fail on them.
+        refused = (
+            ("not json at all", "payload-not-json"),
+            ("[]", "must be a plain object"),
+            ('"a string"', "must be a plain object"),
+            ('{"m":"not an object"}', "must be a plain object"),
+            ('{"m":{}}', "must define order, only, or allowFallbacks"),
+            ('{"m":{"only":["groq"],"bogus":1}}', 'unknown field "bogus"'),
+            ('{"m":{"only":[]}}', "1-64 provider slugs"),
+            ('{"m":{"order":["groq","groq"]}}', "duplicate provider slugs"),
+            ('{"m":{"only":[" groq"]}}', "nonblank trimmed provider slugs"),
+            ('{"m":{"only":[7]}}', "nonblank trimmed provider slugs"),
+            ('{"m":{"allowFallbacks":"false"}}', "must be a boolean"),
+            ('{" m":{"only":["groq"]}}', "nonblank trimmed model ids"),
+        )
+        admitted = (
+            '{"openai/gpt-oss-120b":{"only":["cerebras"]}}',
+            '{"openai/gpt-oss-120b":{"order":["cerebras","groq"],"allowFallbacks":true}}',
+            '{"a":{"allowFallbacks":false},"b":{"only":["groq"]}}',
+            "{}",  # upstream accepts an empty map, so this wrapper does not invent a stricter rule
+        )
+        for payload, expected in refused:
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher(
+                    "configure", "config", "set", self.PIN_PATH, payload, config=self.PIN_CONFIG,
+                )
+
+                self.assertEqual(result.returncode, 3)
+                self.assertIn(expected, result.stderr)
+                self.assertOnlyReadOnlyOcxRoutes(log, self.PIN_CONFIG_READ)
+        for payload in admitted:
+            with self.subTest(payload=payload):
+                result, log = self.run_launcher(
+                    "configure", "config", "set", self.PIN_PATH, payload, config=self.PIN_CONFIG,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertExactTracedOcxRoute(log, "config", "set", self.PIN_PATH, payload)
+
+    def test_the_pin_grammar_admits_no_extra_argument(self) -> None:
+        # The whole point of a narrow admission is that nothing rides in behind a valid path.
+        # Upstream's own `rejectArgs` would refuse these too, but that would be the tool declining
+        # a route this wrapper had already approved and forwarded.
+        conforming = '{"m":{"only":["groq"]}}'
+        for arguments in (
+            ("config", "set", self.PIN_PATH, conforming, "--json"),
+            ("config", "set", self.PIN_PATH, conforming, "extra"),
+            ("config", "set", self.PIN_PATH),
+            ("config", "unset", self.PIN_PATH, "--json"),
+            ("config", "unset", self.PIN_PATH, conforming),
+        ):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher("configure", *arguments, config=self.PIN_CONFIG)
+
+                self.assertEqual(result.returncode, 3)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+        # A bare `config set <path>` with no value is a usage error rather than a grammar refusal
+        # in upstream's own terms, so it is checked above for exit 3 and named here for clarity:
+        # the wrapper counts arguments before it looks at anything else.
+        result, _ = self.run_launcher(
+            "configure", "config", "set", self.PIN_PATH, config=self.PIN_CONFIG,
+        )
+        self.assertIn("grammar", result.stderr)
+
+    def test_the_pin_admission_names_no_admitted_jq_route_rather_than_blaming_the_provider(
+        self,
+    ) -> None:
+        # Same rule as `test_a_configure_mutation_names_the_tool_when_no_admitted_jq_route_runs`:
+        # a missing tool is about this host's installation, not about the provider or the payload,
+        # and qualifying the provider is impossible without reading the config.
+        result, log = self.run_launcher(
+            "configure", "config", "set", self.PIN_PATH, self.PIN_PAYLOAD,
+            config=self.PIN_CONFIG, bound_jq_missing=True,
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("no admitted `jq` route runs on this host", result.stderr)
+        self.assertNotIn("provider-absent", result.stderr)
+        self.assertOnlyReadOnlyOcxRoutes(log, self.PIN_CONFIG_READ)
+
+    # --- agentic-sdlc-4518: the config-plane refusal explains the config plane ------------
+    #
+    # THE DEFECT: every configure refusal delegated to `refuse`, whose body is the ADR-0014
+    # LAUNCH-route explanation. Refusing `config set` and then discussing provider-routing
+    # variables, apiKeyHelper, Console keys and model slots sends the reader to inspect four
+    # things that have nothing to do with the verb they typed.
+    #
+    # Sentinels drawn from `refuse`'s body, so this cannot pass by the text merely being reworded.
+    LAUNCH_ROUTE_SENTINELS = (
+        "outranks the gateway's base URL",
+        "cloud-provider route is a different command",
+        "saved claude.ai login stays the active credential",
+        "Bedrock",
+    )
+
+    def test_the_config_plane_refusal_names_the_verb_and_drops_the_launch_route_text(self) -> None:
+        for arguments, named in (
+            (("config", "set", "providers.openrouter.apiKey", "v"), "ocx config set"),
+            (("config", "unset", "providers.openrouter.apiKey"), "ocx config unset"),
+            (("config", "import", "candidate.json", "--yes"), "ocx config import"),
+            (("config", "export", "-"), "ocx config export"),
+        ):
+            with self.subTest(arguments=arguments):
+                result, _ = self.run_launcher("configure", *arguments, config=self.PIN_CONFIG)
+
+                self.assertEqual(result.returncode, 3)
+                # The first line's shape is preserved: the reason token is read out of it.
+                self.assertIn(
+                    "REFUSED: opencodex configuration route refused (unbounded-route);",
+                    result.stderr,
+                )
+                self.assertIn(named, result.stderr)
+                for sentinel in self.LAUNCH_ROUTE_SENTINELS:
+                    self.assertNotIn(sentinel, result.stderr)
+                # And it says what IS admitted, including the one config-plane write.
+                self.assertIn("provider add|edit|update|remove", result.stderr)
+                self.assertIn("modelOpenRouterRouting", result.stderr)
+
+    def test_the_launch_route_body_is_still_reachable_from_a_provider_boundary_refusal(
+        self,
+    ) -> None:
+        # THE POSITIVE CONTROL for the test above. Without it, deleting `refuse`'s body outright
+        # would satisfy every assertNotIn and the pair would prove nothing. A provider-boundary
+        # refusal is the case where that text IS on topic, so it must still carry it.
+        result, _ = self.run_launcher("configure", "login", "anthropic")
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("anthropic-or-unclassifiable-provider", result.stderr)
+        for sentinel in self.LAUNCH_ROUTE_SENTINELS:
+            self.assertIn(sentinel, result.stderr)
+
+    def test_the_pin_refusal_carries_no_launch_route_text_either(self) -> None:
+        result, _ = self.run_launcher(
+            "configure", "config", "set", self.PIN_PATH, "[]", config=self.PIN_CONFIG,
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("REFUSED: OpenRouter provider pinning refused", result.stderr)
+        for sentinel in self.LAUNCH_ROUTE_SENTINELS:
+            self.assertNotIn(sentinel, result.stderr)
+        # It names the grammar the operator should have used instead of only what was wrong.
+        self.assertIn("config set providers.<name>.modelOpenRouterRouting", result.stderr)
+
+    def test_the_configure_help_surfaces_name_the_one_admitted_config_write(self) -> None:
+        # Two help surfaces claim the plane is closed; a closed-list claim that omits the one
+        # exception is false. Both are asserted, and each must also still say the rest is refused.
+        for arguments in (("configure",), ("configure", "--help")):
+            with self.subTest(arguments=arguments):
+                result, log = self.run_launcher(*arguments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("modelOpenRouterRouting", result.stdout)
+                self.assertIn("mutation/import/export", result.stdout)
+                self.assertOnlyReadOnlyOcxRoutes(log)
+
     def test_configure_allows_non_anthropic_provider_and_preserves_arguments(self) -> None:
         result, log = self.run_launcher("configure", "login", "xai", "two words")
 
