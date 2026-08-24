@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# ccodex — self-locating Agentic SDLC operator dispatcher (the distribution tree's own bin/).
+#
+# This is the COMMITTED sibling of assets/launchers/ccodex.in, for a tree acquired WITHOUT the
+# operator-tools install step: the mise `github:` backend, a plain extracted release archive, or
+# a checkout. The rendered ccodex.in cannot ship as committed bytes — its shebang and its five
+# tool paths are install-time substitutions, and install_operator_tools.py fails closed on a
+# leftover placeholder — so this file exists, and it diverges from the rendered plane in exactly
+# three declared ways:
+#   * `#!/usr/bin/env bash`: a committed cross-host file cannot carry the per-host absolute
+#     interpreter pin; the pinned-shebang doctrine stays on the rendered operator-tools plane.
+#   * No install-time tool bindings. The distribution root is the parent of this file's own
+#     bin/, and every tool resolves through that root's reviewed mise.toml + mise.lock: the
+#     launch-family verbs exec scripts/opencodex-claude.sh with AGENTIC_SDLC_OCX and
+#     AGENTIC_SDLC_JQ left unset, so the launcher's own direct-checkout branches take the pinned
+#     `mise -C <root> exec` routes, and the Python-backed verbs run
+#     `mise -C <root> exec -- uv run --python 3.12.11 --script`.
+#   * Bare `set-fast-model` (the interactive selector) is refused by name — pass an exact id
+#     from `ccodex models`, a Claude family alias, or `-` to clear; the one-argument form works
+#     unchanged.
+# `version` and `--help` stay tool-free: they answer before mise, any trust step, or any
+# download. This command NEVER runs `mise trust`. The first tool-needing verb on an untrusted
+# root is refused at exit 3 naming the exact remedy; after the operator's explicit
+# review-and-trust the same verb proceeds, and mise auto-installs the pinned toolset from the
+# tree's own lock. The grammar below stays bash-3.2 compatible, matching the rendered plane's
+# macOS constraint.
+set -euo pipefail
+
+# Self-location: `realpath` (present on Linux and macOS 13+) resolves a symlinked entry back to
+# the tree; without it the physical parent directory of $0 still locates an unlinked copy.
+self="$0"
+if command -v realpath >/dev/null 2>&1; then
+  self="$(realpath "$0")"
+fi
+root="$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd -P)"
+launcher="$root/scripts/opencodex-claude.sh"
+
+usage() {
+  cat <<EOF
+usage: ccodex <command> [args...]
+
+Gateway plane -- one session, both catalogs (\`ccodex ocx <verb>\` is the long form):
+  ensure                      Ensure the gateway is healthy without launching Claude Code.
+  launch [--yolo] [args...]  Ensure the gateway is healthy, then launch Claude Code through it
+                              with your OWN ~/.claude login. Native claude models pass through
+                              to Anthropic on your subscription; gateway models route to their
+                              own providers -- both in one session. Select any catalog model
+                              with --model. --yolo explicitly bypasses permission checks and is
+                              unsafe outside an isolated, disposable environment.
+  ultracode [--yolo] [args...] Same fail-closed launch path with session Ultracode; --yolo
+                              explicitly bypasses permission checks with the same warning.
+  status                      Gateway supervision, configured-vs-live providers, and whether
+                              anything would silently defeat the gateway route.
+  restart                     Stop cleanly, then ensure the gateway is back up.
+
+Providers and models (what a launched session can actually pick):
+  providers                   Configured providers, and which are LIVE in the running gateway.
+  models                      The running gateway's flat live catalog. Muse models appear here
+                              as ordinary namespaced entries, not as a separate plane.
+  set-fast-model <id|->       Set Claude Code's Haiku/background small-fast model to an exact
+                              id from \`ccodex models\` or a Claude family alias; - clears. The
+                              interactive selector ships only with the installed operator tools.
+  configure [args...]         Reviewed provider configuration.
+
+Installed-bundle lifecycle:
+  bundle <install|status|uninstall>
+  libraries <list|status|install|migrate|uninstall> [args...]
+  statusline <status|activate|deactivate> [args...]
+
+Checkout-development evidence (read-only, no gateway or lifecycle effects):
+  sdlc <inspect|status|doctor> [--json]
+  sdlc recover --dry-run [--json]
+
+Checkout-development lifecycle (mutating verbs; each is admitted or refused by its own module):
+  sdlc install --host claude   Explicit host, no default and no wildcard.
+  sdlc update
+  sdlc uninstall
+  sdlc recover --apply <plan-sha256>
+
+  version                     Report this command's self-located root and how tools resolve.
+
+This copy locates its distribution root as the parent of its own bin/ and resolves every tool
+through that root's reviewed mise.toml + mise.lock. \`version\` and \`--help\` need no tools; the
+first tool-needing verb on an untrusted root is refused at exit 3 with the exact remedy, and
+this command never runs \`mise trust\` on your behalf.
+
+Help is never a side-effecting operation. \`ccodex <verb> --help\` prints that verb's own help
+and runs nothing. To reach the help of the tool BEHIND a launch verb, end this command's
+options with \`--\`:
+  ccodex launch -- --help     Claude Code's own help, through a prepared session
+
+Maintenance tasks (test, validate, check, secrets, mermaid, hooks) are deliberately absent:
+they belong to working ON the repository, not to using what it installed.
+
+exit codes: 0 ok - 1 failure - 2 usage - 3 refused (a boundary declined the operation before any
+effect) - 4 admitted partial or unknown effect (\`sdlc\` lifecycle verbs only)
+EOF
+}
+
+require_launcher() {
+  [ -f "$launcher" ] || {
+    printf 'error: the supervised launcher is missing: %s\n' "$launcher" >&2
+    printf 'This command dispatches into the distribution tree it sits in; that tree is incomplete.\n' >&2
+    exit 1
+  }
+}
+
+# Fail closed, by name, before any effect: a missing mise and an untrusted root are both caught
+# here so no route half-runs. The probe (`mise tasks`) parses the config without resolving or
+# installing a tool, and its stdin is closed so mise cannot answer its own trust prompt.
+require_toolchain() {
+  command -v mise >/dev/null 2>&1 || {
+    printf 'refused: mise is not on PATH, and every tool-needing verb resolves its pinned tools\n' >&2
+    printf 'through this tree'"'"'s mise.toml + mise.lock. Install mise, then re-run this command.\n' >&2
+    exit 3
+  }
+  local probe
+  if ! probe="$(mise -C "$root" tasks </dev/null 2>&1 >/dev/null)"; then
+    case "$probe" in
+      *"not trusted"*)
+        printf 'refused: %s/mise.toml is not trusted, so its pinned toolchain cannot resolve.\n' "$root" >&2
+        printf 'Review %s/mise.toml and %s/mise.lock, then run:\n' "$root" "$root" >&2
+        printf '  mise trust %s/mise.toml\n' "$root" >&2
+        printf 'This command never trusts a config on your behalf. After that explicit step, the\n' >&2
+        printf 'first tool-needing verb auto-installs the pinned toolset from the tree'"'"'s lock.\n' >&2
+        exit 3
+        ;;
+      *)
+        printf 'error: mise cannot read %s:\n%s\n' "$root" "$probe" >&2
+        exit 1
+        ;;
+    esac
+  fi
+}
+
+# uv-backed Python route, resolved through the tree's own pinned toolchain rather than an
+# install-time binding. A missing entry file is refused by name before mise is consulted.
+run_python() {
+  local script="$1"
+  shift
+  [ -f "$root/scripts/$script" ] || {
+    printf 'error: scripts/%s is unavailable in this distribution\n' "$script" >&2
+    exit 3
+  }
+  require_toolchain
+  exec mise -C "$root" exec -- uv run --python 3.12.11 --script "$root/scripts/$script" "$@"
+}
+
+run_ocx() {
+  require_toolchain
+  exec mise -C "$root" exec -- ocx "$@"
+}
+
+set_fast_model_help() {
+  cat <<'EOF'
+usage: ccodex set-fast-model <exact-model-id|->
+
+Set Claude Code's Haiku/background small-fast slot to an exact Claude or routed id without
+prompting; pass - to clear it. Ids come from `ccodex models` or a Claude family alias
+(sonnet|opus|fable). The interactive selector ships only with the installed operator tools.
+
+This is not the Auto mode permission classifier. A selection persists operator
+configuration; help and cancellation do not.
+EOF
+}
+
+# Long-form verb name for the supervised launcher, or nonzero for a spelling it does not serve.
+# `ultracode` is this command's operator-facing spelling of the launcher's `launch-ultracode`.
+launcher_verb() {
+  case "$1" in
+    ensure|launch|status|restart|configure|launch-ultracode) printf '%s' "$1" ;;
+    ultracode) printf 'launch-ultracode' ;;
+    *) return 1 ;;
+  esac
+}
+
+# A sub-dispatcher's help request must not be an error; a BARE verb still exits 2, because that
+# is a genuine invocation error rather than a question.
+sub_dispatch_help() {
+  printf 'usage: ccodex %s <%s>\n\n' "$1" "$2"
+  printf 'Run `ccodex --help` for what each does, or pass a subcommand'"'"'s own --help.\n'
+  exit 0
+}
+
+route="${1:-}"
+case "$route" in
+  ensure|launch|ultracode|status|restart|configure)
+    require_launcher
+    verb="$(launcher_verb "$route")"
+    shift
+    # Verb-level help is the launcher's decision and prints tool-free, so a help-shaped first
+    # argument skips the toolchain preflight rather than refusing a question.
+    case "${1:-}" in -h|--help) ;; *) require_toolchain ;; esac
+    exec "$launcher" "$verb" "$@"
+    ;;
+  ocx)
+    require_launcher
+    shift
+    verb="${1:-}"
+    case "$verb" in
+      -h|--help|help) usage; exit 0 ;;
+      "") printf 'error: ccodex ocx needs a verb (ensure|launch|ultracode|status|restart|configure)\n\n' >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+    resolved="$(launcher_verb "$verb")" \
+      || { printf 'error: unknown ccodex ocx verb: %s\n\n' "$verb" >&2; usage >&2; exit 2 ; }
+    case "${1:-}" in -h|--help) ;; *) require_toolchain ;; esac
+    exec "$launcher" "$resolved" "$@"
+    ;;
+  providers)
+    shift
+    run_ocx provider list "$@"
+    ;;
+  set-fast-model)
+    shift
+    case "${1:-}" in
+      -h|--help|help) [ "$#" -eq 1 ] || { printf 'usage: ccodex set-fast-model <exact-model-id|->\n' >&2; exit 2; }; set_fast_model_help; exit 0 ;;
+    esac
+    [ "$#" -le 1 ] || { printf 'usage: ccodex set-fast-model <exact-model-id|->\n' >&2; exit 2; }
+    if [ "$#" -eq 0 ]; then
+      printf 'refused: the interactive selector ships only with the installed operator tools.\n' >&2
+      printf 'Pass an exact id from `ccodex models` or a Claude family alias, or - to clear.\n' >&2
+      exit 3
+    fi
+    run_ocx claude config set --small-fast-model "$1"
+    ;;
+  # The LIVE catalog, read from the running gateway's own `GET /v1/models` -- deliberately NOT
+  # `ocx models list`, which reports the CONFIGURED models. Only the live catalog answers "what
+  # can a launched session pick".
+  models)
+    shift
+    require_toolchain
+    port="$(mise -C "$root" exec -- ocx config get port 2>/dev/null | tr -d '[:space:]' | grep -E '^[0-9]+$' || true)"
+    if [ -z "$port" ] || ! command -v curl >/dev/null 2>&1; then
+      printf 'error: cannot read the live catalog (no configured port, or curl is unavailable)\n' >&2
+      printf 'Configured (NOT proof of what is served): ccodex providers\n' >&2
+      exit 1
+    fi
+    catalog="$(curl -fsS --max-time 6 "http://127.0.0.1:${port}/v1/models" 2>/dev/null || true)"
+    if [ -z "$catalog" ]; then
+      printf 'error: the gateway at 127.0.0.1:%s did not serve a catalog. It may be down.\n' "$port" >&2
+      printf 'Start it and re-check:  ccodex status\n' >&2
+      exit 1
+    fi
+    printf 'live catalog served by the gateway at 127.0.0.1:%s\n' "$port"
+    printf '(any id below can be selected with `ccodex launch --model <id>` or the /model picker)\n\n'
+    printf '%s' "$catalog" | mise -C "$root" exec -- jq -r '(.data // []) | .[] | select(.id != null) | "  " + .id'
+    printf '\nA namespaced id (provider/model) is an ordinary catalog entry: a provider such as\n'
+    printf 'muse is one row in `ccodex providers`, never a separate plane or launcher.\n'
+    printf '\nThis is reachability, not authorization, and it is not a capability claim.\n'
+    ;;
+  bundle)
+    shift
+    verb="${1:-}"
+    case "$verb" in
+      install|status|uninstall) shift; run_python install_skill_bundle.py "$verb" "$@" ;;
+      -h|--help|help) sub_dispatch_help bundle 'install|status|uninstall' ;;
+      *) printf 'error: ccodex bundle needs install|status|uninstall\n' >&2; exit 2 ;;
+    esac
+    ;;
+  libraries)
+    shift
+    verb="${1:-}"
+    case "$verb" in
+      list|status|install|migrate|uninstall) shift; run_python install_external_libraries.py "$verb" "$@" ;;
+      -h|--help|help) sub_dispatch_help libraries 'list|status|install|migrate|uninstall' ;;
+      *) printf 'error: ccodex libraries needs list|status|install|migrate|uninstall\n' >&2; exit 2 ;;
+    esac
+    ;;
+  statusline)
+    shift
+    verb="${1:-}"
+    case "$verb" in
+      status|activate|deactivate) shift; run_python manage_claude_statusline.py "$verb" "$@" ;;
+      -h|--help|help) sub_dispatch_help statusline 'status|activate|deactivate' ;;
+      *) printf 'error: ccodex statusline needs status|activate|deactivate\n' >&2; exit 2 ;;
+    esac
+    ;;
+  sdlc)
+    shift
+    # Readers and the mutating lifecycle verbs take one route on purpose: every verb decision --
+    # admit, refuse by name, or hand off to a per-verb module -- belongs to scripts/ccodex_sdlc.py,
+    # so the argument vector is forwarded unchanged.
+    run_python ccodex_sdlc.py "$@"
+    ;;
+  version)
+    printf 'ccodex (agentic-sdlc self-located dispatcher)\n'
+    printf '  distribution root : %s\n' "$root"
+    printf '  root source       : self-located (parent of this command'"'"'s own bin/)\n'
+    printf '  launcher          : %s%s\n' "$launcher" "$([ -f "$launcher" ] || printf ' (MISSING)')"
+    printf '  toolchain         : mise -C <root> exec, pinned by the tree'"'"'s mise.toml + mise.lock\n'
+    printf '  mise on PATH      : %s\n' "$(command -v mise || printf 'no (required for every verb except version and --help)')"
+    printf '\nFirst tool-needing verb on a fresh root: review %s/mise.toml and mise.lock,\n' "$root"
+    printf 'then run `mise trust %s/mise.toml` yourself (never run for you); the pinned\n' "$root"
+    printf 'toolset then auto-installs from the tree'"'"'s lock.\n'
+    ;;
+  -h|--help|help) usage ;;
+  "") usage >&2; exit 2 ;;
+  *) printf 'error: unknown command %s\n\n' "$route" >&2; usage >&2; exit 2 ;;
+esac

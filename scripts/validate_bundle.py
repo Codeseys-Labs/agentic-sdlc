@@ -203,11 +203,14 @@ MERMAID_BROWSER_IDENTITY = {
 }
 # The shipped CLI's shell payload. `bash -n` over these is a payload guard, not machinery
 # bookkeeping: a stray `fi` here kills `ccodex launch` on first invocation. They live under
-# assets/ or are sourced fragments, so the scripts/*.sh glob in validate_scripts misses them.
+# assets/ or bin/ or are sourced fragments, so the scripts/*.sh glob in validate_scripts misses
+# them. `bin/ccodex` is the release tree's self-locating dispatcher; the entry doubles as an
+# existence pin, because `bash -n` on a missing path exits nonzero and names it.
 SHELL_SYNTAX_PATHS = (
     "assets/claude/statusline-command.sh",
     "assets/claude/session-inheritance.sh",
     "assets/launchers/ccodex.in",
+    "bin/ccodex",
     "scripts/opencodex-claude.sh",
 )
 MERMAID_REQUIRED_ARTIFACTS = frozenset(
@@ -1610,7 +1613,10 @@ def validate_release_candidate_policy(root: Path, result: Validation) -> None:
             ):
                 result.error(f"{relative}: payload allowlist must be sorted, closed, and non-overlapping")
             required_files = {"LICENSE", "NOTICE"}
-            required_trees = {"agents", "assets", "commands", "hooks", "policy", "scripts", "skills", "workflows"}
+            # `bin` is required because `bin/ccodex` is the mise github-backend tool's one exposed
+            # command: without it the backend's bin lookup falls through to the 8 executable
+            # scripts/*.sh, presenting a maintenance surface as the tool's PATH surface.
+            required_trees = {"agents", "assets", "bin", "commands", "hooks", "policy", "scripts", "skills", "workflows"}
             if not required_files.issubset(files) or not required_trees.issubset(trees):
                 result.error(f"{relative}: minimal authored payload roots are missing")
 
