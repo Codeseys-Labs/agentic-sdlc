@@ -186,7 +186,11 @@ class BootstrapAgenticSdlcTests(unittest.TestCase):
             )
 
             tracked.write_text("B\n", encoding="utf-8")
-            subprocess.run(["git", "commit", "-qam", "B"], cwd=source, check=True)
+            # Same-size rewrite ("A\n" -> "B\n"): `commit -a` trusts stat data, and a
+            # same-mtime-quantum write can read as clean (racy index), which made this
+            # commit exit 1 under a loaded host. An explicit add re-hashes the content.
+            subprocess.run(["git", "add", "--", tracked.name], cwd=source, check=True)
+            subprocess.run(["git", "commit", "-qm", "B"], cwd=source, check=True)
             subprocess.run(["git", "push", "-q", "origin", "main"], cwd=source, check=True)
             second = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=source, text=True, capture_output=True, check=True
