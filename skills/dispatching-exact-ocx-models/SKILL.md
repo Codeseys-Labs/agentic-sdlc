@@ -60,6 +60,17 @@ production handoff as if the assignment ran.
 Return the bounded worker artifact plus its verified receipt, or one refusal/SeedProposal naming
 the missing injection, compatibility, or receipt capability. Never silently substitute a model.
 
+## References
+
+Read only what is needed:
+
+- `references/ccodex-ocx-configuration.md`: configuring ccodex and the ocx gateway — the two
+  configuration planes, provider onboarding order (restart is the publish step), liveness
+  verification, the silent default-provider misroute, reasoning-token headroom for probe turns,
+  OpenRouter upstream pinning, attribution reading, launch refusals, cheap test models, and the
+  agent/operator authority boundaries. Read when the task is configuring or onboarding rather
+  than dispatching.
+
 ## Admission rationale
 
 This skill clears all four admission gates: its description selects exact dispatch rather than tier
