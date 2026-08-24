@@ -353,6 +353,16 @@ model selection as policy.
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a
   row in a provider list, never a plane (ADR-0007 amendment, ADR-0010)
 - `mermaid:provision`, `mermaid:linux-test` — explicit Linux x64 renderer steps, never gate leaves
+- `usage:report` — advisory read-only usage projection over the local evidence stores
+  (`~/.opencodex/usage.jsonl` — the only file read in that credential-adjacent directory —
+  Claude transcripts, and `stats-cache.json`) per
+  `docs/plans/2026-08-24-usage-accounting-design.md`: billing-axis × measurement-label lanes,
+  subscription cost always unpriced (an undeclared billing kind fails toward not-pricing),
+  default output dollar-free, refusals emitted in the output itself, and no cross-store total
+  because the two stores overlap unprovably and count input tokens in incompatible units.
+  Opt-in `--estimates <snapshot>` quotes the gateway's own figure verbatim for declared
+  api-key lanes only, each labeled a list-rate estimate, not a bill. Never a gate leaf:
+  absent from `check`, `lefthook.yml`, and CI, and a report authorizes nothing
 - `release:build` — build the deterministic unpublished-candidate archive of the committed HEAD
   tree into `dist/` (`scripts/build_release.py`). `scripts/write_acquisition_receipt.py` is the
   sole producer of the acquisition receipt `ccodex sdlc install`/`update` admit; placement of a

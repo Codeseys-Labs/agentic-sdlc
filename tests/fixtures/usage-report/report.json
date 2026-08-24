@@ -1,0 +1,166 @@
+{
+  "schema": "agentic-sdlc/usage-report@1",
+  "generatedAt": "2026-08-24T12:00:00+00:00",
+  "window": {
+    "requested": "7d",
+    "from": "2026-08-17T12:00:00+00:00",
+    "to": "2026-08-24T12:00:00+00:00"
+  },
+  "stores": {
+    "gateway": {
+      "evidence": {
+        "path": "<fixture>/opencodex/usage.jsonl",
+        "present": true,
+        "parsedRows": 4,
+        "badLines": 0,
+        "rowsWithoutTimestamp": 0,
+        "windowLabel": "lower-bound",
+        "windowEnd": "2026-08-24T10:00:00+00:00",
+        "freshness": "exact",
+        "schemaNote": "best-effort (opencodex private file)"
+      },
+      "unit": "gateway-total (cache-inclusive)",
+      "lanes": [
+        {
+          "lane": "api:muse",
+          "provider": "muse",
+          "billingKind": "api-key",
+          "requests": {
+            "value": 1,
+            "label": "exact"
+          },
+          "tokens": {
+            "value": 500,
+            "unit": "gateway-total (cache-inclusive)",
+            "label": "exact",
+            "unmeasuredRequests": 0
+          },
+          "cost": {
+            "label": "missing",
+            "statement": "metered on the provider's bill; no local evidence carries it"
+          }
+        },
+        {
+          "lane": "subscription:anthropic",
+          "provider": "anthropic-native",
+          "billingKind": "subscription",
+          "requests": {
+            "value": 3,
+            "label": "exact"
+          },
+          "tokens": {
+            "value": 2000,
+            "unit": "gateway-total (cache-inclusive)",
+            "label": "lower-bound",
+            "unmeasuredRequests": 1
+          },
+          "cost": {
+            "label": "unpriced",
+            "statement": "subscription marginal cost is unknown"
+          }
+        }
+      ],
+      "surfaces": {
+        "claude": 1,
+        "unattributed": 3
+      },
+      "misroutes": {
+        "defaultProviderRows": 1,
+        "note": "routeKind default-provider is an alarm (seed agentic-sdlc-fa32)"
+      }
+    },
+    "claude": {
+      "evidence": {
+        "path": "<fixture>/claude/projects/*/*.jsonl",
+        "present": true,
+        "transcriptFiles": 1,
+        "usageRecords": 2,
+        "badLines": 0,
+        "rowsWithoutTimestamp": 0,
+        "windowLabel": "exact",
+        "windowEnd": "2026-08-24T10:00:00+00:00",
+        "freshness": "exact"
+      },
+      "unit": "anthropic message.usage (cache-exclusive)",
+      "sessions": {
+        "count": 2,
+        "label": "exact"
+      },
+      "sidechainRecords": 1,
+      "recordsWithAttributionSkill": 0,
+      "syntheticRowsExcluded": 1,
+      "byEntrypoint": {
+        "cli": 2
+      },
+      "byModel": [
+        {
+          "model": "claude-fable-5",
+          "records": 2,
+          "tokens": {
+            "input_tokens": 130,
+            "output_tokens": 23,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 7
+          },
+          "unit": "anthropic message.usage (cache-exclusive)",
+          "label": "exact"
+        }
+      ],
+      "ownership": {
+        "perWorkflow": {
+          "label": "missing",
+          "statement": "transcripts carry no verified linkage from a spawned agent's session to its parent; per-workflow ownership is missing, never guessed"
+        },
+        "perTeammate": {
+          "label": "missing",
+          "statement": "transcripts carry no verified linkage from a spawned agent's session to its parent; per-teammate ownership is missing, never guessed"
+        }
+      },
+      "crossCheck": {
+        "path": "<fixture>/claude/stats-cache.json",
+        "label": "exact",
+        "lastComputedDate": "2026-08-24",
+        "note": "lifetime aggregate, not window-scoped; costUSD is a local list-rate computation and is never read into this report",
+        "byModel": {
+          "claude-fable-5": {
+            "inputTokens": 130,
+            "outputTokens": 23
+          }
+        }
+      }
+    }
+  },
+  "overlap": {
+    "statement": "gateway surface:\"claude\" rows and transcript rows describe overlapping turns with no provable join (a conversationId is not a sessionId) and incompatible input-token units (cache-inclusive vs cache-exclusive); the two stores render separately and no combined total exists in this report"
+  },
+  "refusals": [
+    {
+      "id": "no-cross-store-total",
+      "statement": "the gateway store and the transcript store describe overlapping turns with no provable join and incompatible input-token units; any combined number would double-count and mix units, so none exists anywhere in this report"
+    },
+    {
+      "id": "no-per-turn-cost",
+      "statement": "no local surface carries a provider-metered cost for any single request, so per-turn cost attribution is not claimed"
+    },
+    {
+      "id": "no-subscription-dollars",
+      "statement": "a subscription turn is never priced, not even as an estimate; the gateway's own list-rate figure over subscription lanes is a defect (seed agentic-sdlc-bf25), not a cost, and is never quoted here"
+    },
+    {
+      "id": "no-per-workflow-or-teammate-ownership",
+      "statement": "transcripts carry no verified linkage from a spawned agent's session to its parent, so per-workflow and per-teammate ownership stay missing rather than heuristically split"
+    },
+    {
+      "id": "no-session-conversation-join",
+      "statement": "gateway conversationId values and transcript sessionId values do not correlate by any verified rule; no join is attempted"
+    },
+    {
+      "id": "no-completeness-claim",
+      "statement": "ambiguous account rows, surface-less rows, and unreported-usage rows are counted buckets, never redistributed into named lanes"
+    },
+    {
+      "id": "no-budget-authority",
+      "statement": "a usage report grants nothing and retroactively authorizes nothing"
+    }
+  ]
+}

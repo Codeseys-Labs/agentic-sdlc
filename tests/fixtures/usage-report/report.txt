@@ -1,0 +1,32 @@
+agentic-sdlc usage report (agentic-sdlc/usage-report@1)
+generated 2026-08-24T12:00:00+00:00 | window 7d (2026-08-17T12:00:00+00:00 -> 2026-08-24T12:00:00+00:00)
+
+== gateway store ==
+evidence: <fixture>/opencodex/usage.jsonl | parsed 4 rows, 0 bad lines, 0 without timestamps | window: lower-bound | freshness: exact
+schema: best-effort (opencodex private file)
+unit: gateway-total (cache-inclusive)
+  api:muse                     requests       1  500 tokens                                        cost: missing - metered on the provider's bill; no local evidence carries it
+  subscription:anthropic       requests       3  >= 2000 tokens (1 request unmeasured)             cost: unpriced - subscription marginal cost is unknown
+surfaces: claude 1, unattributed 3
+misroutes: 1 default-provider rows (routeKind default-provider is an alarm (seed agentic-sdlc-fa32))
+
+== claude store ==
+evidence: <fixture>/claude/projects/*/*.jsonl | 1 files, 2 usage records, 0 bad lines, 0 without timestamps | window: exact | freshness: exact
+unit: anthropic message.usage (cache-exclusive)
+sessions: 2 (exact) | sidechain records: 1 | synthetic rows excluded: 1 | records with attributionSkill: 0
+by entrypoint: cli 2
+  claude-fable-5                       records      2  in 130  out 23  cacheCreate 0  cacheRead 7  (exact)
+ownership: per-workflow missing - transcripts carry no verified linkage from a spawned agent's session to its parent; per-workflow ownership is missing, never guessed
+ownership: per-teammate missing - transcripts carry no verified linkage from a spawned agent's session to its parent; per-teammate ownership is missing, never guessed
+cross-check (stats-cache.json): exact - lifetime aggregate, not window-scoped; costUSD is a local list-rate computation and is never read into this report
+
+overlap: gateway surface:"claude" rows and transcript rows describe overlapping turns with no provable join (a conversationId is not a sessionId) and incompatible input-token units (cache-inclusive vs cache-exclusive); the two stores render separately and no combined total exists in this report
+
+== refusals ==
+- no-cross-store-total: the gateway store and the transcript store describe overlapping turns with no provable join and incompatible input-token units; any combined number would double-count and mix units, so none exists anywhere in this report
+- no-per-turn-cost: no local surface carries a provider-metered cost for any single request, so per-turn cost attribution is not claimed
+- no-subscription-dollars: a subscription turn is never priced, not even as an estimate; the gateway's own list-rate figure over subscription lanes is a defect (seed agentic-sdlc-bf25), not a cost, and is never quoted here
+- no-per-workflow-or-teammate-ownership: transcripts carry no verified linkage from a spawned agent's session to its parent, so per-workflow and per-teammate ownership stay missing rather than heuristically split
+- no-session-conversation-join: gateway conversationId values and transcript sessionId values do not correlate by any verified rule; no join is attempted
+- no-completeness-claim: ambiguous account rows, surface-less rows, and unreported-usage rows are counted buckets, never redistributed into named lanes
+- no-budget-authority: a usage report grants nothing and retroactively authorizes nothing

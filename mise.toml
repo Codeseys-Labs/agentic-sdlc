@@ -287,6 +287,16 @@ run_windows = "uv.exe run --python 3.12.11 --script skills/model-tier-rightsizin
 # Registering a provider goes through the reviewed configure route, with muse as the worked
 # example; nothing about it is special-cased in code. `ccodex models` prints the live catalog.
 
+# Advisory usage projection (docs/plans/2026-08-24-usage-accounting-design.md, seed
+# agentic-sdlc-12b7). Read-only over local evidence stores with a closed three-pattern
+# allowlist; subscription lanes are never priced and the default output carries no dollar
+# figure. Like rightsize:evaluate it is never a dependency of check, setup, install, hooks,
+# or CI — a beautiful report is evidence of nothing.
+[tasks."usage:report"]
+description = "Render the honest local usage report (advisory, read-only, never a gate)"
+run = "uv run --python 3.12.11 --script scripts/usage_report.py"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/usage_report.py"
+
 [tasks."hooks:install"]
 description = "Install this repository's lefthook hooks"
 run = "lefthook install"
