@@ -1,10 +1,14 @@
 # ADR-0024 — Execute each wave as one artifact-driven Dynamic Workflow
 
 - **Status:** accepted
-- **Note:** ADR-0030 refines decision 6 only. Completion still requires acceptance evidence,
-  qualifying gates, disposition of blocking findings, and an adversarial review; that evidence is
-  now read from Git and one `docs/evidence/waves/<wave-id>.md` file rather than derived as a
-  terminal verdict document. Decisions 1 through 5 stand unchanged.
+- **Note:** amended 2026-08-23 (see the amendment at the end of this record). Decision 1 is
+  reworked: a wave executes as subagents in dedicated git worktrees under one bounded envelope,
+  and the one-Dynamic-Workflow-DAG substrate is aspirational pending live-host proof (seeds
+  `agentic-sdlc-4d2b` and `agentic-sdlc-60f0`). Decisions 2 through 5 stand unchanged. ADR-0030
+  refines decision 6 only: completion still requires acceptance evidence, qualifying gates,
+  disposition of blocking findings, and an adversarial review; that evidence is now read from Git
+  and one `docs/evidence/waves/<wave-id>.md` file rather than derived as a terminal verdict
+  document.
 - **Date:** 2026-08-15
 - **Deciders:** operator (decision through the resolved Wayfinder review); agent (evidence and drafting)
 - **Relates to:** `skills/agentic-sdlc/SKILL.md`, `commands/sdlc-wave.md`, `skills/agentic-sdlc/references/sdlc-loop.md`
@@ -84,3 +88,30 @@ commands executable and authorizes no spawn, worktree, inference, fan-in, or pub
 If Claude Code removes Dynamic Workflows or cannot pass the published Core graph, pause, artifact,
 and identity canaries at the minimum supported boundary, the workflow owner re-examines the primary
 execution substrate.
+
+## Amendment — 2026-08-23: waves execute as worktree subagents; the one-Workflow-DAG substrate is pending proof
+
+Decision 1 said one approved wave executes as one artifact-driven Dynamic Workflow DAG. The tree
+does not execute waves that way, and the artifact family that made the DAG "artifact-driven" was
+withdrawn by ADR-0030 inside the same initiative. `commands/sdlc-wave.md` executes a wave as
+subagents in dedicated git worktrees: one writer per branch, worktree, and disjoint write set;
+read-only reviewers and critics; one separately authorized integrator performing serial fan-in.
+The only shipped Dynamic Workflow, `workflows/sdlc-wave-scout.js`, is a read-only two-stage scout
+that proposes a wave graph and refuses dispatch without a resolved `RuntimeAssignment` per stage.
+No evidence yet shows a live Claude Code host discovering or executing an installed workflow;
+seeds `agentic-sdlc-4d2b` and `agentic-sdlc-60f0` own that proof.
+
+This amendment reworks decision 1 into its two honest halves. The half that stands: one approved
+wave is one bounded execution with one top-level mission root and one shared budget, WIP,
+concurrency, depth, deadline, and call envelope — carried today by worktree-subagent execution
+under conductor-set caps. The half that becomes aspirational: the Dynamic Workflow DAG as the
+execution substrate. It is not withdrawn — the Considered Options rejections above still hold,
+and the product spec's Release Validity gate still requires the Workflow canaries — but it may
+not be cited as the current execution model until the two seeds close with live-host evidence.
+If that proof lands, the DAG's driving artifacts are the Git-plus-markdown wave evidence of
+ADR-0030, not the withdrawn typed artifact family. Decisions 2 through 5 stand unchanged, and
+decision 6 remains as ADR-0030 refined it.
+
+- **Confirmation:** read `commands/sdlc-wave.md`'s worktree execution steps and
+  `workflows/sdlc-wave-scout.js`'s named dispatch refusals against this amendment, and track
+  seeds `agentic-sdlc-4d2b` and `agentic-sdlc-60f0` for the pending half.

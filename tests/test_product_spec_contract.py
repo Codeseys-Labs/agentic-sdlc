@@ -21,7 +21,9 @@ CORE_COMMANDS = frozenset(
     }
 )
 
-# The exact `ccodex sdlc` namespace, in order (to-spec-handoff.md:174-181).
+# The exact `ccodex sdlc` namespace, in order. The brief (to-spec-handoff.md:174-181) enumerated
+# eight; the 2026-08-23 operator decision moved `rightsize` to the agent plane, so the re-issued
+# spec pins seven (Implementation Decision 91) and the seven remain a subset of the brief's block.
 NAMESPACE_LINES = (
     "ccodex sdlc inspect",
     "ccodex sdlc doctor",
@@ -30,7 +32,6 @@ NAMESPACE_LINES = (
     "ccodex sdlc update",
     "ccodex sdlc recover",
     "ccodex sdlc uninstall",
-    "ccodex sdlc rightsize",
 )
 SDLC_VERBS = frozenset(line.split()[2] for line in NAMESPACE_LINES)
 
@@ -60,9 +61,9 @@ EXIT_OBLIGATIONS = {
     1: "negative claim fixtures",
     2: "before any mutating verb exists",
     3: "preserve foreign state",
-    4: "write-ready, remediation-ready, or refused",
+    4: "applied activation commit or a named refusal",
     5: "terminal wave receipt",
-    6: "read-only projections",
+    6: "readable against Git history",
     7: "return to native-only state",
     8: "none enabled by default",
     9: "one certified Core tuple",
@@ -84,6 +85,21 @@ FIXTURE_CLASSES = (
 
 PROVENANCE_TARGETS = ("to-spec-handoff.md", "map.md")
 
+# The 2026-08-23 re-issue's honesty pins: the ADR status sentence must state ADR-0025's
+# supersession, never the pre-re-issue blanket acceptance claim, and Implementation Decision 61
+# must keep the six-outcome vocabulary the ADR-0030 amendment restored.
+SUPERSESSION_SENTENCE = "ADR-0025 is superseded by ADR-0030"
+RETIRED_ADR_CLAIM = "ADR-0022 through ADR-0027 are accepted"
+WAVE_OUTCOMES = (
+    "`accepted`",
+    "`remediation-progress`",
+    "`blocked`",
+    "`aborted`",
+    "`failed`",
+    "`unknown-effect`",
+)
+
+IMPLEMENTATION_DECISIONS_HEADING = "## Implementation Decisions"
 TESTING_DECISIONS_HEADING = "## Testing Decisions"
 RELEASE_VALIDITY_HEADING = "## Release Validity"
 BUILD_SLICES_HEADING = "## Build Slices"
@@ -142,13 +158,13 @@ def namespace_block(text: str) -> list[str]:
 
 
 def stray_verbs(text: str) -> set[str]:
-    """Any `ccodex sdlc <verb>` outside the eight. Case- and wrap-tolerant, so a
+    """Any `ccodex sdlc <verb>` outside the seven. Case- and wrap-tolerant, so a
     verb smuggled in across a line break or capitalized is still visible.
     ponytail: a generic mention must use backticked `ccodex sdlc` house style, or it
     registers as a stray verb. Known, accepted tradeoff — the realistic trigger is a
     descriptive caption, e.g. a Mermaid node label `[ccodex sdlc lifecycle]`. If the
     spec gains a diagram, exclude ```mermaid fences specifically. Do NOT exclude all
-    fences: that would hide a ninth verb smuggled into ID 91's ```text block."""
+    fences: that would hide an extra verb smuggled into ID 91's ```text block."""
     seen = {v.lower() for v in re.findall(r"(?i)ccodex\s+sdlc\s+([a-z][a-z-]*)", text)}
     return seen - SDLC_VERBS
 
@@ -188,14 +204,15 @@ class ProductSpecContractTests(unittest.TestCase):
         """Closure, not membership: an extra /sdlc-* command is also a defect."""
         self.assertEqual(CORE_COMMANDS, declared_commands(self.spec))
 
-    def test_namespace_block_enumerates_the_eight_verbs_in_order(self) -> None:
+    def test_namespace_block_enumerates_the_seven_verbs_in_order(self) -> None:
         """Enumeration, not vocabulary: dropping a line from the block is a defect
         even when the verb is still mentioned in prose elsewhere."""
         self.assertEqual(list(NAMESPACE_LINES), namespace_block(self.spec))
 
     def test_no_verb_exists_outside_the_namespace(self) -> None:
-        """Closure: a smuggled ninth verb fails even split across a line wrap
-        or capitalized."""
+        """Closure: a smuggled extra verb fails even split across a line wrap
+        or capitalized. Since the 2026-08-23 decision this includes `rightsize`,
+        which lives on the agent plane and must not reappear under `ccodex sdlc`."""
         self.assertEqual(set(), stray_verbs(self.spec))
 
     def test_structure_is_exactly_the_nine_sections(self) -> None:
@@ -243,10 +260,25 @@ class ProductSpecContractTests(unittest.TestCase):
         self.assertIn("proportional", item)
         self.assertIn("slice", item)
 
+    def test_declares_the_adr_supersession_and_not_the_retired_blanket_claim(self) -> None:
+        """DIV-2's repair: the spec states ADR-0025's supersession by ADR-0030 and no
+        longer carries the pre-re-issue blanket acceptance sentence."""
+        self.assertIn(SUPERSESSION_SENTENCE, self.spec)
+        self.assertNotIn(RETIRED_ADR_CLAIM, self.spec)
+
+    def test_decision_61_keeps_the_six_outcome_vocabulary(self) -> None:
+        """Retention pin for the vocabulary the ADR-0030 amendment restored: all six
+        wave outcomes stay closed inside Implementation Decision 61."""
+        item = numbered_item(self.spec, IMPLEMENTATION_DECISIONS_HEADING, 61)
+        self.assertNotEqual("", item, "spec must carry Implementation Decision 61")
+        self.assertEqual([], missing(item, WAVE_OUTCOMES))
+
     def test_handoff_remains_the_cited_source_of_every_addition(self) -> None:
         self.assertTrue(HANDOFF.is_file())
         handoff = HANDOFF.read_text(encoding="utf-8")
         self.assertTrue(CORE_COMMANDS <= declared_commands(handoff))
+        # A deliberate subset: the brief's block carries the eighth line the 2026-08-23
+        # decision withdrew, so the seven pinned lines must all trace to it.
         self.assertEqual([], missing(handoff, NAMESPACE_LINES))
         # Closure is asserted on the spec only. The brief is an immutable source, and
         # its Mermaid node label `[ccodex sdlc lifecycle]` is a caption, not a verb.
@@ -268,23 +300,27 @@ class ProductSpecMutationTests(unittest.TestCase):
         self.assertNotEqual(CORE_COMMANDS, declared_commands(mutated))
 
     def test_dropping_a_verb_from_the_block_is_detected(self) -> None:
-        """Dropped from the enumeration while a prose mention survives."""
-        mutated = self.spec.replace("    ccodex sdlc rightsize\n", "")
+        """Dropped from the enumeration is a defect even while prose survives."""
+        mutated = self.spec.replace("    ccodex sdlc uninstall\n", "")
         self.assertNotEqual(list(NAMESPACE_LINES), namespace_block(mutated))
 
-    def test_smuggling_a_ninth_verb_is_detected(self) -> None:
+    def test_smuggling_an_extra_verb_is_detected(self) -> None:
+        """The realistic regression since 2026-08-23: the withdrawn eighth verb creeps
+        back into the block."""
         mutated = self.spec.replace(
-            "    ccodex sdlc rightsize", "    ccodex sdlc rightsize\n    ccodex sdlc publish", 1
+            "    ccodex sdlc uninstall",
+            "    ccodex sdlc uninstall\n    ccodex sdlc rightsize",
+            1,
         )
         self.assertNotEqual(set(), stray_verbs(mutated))
         self.assertNotEqual(list(NAMESPACE_LINES), namespace_block(mutated))
 
-    def test_a_wrap_split_ninth_verb_is_detected(self) -> None:
+    def test_a_wrap_split_stray_verb_is_detected(self) -> None:
         """A verb hidden across a line break, which this document's wrapping invites."""
         mutated = self.spec + "\nThe ccodex sdlc\npublish verb promotes a candidate.\n"
         self.assertNotEqual(set(), stray_verbs(mutated))
 
-    def test_a_capitalized_ninth_verb_is_detected(self) -> None:
+    def test_a_capitalized_stray_verb_is_detected(self) -> None:
         mutated = self.spec + "\nccodex sdlc Publish promotes a candidate.\n"
         self.assertNotEqual(set(), stray_verbs(mutated))
 
@@ -347,6 +383,24 @@ class ProductSpecMutationTests(unittest.TestCase):
     def test_dropping_provenance_is_detected(self) -> None:
         mutated = self.spec.replace("to-spec-handoff.md", "")
         self.assertNotEqual([], missing(mutated, PROVENANCE_TARGETS))
+
+    def test_reasserting_the_retired_adr_claim_is_detected(self) -> None:
+        """The pre-re-issue regression: the supersession sentence reverts to the
+        blanket acceptance claim that ADR-0025's supersession falsified."""
+        mutated = self.spec.replace(
+            SUPERSESSION_SENTENCE,
+            "ADR-0017 through ADR-0020 and ADR-0022 through ADR-0027 are accepted "
+            "product constraints",
+        )
+        self.assertIn(RETIRED_ADR_CLAIM, mutated)
+        self.assertNotIn(SUPERSESSION_SENTENCE, mutated)
+
+    def test_narrowing_the_wave_outcomes_is_detected(self) -> None:
+        """The ADR-0030 pre-amendment regression: an honesty outcome silently leaves
+        Implementation Decision 61's closed set."""
+        mutated = self.spec.replace("`unknown-effect`", "`unknown`")
+        item = numbered_item(mutated, IMPLEMENTATION_DECISIONS_HEADING, 61)
+        self.assertNotEqual([], missing(item, WAVE_OUTCOMES))
 
 
 if __name__ == "__main__":

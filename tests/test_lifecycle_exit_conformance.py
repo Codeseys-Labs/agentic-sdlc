@@ -1755,7 +1755,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
     ``ccodex_sdlc_uninstall.py`` used to name exit 1 ``EXIT_ATTENTION`` and return it for two
     outcomes: ``partly-retired`` (some entries removed, some preserved) and ``not-retired`` (nothing
     moved).  Its own sealed receipt records ``effect_state: partial`` for the first and ``none`` for
-    the second.  Decision 9 (spec:227-229) assigns 1 to "unexpected internal failure" and 4 to "an
+    the second.  Decision 9 (spec:247-249) assigns 1 to "unexpected internal failure" and 4 to "an
     admitted partial or unknown effect", so a caller that branched on the documented vocabulary read an
     admitted effect as a crash.  Both now return 4 (agentic-sdlc-d7b3).
 
@@ -2239,7 +2239,7 @@ class CrashHonestyTest(Conformance):
 class OwnershipSchemaTest(Conformance):
     """One ownership schema is READ; every other generation is refused BY NAME and never retrofitted.
 
-    Slice 3's exit artifact named "the two old-schema readers" (spec:586-591, agentic-sdlc-642f), and
+    Slice 3's exit artifact named "the two old-schema readers" (spec:631-637, agentic-sdlc-642f), and
     this section used to pin that split: `normalize_document_to_v3` admitted v2 and v3, and
     `combined_v1_state` recognized v1 for the explicit `--migrate-state` operation. Demolition rank 4
     (seed agentic-sdlc-0c38) deleted every one of those readers along with the physical-identity

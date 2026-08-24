@@ -12,6 +12,21 @@ details named under the brief's residual implementation discovery. It must retur
 decision work if a proposed design would change a boundary, authority rule, ownership plane, public
 promise, or explicit non-goal in the brief.
 
+**Re-issued 2026-08-23.** This specification is subordinate to ADR-0022 as amended 2026-08-22 and
+to ADR-0030. Sentences that commanded the retired activation transaction engine or the withdrawn
+typed planning stack now describe the shipped replacements and cite the deciding record; the
+history is named, never silently deleted. The re-issue also records the 2026-08-23 operator
+decisions: the `ccodex sdlc` namespace is seven verbs, with rightsizing on the agent plane
+(Implementation Decision 91); the tracked RepositoryContractManifest is not built, and the
+reviewed `--manifest` input plus the enumerated `git diff` is the accepted mechanism
+(Implementation Decision 10); the dropped bundled-runtime and candidate-digest vocabulary is a
+recorded decision (Implementation Decision 68); and the six-outcome wave vocabulary of
+Implementation Decision 61 is retained, restored to the operative surfaces by the ADR-0030
+amendment. ADR-0024 decision 1 is amended by dated note in the same change, and the ADR status
+assertions in Implementation Decision 89 and Further Notes are corrected. The four-class drift
+vocabulary here matches the canonical table in `skills/agentic-sdlc/references/mission-loop.md`
+and the `CONTEXT.md` glossary.
+
 ## Problem Statement
 
 Experienced Claude Code users can assemble skills, subagents, model gateways, repository tooling,
@@ -21,7 +36,7 @@ or model access while leaving repository hygiene, ownership, evidence, recovery,
 authority as unrelated conventions.
 
 The user needs one opinionated harness that can safely activate greenfield or brownfield Git
-repositories, plan and execute bounded Claude Code Dynamic Workflow waves, select fit-for-purpose
+repositories, plan and execute bounded Claude Code waves, select fit-for-purpose
 models, preserve work across sessions, and make every result explainable. Native Claude subscription
 use must be sufficient. Multiple providers should be available through an optional, explicit,
 qualified routing profile without turning a gateway into the product or silently changing
@@ -42,16 +57,21 @@ operator's paid Claude Code account. It will require no gateway, external provid
 library, hosted service, renderer, or product telemetry.
 
 Package one operator CLI named `ccodex`. Its `sdlc` namespace is the lifecycle front door for exact
-Agentic SDLC releases, with the eight verbs `inspect`, `doctor`, `install`, `status`, `update`,
-`recover`, `uninstall`, and `rightsize` enumerated in Implementation Decision 91. Its `routes`
+Agentic SDLC releases, with the seven verbs `inspect`, `doctor`, `install`, `status`, `update`,
+`recover`, and `uninstall` enumerated in Implementation Decision 91. Rightsizing lives on the agent
+plane: `/sdlc-rightsize` and the `model-tier-rightsizing` skill drive `mise run rightsize:evaluate`
+(operator decision, 2026-08-23). Its `routes`
 namespace will manage the optional routed-model profile through OCX. Installing the CLI will not
 activate Claude Code, modify a repository, trust configuration, start a gateway, configure a
 provider, install a companion library, or launch a session.
 
-Within an activated repository, `/sdlc-init` will assess existing operating contracts and produce
-a digest-approved activation plan. A deterministic planning compiler will turn immutable mission
-and repository evidence into one bounded WavePlan. One approved wave will execute as one
-artifact-driven Claude Code Dynamic Workflow DAG. Every writer will have exclusive worktree
+Within an activated repository, `/sdlc-init` is a reviewed runbook, not a deterministic activation
+engine. It drives the instruction generator's read-only `classify` verdict and diff-shown,
+`--yes`-confirmed `apply` (ADR-0022 as amended). Planning binds each mission to one sealed
+MissionContract with an authority ladder and non-waivable stop conditions; the withdrawn typed
+plan stack is described in Implementation Decision 18 (ADR-0030). One approved wave executes as
+subagents in dedicated git worktrees; execution as one Dynamic Workflow DAG is a pending proof
+obligation (ADR-0024 as amended). Every writer will have exclusive worktree
 custody, every model call will have an exact RuntimeAssignment and independent identity evidence,
 reviews will consume immutable candidates, and one separately authorized integrator will perform
 serial fan-in.
@@ -82,12 +102,12 @@ installed through their own front doors.
 12. As an operator, I want machine and human status views derived from the same record, so that automation does not scrape or disagree with prose.
 13. As a greenfield repository owner, I want `/sdlc-init` to establish guidance, tracking, decisions, gates, hooks, CI, and hygiene tooling, so that the repository starts with a maintainable operating contract.
 14. As a brownfield repository owner, I want `/sdlc-init` to preserve existing policy and tooling, so that activation does not replace working local conventions.
-15. As a brownfield maintainer, I want activation to produce a remediation-ready state when known gate failures remain, so that improvement can proceed honestly in bounded waves.
+15. As a brownfield maintainer, I want known gate failures tracked as bounded remediation Seeds rather than a terminal activation state, so that improvement can proceed honestly in bounded waves.
 16. As a repository owner, I want greenfield and brownfield to be classified by occupied contract surfaces, so that repository age does not drive unsafe assumptions.
 17. As a repository owner, I want a read-only activation plan before writes, so that I can review every proposed create, merge, adopt, skip, or refusal.
-18. As a repository owner, I want activation approval bound to the exact plan digest and prestate, so that drift invalidates stale consent.
-19. As a repository owner, I want a tracked portable repository manifest, so that shared intent is visible without pretending to prove machine readiness.
-20. As an operator, I want local activation evidence stored outside the repository, so that machine ownership and trust state do not pollute portable project policy.
+18. As a repository owner, I want the reviewed diff and the write to happen in one invocation, so that no approved-then-changed interval exists between plan and apply.
+19. As a repository owner, I want the reviewed manifest input and the rendered guidance block visible in the enumerated activation diff, so that shared intent is visible without pretending to prove machine readiness.
+20. As an operator, I want activation evidence carried by the enumerated activation diff and commit, so that a machine-local receipt no reader consumes is not required.
 21. As a multi-host team, I want `AGENTS.md` to be canonical guidance, so that host-neutral instructions have one source of truth.
 22. As a Claude Code user, I want an owned `CLAUDE.md` projection of canonical guidance, so that Claude receives the same repository contract.
 23. As a repository with foreign guidance, I want it preserved until explicit reconciliation, so that activation does not silently choose an instruction channel.
@@ -96,22 +116,22 @@ installed through their own front doors.
 26. As a repository owner, I want `mise run check` to be the authoritative pinned gate, so that local agents and CI use the same verdict surface.
 27. As a repository owner, I want mise, lefthook, and betterleaks integrated with current project behavior, so that hygiene is enforced without spraying a generic scaffold.
 28. As a mission owner, I want durable mission intent separate from an individual wave, so that a long objective can progress through reviewed increments.
-29. As a planner, I want repository and policy evidence captured in an immutable PlanningSnapshot, so that the compiled plan has recoverable inputs.
-30. As a planner, I want a deterministic read-only compiler, so that plan generation itself cannot mutate code, queues, credentials, or external systems.
-31. As an operator, I want a versioned WavePlan with exact artifacts, routes, budgets, and limits, so that execution matches what I reviewed.
-32. As an operator, I want a PlanDiff for every revised plan, so that drift cannot hide inside a conversational continuation.
-33. As an operator, I want scope, authority, route, egress, and budget drift classified separately, so that only admissible corrections continue automatically.
+29. As a planner, I want plan inputs recoverable from Git history and the recorded plan, so that a reviewed plan does not depend on a typed snapshot artifact.
+30. As a planner, I want planning to propose and never mutate, so that plan generation itself cannot mutate code, queues, credentials, or external systems.
+31. As an operator, I want the recorded wave plan to name exact artifacts, routes, budgets, and limits, so that execution matches what I reviewed.
+32. As an operator, I want every plan change to arrive as a new revision for approval, so that drift cannot hide inside a conversational continuation.
+33. As an operator, I want observed drift classified against the four drift classes, so that only admissible corrections continue automatically.
 34. As an operator, I want human approval to be the default planning gate, so that agents do not broaden work from their own findings.
-35. As an advanced operator, I want an explicit bounded AutoEnvelope, so that selected internal transitions can continue without granting open-ended autonomy.
+35. As an advanced operator, I want bounded autonomy granted through the mission contract's authority ladder and stop conditions, so that selected work can continue without granting open-ended autonomy.
 36. As an operator, I want auto mode to stop on scope or authority expansion, so that automation cannot create new permission.
 37. As an operator, I want auto mode independent from `--yolo`, so that bounded replanning never disables host permissions.
 38. As an operator, I want pause and resume to revalidate durable state, so that a later session cannot invent missing progress or effects.
-39. As a mission owner, I want one Dynamic Workflow wave to represent one bounded DAG, so that the execution boundary remains reviewable.
+39. As a mission owner, I want one wave to remain one bounded execution under one shared envelope, so that the execution boundary remains reviewable.
 40. As a mission owner, I want finite configurable concurrency, node, depth, call, time, and cost caps, so that execution cannot become unbounded.
 41. As a cautious operator, I want recursive spawning disabled by default, so that child workflows do not silently multiply scope or spend.
 42. As an advanced operator, I want a canary-qualified recursive profile, so that bounded investigation and planning may self-progress inside one approved envelope.
 43. As a conductor, I want each node to declare inputs, outputs, authority, tools, assignment, and stop rules, so that downstream admission is explicit.
-44. As a conductor, I want nodes to exchange schema-validated artifacts instead of hidden chat context, so that handoffs remain inspectable and resumable.
+44. As a conductor, I want handoffs recorded in Git and the wave evidence file instead of hidden chat context, so that they remain inspectable and resumable.
 45. As an implementer, I want one exclusive write set and worktree, so that parallel agents cannot overwrite each other.
 46. As a reviewer, I want immutable candidate inputs and no repair tools, so that review remains independent evidence.
 47. As a critic, I want to inspect the integrated snapshot and file findings without editing it, so that completion challenge stays independent.
@@ -121,7 +141,7 @@ installed through their own front doors.
 51. As a conductor, I want every model spawn to receive an exact RuntimeAssignment, so that a role or prompt cannot silently select a default model.
 52. As a conductor, I want requested model, effort, context, provider, and observed identity stored separately, so that requested values never masquerade as readback.
 53. As a conductor, I want unresolved or uninjectable assignments to stop before spawn, so that unsupported routing does not become best effort.
-54. As a workflow author, I want one versioned RoleSubmission contract, so that all role outputs have stable verdict and evidence fields.
+54. As a workflow author, I want every role's structured submission to carry the same fixed headings, so that all role outputs have stable verdict and evidence fields.
 55. As a workflow author, I want capability-demand routing instead of permanent provider pins, so that roles can use fit-for-purpose exact routes.
 56. As a documentation owner, I want a permanent `sdlc-documentarian` role, so that evidence-preserving documentation has a clear author.
 57. As a security workflow owner, I want specialist responsibilities to begin as task roles or review lenses, so that the permanent selector surface grows only with evidence.
@@ -227,13 +247,20 @@ installed through their own front doors.
 9. **Effect-aware exits.** New lifecycle and control surfaces use: 0 for a valid query or closed
    requested result; 1 for unexpected internal failure; 2 for grammar/schema/input error; 3 for
    clean refusal before effect; and 4 after an admitted partial or unknown effect.
-10. **Repository manifest.** Track portable repository intent in one versioned
-    RepositoryContractManifest. Do not use it as ownership, tool, trust, route, or readiness proof.
-11. **Local activation evidence.** Store exact machine-local activation ownership, hashes, physical
-    identity, tool versions, and trust state under the `ccodex` XDG state plane.
-12. **Activation compiler.** `/sdlc-init` performs read-only assessment and planning, exact digest
-    approval, transactional apply, readback, and recovery. It returns write-ready,
-    remediation-ready, or a truthful non-success/effect state.
+10. **Repository manifest.** The tracked RepositoryContractManifest is not built, by recorded
+    decision (2026-08-23). Shared intent travels as the reviewed `--manifest` input to the
+    instruction generator's `apply`, the rendered `AGENTS.md` block, and the enumerated `git diff`
+    reviewed before the activation commit. No manifest is ownership, tool, trust, route, or
+    readiness proof.
+11. **Local activation evidence.** Repository activation records its evidence in the repository's
+    own Git history: the reviewed diff and the activation commit. The machine-local activation
+    receipt is withdrawn because it never had a reader (ADR-0022 amendment). Distribution
+    activation keeps its own receipt under the `ccodex` XDG state plane.
+12. **Activation runbook.** `/sdlc-init` is a reviewed runbook, not a deterministic activation
+    engine (ADR-0022 as amended). It drives `instruction-generator.py`: `classify` returns
+    greenfield, brownfield, or refuse-and-ask with every reason named, and `apply` prints its diff
+    and writes only when the same invocation carries `--yes`. The write-ready and
+    remediation-ready vocabulary is retired; bounded hygiene work is tracked as Seeds.
 13. **Greenfield and brownfield.** Classify by occupied operating-contract surfaces rather than
     code age. Brownfield behavior uses minimum-compatible integration and iterative hygiene waves.
 14. **Guidance authority.** `AGENTS.md` is canonical. Claude guidance is an owned projection.
@@ -245,25 +272,34 @@ installed through their own front doors.
     equivalent brownfield convention. Accepted ADRs remain evidence, never authority.
 17. **Gate contract.** `mise run check` is the single authoritative repository gate. Hook and
     partial-task results cannot substitute for it. Brownfield remediation uses exact non-worsening
-    baselines until write-ready.
-18. **Planning artifacts.** Define independently versioned MissionContract, PlanningSnapshot,
-    WavePlan, PlanDiff, and AutoEnvelope schemas. Use deterministic canonical serialization and
-    immutable generations.
-19. **Planning compiler capabilities.** The compiler has no model, network, credential, queue,
-    write, or external-effect capability. It consumes exact evidence and emits a candidate only.
-20. **Drift taxonomy.** Keep evidence refresh, plan correction, scope change, and authority change
-    separate. Scope and authority changes always require human disposition.
-21. **Auto mode.** Default off. An AutoEnvelope names closed transitions, scope, routes, egress,
-    budgets, retry/call/depth/time limits, pause conditions, and expiry. It never selects `--yolo`
-    or creates a second mission root.
-22. **Dynamic Workflow boundary.** One approved wave is one Claude Code Dynamic Workflow DAG. A
-    mission spans waves. Cross-session continuation compiles a new wave from durable artifacts.
+    baselines until the gate passes clean; the write-ready terminal vocabulary is retired
+    (ADR-0022 amendment).
+18. **Planning artifacts.** One sealed MissionContract binds each mission, with deterministic
+    canonical serialization. The PlanningSnapshot, WavePlan, PlanDiff, and AutoEnvelope schemas
+    are withdrawn (ADR-0030); the recorded plan plus Git's own history carries the review intent
+    they served.
+19. **Planning proposals.** The deterministic planning compiler is withdrawn (ADR-0030). Planning
+    emits proposals only: the read-only wave-scout Workflow proposes a wave graph and refuses
+    dispatch without a resolved RuntimeAssignment per stage, and no planning surface mutates code,
+    queues, credentials, or external systems.
+20. **Drift taxonomy.** The four drift classes are `compatible`, `revalidation-required`,
+    `replan-required`, and `hard-stop`; the canonical table lives in
+    `skills/agentic-sdlc/references/mission-loop.md`. Scope and authority changes always require
+    human disposition, carried as non-waivable stop conditions in every sealed contract.
+21. **Auto mode.** Default off. Bounded autonomy is granted through the sealed MissionContract's
+    authority ladder and stop conditions; the AutoEnvelope schema is withdrawn (ADR-0030). Bounded
+    autonomy never selects `--yolo` or creates a second mission root.
+22. **Wave execution boundary.** One approved wave is one bounded execution: subagents in dedicated
+    git worktrees under one shared envelope (ADR-0024 as amended). Executing a wave as one Dynamic
+    Workflow DAG is a pending proof obligation. A mission spans waves. Cross-session continuation
+    plans a new wave from Git history and the recorded wave evidence.
 23. **Execution defaults.** Ship defaults of four concurrent nodes, 64 total nodes, and recursion
     off; the recursive child generation cap is raisable. Keep every limit configurable, finite,
     recorded, and bounded by verified host capability. Recursive execution remains separately
     disabled by default.
-24. **Node contract.** Every node declares inputs, output schema, authority, tools, work ownership,
-    RuntimeAssignment, stop rule, and RoleSubmission destination.
+24. **Node contract.** Every node declares inputs, outputs, authority, tools, work ownership,
+    RuntimeAssignment, and stop rule. Role outputs are structured advisory submissions with fixed
+    headings in the role files; the typed RoleSubmission schema is withdrawn (ADR-0030).
 25. **Runtime assignment.** Resolve exact provider/model, requested effort and context, transport,
     tool surface, and route evidence before spawn. Requested and observed fields remain distinct.
 26. **Retry.** Read-only nodes may retry eligible transient failures within budget. Write nodes may
@@ -377,9 +413,12 @@ installed through their own front doors.
 67. **Incidents.** A possible exposure stops the affected branch and writes a redacted local
     incident receipt. Do not auto-rotate credentials, rewrite history, delete user data, transmit
     the incident, or claim external effects were reversed.
-68. **Supply chain.** Digest-bind every bundled tool, runtime, plugin, workflow, skill, profile, and
-    policy. Include an SBOM and licence/NOTICE inventory. Use packaged absolute tools and no mutable
-    latest, ambient PATH substitution, or silent downloads.
+68. **Supply chain.** Digest pinning is partial, by recorded decision: `mise.lock`, the Mermaid
+    renderer pins, the role manifest pins, and the pinned jq route are digest-bound, while
+    digest-binding bundled runtimes and the candidate archive/runtime stanzas are no longer
+    commanded — `policy/release-candidate.v1.json` dropped them (main `60496c3`) and instead
+    discloses `sbom: absent` honestly. Keep the licence/NOTICE inventory. Use no mutable latest,
+    ambient PATH substitution, or silent downloads.
 69. **Tool admission.** Each node declares its minimum tool/MCP surface. Inspect the effective
     model-visible inventory. Treat definitions/results as untrusted, bounded, sanitized input.
 70. **Companion libraries.** Keep the initial closed catalog external and opt-in through each
@@ -431,9 +470,10 @@ installed through their own front doors.
     provider-neutral claims only with executable product surfaces and negative claim tests.
     Reconcile historical PRIME/DRIVE/gateway queue records later through an authorized conductor
     operation without deleting history.
-89. **ADR lifecycle.** Treat ADR-0017 through ADR-0020 and ADR-0022 through ADR-0027 as accepted
-    product constraints. Keep the release-topology and initiative ADRs proposed until their stated
-    evidence conditions close.
+89. **ADR lifecycle.** Treat ADR-0017 through ADR-0020, ADR-0022 (as amended), ADR-0023,
+    ADR-0024 (as amended), ADR-0026, ADR-0027, and ADR-0030 as accepted product constraints.
+    ADR-0025 is superseded by ADR-0030. Keep the release-topology and initiative ADRs proposed
+    until their stated evidence conditions close.
 90. **Core command surface.** Core owns exactly five Claude commands. `/sdlc-init` assesses and
     activates one repository. `/sdlc-frame` records one bounded intent and run shape. `/sdlc-wave`
     compiles and runs one approved wave. `/sdlc-mission` advances a durable objective through
@@ -450,12 +490,13 @@ installed through their own front doors.
     ccodex sdlc update
     ccodex sdlc recover
     ccodex sdlc uninstall
-    ccodex sdlc rightsize
     ```
 
-    Inspection, doctor, status, help, and dry-run are read-only. `ccodex sdlc rightsize` is the
-    CLI entry point to the rightsizing surface specified in Implementation Decisions 33 through 41;
-    the non-activation semantics of install are specified in Implementation Decision 6.
+    Inspection, doctor, status, help, and dry-run are read-only. The brief's eighth verb,
+    `rightsize`, is withdrawn from this namespace by operator decision (2026-08-23): rightsizing
+    lives on the agent plane, where `/sdlc-rightsize` and the `model-tier-rightsizing` skill drive
+    `mise run rightsize:evaluate` against the surface specified in Implementation Decisions 33
+    through 41. The non-activation semantics of install are specified in Implementation Decision 6.
 
 ## Testing Decisions
 
@@ -466,27 +507,30 @@ installed through their own front doors.
 3. Run the primary seam twice: once against an empty greenfield contract surface and once against
    an occupied brownfield surface with preserved foreign guidance, tooling, queue, CI, and dirty
    user work.
-4. The greenfield journey must reach write-ready and one accepted Core wave. The brownfield journey
-   may reach remediation-ready and a non-worsening `remediation-progress` wave.
+4. The greenfield journey must reach a reviewed activation commit and one accepted Core wave. The
+   brownfield journey may land with named remediation Seeds and a non-worsening
+   `remediation-progress` wave.
 5. Release lifecycle tests cover exact identity, checksums, provenance, SBOM/licences, install,
    status, update, preview/stable isolation, downgrade, rollback, interrupted recovery, removal,
    modified-owned conflicts, foreign preservation, and missing release roots.
 6. Read-only command tests prove no filesystem writer, provider call, gateway process, trust,
    authentication, queue mutation, repair, or telemetry effect occurs.
-7. Activation tests cover greenfield, brownfield, exact plan-digest approval, stale prestate,
-   conflict refusal, symlink/special-node/path containment, partial effect, crash recovery,
-   idempotent rerun, and truthful readiness states.
-8. Activation tests reuse the existing transaction and ownership seams rather than introducing a
-   second activation engine.
+7. Activation tests cover the classify three-way verdict, the shown-diff `--yes` apply loop,
+   conflict refusal, symlink/special-node/path containment, crash consistency of the
+   temp-plus-rename write, idempotent rerun, and truthful verdict states.
+8. Activation tests reuse the instruction-generator seam rather than introducing a second
+   activation engine; the retired transaction engine's test suites were deleted with it
+   (ADR-0022 amendment).
 9. Queue tests reuse the verified conductor-only Seeds launcher seam. They cover exact prestate,
    one-record deltas, worker proposal-only behavior, alternate tracker adapter conformance, and no
    shadow queues.
-10. Planning compiler tests run without network or models, compile the same inputs twice, compare
-    canonical digests, and reject malformed, missing, duplicated, stale, cyclic, scope-changing,
-    or authority-changing inputs.
-11. Drift tests cover all four classes and prove that scope/authority drift always stops. Auto mode
-    tests prove only listed transitions occur, budgets debit descendants, expiry stops, and YOLO is
-    never selected.
+10. Planning tests cover the sealed MissionContract — canonical serialization, the authority
+    ladder, and the four non-waivable stop conditions — and the wave scout's named refusals to
+    dispatch without a resolved RuntimeAssignment per stage. The deterministic-compiler test
+    obligations are withdrawn with the compiler (ADR-0030).
+11. Drift tests cover all four classes and prove that scope/authority drift always stops, carried
+    by the contract's non-waivable stop conditions. Bounded-autonomy tests prove the authority
+    ladder's ceiling holds and YOLO is never selected.
 12. Dynamic Workflow canaries bind exact Claude Code version, account/provider mode, plugin
     identity, workflow behavior, approval, agent execution, artifacts, pause, stop, resume, and
     result readback.
@@ -552,8 +596,9 @@ installed through their own front doors.
 35. Claim tests reject provider-neutral/equal-parity, blanket cross-platform/latest, provider-wide,
     model-wide, official-product, replacement, universal-gateway, bundled-companion, unsupported
     renderer, ASD-conformance, and security-completeness language.
-36. Use existing prior art: installer lifecycle and fault tests, activation transaction tests,
-    Seeds launcher tests, worktree fail-closed tests, runtime-contract validation, route launcher
+36. Use existing prior art: installer lifecycle and fault tests, instruction-generator tests (the
+    replacement for the deleted activation transaction suites; ADR-0022 amendment), Seeds launcher
+    tests, worktree fail-closed tests, runtime-contract validation, route launcher
     tests, rightsizing evaluator tests, gate receipt tests, Mermaid renderer tests, external-library
     tests, authority correction tests, role submission tests, and ADR lifecycle tests.
 37. The authoritative offline gate remains `mise run check`. Live provider, billing, route,
@@ -592,23 +637,27 @@ Every slice carries the fixture classes required by Testing Decision 39.
 
 ### Slice 4 — Activation slice
 
-- **Scope:** compose one full greenfield and one brownfield assessed plan, a tracked repository manifest,
-  and a local receipt.
-- **Exit artifact:** a write-ready, remediation-ready, or refused activation result.
+- **Scope:** compose one full greenfield and one brownfield activation through the classify and
+  shown-diff apply loop, with the reviewed manifest input and the enumerated activation diff as
+  the approval artifacts.
+- **Exit artifact:** an applied activation commit or a named refusal, with every verdict truthful.
 
 ### Slice 5 — Native-Claude Core wave
 
-- **Scope:** ship the smallest owned Dynamic Workflow that proves planning, exact native runtime
-  assignment, isolated custody, artifacts, pause/stop, review, authorized fan-in, integrated gate,
-  and adversarial disposition.
+- **Scope:** prove one native-Claude wave end to end — planning, exact native runtime assignment,
+  isolated worktree custody, recorded evidence, review, authorized fan-in, integrated gate, and
+  adversarial disposition — executed as subagents in worktrees, with the owned Dynamic Workflow
+  execution pending its live-host proof (ADR-0024 as amended).
 - **Exit artifact:** one terminal wave receipt reaching honest `accepted` or intended
   `remediation-progress`.
 
 ### Slice 6 — Planning and observability
 
-- **Scope:** add mission, snapshot, plan, diff, and AutoEnvelope schemas, the deterministic compiler,
-  effect journals, and immutable receipt families.
-- **Exit artifact:** read-only projections rendering the recorded journals and receipts.
+- **Scope:** bind each mission to one sealed MissionContract, record wave evidence in Git and one
+  markdown file per wave (ADR-0030), and keep effect journals and immutable receipt families on
+  the lifecycle surfaces.
+- **Exit artifact:** one wave's evidence file readable against Git history and its recorded
+  receipts.
 
 ### Slice 7 — Routed-model profile
 
@@ -634,7 +683,8 @@ Every slice carries the fixture classes required by Testing Decision 39.
 A stable Core release is invalid unless all of these are true, together with the migration,
 recovery, and certified-tuple requirement stated below them:
 
-- exact release identity, SBOM, licences, checksums, and packaged tools verify;
+- exact release identity, checksums, and the licence/NOTICE inventory verify, with SBOM absence
+  and the uncommanded runtime digests disclosed honestly (Implementation Decision 68);
 - install/status/update/recovery/removal preserve foreign state and have effect-aware exits;
 - one clean greenfield and one occupied brownfield activation journey pass from installed bytes;
 - the native-Claude minimum and stable-reference Workflow canaries pass for the exact tuple;
@@ -683,15 +733,18 @@ passing gate remains evidence and never authorizes publication.
 
 - The canonical descriptor is: “A Claude Code-first, evidence-driven SDLC harness for greenfield
   and brownfield repositories.”
-- ADR-0017 through ADR-0020 and ADR-0022 through ADR-0027 are accepted product constraints.
+- ADR-0017 through ADR-0020, ADR-0022 (as amended), ADR-0023, ADR-0024 (as amended), ADR-0026,
+  ADR-0027, and ADR-0030 are accepted product constraints. ADR-0025 is superseded by ADR-0030.
 - ADR-0021 remains proposed until a self-contained versioned release and clean-host lifecycle
   evidence exist. ADR-0011 remains the accepted current checkout topology until then.
 - ADR-0028 remains proposed with an in-progress rollup because ADR-0021 is its one proposed child.
 - The current `0.7.3` checkout, manifests, and dispatcher are brownfield evidence, not the target
   release experience.
-- Preserve current lifecycle ownership, activation transactions, Seeds launcher, worktree
-  controls, rightsizing evaluator, route launcher, Mermaid renderer, gate stack, and negative tests.
-  Build the missing product composition around them rather than creating parallel engines.
+- Preserve current lifecycle ownership, the instruction-generator activation seam, Seeds launcher,
+  worktree controls, rightsizing evaluator, route launcher, Mermaid renderer, gate stack, and
+  negative tests. Build the missing product composition around them rather than creating parallel
+  engines. The activation transaction engine this note once preserved is deleted (ADR-0022
+  amendment).
 - The current repository's provider-neutral multi-host descriptions require a coordinated claim
   migration only after the executable Core surface exists.
 - Non-Claude routing through Claude Code may be supported by Agentic SDLC for exact qualified tuples

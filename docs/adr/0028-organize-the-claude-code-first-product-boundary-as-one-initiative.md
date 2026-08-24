@@ -34,10 +34,11 @@ does not replace existing ADRs for rightsizing, external libraries, gateway logi
 
 ## Decision
 
-ADR-0017 through ADR-0027 form one Claude Code-first product-boundary initiative. Each child retains
-its own status, evidence, options, consequences, confirmation, and reversal condition. This record
-provides only the registry and sequencing view; its rollup is evidence about decision progress,
-never product completion or authority.
+ADR-0017 through ADR-0027, together with every later record that declares a `Part-Of: ADR-0028`
+edge (currently ADR-0030), form one Claude Code-first product-boundary initiative. Each child
+retains its own status, evidence, options, consequences, confirmation, and reversal condition.
+This record provides only the registry and sequencing view; its rollup is evidence about decision
+progress, never product completion or authority.
 
 ## Current child registry
 
@@ -48,21 +49,26 @@ never product completion or authority.
 | ADR-0019 | accepted | Every effect requires fresh operation-specific human authority. |
 | ADR-0020 | accepted | Readiness-dependent execution uses exact verified dependencies. |
 | ADR-0021 | proposed | A versioned mise release is the future primary distribution topology. |
-| ADR-0022 | accepted | Repository activation consumes a digest-approved assessed plan. |
+| ADR-0022 | accepted (amended 2026-08-22) | Repository activation is a classify-then-shown-diff apply lifecycle; the transaction engine, plan digest, machine receipt, and terminal readiness vocabulary are retired. |
 | ADR-0023 | accepted | One evidence-preserving documentation profile governs product prose. |
-| ADR-0024 | accepted | One approved wave executes as one artifact-driven Dynamic Workflow. |
-| ADR-0025 | accepted | Immutable planning artifacts compile into bounded execution. |
+| ADR-0024 | accepted (amended 2026-08-23) | One approved wave is one bounded execution, today as worktree subagents; the Dynamic Workflow DAG substrate is aspirational pending live-host proof. |
+| ADR-0025 | superseded by ADR-0030 | Immutable planning artifacts compile into bounded execution — withdrawn; the scope/authority human-disposition rule survives in the sealed mission contract's stop conditions. |
 | ADR-0026 | accepted | Threat analysis remains separate from human risk ownership. |
 | ADR-0027 | accepted | Compatibility uses capability evidence above published minimums. |
+| ADR-0030 | accepted | Wave evidence is recorded in Git and one markdown file per wave; the typed planning stack is withdrawn. |
 
 ## Current rollup
 
-The initiative is **in progress**: ADR-0021 remains proposed; ADR-0017 through ADR-0020 and ADR-0022
-through ADR-0027 are accepted. The child registry is a current generated view, not historical
-metadata. Every child status transition rebuilds the registry and this rollup in the same change.
+The initiative is **in progress**: ADR-0021 remains proposed; ADR-0017 through ADR-0020, ADR-0022
+(as amended 2026-08-22), ADR-0023, ADR-0024 (as amended 2026-08-23), ADR-0026, ADR-0027, and
+ADR-0030 are accepted; ADR-0025 is superseded by ADR-0030, which carries its surviving rule. The
+child registry is a current generated view, not historical metadata. Every child status transition
+rebuilds the registry and this rollup in the same change; ADR-0030's landing and ADR-0025's
+supersession on 2026-08-22 missed that rule, and this 2026-08-23 rebuild repairs the omission.
 While any child remains proposed, the initiative's closed lifecycle status remains `proposed`.
-ADR-0028 can become `accepted` only when every child is accepted. ADR-0021 therefore keeps this
-initiative proposed until its release evidence exists.
+ADR-0028 can become `accepted` only when every child is accepted or superseded by an accepted
+successor inside the initiative. ADR-0021 therefore keeps this initiative proposed until its
+release evidence exists.
 
 ## Sequencing
 
@@ -70,8 +76,8 @@ initiative proposed until its release evidence exists.
    foundations. They can be reviewed independently.
 2. ADR-0022 uses the authority and dependency foundations to define repository activation.
 3. ADR-0024 uses the host, authority, and dependency foundations to define the Core wave.
-4. ADR-0025 consumes activation and workflow artifacts to define planning, drift, and bounded auto
-   mode.
+4. ADR-0025 consumed activation and workflow artifacts to define planning, drift, and bounded auto
+   mode; ADR-0030 superseded it and records wave evidence in Git and one markdown file instead.
 5. ADR-0023 and ADR-0026 add documentation and threat-model surfaces under the same authority and
    data boundaries.
 6. ADR-0027 defines compatibility admission over the host and dependency boundaries.
@@ -87,7 +93,8 @@ initiative proposed until its release evidence exists.
   be rebuilt in the same change as every child status transition.
 - Negative: the rollup can be mistaken for delivery progress unless every view repeats that ADR
   states are decision evidence only.
-- **Confirmation:** review every ADR-0017 through ADR-0027 for one `Part-Of: ADR-0028` edge and
+- **Confirmation:** review every ADR-0017 through ADR-0027 and ADR-0030 for one
+  `Part-Of: ADR-0028` edge and
   compare its dependency edges with the Sequencing section. This is a current, read-only review;
   it authorizes no status or implementation effect.
 
