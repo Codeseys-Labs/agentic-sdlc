@@ -460,6 +460,9 @@ class GateGraphTests(unittest.TestCase):
             ("description: |\nextra:\n  not-a-description", "missing description"),
             ("description: >2\n  " + "x" * 1025, "description exceeds 1024"),
             ("description: |\n  short\n\n  " + "x" * 1025, "description exceeds 1024"),
+            # A plain (unquoted, non-block) multiline scalar carries its bulk on continuation
+            # lines; a first-line-only measure reads it as 28 characters (agentic-sdlc-e78f).
+            ("description: plain first line stays short\n  " + "x" * 1025, "description exceeds 1024"),
         )
         executed = 0
         for replacement, diagnostic in variants:
@@ -474,6 +477,25 @@ class GateGraphTests(unittest.TestCase):
                 self.assertIn(f"stacked-prs: {diagnostic}", result.stderr)
                 executed += 1
         self.assertEqual(executed, len(variants))
+
+    def test_block_scalar_description_at_cap_boundary(self) -> None:
+        # Positive control for the multiline variants above: the cap must measure the parsed
+        # value, not refuse every multiline description. The whole description block is
+        # replaced — splicing only the first line would fold the fixture's own continuation
+        # lines into the planted scalar and push an exact-boundary value over the cap.
+        for length, returncode, diagnostic in ((1024, 0, None), (1025, 1, "description exceeds 1024")):
+            with self.subTest(length=length), tempfile.TemporaryDirectory() as temp:
+                repo = self.copied_repo(temp)
+                skill = repo / "skills" / "stacked-prs" / "SKILL.md"
+                lines = skill.read_text(encoding="utf-8").splitlines()
+                start = next(index for index, line in enumerate(lines) if line.startswith("description:"))
+                end = next(index for index in range(start + 1, len(lines)) if not lines[index].startswith(" "))
+                planted = lines[:start] + ["description: >-", "  " + "x" * length] + lines[end:]
+                skill.write_text("\n".join(planted) + "\n", encoding="utf-8")
+                result = self.run_validator(repo)
+                self.assertEqual(result.returncode, returncode, result.stdout + result.stderr)
+                if diagnostic:
+                    self.assertIn(f"stacked-prs: {diagnostic}", result.stderr)
 
     @unittest.skipUnless(shutil.which("mise"), "mise is required for trust behavior")
     def test_paranoid_mode_requires_per_path_trust(self) -> None:

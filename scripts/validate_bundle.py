@@ -525,20 +525,24 @@ def validate_skills(root: Path, result: Validation) -> None:
         metadata = frontmatter(text)
         if metadata_value(metadata, "name") != directory:
             result.error(f"{directory}: name does not match directory")
-        description = metadata_value(metadata, "description")
-        if not description:
-            result.error(f"{directory}: missing description")
-        elif len(description) > 1024:
-            result.error(f"{directory}: description exceeds 1024 characters")
-        # A skill may not pin a model either. Parse semantically rather than matching the raw
-        # frontmatter string: a substring test on `metadata` also hits `name:
-        # model-tier-rightsizing`, and a line-anchored regex still misses the quoted and
-        # \u-escaped key forms that validate_agents already rejects.
+        # The description cap and the model-pin check both need the semantic parse. metadata_value
+        # reads a plain (unquoted, non-block) multiline scalar's first line only, so measuring the
+        # Codex 1024-char cap on it admits an over-cap description (agentic-sdlc-e78f); and a
+        # substring test on `metadata` for the pin also hits `name: model-tier-rightsizing`, while
+        # a line-anchored regex still misses the quoted and \u-escaped key forms that
+        # validate_agents already rejects.
         try:
             skill_metadata = parse_frontmatter_metadata(text)
         except ValueError as exc:
             result.error(f"{directory}: invalid frontmatter: {exc}")
         else:
+            description = skill_metadata.get("description")
+            if not description:
+                result.error(f"{directory}: missing description")
+            elif not isinstance(description, str):
+                result.error(f"{directory}: description must be a YAML string")
+            elif len(description) > 1024:
+                result.error(f"{directory}: description exceeds 1024 characters")
             for forbidden in ("model", "model_reasoning_effort"):
                 if forbidden in skill_metadata:
                     result.error(f"{directory}: static {forbidden} is forbidden")
