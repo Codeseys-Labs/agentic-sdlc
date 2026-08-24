@@ -1,17 +1,18 @@
 ---
 name: adr-lifecycle
 description: >-
-  Author, review, number, index, and supersede Architecture Decision Records — the durable record
-  of a hard-to-reverse choice and the options it rejected. Use when the user says "write an ADR",
-  "record this decision", "why did we choose X", "supersede ADR-NNNN", or "review this ADR", or
-  when a framing, planning, or reconciling step settles a choice a later session would otherwise
-  re-argue from scratch. Runs a significance gate before authoring, picks a formality tier,
-  requires at least two genuinely considered options and one named negative consequence, keeps
-  implementation detail out of the record, and treats an accepted record as immutable — supersede,
-  never edit. Neighbour boundary: `../change-writing/SKILL.md` owns commit, pull-request, and
-  squash text, including the message that lands an ADR file; this skill owns only the decision
-  record itself. An accepted ADR is advisory evidence a conductor may cite; it never authorizes a
-  push, merge, publication, deployment, or queue mutation.
+  Fires at the moment a hard-to-reverse choice is settled — during framing, planning, review,
+  or reconciling — and on the symptom of the same choice being re-argued across sessions
+  ("why did we choose X"), and on explicit asks: "write an ADR", "record this decision",
+  "supersede ADR-NNNN", "review this ADR". Author, review, number, index, and
+  supersede Architecture Decision Records — the durable record of such a choice and the
+  options it rejected. Runs a significance gate before authoring, picks a formality tier,
+  requires at least two genuinely considered options and one named negative consequence,
+  keeps implementation detail out of the record, and treats an accepted record as immutable —
+  supersede, never edit. Neighbour boundary: `../change-writing/SKILL.md` owns commit,
+  pull-request, and squash text, including the message that lands an ADR file; this skill
+  owns only the decision record itself. An accepted ADR is advisory evidence; it never
+  authorizes a push, merge, publication, deployment, or queue mutation.
 ---
 
 # ADR lifecycle

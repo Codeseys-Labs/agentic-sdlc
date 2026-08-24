@@ -1,6 +1,14 @@
 ---
 name: agentic-sdlc
-description: This skill should be used when the user asks to frame, plan, execute, review, or drive a project-scale agentic SDLC run, including Seeds-backed worktree waves, backlog-zero missions, multi-agent implementation, or concurrent critique. The baseline uses the current host's native agent and subagent capabilities and requires no cmux or tmux. cmux is an optional non-load-bearing view/event layer only when already active or explicitly requested.
+description: >-
+  Fires at the intake of project-scale work — framing, planning, executing, reviewing, or
+  driving an agentic SDLC run, including Seeds-backed worktree waves, backlog-zero missions,
+  multi-agent implementation, and concurrent critique — at the moment a session opens an
+  SDLC-activated repository whose queue holds open seeds, and on the symptom of multi-agent
+  implementation being improvised ad hoc instead of run as a planned wave. The baseline uses
+  the current host's native agent and subagent capabilities and requires no cmux or tmux.
+  cmux is an optional non-load-bearing view/event layer only when already active or
+  explicitly requested.
 ---
 
 # Agentic SDLC Orchestrator
@@ -252,6 +260,7 @@ publication, PR mutation, merge, or deployment.
 Read only what is needed:
 
 - `references/sdlc-loop.md`: phase gates, backflow, done criteria.
+- `references/routing.md`: the moment→skill routing table for all twelve skills in this bundle — the lifecycle moments and symptoms each description expresses, the two deliberate exceptions, and the four named refusals (no sticky modes, no standing-order descriptions, no self-insertion into delegation, no global-configuration capture) that bound any priming surface.
 - `references/seeds-worktrees.md`: Seeds queue, worktree wave, squash/rebase, PR handling, and
   the canonical in-workspace `.worktrees/<seed-id>-<slug>/` substrate rule.
 - `references/worktree-lifecycle.md`: one wave worktree end to end with the refusal and

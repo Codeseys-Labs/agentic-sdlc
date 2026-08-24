@@ -1,11 +1,14 @@
 ---
 name: change-writing
-description: Use when the user (or another skill) needs a commit message, pull-request title/body,
-  squash message, or a review of an existing change message. Reads repository policy, history, and
-  the verified diff/gate evidence, then emits proposed text ONLY — it never stages, commits, pushes,
-  creates or edits PRs, merges, or deploys. Model/tool attribution, Co-Authored-By trailers,
-  generated-by footers, and badges are omitted unless the user explicitly requests them for the
-  current artifact.
+description: >-
+  Fires before any commit message, pull-request title/body, or squash message is composed —
+  including the message for a `git commit` or `gh pr create` the agent itself is preparing —
+  when another skill needs message text, or when an existing change message needs review. Also
+  fires on the symptom of attribution slop in a draft: Co-Authored-By trailers, generated-by
+  footers, or badges. Reads repository policy, history, and the verified diff/gate evidence,
+  then emits proposed text ONLY — it never stages, commits, pushes, creates or edits PRs,
+  merges, or deploys. Model/tool attribution, trailers, footers, and badges are omitted unless
+  the user explicitly requests them for the current artifact.
 ---
 
 # Change-message writing

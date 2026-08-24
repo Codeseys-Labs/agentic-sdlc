@@ -3,7 +3,8 @@ name: stacked-prs-gh-cli
 description: |
   Use when managing dependent GitHub pull requests with plain `gh` and git, especially when
   a parent changes or merges, a child must change base, a branch is being rewritten, or
-  governance/check evidence is incomplete.
+  governance/check evidence is incomplete. The tool-agnostic restack doctrine lives in
+  stacked-prs; this skill is its plain-`gh` flavor.
 ---
 
 # Stacked PRs with plain `gh` + git

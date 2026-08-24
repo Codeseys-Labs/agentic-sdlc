@@ -1,6 +1,13 @@
 ---
 name: reviewing-overengineering
-description: Use when a concrete plan or diff needs an independent complexity, deletion, or remediation audit, especially when deadlines, line-count targets, or “simplify” requests could erase trust-boundary controls. Not for a general correctness review or continuous style advice.
+description: >-
+  Fires before a plan is accepted or a diff merged when its size, layer count, or abstraction
+  budget is in question — and at the moment "simplify", "cut this down", a line-count target,
+  or deadline pressure enters a review, because those are the moments a trust-boundary
+  control gets deleted as bloat. Also fires when a remediation claims simplification: a
+  remediated candidate is re-reviewed, never waved through. Produces an independent
+  complexity, deletion, or remediation audit with a safety-preservation rebuttal. Not for a
+  general correctness review or continuous style advice.
 ---
 
 # Reviewing overengineering

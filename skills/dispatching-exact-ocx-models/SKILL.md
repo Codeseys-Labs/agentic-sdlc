@@ -1,6 +1,12 @@
 ---
 name: dispatching-exact-ocx-models
-description: Use when a conductor-selected exact OCX route must be injected into an Agent or Workflow worker, especially for generated ocx agent types, namespaced provider IDs, or tool surfaces whose compatibility and post-run identity need verification. Not for choosing a tier or evaluating candidates; use model-tier-rightsizing first.
+description: >-
+  Fires at the spawn boundary — after model-tier-rightsizing has chosen an exact OCX route,
+  before the worker starts — when that conductor-selected route must be injected into an
+  Agent or Workflow worker, especially for generated ocx agent types, namespaced provider
+  IDs, or tool surfaces whose compatibility needs checking. Also fires on the symptom of a
+  generated `ocx-*` agent or namespaced provider ID whose post-run identity is unverified.
+  Not for choosing a tier or evaluating candidates; use model-tier-rightsizing first.
 ---
 
 # Dispatching exact OCX models

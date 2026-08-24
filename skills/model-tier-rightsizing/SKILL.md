@@ -1,11 +1,13 @@
 ---
 name: model-tier-rightsizing
-description: |
-  Route workflow agents by wrong-output blast radius and verification strength. Use when
-  a caller must inject a certified exact model ID and requested effort into a bounded
-  dispatch, preserve a high-impact recommendation lane, or stop after null output,
-  semantic uncertainty, throttling, missing readback, or unresolved transport identity.
-  Stable doctrine stays here; generation-specific routing stays in one canonical reference.
+description: >-
+  Fires before ANY agent or workflow dispatch that names a model or effort — before a
+  `RuntimeAssignment` is written — routing workflow agents by wrong-output blast radius and
+  verification strength. Also fires when a caller must inject a certified exact model ID and
+  requested effort into a bounded dispatch or preserve a high-impact recommendation lane, and
+  on the mid-run symptoms that require a stop: null output, semantic uncertainty, throttling,
+  missing readback, or unresolved transport identity. Stable doctrine stays here;
+  generation-specific routing stays in one canonical reference.
 ---
 
 # Model-tier rightsizing
