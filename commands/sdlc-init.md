@@ -23,8 +23,11 @@ this file — substrate selection, Seeds proof, trust decisions, gate falsifiabi
 `wave_ready` — is conductor work performed and evidenced as reviewed manual steps, never claimed
 as a tool guarantee. Read `--help` before invoking either verb.
 
-`apply` prints a unified diff and writes only when the same invocation carries `--yes`, so the
-bytes approved are the bytes written. Without `--yes` it shows the diff and refuses at exit 3,
+`apply` prints a unified diff and writes only when the same invocation carries `--yes`: within
+the `--yes` invocation, the diff printed is exactly the bytes written. The documented loop below
+is two invocations — review, then re-run with `--yes` — and nothing binds them mechanically, so
+approval attaches to the diff the `--yes` invocation re-prints, not to the earlier one.
+Without `--yes` it shows the diff and refuses at exit 3,
 having written nothing; a symlink or any non-regular node at the target refuses at exit 2, as does
 an entry whose parent directory does not exist in the target, because this tool creates no
 directory; a target already carrying the rendered block reports `no-op`, which is the idempotence
@@ -138,7 +141,11 @@ Approval of a diff is not authorization for any other effect.
      --manifest <reviewed manifest> --entry AGENTS.md`, which renders one manifest entry inside
      `<!-- agentic-sdlc:start -->` / `<!-- agentic-sdlc:end -->` markers, preserves every byte
      outside them, and splices in place when the block already exists. Review the printed diff,
-     then re-run the same command with `--yes` to write it. Include project intent,
+     then re-run the same command with `--yes` to write it. The `--yes` invocation re-renders
+     against the live target and manifest and re-prints the diff of exactly the bytes it writes;
+     confirm that re-printed diff matches the one reviewed, because no digest binds the two
+     invocations. Step 7's enumerated `git diff` before the atomic activation commit is the
+     byte-exact approval artifact. Include project intent,
      `mise run check`, Git-worktree substrate, Seeds commands, worktree ownership, and the global
      doctrine pointer.
    - `CLAUDE.md` remains thin: the same `apply` with `--entry CLAUDE.md`, preserving existing
