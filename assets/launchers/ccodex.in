@@ -216,6 +216,59 @@ configuration; help and cancellation do not.
 EOF
 }
 
+# --- selected-model admission for the small-fast slot (seed agentic-sdlc-fa32) ---------------
+#
+# The gateway does not fail closed on a provider prefix it does not serve: its router computes the
+# prefix, finds no provider of that name, discards that result, and forwards the model string
+# verbatim to whichever provider is DEFAULT, tagged `routeKind: "default-provider"`. This slot makes
+# that worse than a one-session mistake -- it is persistent operator configuration, so EVERY
+# Haiku/background turn afterwards bills the wrong account while attribution records the wrong
+# provider. `scripts/opencodex-claude.sh` carries the full source account; the upstream-facing report
+# is docs/research/2026-08-24-gateway-default-provider-misroute.md.
+#
+# DELIBERATELY WEAKER than `ccodex launch`'s refusal, and the difference is the point. Launch already
+# requires a healthy gateway, so an unreadable catalog there is itself a fault and refusing costs
+# nothing. Writing this slot is legitimate with the gateway DOWN -- configure now, launch later -- so
+# an unreadable catalog here WARNS and proceeds rather than breaking a working offline flow. What it
+# never does is stay silent about a namespaced id it could not verify.
+#
+# A BARE value is never checked and never needs the gateway: that covers the Claude family aliases,
+# `-`, and every native id the default provider serves under its own bare name.
+assert_fast_model_is_servable() {
+  local requested="$1" prefix catalog rows
+  case "$requested" in
+    */*) ;;
+    *) return 0 ;;
+  esac
+  prefix="${requested%%/*}"
+  require_ocx
+  require_jq
+  if ! catalog="$("$AGENTIC_SDLC_OCX" models live --json 2>/dev/null)" \
+    || ! rows="$(printf '%s' "$catalog" | "$AGENTIC_SDLC_JQ" -r '
+      .[] | select(.disabled != true) | [.namespaced, .provider] | @tsv
+    ' 2>/dev/null)" \
+    || [ -z "$rows" ]; then
+    printf 'WARNING: the live OCX catalog could not be read, so `%s` was NOT checked against it.\n' "$requested" >&2
+    printf 'If the gateway does not serve that provider it will not fail closed -- it forwards the id\n' >&2
+    printf 'to the DEFAULT provider, and every background turn would bill the wrong account. Confirm\n' >&2
+    printf 'with `ccodex models` once the gateway is up. Writing the value as asked.\n\n' >&2
+    return 0
+  fi
+  # Two separate columns rather than one merged list: a provider NAME carries no slash, so merging
+  # them would let a requested `<bare-served-id>/anything` match a model row and be admitted.
+  grep -qxF "$requested" <<<"$(printf '%s\n' "$rows" | cut -f1)" && return 0
+  grep -qxF "$prefix" <<<"$(printf '%s\n' "$rows" | cut -f2 | sort -u)" && return 0
+  printf 'REFUSED: `%s` names the provider `%s`, and the running gateway serves no provider of\n' "$requested" "$prefix" >&2
+  printf 'that name. Nothing was written.\n\n' >&2
+  printf 'The gateway would not fail closed on it: the id would be forwarded to the DEFAULT provider,\n' >&2
+  printf 'so every Haiku/background turn would be billed to the wrong account while the attribution\n' >&2
+  printf 'log recorded that provider instead of this one.\n\n' >&2
+  printf 'Pick an id from `ccodex models`, a Claude family alias (sonnet|opus|fable), or `-` to clear.\n' >&2
+  printf 'A provider that IS configured but absent from the catalog is not published yet: `ocx sync`\n' >&2
+  printf 'then `ccodex restart`, each as its own authorized step, and confirm with `ccodex status`.\n' >&2
+  return 3
+}
+
 select_fast_model() {
   local catalog lines choice selected index=1
   require_ocx
@@ -343,6 +396,9 @@ case "$route" in
       require_root
       select_fast_model
     else
+      # The interactive path builds its menu FROM the live catalog, so its rows are already served.
+      # This noninteractive path is the one that can name anything, so the check belongs here.
+      assert_fast_model_is_servable "$1" || exit $?
       run_ocx claude config set --small-fast-model "$1"
     fi
     ;;

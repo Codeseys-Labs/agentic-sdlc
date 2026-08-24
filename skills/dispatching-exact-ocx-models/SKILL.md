@@ -39,6 +39,21 @@ at most 64 characters; remove unnecessary model-visible tools and avoid structur
 when that extra tool is incompatible. Do not broaden permissions merely to retain a convenient
 agent type.
 
+**A namespaced ID's provider prefix is checked against the LIVE catalog before dispatch, not after.**
+The gateway does not fail closed on a prefix it does not serve: its router computes the prefix, finds
+no provider of that name, discards that result, and forwards the model string verbatim to whichever
+provider is DEFAULT — so the request is attempted and billed against the wrong upstream, and the
+attribution the verification step below reads records the selected provider rather than the requested
+one. Reading `routeKind: "default-provider"` afterwards is therefore detection of a charge already
+incurred, not prevention. Before dispatching a namespaced ID, confirm its prefix appears in the
+running gateway's own `GET /v1/models` (`ccodex models`, or `ccodex status` for configured-vs-live);
+a prefix that is configured but absent from that catalog is not published and routes to the default
+provider exactly as an unknown one does. If the catalog cannot be read, the prefix is unverified —
+return one SeedProposal, not a dispatch. A bare, un-prefixed ID is not subject to this check: those
+take the router's own vendor-pattern and native-passthrough paths and need no catalog row.
+`ccodex launch --model` enforces this refusal itself; a dispatch that reaches the gateway by any
+other path carries the check as the caller's obligation.
+
 ## Verify, then admit
 
 After the call, correlate the concrete request with adapter readback or gateway attribution and

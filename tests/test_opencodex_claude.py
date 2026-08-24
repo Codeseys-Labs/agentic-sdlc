@@ -897,6 +897,195 @@ class OpenCodexClaudeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    # --- selected-model admission (seed agentic-sdlc-fa32) ------------------------------------
+    #
+    # The gateway's router does not fail closed on a provider prefix it does not serve. It computes
+    # the prefix, fails to match it against the configured providers, DISCARDS that failure, and
+    # forwards the caller's model string verbatim to whichever provider is DEFAULT, tagged
+    # `routeKind: "default-provider"` -- so the request is attempted and billed against the wrong
+    # account while attribution records the wrong provider. Three such rows were in this host's own
+    # gateway store inside seven days. The launcher cannot fix the router; what it can do is refuse
+    # to hand it an id it will misroute, and these tests are what keep that refusal honest in both
+    # directions -- it must bite on an unserved prefix and must NOT bite on the legitimate routes.
+    #
+    # Shape copied from the real `GET /v1/models`: bare native rows, and routed rows whose id is the
+    # raw `<provider>/<model>` concatenation, which for OpenRouter really does carry two slashes.
+    LIVE_CATALOG = {
+        "object": "list",
+        "data": [
+            {"id": "gpt-5.6-sol", "object": "model", "owned_by": "openai"},
+            {"id": "muse/muse-spark-1.2", "object": "model", "owned_by": "muse"},
+            {
+                "id": "openrouter/~anthropic/claude-fable-latest",
+                "object": "model",
+                "owned_by": "openrouter",
+            },
+        ],
+    }
+
+    def test_launch_refuses_a_model_whose_provider_the_gateway_does_not_serve(self) -> None:
+        result, log = self.run_launcher(
+            "launch",
+            "--model",
+            "zzz-totally-unconfigured-provider/some-model",
+            catalog_json=self.LIVE_CATALOG,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        # Name the prefix, or the operator cannot tell which of their ids was wrong.
+        self.assertIn("zzz-totally-unconfigured-provider", result.stderr)
+        self.assertIn("serves no provider of that name", result.stderr)
+        # Say what would have happened, so the refusal reads as a billing fact and not as pedantry.
+        self.assertIn("default-provider", result.stderr)
+        # The assertion that actually matters: exit 3 with a launched session is not a refusal.
+        self.assertNotIn("<ocx><claude>", log.read_text())
+
+    def test_launch_accepts_a_model_whose_provider_the_gateway_serves(self) -> None:
+        # POSITIVE CONTROL for the test above. Without this, a check that refused EVERY namespaced
+        # id would pass the refusal test and break every routed model in the bundle.
+        result, log = self.run_launcher(
+            "launch", "--model", "muse/muse-spark-1.2", catalog_json=self.LIVE_CATALOG
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_launch_accepts_the_two_slash_routed_id_the_catalog_really_serves(self) -> None:
+        # `/v1/models` emits `<provider>/<native-id>` unencoded, and OpenRouter's own native ids
+        # contain a slash, so the id a caller copies out of the catalog has TWO. A check that split
+        # on the last slash, or that required exactly one, would refuse the catalog's own rows.
+        result, log = self.run_launcher(
+            "launch",
+            "--model",
+            "openrouter/~anthropic/claude-fable-latest",
+            catalog_json=self.LIVE_CATALOG,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_launch_never_refuses_a_bare_model_id_and_needs_no_catalog_to_allow_it(self) -> None:
+        # The legitimate flow this check must not break. A bare `claude-*` id is the native
+        # Anthropic passthrough this whole route exists to preserve, it is answered on the
+        # operator's own subscription, and a live catalog need carry no `claude*` row at all --
+        # this host's does not. No catalog fixture is passed, so the id is admitted without one:
+        # a bare id is decided before the catalog is ever read.
+        result, log = self.run_launcher("launch", "--model", "claude-sonnet-5")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_launch_does_not_refuse_a_routing_profile_selection(self) -> None:
+        # `policy/<id>` is resolved by the router BEFORE the provider-prefix branch, and an unknown
+        # profile already fails closed upstream, so this check has nothing to add and no business
+        # refusing it. `policy` is not a provider and never appears in the catalog, so a check that
+        # only asked "is the prefix a live provider" would refuse a working selection.
+        result, log = self.run_launcher(
+            "launch", "--model", "policy/cheap-first", catalog_json=self.LIVE_CATALOG
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_an_uncheckable_catalog_refuses_a_namespaced_model_instead_of_launching_it(self) -> None:
+        # Fail-open is the defect under repair, so it must not be reintroduced as a degrade: with no
+        # catalog fixture the stub curl fails, nothing was checked, and a selection that could not
+        # be verified stops the launch rather than passing as served. Same rule the unverifiable
+        # `--settings` document already follows.
+        result, log = self.run_launcher("launch", "--model", "muse/muse-spark-1.2")
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("could not be read", result.stderr)
+        self.assertNotIn("<ocx><claude>", log.read_text())
+
+    def test_launch_refuses_a_configured_but_unpublished_provider_and_names_the_publish_step(self) -> None:
+        # Configuration drift reaches the SAME misroute as a typo, and the launcher already warns
+        # about it after a provider mutation -- but nothing stopped a dispatch to it. The remedy
+        # differs from a typo's, so the refusal distinguishes the two rather than printing one
+        # sentence for both.
+        result, log = self.run_launcher(
+            "launch",
+            "--model",
+            "openrouter/some-model",
+            catalog_json={"object": "list", "data": [{"id": "gpt-5.6-sol"}]},
+            provider_list_json={
+                "configured": [
+                    {"name": "openai", "isDefault": True},
+                    {"name": "openrouter", "isDefault": False},
+                ]
+            },
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("CONFIGURED but is not in the running gateway's catalog", result.stderr)
+        self.assertIn("ocx sync", result.stderr)
+        self.assertNotIn("<ocx><claude>", log.read_text())
+
+    def test_launch_accepts_an_explicit_namespace_on_the_default_provider(self) -> None:
+        # REGRESSION, and it was a real one: the default provider serves BARE ids, so it never
+        # appears as a `<name>/` row in the catalog, while the router still matches it by name and
+        # routes there EXPLICITLY rather than through the fallthrough. An earlier draft of this check
+        # therefore refused `openai/gpt-5.5` on a host whose default IS openai -- a working
+        # selection, caught by replaying the rule against this host's real live catalog rather than
+        # against the fixture. The catalog below deliberately carries no `openai/` row.
+        result, log = self.run_launcher(
+            "launch",
+            "--model",
+            "openai/gpt-5.5",
+            catalog_json={"object": "list", "data": [{"id": "gpt-5.6-sol"}]},
+            provider_list_json={"configured": [{"name": "openai", "isDefault": True}]},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_a_leading_slash_model_id_is_left_to_the_router(self) -> None:
+        # The router guards its prefix branch on `slash > 0`, so `/foo` never reaches the prefix test
+        # upstream. Claiming jurisdiction over a shape the router does not treat as namespaced would
+        # be this check inventing a refusal rather than mirroring one.
+        #
+        # WHAT THIS TEST DOES AND DOES NOT PROVE, because mutation testing showed the difference.
+        # Deleting the launcher's explicit leading-slash guard does NOT make this test fail: without
+        # it the prefix is the empty string, and `grep -qxF ""` matches every line, so the id is
+        # admitted by accident instead of by intent. No test can isolate that guard, because both
+        # paths reach the same verdict. This pins the BEHAVIOUR -- a leading-slash id is not refused
+        # -- which is a real regression pin if someone later makes it refuse. It is not evidence that
+        # the guard is what produces that behaviour. The guard is kept anyway so the outcome stops
+        # depending on an empty grep pattern matching everything, which a later edit could silently
+        # turn into a refusal.
+        result, log = self.run_launcher(
+            "launch", "--model", "/some-model", catalog_json=self.LIVE_CATALOG
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<ocx><claude>", log.read_text())
+
+    def test_the_equals_spelling_of_the_model_argument_is_checked_too(self) -> None:
+        # `--model=x` and `--model x` are one selection with two spellings; checking only the
+        # separated form leaves a bypass that looks like a working launch.
+        result, log = self.run_launcher(
+            "launch", "--model=zzz-unserved-provider/some-model", catalog_json=self.LIVE_CATALOG
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("zzz-unserved-provider", result.stderr)
+        self.assertNotIn("<ocx><claude>", log.read_text())
+
+    def test_ultracode_inherits_the_selected_model_refusal(self) -> None:
+        # launch-ultracode reaches the gateway through cmd_launch, so the check must cover it
+        # without a second copy. It also arrives carrying its own `--settings`, which must not
+        # shadow the `--model` scan.
+        result, log = self.run_launcher(
+            "launch-ultracode",
+            "--model",
+            "zzz-unserved-provider/some-model",
+            catalog_json=self.LIVE_CATALOG,
+        )
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("zzz-unserved-provider", result.stderr)
+        self.assertNotIn("<ocx><claude>", log.read_text())
+
     # ONE fixture list per verdict, consumed by BOTH base-URL channels below. The launcher feeds its
     # two channels from one shared loopback pattern for the same reason: a fixture list per channel
     # is how "refuses from the shell, passes silently from the file" gets reintroduced.

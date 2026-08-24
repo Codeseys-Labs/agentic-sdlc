@@ -335,6 +335,21 @@ model selection as policy.
   before gateway startup, then accepted arguments are forwarded unchanged. An `sk-ant-oat*` login
   is accepted; no credential value or selected settings path is printed. A healthy launch is still
   not model-identity evidence.
+  `launch` and `ultracode` ALSO refuse (exit 3) a `--model` whose `<provider>/` prefix the RUNNING
+  gateway does not serve, checked against its own `GET /v1/models` after the health probe, because
+  the router does not fail closed on it: it computes the prefix, finds no provider of that name,
+  discards that result, and forwards the id verbatim to the DEFAULT provider as
+  `routeKind: "default-provider"`, so the turn is billed to the wrong account while attribution
+  records the wrong provider. A configured-but-unpublished prefix refuses separately and names the
+  `ocx sync` + `ccodex restart` publish step. A BARE id is never refused — native `claude-*`
+  passthrough needs no catalog row — nor is an exact catalog id or `policy/<id>`; an unreadable
+  catalog refuses rather than passing as served. The check needs a live catalog, so unlike the
+  settings refusals it necessarily runs after the gateway is ensured. `ccodex set-fast-model <id>`
+  carries the same rule with a deliberately WEAKER contract: an unserved prefix refuses, but an
+  unreadable catalog WARNS and still writes, because configuring that slot with the gateway down is
+  legitimate. This is a caller-side mitigation on those surfaces, not a fix — only the router can
+  make the misroute fail closed for every client. See
+  `docs/research/2026-08-24-gateway-default-provider-misroute.md`.
   `ocx:configure` admits only reviewed non-Anthropic provider/account routes, and a mutation there
   writes the CONFIG FILE only: the wrapper prints the required `ocx sync` plus `ccodex restart` and
   runs neither, because until both have run a request naming the new provider is classified

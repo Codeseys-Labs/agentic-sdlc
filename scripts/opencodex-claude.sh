@@ -588,6 +588,14 @@ live_catalog_model_ids() {
     | jq -r '(.data // []) | .[] | select(.id != null) | .id' 2>/dev/null
 }
 
+# The `<provider>/` prefixes present in a catalog listing supplied on stdin. ONE definition on
+# purpose: `not_live_providers` (a status display) and the launch-time model admission below must
+# agree byte for byte on what "the running gateway serves this provider" means, and two spellings
+# of that sed would be free to drift into disagreeing about a launch.
+catalog_provider_prefixes() {
+  sed -n 's|^\([^/][^/]*\)/.*|\1|p' | sort -u
+}
+
 # Names with at least one model served under `<name>/`. The default provider serves bare IDs,
 # so it is reported live whenever the catalog answers at all -- its own liveness is already the
 # health probe's subject and misreporting it as NOT-LIVE would be the false alarm this check
@@ -596,7 +604,7 @@ live_provider_names() {
   local port="$1" catalog
   catalog="$(live_catalog_model_ids "$port")" || return 1
   [ -n "$catalog" ] || return 1
-  printf '%s\n' "$catalog" | sed -n 's|^\([^/][^/]*\)/.*|\1|p' | sort -u
+  catalog_provider_prefixes <<<"$catalog"
 }
 
 # The configured DEFAULT provider's name. Exit 1 when it cannot be read at all, and that status is
@@ -626,6 +634,171 @@ not_live_providers() {
     [ "$name" = "$default_name" ] && continue
     printf '%s\n' "$live" | grep -qxF "$name" || printf '%s\n' "$name"
   done <<<"$configured"
+}
+
+# --- selected-model admission ---------------------------------------------------------------
+#
+# The router's fail-open, refused HERE rather than reported after the fact. Read in the installed
+# opencodex 2.28.0 source, not inferred: `routeModelInternal` (src/router.ts:541) takes the
+# provider prefix of a `<provider>/<model>` id at src/router.ts:626, tests it against the
+# CONFIGURED providers at :630, and when that test fails it DISCARDS the negative result -- the
+# `if` has no `else`, and `provName` leaves scope at :650 without ever being compared to the
+# provider that ends up selected. Control reaches :685, which returns
+# `routeKind: "default-provider"` and passes the caller's string on VERBATIM, bogus prefix
+# included. The credential precondition is local to the ALREADY-selected provider, so on a host
+# whose default provider is credentialed the request is attempted and BILLED against the wrong
+# upstream while the attribution log records the wrong provider. Three such rows sit in this
+# host's own gateway store from the last seven days (`mise run usage:report`, misroutes line), so
+# this is a live alarm rather than a hypothetical. Upstream owns the router; this wrapper owns
+# whether OUR launch hands it an id it will silently misroute.
+# docs/research/2026-08-24-gateway-default-provider-misroute.md carries the upstream-facing report.
+#
+# The rule is deliberately NARROW, because a broad one refuses legitimate routes:
+#   * NO SLASH is never refused. Those ids take the router's other, legitimate paths -- the bare
+#     OpenAI family (src/router.ts:652-658), the configured defaultModel (:660-665), the vendor
+#     patterns that serve `claude-*` (:667-668), and the static models list (:670-677). A live
+#     catalog need carry no bare `claude*` row at all (this host's does not), so refusing bare ids
+#     would refuse the native Anthropic passthrough this whole route exists to preserve.
+#   * An EXACT catalog id is never refused whatever its shape. That covers an alias -- the catalog
+#     emits `m.alias` in PLACE of the namespaced form -- and the two-slash routed ids `/v1/models`
+#     really serves, such as `openrouter/~anthropic/claude-fable-latest`.
+#   * A LIVE prefix is never refused: a provider serving at least one `<name>/` row is live, so a
+#     model of its own that this listing does not enumerate still routes to it.
+#   * The DEFAULT provider's own name is never refused. It serves BARE ids, so it is absent from the
+#     `<name>/` prefix set by construction, while the router matches it by name and routes there
+#     explicitly -- `openai/gpt-5.5` on a host whose default is `openai` is a working selection, and
+#     an earlier draft of this check refused it. Verified against this host's live catalog.
+#   * `policy/<id>` is never refused. Routing profiles resolve at src/router.ts:555, BEFORE the
+#     prefix branch, and an unknown profile ALREADY fails closed upstream with
+#     NoEligiblePolicyCandidateError -- so this check has nothing to add and no business refusing.
+#
+# LIMIT, stated rather than hidden: a configured COMBO alias carrying a slash (one optional
+# segment, src/combos/types.ts:27) also resolves before the prefix branch, and this check does not
+# read the combo table, so such an alias WOULD be refused here. No combo is configured on this
+# host and none appears anywhere in this repository; where one is, pass the resolved id instead.
+
+# Classifies ONE caller-supplied model id against the running gateway's live catalog. Prints
+# `<verdict><tab><detail>` and exits 0 when the id must NOT be launched; exits 1 when it is
+# admissible. `unreadable` is a refusal and not a pass, for the same reason an unverifiable
+# `--settings` value is: a check that cannot run has established nothing, and guessing here is
+# what puts the request on the wrong account.
+unlaunchable_model_id() {
+  local requested="$1" port="$2" catalog prefix configured
+  case "$requested" in
+    # A LEADING slash is not this branch upstream either: the router guards on `slash > 0`, so an
+    # id whose first character is `/` never reaches the prefix test and this check claims no
+    # jurisdiction over it. Keeping the shapes identical is what stops the two from disagreeing.
+    /*) return 1 ;;
+    */*) ;;
+    *) return 1 ;;
+  esac
+  prefix="${requested%%/*}"
+  [ "$prefix" = policy ] && return 1
+  command -v curl >/dev/null 2>&1 || { printf 'unreadable\tno curl is available to read it'; return 0; }
+  jq_available || { printf 'unreadable\tthe admitted jq route could not be run'; return 0; }
+  catalog="$(live_catalog_model_ids "$port")" \
+    || { printf 'unreadable\tthe gateway at 127.0.0.1:%s did not serve it' "${port:-unknown}"; return 0; }
+  [ -n "$catalog" ] \
+    || { printf 'unreadable\tthe gateway at 127.0.0.1:%s served an empty catalog' "${port:-unknown}"; return 0; }
+  # Here-strings rather than pipes into `grep -q`: under `set -o pipefail` a matching `grep -q`
+  # can SIGPIPE the writer and make a SUCCESSFUL search report failure.
+  grep -qxF "$requested" <<<"$catalog" && return 1
+  grep -qxF "$prefix" <<<"$(catalog_provider_prefixes <<<"$catalog")" && return 1
+  # The DEFAULT provider serves BARE ids, so it never appears as a `<name>/` prefix in the catalog
+  # -- but the router still matches it by name at src/router.ts:630 and routes there EXPLICITLY,
+  # never through the fallthrough this check exists to stop. Refusing `<default>/model` would refuse
+  # a working selection, and it is the same false alarm `not_live_providers` already exempts the
+  # default provider from. Its own residual comes along: this reads the CONFIG file, so a default
+  # changed there but not yet loaded by the running gateway is admitted by a name the process does
+  # not have. `owned_by` in the catalog is not a substitute -- it carries the upstream VENDOR
+  # (a `muse` provider's rows report `meta`) and is hardcoded to `openai` for native rows.
+  [ "$prefix" = "$(default_provider_name || true)" ] && return 1
+  # Only reached on the refusal branch, so the happy path adds no `ocx` call. The distinction is
+  # worth one read: configuration drift and a typo are the same misroute with different remedies.
+  configured="$(configured_provider_names 2>/dev/null || true)"
+  if grep -qxF "$prefix" <<<"$configured"; then
+    printf 'not-live\t%s' "$prefix"
+    return 0
+  fi
+  printf 'unknown\t%s' "$prefix"
+}
+
+# The FIRST `--model` value in the forwarded arguments, or exit 1 for none. Scanning stops at a
+# literal `--` exactly as assert_forwarded_settings_are_effective does. That is not a hole for the
+# wrapper's own separator: `strip_forwarding_separator` has already consumed a LEADING `--` before
+# cmd_launch runs, so what this scans is Claude's own argument vector. A LATER `--` ends Claude's
+# option parsing, past which `--model` is a positional argument rather than a model selection, so
+# there is nothing there for this check to be right about.
+forwarded_model_argument() {
+  local -a arguments=("$@")
+  local index=0 argument
+  while [ "$index" -lt "${#arguments[@]}" ]; do
+    argument="${arguments[$index]}"
+    case "$argument" in
+      --) return 1 ;;
+      --model)
+        index=$((index + 1))
+        [ "$index" -lt "${#arguments[@]}" ] || return 1
+        [ -n "${arguments[$index]}" ] || return 1
+        printf '%s' "${arguments[$index]}"
+        return 0
+        ;;
+      --model=*)
+        [ -n "${argument#--model=}" ] || return 1
+        printf '%s' "${argument#--model=}"
+        return 0
+        ;;
+    esac
+    index=$((index + 1))
+  done
+  return 1
+}
+
+# Separate from `refuse` because the epilogue there is about a setting that outranks the gateway's
+# base URL, which is a different hazard with a different remedy. Same exit 3: a boundary declined
+# the operation before any effect.
+refuse_misroute() {
+  printf '\nREFUSED: %s\n' "$1" >&2
+  cat >&2 <<'EOF'
+The gateway does not fail closed on this. Its router takes the provider prefix, finds no provider
+of that name, discards that result, and forwards your model string VERBATIM to whichever provider
+is DEFAULT -- tagged `routeKind: "default-provider"`. The credential check that follows belongs to
+that default provider, not to the one you named, so where the default is credentialed the request
+is answered and BILLED against the wrong account while the attribution log records the wrong
+provider. Launching would make that silent; this refusal makes it loud.
+
+Pick an id the running gateway actually serves:
+  ccodex models            the live catalog, which is what a launched session can pick from
+  ccodex status            configured providers vs the ones the running gateway serves
+
+A bare id is never refused here: native `claude-*` ids pass through to Anthropic on your own
+subscription, and this check governs only a namespaced `<provider>/<model>` selection.
+EOF
+  exit 3
+}
+
+# Runs AFTER ensure_gateway_up, and that ordering is a deliberate trade rather than an oversight.
+# The checks in assert_gateway_route_is_effective run BEFORE any gateway is started so a refused
+# launch leaves no proxy the operator did not ask for. This check cannot: its whole subject is what
+# the RUNNING gateway serves, and there is no catalog to read until one is up. So a launch refused
+# here may leave a healthy gateway behind -- `launch` was going to ensure one anyway, and `ccodex
+# status` reports it. What it does not leave behind is a misrouted, billed request.
+assert_selected_model_is_served() {
+  local port="$1"
+  shift
+  local requested result verdict detail
+  requested="$(forwarded_model_argument "$@")" || return 0
+  result="$(unlaunchable_model_id "$requested" "$port")" || return 0
+  verdict="${result%%$'\t'*}"
+  detail="${result#*$'\t'}"
+  case "$verdict" in
+    unreadable)
+      refuse_misroute "--model $requested names the provider \`${requested%%/*}\`, and the running gateway's live catalog could not be read to check it ($detail); an unverifiable selection stops the launch rather than passing as served" ;;
+    not-live)
+      refuse_misroute "--model $requested names the provider \`$detail\`, which is CONFIGURED but is not in the running gateway's catalog, so the gateway does not serve it -- run \`ocx sync\` and then \`ccodex restart\` to publish it, each as its own authorized step, and confirm with \`ccodex status\`" ;;
+    unknown)
+      refuse_misroute "--model $requested names the provider \`$detail\`, and the running gateway serves no provider of that name" ;;
+  esac
 }
 
 # Printed after every admitted provider mutation. The sequence is NOT run for the operator: a
@@ -1445,6 +1618,8 @@ cmd_launch() {
   local json port
   json="$(gateway_health_json)"
   port="$(health_field port "$json")"
+  # Before the banner, so a refusal is never printed underneath a report of the session it stopped.
+  assert_selected_model_is_served "$port" "$@"
   printf '  config dir: %s (global)\n' "$HOME/.claude"
   printf '              ocx claude writes its roster agents and gateway model cache HERE; this\n'
   printf '              route no longer uses a private plane (ADR-0014 supersedes ADR-0010 here)\n'

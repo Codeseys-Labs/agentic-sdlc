@@ -583,12 +583,22 @@ class OperatorToolsTests(unittest.TestCase):
         )
         ocx.chmod(0o755)
         jq = root / "runtime" / "jq"
+        # The `-r` branch DELEGATES to a real jq when one is bound, and that is the point rather
+        # than a convenience: this stub used to discard stdin and echo one fixed table shaped for
+        # `select_fast_model`'s program, so any OTHER jq program under test received an answer to a
+        # question it had not asked. A canned reply cannot distinguish a correct jq program from a
+        # wrong one. Real jq on the fixture below reproduces that table byte for byte, so the
+        # existing selector assertions are unchanged by the delegation -- they are now testing the
+        # program instead of the echo. The canned fallback remains for a host with no jq at all,
+        # and the tests that depend on a real program skip rather than trust it.
         jq.write_text(
             "#!/bin/sh\n"
             'case "${1:-}" in\n'
             "  --version) printf 'jq-1.8.2\\n' ;;\n"
             "  -ers) cat >/dev/null; printf 'clean\\n' ;;\n"
-            "  -r) cat >/dev/null; printf 'gpt-5.6-luna\\tnative OCX\\nmuse/muse-spark-1.2\\trouted via muse\\n' ;;\n"
+            "  -r)\n"
+            '    if [ -n "${TEST_REAL_JQ:-}" ] && [ -x "${TEST_REAL_JQ:-}" ]; then exec "$TEST_REAL_JQ" "$@"; fi\n'
+            "    cat >/dev/null; printf 'gpt-5.6-luna\\tnative OCX\\nmuse/muse-spark-1.2\\trouted via muse\\n' ;;\n"
             "  *) exit 1 ;;\n"
             "esac\n"
         )
@@ -615,11 +625,16 @@ class OperatorToolsTests(unittest.TestCase):
         (home / ".claude").mkdir(parents=True, exist_ok=True)
         (home / ".claude" / "history.jsonl").write_text('{"display":"global"}\n')
         mise.unlink()
-        return {
+        environment = {
             "HOME": str(home),
             "XDG_STATE_HOME": str(root / "operator-state"),
             "PATH": f"{stubs}:{bin_dir}:/usr/bin:/bin",
         }
+        # Absolute, because the stub jq is reached through a PATH that need not carry a real one.
+        real_jq = shutil.which("jq")
+        if real_jq:
+            environment["TEST_REAL_JQ"] = real_jq
+        return environment
 
     def test_every_help_form_prints_usage_and_prepares_nothing(self) -> None:
         # Top-level help was already correct; the verb level was not, and `ocx --help` errored
@@ -1008,7 +1023,84 @@ class OperatorToolsTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertIn("cannot read the live OCX catalog", result.stderr)
+
+    # --- small-fast slot admission (seed agentic-sdlc-fa32) -----------------------------------
+    #
+    # The gateway does not fail closed on a provider prefix it does not serve: it forwards the id
+    # to whichever provider is DEFAULT. This slot is PERSISTENT operator configuration, so that is
+    # not a one-session mistake -- every Haiku/background turn afterwards bills the wrong account
+    # while attribution records the wrong provider. The selector builds its menu from the live
+    # catalog and so cannot name an unserved provider; the noninteractive form can name anything,
+    # which is why the check lives there and why these tests pin it in both directions.
+
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to evaluate the catalog program")
+    def test_set_fast_model_refuses_a_provider_the_gateway_does_not_serve(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "set-fast-model", "zzz-unserved-provider/some-model"],
+                capture_output=True, text=True, env=environment, check=False,
+            )
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("zzz-unserved-provider", result.stderr)
+            self.assertIn("serves no provider of", result.stderr)
+            # Name the consequence, so the refusal reads as a billing fact rather than pedantry.
+            self.assertIn("DEFAULT provider", result.stderr)
+            # A refusal that wrote the value anyway is not a refusal.
             self.assertNotIn("config><set", result.stdout)
+
+    @unittest.skipUnless(shutil.which("jq"), "a real jq is required to evaluate the catalog program")
+    def test_set_fast_model_accepts_a_provider_the_gateway_serves(self) -> None:
+        # POSITIVE CONTROL, aimed at the PREFIX branch rather than the exact-id branch:
+        # `openai/gpt-5.5` is not a catalog row, but `openai` serves rows, so the id routes to a
+        # provider the gateway really has and must not be refused. Without this, a check that
+        # refused every namespaced id would pass the refusal test above.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "set-fast-model", "openai/gpt-5.5"],
+                capture_output=True, text=True, env=environment, check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "STUB-OCX:<claude><config><set><--small-fast-model><openai/gpt-5.5>",
+                result.stdout,
+            )
+
+    def test_set_fast_model_warns_but_still_writes_when_the_catalog_is_unreadable(self) -> None:
+        # DELIBERATELY WEAKER than `ccodex launch`'s refusal, and the asymmetry is the finding:
+        # launch already requires a healthy gateway, so refusing an unverifiable selection there
+        # costs nothing, while writing this slot with the gateway DOWN is a legitimate flow
+        # (configure now, launch later) that a refusal would break. Silence would not be
+        # acceptable either, so the write proceeds and says it was not checked.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            operator_tools.install(config)
+            environment = self.stub_environment(root, config.bin_dir)
+            environment["STUB_OCX_MODELS_FAIL"] = "1"
+
+            result = subprocess.run(
+                [str(config.bin_dir / "ccodex"), "set-fast-model", "zzz-unserved-provider/some-model"],
+                capture_output=True, text=True, env=environment, check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("was NOT checked", result.stderr)
+            self.assertIn(
+                "STUB-OCX:<claude><config><set><--small-fast-model><zzz-unserved-provider/some-model>",
+                result.stdout,
+            )
 
     def test_set_fast_model_refuses_extra_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
