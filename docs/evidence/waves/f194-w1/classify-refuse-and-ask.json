@@ -1,0 +1,1 @@
+{"ask":true,"occupied":[],"reasons":["the repository already has 2 commits","the working tree is not clean (1 reported entries)"],"schema":"agentic-sdlc/repository-class@1","verdict":"refuse-and-ask"}

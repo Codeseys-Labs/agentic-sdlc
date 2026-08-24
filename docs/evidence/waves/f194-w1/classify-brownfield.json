@@ -1,0 +1,1 @@
+{"ask":true,"occupied":[".github","AGENTS.md","mise.toml"],"reasons":[".github is an occupied operating-contract surface","AGENTS.md is an occupied operating-contract surface","mise.toml is an occupied operating-contract surface"],"schema":"agentic-sdlc/repository-class@1","verdict":"brownfield"}
