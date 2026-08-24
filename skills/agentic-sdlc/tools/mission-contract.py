@@ -165,6 +165,7 @@ AUTHORITY_LADDER = (
 )
 
 #: The four stop conditions no contract may omit; ADR-0025 and issue 16 make each non-waivable.
+#: hard-stop-drift's operative definition is the "Drift classes" table in references/mission-loop.md.
 MANDATORY_STOP_CONDITIONS = (
     "authority-expansion-required",
     "hard-stop-drift",

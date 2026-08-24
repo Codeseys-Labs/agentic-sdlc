@@ -92,6 +92,49 @@ platform-claim evidence, tracker/ADR hygiene.
 - No closing anything without acceptance evidence (gates run, output pasted).
 - No unbounded scope: new findings are triaged, not auto-executed.
 
+## Drift classes (the four-outcome doctrine)
+
+This section is the single canonical definition of plan drift for the mission loop. Drift is any
+observed difference between current state and a load-bearing commitment the mission runs under —
+a sealed MissionContract field, an approval invariant, worktree custody, an authoritative gate
+verdict, or queue state. `tools/mission-contract.py` makes `hard-stop-drift` one of the four
+non-waivable stop conditions in every sealed contract; this table is what that token means.
+ADR-0025 and issue 16 originated these rules and are cited as history only; the operative
+definition is this one.
+
+| Class | Meaning | Mission response |
+|---|---|---|
+| `compatible` | The change is unrelated or explicitly tolerated, and every affected invariant still holds. | Continue; record the observation. |
+| `revalidation-required` | Plan semantics are unchanged, but a freshness, identity, capability, or admission fact must be renewed — an approval's validity, a model readback, the queue digest the conductor classified against. | Renew the named fact and continue only when it renews cleanly; otherwise escalate one class. |
+| `replan-required` | A plan-bound fact changed: the workstream set or its ordering, declared constraints or budgets, retries, route constraints, custody boundaries, declared egress, gates or policies, required artifacts, terminal criteria. | Stop the affected work and produce a new plan revision for approval; never edit the approved plan in place. |
+| `hard-stop` | Continuation would cross an authority, ownership, security, credential, destructive/outward-effect, or unknown-effect boundary. | Stop and return to a human with the blocker named. This class is the contract's non-waivable `hard-stop-drift` stop condition. |
+
+Rules over the classes:
+
+- **Severity is a max-fold** over the semantic order `compatible < revalidation-required <
+  replan-required < hard-stop` (deliberately not the alphabetical order of the same strings).
+  The outcome for a set of observed changes is the maximum severity among them: one hard-stop
+  among a hundred compatible changes is a hard-stop.
+- **Ambiguous classification is `hard-stop`, never `compatible`.** A change the conductor cannot
+  interpret unambiguously — an unknown change kind, a subject the mission does not name, an
+  observation about some other plan — is classified hard-stop rather than tolerated.
+- **No downgrade.** No acknowledgement, retry, old approval, or unaffected gate downgrades a
+  stop. An approval invalidated by drift is renewed by a human, never by re-reading it.
+- **Drift never repairs.** Detection never resets, rebases, checks out, stashes, overwrites,
+  removes, reauthenticates, reroutes, or rewrites a queue. The classification is evidence; the
+  response is a separate bounded decision.
+- **Scope and authority drift always routes to a human.** It is never reclassified downward,
+  whatever else in the observed set is compatible; the contract carries it as the non-waivable
+  `scope-change-required` and `authority-expansion-required` stop conditions.
+
+Change kinds that always stop, named against what exists at HEAD: a change to any sealed
+MissionContract field (objective, scope and non-goals, constraints, authority classes or ceiling,
+completion contract, stop conditions) is at minimum `replan-required`, and `hard-stop` when it
+expands authority or scope; an approval invariant no longer holding is `revalidation-required`
+until renewed; a worktree custody conflict, an authoritative gate verdict flipping under the
+mission, or the queue moving away from the digest the conductor classified against each stop the
+affected work before the next wave is planned.
+
 ## The wave loop
 
 ```

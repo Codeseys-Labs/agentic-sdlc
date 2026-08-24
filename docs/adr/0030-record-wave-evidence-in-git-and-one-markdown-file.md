@@ -2,6 +2,9 @@
 
 - **Status:** accepted
 - **Date:** 2026-08-22
+- **Note:** amended 2026-08-23 (see the amendment at the end of this record). The six-outcome
+  wave vocabulary the deleted `wave-verdict.py` carried is restored to the operative doc
+  surfaces; every deletion this record decided stands.
 - **Deciders:** operator (ratification of the demolition plan recorded as `agentic-sdlc-3c90`); agent (evidence and drafting)
 - **Relates to:** `skills/agentic-sdlc/SKILL.md`, `commands/sdlc-wave.md`,
   `docs/evidence/waves/TEMPLATE.md`, `skills/agentic-sdlc/references/readiness-composition.md`,
@@ -143,3 +146,30 @@ that a rule was violated in a way a sealed document would have refused — a rev
 implementer, an approval dated after the merge, or a gate receipt from an unmerged head — the wave
 owner rebuilds the mechanical check as the ~120-line derivation over this file, and not as a second
 document protocol.
+
+## Amendment — 2026-08-23: the six-outcome wave vocabulary is restored; it was narrowed here without being named
+
+This record deleted `wave-verdict.py` and, with it, silently narrowed the wave-outcome vocabulary
+from the six values the product spec closes — `accepted`, `remediation-progress`, `blocked`,
+`aborted`, `failed`, `unknown-effect` (Implementation Decision 61 at
+`docs/plans/claude-code-first-harness/agentic-sdlc-product-spec.md:361-362`, stories 85 and 94 at
+spec:155 and spec:164) — to the three that survived in `skills/agentic-sdlc/SKILL.md`'s Reconcile
+step and `docs/evidence/waves/TEMPLATE.md`. The Consequences above name every other loss; this one
+went unnamed, and that silence is the defect this amendment repairs. The narrowing was also
+incoherent with what this record itself retained: the Relationships table keeps
+`mission-contract.py`'s non-waivable `unknown-or-partial-effect` stop condition, so the mission
+plane was required to stop on a state the wave plane could no longer record — a wave that died
+mid-fan-in had no honest word except `blocked`, indistinguishable from an ordinary
+safe-to-remediate block. `CONTEXT.md`'s "Wave outcome receipt" entry kept all six values
+throughout, so three surfaces gave three answers.
+
+Restored on 2026-08-23, as vocabulary only: `TEMPLATE.md` gains one wave-level `outcome` field
+closed at the six spec values, with the blank case failing closed (an absent outcome is a named
+gap, never an assumed `accepted`), and SKILL.md's Reconcile step states the six with the two
+load-bearing precedence rules from the deleted docstring — `unknown-effect` dominates and is never
+talked down, and an ended state overrides completion evidence. The third precedence rule (two
+sealed conductor records disagreeing between `failed` and `aborted` refuse to `blocked`) is
+deliberately not restored: it adjudicated between the sealed records of a crashed-and-resumed run,
+and that two-record protocol died with the stack this record deleted. Everything else here stands
+unchanged: the eight tools stay deleted, nothing becomes a gate leaf, and the ~120-line derivation
+script stays behind the reversal condition above.

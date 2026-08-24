@@ -169,8 +169,12 @@ Use this phase order unless the task is clearly smaller:
    `git show --stat <integration-commit>` — and verify each gate receipt's envelope and correlation
    graph with `tools/receipt-envelope.py verify`/`check-graph` before trusting it.
 7. Reconcile: turn findings into Seeds, fix blockers, run gates, and update docs. State the wave's
-   one terminal disposition — accepted, remediation-progress, or blocked — from the recorded
-   evidence in `docs/evidence/waves/<wave-id>.md`, never from worker summaries.
+   one terminal outcome — accepted, remediation-progress, blocked, aborted, failed, or
+   unknown-effect — from the recorded evidence in `docs/evidence/waves/<wave-id>.md`, never from
+   worker summaries. The first three are what the evidence shows; the last three are how the
+   execution ended, and only the conductor's own record carries them. `unknown-effect` dominates
+   and is never talked down by other evidence; an ended state overrides completion evidence; and
+   an absent outcome is a named gap that fails closed, never an assumed accepted.
 8. Ship: squash/rebase, sync Seeds, open PR or commit according to repo policy. Before proposing
    any commit, PR, or squash text, load `../change-writing/SKILL.md` to author it; this phase still
    owns the squash/rebase/PR operations and the human still authorizes publication.

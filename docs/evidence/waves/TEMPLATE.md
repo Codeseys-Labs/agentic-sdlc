@@ -7,11 +7,30 @@ worker summary; write `unknown` rather than a guess.
 
 | node | role | model_id | disposition | commit | reviewed-by |
 |---|---|---|---|---|---|
-| `ws-<slug>-<n>` | implementer | `<resolved exact model id>` | accepted \| remediated \| blocked | `<40-hex>` | `ws-<slug>-<m>` |
-| `ws-<slug>-<m>` | reviewer | `<resolved exact model id>` | accepted \| remediated \| blocked | — | — |
+| `ws-<slug>-<n>` | implementer | `<resolved exact model id>` | accepted \| approved-skip \| blocked | `<40-hex>` | `ws-<slug>-<m>` |
+| `ws-<slug>-<m>` | reviewer | `<resolved exact model id>` | accepted \| approved-skip \| blocked | — | — |
 
 `model_id` is the id read back from the adapter, not the requested tier. `reviewed-by` names a
 different node than its own row; a row reviewed by its author is unreviewed.
+
+The disposition column is node-plane vocabulary, closed at those three values and distinct from
+the wave-level outcome below: `accepted` means the reviewing node accepted the workstream —
+including after findings were fixed and re-reviewed; `approved-skip` names the approval that
+skipped the node; `blocked` states its reasons. Wave words (`remediation-progress`,
+`unknown-effect`, ...) never appear in this column.
+
+## Outcome
+
+- `outcome`: `<accepted | remediation-progress | blocked | aborted | failed | unknown-effect>`
+- `reasons`: `<named reasons, for every outcome other than accepted>`
+
+Exactly one of those six values (product spec Implementation Decision 61) — free text is not an
+outcome. The first three state what the recorded evidence shows; the last three state how the
+execution ended, which only the conductor's own record carries. `unknown-effect` dominates: no
+other record or artifact talks it down, and recovery follows it. An ended state overrides
+completion evidence — a wave whose gate passed is still `failed` if its execution ended failed.
+A blank or unfillable `outcome` is a named gap that fails closed: no reader (including a Release
+Validity derivation) ever reads an absent outcome as `accepted`.
 
 ## Operator approval
 
