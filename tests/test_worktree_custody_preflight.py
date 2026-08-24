@@ -124,7 +124,14 @@ class RepoCase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.repo = make_repo(Path(self._tmp.name))
+        # Resolved because the registration checks compare normalized TEXT against `git worktree
+        # list`, which reports git's own PHYSICAL spelling: on macOS `mkdtemp()` hands back
+        # `/var/folders/...` while git records `/private/var/...`, so an unresolved `--target`
+        # never matches its own registrations. The documented caller supplies
+        # `git rev-parse --show-toplevel`, which is already the physical spelling; the
+        # differently-spelled-path residual itself is accepted product doctrine
+        # (`_registration_reasons`' docstring), so the fix belongs to this fixture.
+        self.repo = make_repo(Path(self._tmp.name).resolve())
 
     def check(self, custody: str) -> tuple[dict[str, Any], int]:
         completed = run("--target", str(self.repo), "--custody", custody)

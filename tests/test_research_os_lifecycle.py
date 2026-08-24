@@ -973,6 +973,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                     )
                     self.assertTrue(owned)
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_a_settled_witness_discriminates_a_reused_inode(self) -> None:
         rel = "research/status.md"
         with self.simulated_birth_clock(0.5):
@@ -1296,6 +1297,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     installer.apply_install(root, files=files)
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_hard_killed_journal_recovers_and_is_idempotent_under_a_coarse_clock(
         self,
     ) -> None:
@@ -1427,6 +1429,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
             self.assertEqual(keys, {rel})
             self.assertTrue(targets)
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_a_failed_run_still_pays_the_settlement_it_deferred(self) -> None:
         """A failing run owes its deferred wait and still holds the lock, so it pays it.
 
