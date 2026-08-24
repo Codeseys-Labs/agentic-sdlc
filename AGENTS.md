@@ -57,6 +57,12 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
 - `skills/reviewing-overengineering/` — independent complexity/deletion audit for an immutable
   plan or diff. It applies deletion pressure plus a safety-preservation rebuttal and requires any
   remediated candidate to be reviewed again. Ponytail is optional, never a dependency.
+- `skills/sdlc-threat-model/` — STRIDE-shaped threat enumeration over one scoped subject (one
+  diff, one subsystem, or one trust boundary) bound as an immutable snapshot. It returns
+  classified, evidence-graded findings as seed-shaped recommendations for conductor capture;
+  risk disposition stays human-only (ADR-0026). Advisory and never a gate leaf: it attacks,
+  never fixes, never scans beyond the bound subject, consumes no CVE feeds, and files no seeds
+  itself.
 - `agents/` — eight global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
   critic, integrator, and documentarian — the read-only documentation worker that proposes
   evidence-linked doc refreshes for conductor capture) in Claude `.md` and Codex `.toml` forms,

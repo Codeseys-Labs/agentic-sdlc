@@ -1,7 +1,7 @@
 # Routing: lifecycle moments → skills
 
 One table, three duties. It is the routing card any session-priming surface condenses; it is
-the specification the twelve `skills/*/SKILL.md` descriptions each express — the same moments
+the specification the thirteen `skills/*/SKILL.md` descriptions each express — the same moments
 and symptoms, row by row; and it is the reviewer's checklist when a skill is added, renamed,
 or retired, because a row and a description drifting apart is silent rot. Rows are
 host-agnostic: they name lifecycle moments and observable symptoms, never one host's
@@ -22,6 +22,7 @@ improvising.
 | `model-tier-rightsizing` | before ANY agent or workflow dispatch that names a model or effort; before a `RuntimeAssignment` is written | null output, semantic uncertainty, throttling, missing readback, or unresolved transport identity mid-run |
 | `dispatching-exact-ocx-models` | the spawn boundary, after rightsizing has chosen an exact OCX route and before the worker starts | a generated `ocx-*` agent or namespaced provider ID whose post-run identity is unverified |
 | `reviewing-overengineering` | before a plan is accepted or a diff merged when its size or abstraction budget is questioned; re-review of any remediated candidate | "simplify", "cut this down", line-count targets, or deadline pressure entering a review |
+| `sdlc-threat-model` | a trust boundary being created, moved, or deleted during framing, planning, or review; before accepting a change that touches identity, credentials, untrusted input, or an authority boundary; re-review of any mitigated finding | a residual window named in prose with no threat record behind it; "is this safe?" entering a review; a deletion review reclassifying a control as presentation |
 | `repo-toolchain-gates` | setting up or auditing a repository's gate stack; wiring pre-commit/pre-push hooks or CI; running waves in fresh git worktrees | local lint green but CI red; worktree `config not trusted`; workers skipping hooks; a missing secrets gate |
 | `stacked-prs` | splitting dependent changes into separate, reviewable pull requests | a lower layer changed, merged, retargeted, or restacked while descendants stay open |
 | `stacked-prs-gh-cli` | the same moments as `stacked-prs`, tooling constrained to plain `gh` and git | a child needing a base change; a branch being rewritten; incomplete governance/check evidence |
@@ -39,6 +40,11 @@ Two rows are sequenced, not alternatives: `model-tier-rightsizing` chooses the t
 certifies the exact route; `dispatching-exact-ocx-models` then injects that route at the
 spawn boundary. A dispatch that reaches the second row without the first has skipped the
 router.
+
+Two rows share one moment from opposite directions: `reviewing-overengineering` and
+`sdlc-threat-model` both fire on a deletion review, the former defending existing controls
+against deletion pressure and the latter enumerating what threatens a boundary. Both
+descriptions name each other rather than merging.
 
 ## What this router never does
 

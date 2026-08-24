@@ -260,7 +260,7 @@ publication, PR mutation, merge, or deployment.
 Read only what is needed:
 
 - `references/sdlc-loop.md`: phase gates, backflow, done criteria.
-- `references/routing.md`: the moment→skill routing table for all twelve skills in this bundle — the lifecycle moments and symptoms each description expresses, the two deliberate exceptions, and the four named refusals (no sticky modes, no standing-order descriptions, no self-insertion into delegation, no global-configuration capture) that bound any priming surface.
+- `references/routing.md`: the moment→skill routing table for all thirteen skills in this bundle — the lifecycle moments and symptoms each description expresses, the two deliberate exceptions, and the four named refusals (no sticky modes, no standing-order descriptions, no self-insertion into delegation, no global-configuration capture) that bound any priming surface.
 - `references/seeds-worktrees.md`: Seeds queue, worktree wave, squash/rebase, PR handling, and
   the canonical in-workspace `.worktrees/<seed-id>-<slug>/` substrate rule.
 - `references/worktree-lifecycle.md`: one wave worktree end to end with the refusal and

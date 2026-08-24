@@ -7,7 +7,8 @@ description: >-
   control gets deleted as bloat. Also fires when a remediation claims simplification: a
   remediated candidate is re-reviewed, never waved through. Produces an independent
   complexity, deletion, or remediation audit with a safety-preservation rebuttal. Not for a
-  general correctness review or continuous style advice.
+  general correctness review or continuous style advice, and not for enumerating what
+  threatens a trust boundary (sdlc-threat-model).
 ---
 
 # Reviewing overengineering
