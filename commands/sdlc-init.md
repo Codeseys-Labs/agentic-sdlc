@@ -161,6 +161,15 @@ Approval of a diff is not authorization for any other effect.
      a certified process-scoped no-config gate, never permission to mutate user config.
    - Detect the forge/CI provider. If ambiguous, ask before creating a workflow. CI invokes
      the same `mise run check`; it does not reimplement the gate.
+   - Optional workflow enablement: if this repository wants the shipped wave scout discoverable
+     by name, run `mise run claude:workflows:activate -- --workflow sdlc-wave-scout --target
+     <repo>` from the distribution checkout. The manager copies the owned installed bytes into
+     the target's `.claude/workflows/` and refuses an absent, unowned, or drifted installed
+     source and an occupied foreign destination — treat any refusal as a stop to inspect, never
+     as permission to clear the path by hand. Enablement takes effect at the target's next
+     Claude Code session (the Workflow name registry is read at session start). The placed file
+     is repo-visible: include it in the activation commit only with the same explicit approval
+     as every other enumerated activation file.
 
 7. **Commit and evidence**
    - Re-run inventory and show exactly created, adopted, merged, skipped, and conflicted

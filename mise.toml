@@ -234,6 +234,21 @@ description = "Remove only the settings element recorded at hook activation (-- 
 run = "uv run --python 3.12.11 --script scripts/manage_claude_hooks.py deactivate"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_hooks.py deactivate"
 
+[tasks."claude:workflows:status"]
+description = "Report installed and enabled workflow state for one target repository (-- --target <repo>)"
+run = "uv run --python 3.12.11 --script scripts/manage_claude_workflows.py status"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_workflows.py status"
+
+[tasks."claude:workflows:activate"]
+description = "Copy one owned installed workflow into a target repo's .claude/workflows/ (-- --workflow <name> --target <repo>)"
+run = "uv run --python 3.12.11 --script scripts/manage_claude_workflows.py activate"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_workflows.py activate"
+
+[tasks."claude:workflows:deactivate"]
+description = "Remove only the byte-identical enabled workflow copy recorded at activation (-- --workflow <name> --target <repo>)"
+run = "uv run --python 3.12.11 --script scripts/manage_claude_workflows.py deactivate"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_workflows.py deactivate"
+
 [tasks."ocx:launch"]
 description = "Launch a second Claude Code process through the opencodex gateway"
 run = "scripts/opencodex-claude.sh launch"

@@ -80,7 +80,17 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   the same name plus a description (no variables, calls, spreads, or interpolation; only comments
   and blank lines before it); the validator checks both pairings, the lowercase-slug name, the
   meta literal's closed shape, module-free parseability, the absence of a static model/effort
-  pin, and the absence of user-specific paths.
+  pin, and the absence of user-specific paths. The home-plane collection is NOT a name-discovery
+  surface: the host's Workflow name registry reads only a project's own `.claude/workflows/`,
+  once at session start (live measurement 2026-08-24, recorded on agentic-sdlc-4d2b), so the
+  installed bytes stay undiscovered until the separately authorized per-repo
+  `claude:workflows:activate` (`scripts/manage_claude_workflows.py`) copies one owned installed
+  workflow into a target repository's `.claude/workflows/<name>.js` under a receipt — a copy,
+  never a symlink, so the enabled entry is self-contained repo bytes carrying no user-specific
+  path. Activate refuses an absent, unowned, or digest-drifted installed source and an occupied
+  foreign destination; deactivate removes only a copy still byte-identical to its receipt;
+  foreign and modified files are preserved and reported. Enablement takes effect at the target's
+  next session, and the manager's output says so.
 - `hooks/` — agent-CLI hook scripts (Claude Code first), installed as ordinary owned bytes into
   `<claude-home>/.claude/hooks/` by the same lifecycle and under the same preservation rules as
   workflows; Codex owns no record of them. That directory is not an auto-discovery surface —
@@ -276,6 +286,13 @@ model selection as policy.
   explicitly wire installed agent hooks into the operator's Claude settings, one hook and one
   owned array element at a time (`-- --hook <name>`, never "all"); never gate leaves, unreachable
   from `bundle:install`, and each activation is its own operation-specific settings mutation
+- `claude:workflows:status`, `claude:workflows:activate`, `claude:workflows:deactivate` —
+  inspect or explicitly enable installed workflows for one target repository, one owned copied
+  file at a time (`-- --workflow <name> --target <repo>`, never "all"); activation copies the
+  owned installed bytes into the target's `.claude/workflows/`, refuses foreign or drifted
+  state, and states that the change takes effect at the target's next session; never gate
+  leaves, unreachable from `bundle:install`, and each activation is its own operation-specific
+  per-repo mutation
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
 - `rightsize:evaluate` — explicit model-rightsizing discovery/plan/evaluate/render surface; never a
   gate leaf. `plan` makes no model calls. `evaluate` requires the plan's exact authorization digest
