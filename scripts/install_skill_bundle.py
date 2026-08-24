@@ -65,9 +65,10 @@ COLLECTION_FOR_KIND = {
     "agent": "agents",
     "command": "commands",
     "workflow": "workflows",
+    "hook": "hooks",
 }
 #: Kinds only Claude Code discovers. A Codex plane owns no record of them.
-CLAUDE_ONLY_KINDS = frozenset({"command", "workflow"})
+CLAUDE_ONLY_KINDS = frozenset({"command", "workflow", "hook"})
 #: The one kind published as a directory tree. Every other kind is a single file, so a record's kind
 #: decides the node type its destination must have and no record field has to carry it.
 DIRECTORY_KINDS = frozenset({"skill"})
@@ -310,6 +311,13 @@ def entry_collection(kind: Any) -> str | None:
     workflow never runs it, never enables it, never reloads a host, and never grants it any
     authority: enabling or executing the real host overlay is a separately authorized
     user-configuration effect. That is why the workflow kind needs no execution machinery here.
+
+    `hook` is an agent-CLI hook script that lands in `<claude-home>/.claude/hooks/`. The same
+    boundary holds, and for hooks it is load-bearing twice over: that directory is not a Claude
+    Code auto-discovery surface (hooks run only from settings configuration), so installing,
+    refreshing, adopting, or removing one never runs it and never enables it. Wiring one into
+    `settings.json` is the separately authorized `claude:hooks:activate` step
+    (`scripts/manage_claude_hooks.py`), which this lifecycle never reaches.
     """
     return COLLECTION_FOR_KIND.get(kind) if isinstance(kind, str) else None
 
@@ -604,6 +612,9 @@ def discover_entries(repo_root: Path) -> list[Entry]:
     # Workflow documents are Claude-only bytes; installing one never runs or enables it.
     for source in sorted((repo_root / "workflows").glob("*.js")):
         entries.append(Entry("claude", "workflow", source.name, source))
+    # Hook scripts are Claude-only bytes too; installing one never runs or enables it.
+    for source in sorted((repo_root / "hooks").glob("*.sh")):
+        entries.append(Entry("claude", "hook", source.name, source))
     return entries
 
 

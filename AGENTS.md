@@ -78,6 +78,23 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   pin. Adding one = adding `workflows/<name>.js` whose first line is `// workflow: <name>`; the
   validator checks that pairing, the lowercase-slug name, module-free parseability, the absence of
   a static model/effort pin, and the absence of user-specific paths.
+- `hooks/` — agent-CLI hook scripts (Claude Code first), installed as ordinary owned bytes into
+  `<claude-home>/.claude/hooks/` by the same lifecycle and under the same preservation rules as
+  workflows; Codex owns no record of them. That directory is not an auto-discovery surface —
+  hooks run only from settings configuration — so installing, refreshing, adopting, or removing
+  one never runs it and never enables it, and no `bundle:*` path ever touches `settings.json`.
+  Wiring one in is the separately authorized, operation-specific `claude:hooks:activate`
+  (`scripts/manage_claude_hooks.py`), whose ownership unit is ONE `hooks.<Event>` array element
+  recorded in a receipt: activate appends exactly that element and refuses an absent, unowned, or
+  digest-drifted hook file; deactivate removes only a deep-equal element; foreign and modified
+  elements are preserved and reported. There is deliberately no plugin-channel `hooks/hooks.json`,
+  because plugin hooks auto-enable when the plugin is enabled. The shipped
+  `session-start-routing-primer` is repo-gated: in a repository with a regular non-symlink
+  `.seeds/issues.jsonl` AND the `/sdlc-init` AGENTS.md marker it emits a fixed reviewed
+  situation→skill routing card (≤2 KiB, never interpolating repository content); anywhere else it
+  exits 0 with zero bytes of stdout, injecting nothing. Adding one = adding `hooks/<name>.sh`
+  whose line 2 is `# hook: <name>` plus `# hook-event:`/`# hook-matcher:` headers from the
+  validator's closed vocabulary, POSIX-sh-parseable, within the 4096-byte cap.
 
 ## Working on THIS repo
 
@@ -252,6 +269,10 @@ model selection as policy.
 - `operator-tools:install`, `operator-tools:status`, `operator-tools:retire-aliases`,
   `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
+- `claude:hooks:status`, `claude:hooks:activate`, `claude:hooks:deactivate` — inspect or
+  explicitly wire installed agent hooks into the operator's Claude settings, one hook and one
+  owned array element at a time (`-- --hook <name>`, never "all"); never gate leaves, unreachable
+  from `bundle:install`, and each activation is its own operation-specific settings mutation
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
 - `rightsize:evaluate` — explicit model-rightsizing discovery/plan/evaluate/render surface; never a
   gate leaf. `plan` makes no model calls. `evaluate` requires the plan's exact authorization digest

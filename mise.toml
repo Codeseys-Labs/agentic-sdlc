@@ -219,6 +219,21 @@ description = "Restore only the Claude Code statusline fields managed at activat
 run = "uv run --python 3.12.11 --script scripts/manage_claude_statusline.py deactivate"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_statusline.py deactivate"
 
+[tasks."claude:hooks:status"]
+description = "Inspect the installed Claude Code agent hooks and their settings wiring"
+run = "uv run --python 3.12.11 --script scripts/manage_claude_hooks.py status"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_hooks.py status"
+
+[tasks."claude:hooks:activate"]
+description = "Explicitly wire one owned installed agent hook into Claude settings (-- --hook <name>)"
+run = "uv run --python 3.12.11 --script scripts/manage_claude_hooks.py activate"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_hooks.py activate"
+
+[tasks."claude:hooks:deactivate"]
+description = "Remove only the settings element recorded at hook activation (-- --hook <name>)"
+run = "uv run --python 3.12.11 --script scripts/manage_claude_hooks.py deactivate"
+run_windows = "uv.exe run --python 3.12.11 --script scripts/manage_claude_hooks.py deactivate"
+
 [tasks."ocx:launch"]
 description = "Launch a second Claude Code process through the opencodex gateway"
 run = "scripts/opencodex-claude.sh launch"

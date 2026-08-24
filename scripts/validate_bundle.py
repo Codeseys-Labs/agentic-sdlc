@@ -81,6 +81,21 @@ WORKFLOW_PARSE_PROBE = (
     "try { new AsyncFunction(fs.readFileSync(process.argv[1], 'utf8')); }"
     "catch (error) { process.stderr.write(String((error && error.message) || error)); process.exit(1); }"
 )
+# The agent-hook script's authored shape mirrors the workflow header pairing, shifted one line
+# down because line 1 of a shell script is its shebang. Lines 3 and 4 declare the settings stanza
+# the separately authorized activator builds — a CLOSED event/matcher vocabulary, so shipping a
+# hook this bundle's activator cannot wire is a gate failure, not a runtime surprise.
+HOOK_SHEBANG = "#!/bin/sh"
+HOOK_HEADER_PREFIX = "# hook: "
+HOOK_EVENT_PREFIX = "# hook-event: "
+HOOK_MATCHER_PREFIX = "# hook-matcher: "
+HOOK_EVENT_MATCHERS = {
+    "SessionStart": frozenset({"startup", "resume", "clear", "compact", "fork"}),
+}
+# Self-imposed context-injection budget: the platform documents no size limit for SessionStart
+# stdout, so the bundle imposes one on the whole file. A hook that wants to emit more must
+# justify raising this cap in review.
+HOOK_MAX_BYTES = 4096
 REQUIRED_TASKS = {
     "bundle:install",
     "bundle:status",
@@ -99,6 +114,9 @@ REQUIRED_TASKS = {
     "claude:statusline:status",
     "claude:statusline:activate",
     "claude:statusline:deactivate",
+    "claude:hooks:status",
+    "claude:hooks:activate",
+    "claude:hooks:deactivate",
     "libraries:list",
     "libraries:install",
     "libraries:status",
@@ -574,6 +592,82 @@ def validate_workflows(root: Path, result: Validation) -> None:
         if node:
             completed = subprocess.run(
                 [node, "-e", WORKFLOW_PARSE_PROBE, str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode:
+                # Control characters in a child's message would otherwise be replayed straight
+                # into the rendered error line.
+                detail = completed.stderr.strip().encode("unicode_escape").decode("ascii")
+                result.error(f"{label} does not parse: {detail}")
+
+
+def validate_hooks(root: Path, result: Validation) -> None:
+    """Check the shape of every agent-hook script the bundle ships.
+
+    These are the shape rules for a document the lifecycle owns as BYTES: it must be discoverable
+    by the installer, self-declare the name it will be installed under, declare an event and
+    matcher set the activator's closed vocabulary accepts, parse as POSIX sh, name no
+    user-specific path, and fit the self-imposed context-injection budget. Nothing here executes
+    a hook or asserts that a host will accept one; wiring one into settings stays a separately
+    authorized user-configuration effect. No rule here claims to prove a shell script safe —
+    what bounds this surface is that every shipped hook is reviewed bundle bytes and the operator
+    explicitly enables each one.
+    """
+    directory = root / "hooks"
+    if not directory.is_dir():
+        return
+    sh = shutil.which("sh")
+    for path in sorted(directory.iterdir()):
+        label = path.relative_to(root).as_posix()
+        if path.is_symlink() or not path.is_file():
+            result.error(f"{label}: hooks/ holds regular hook scripts only")
+            continue
+        if path.suffix != ".sh":
+            # The installer discovers `hooks/*.sh`. Anything else here would ship in the payload
+            # and never be installed — dead weight that reads as a shipped entry. This is also
+            # what structurally refuses a plugin-channel `hooks.json` in this tree.
+            result.error(f"{label}: hook scripts must use the .sh suffix")
+            continue
+        stem = path.stem
+        if not WORKFLOW_STEM_PATTERN.fullmatch(stem):
+            result.error(f"{label}: hook name must be a lowercase slug")
+        try:
+            content = path.read_bytes()
+            text = content.decode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            result.error(f"{label}: hook script is unreadable: {exc}")
+            continue
+        if len(content) > HOOK_MAX_BYTES:
+            result.error(f"{label}: hook script exceeds the {HOOK_MAX_BYTES}-byte context-injection budget")
+        lines = [line.rstrip("\r") for line in text.split("\n")]
+        if not lines or lines[0] != HOOK_SHEBANG:
+            result.error(f"{label}: line 1 must be exactly '{HOOK_SHEBANG}'")
+        if len(lines) < 2 or not lines[1].startswith(HOOK_HEADER_PREFIX):
+            result.error(f"{label}: missing a '{HOOK_HEADER_PREFIX}<name>' header on line 2")
+        elif lines[1][len(HOOK_HEADER_PREFIX) :].strip() != stem:
+            result.error(f"{label}: declared hook name does not match the file name")
+        if len(lines) < 3 or not lines[2].startswith(HOOK_EVENT_PREFIX):
+            result.error(f"{label}: missing a '{HOOK_EVENT_PREFIX}<event>' header on line 3")
+            event = None
+        else:
+            event = lines[2][len(HOOK_EVENT_PREFIX) :].strip()
+            if event not in HOOK_EVENT_MATCHERS:
+                result.error(f"{label}: unknown hook-event '{event}'")
+                event = None
+        if len(lines) < 4 or not lines[3].startswith(HOOK_MATCHER_PREFIX):
+            result.error(f"{label}: missing a '{HOOK_MATCHER_PREFIX}<matchers>' header on line 4")
+        elif event is not None:
+            tokens = [token.strip() for token in lines[3][len(HOOK_MATCHER_PREFIX) :].split("|")]
+            for token in tokens:
+                if token not in HOOK_EVENT_MATCHERS[event]:
+                    result.error(f"{label}: unknown hook-matcher token '{token}'")
+        if WORKFLOW_USER_PATH_PATTERN.search(text):
+            result.error(f"{label}: user-specific paths are forbidden")
+        if sh:
+            completed = subprocess.run(
+                [sh, "-n", str(path)],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -1370,7 +1464,7 @@ def validate_release_candidate_policy(root: Path, result: Validation) -> None:
             ):
                 result.error(f"{relative}: payload allowlist must be sorted, closed, and non-overlapping")
             required_files = {"LICENSE", "NOTICE"}
-            required_trees = {"agents", "assets", "commands", "policy", "scripts", "skills", "workflows"}
+            required_trees = {"agents", "assets", "commands", "hooks", "policy", "scripts", "skills", "workflows"}
             if not required_files.issubset(files) or not required_trees.issubset(trees):
                 result.error(f"{relative}: minimal authored payload roots are missing")
 
@@ -1985,6 +2079,7 @@ def validate(root: Path) -> Validation:
     # host-undiagnosable failure for an operator.
     validate_skills(root, result)
     validate_workflows(root, result)
+    validate_hooks(root, result)
     validate_agents(root, result)
     validate_python(root, result)
     validate_scripts(root, result)
