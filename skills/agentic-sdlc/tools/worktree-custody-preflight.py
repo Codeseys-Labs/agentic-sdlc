@@ -189,9 +189,14 @@ class _Statx(ctypes.Structure):
     ]
 
 
-_LIBC = ctypes.CDLL(None, use_errno=True)
-_LIBC.statx.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(_Statx)]
-_LIBC.statx.restype = ctypes.c_int
+# `statx` is a Linux-only symbol, so it is bound by lookup rather than attribute access: a plain
+# `_LIBC.statx` raises at IMPORT time on a libc without the symbol (dlsym failure), which made the
+# module unimportable on Darwin and unreachable for `_mount_id_fd`'s own named refusal below
+# (agentic-sdlc-fb05). `getattr(..., None)` is the same binding `install_research_os.py` uses.
+_LIBC_STATX = getattr(ctypes.CDLL(None, use_errno=True), "statx", None)
+if _LIBC_STATX is not None:
+    _LIBC_STATX.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(_Statx)]
+    _LIBC_STATX.restype = ctypes.c_int
 
 
 def _mount_id_fd(fd: int) -> int:
@@ -204,8 +209,10 @@ def _mount_id_fd(fd: int) -> int:
     """
     if sys.platform != "linux":
         raise MountUnsupported("this host is not Linux, so statx mount IDs are unavailable")
+    if _LIBC_STATX is None:
+        raise MountUnsupported("this libc exposes no statx symbol, so statx mount IDs are unavailable")
     info = _Statx()
-    result = _LIBC.statx(fd, ctypes.c_char_p(b""), _AT_EMPTY_PATH, _STATX_BASIC_STATS | _STATX_MNT_ID, ctypes.byref(info))
+    result = _LIBC_STATX(fd, ctypes.c_char_p(b""), _AT_EMPTY_PATH, _STATX_BASIC_STATS | _STATX_MNT_ID, ctypes.byref(info))
     if result != 0 or not (info.stx_mask & _STATX_MNT_ID):
         raise MountUnsupported("statx mount IDs are unavailable on this host or filesystem")
     return int(info.stx_mnt_id)

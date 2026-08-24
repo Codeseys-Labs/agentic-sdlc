@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from scripts import provision_mermaid_linux as provisioner
@@ -148,23 +149,40 @@ class ProvisionExitSplitTests(unittest.TestCase):
 
         return run
 
-    def provision_exit(self, root: Path) -> tuple[int, str]:
+    def provision_exit(
+        self, root: Path, *, observed_platform: str = "linux", observed_machine: str = "x86_64"
+    ) -> tuple[int, str]:
+        """Drive `main` under an INJECTED platform observation, certified by default.
+
+        What this class proves is the 3-versus-4 effect-boundary split, which sits BEHIND the
+        provisioner's Linux-x64 gate; injecting the certified pair (strictly stronger than
+        skipping -- the split stays proved on every host) keeps that gate from answering first on
+        a host it would refuse. The gate itself keeps its own explicit darwin case below, which
+        passes its refused platform through this same parameter. `create=True` because `os.uname`
+        does not exist on Windows, where the gate's `sys.platform` clause short-circuits anyway.
+        """
         buffer = io.StringIO()
         with contextlib.redirect_stderr(buffer):
             with mock.patch.object(provisioner, "ROOT", root):
-                code = provisioner.main([])
+                with mock.patch.object(provisioner.sys, "platform", observed_platform):
+                    with mock.patch.object(
+                        provisioner.os,
+                        "uname",
+                        create=True,
+                        return_value=SimpleNamespace(machine=observed_machine),
+                    ):
+                        code = provisioner.main([])
         return code, buffer.getvalue()
 
     def test_non_linux_host_refuses_at_three_before_reading_the_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = self.tree(temp)
-            with mock.patch.object(provisioner.sys, "platform", "darwin"):
-                with mock.patch.object(
-                    provisioner.renderer,
-                    "load_policy",
-                    side_effect=AssertionError("the platform refusal comes first"),
-                ) as policy:
-                    code, stderr = self.provision_exit(root)
+            with mock.patch.object(
+                provisioner.renderer,
+                "load_policy",
+                side_effect=AssertionError("the platform refusal comes first"),
+            ) as policy:
+                code, stderr = self.provision_exit(root, observed_platform="darwin")
 
             self.assertEqual(code, provisioner.EXIT_REFUSED)
             self.assertIn("Linux x64 only", stderr)

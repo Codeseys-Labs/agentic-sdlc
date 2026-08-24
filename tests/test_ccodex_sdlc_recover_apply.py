@@ -16,6 +16,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,23 @@ MALFORMED_DIGESTS = (
     " " + "5" * 63,
     "0x" + "5" * 62,
 )
+
+
+#: The two spellings `recover.admit_platform` refuses with, re-expressed for the skip's
+#: positive-control pairing below rather than imported as one opaque constant.
+PLATFORM_REFUSAL_FRAGMENTS = (
+    "resumes an activated Linux plane and is certified only there",
+    "resumes a linux-x64 plane",
+)
+
+
+def uncertified_platform() -> str | None:
+    """The PRODUCT's own certified-platform predicate over the REAL host, or ``None`` when certified."""
+    try:
+        recover.admit_platform()
+    except recover.Refusal as refused:
+        return str(refused)
+    return None
 
 
 def tree_hash(*roots: Path) -> str:
@@ -593,6 +611,44 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
 
 
 class RecoverApplyExecutionTests(RecoverApplyHarness):
+    """Every test here drives the REAL dispatcher end to end, so no observation this harness could
+    inject reaches `admit_platform` across the process boundary. Off the certified platform the
+    child refuses at exit 3 BEFORE any effect -- the product being correct -- so that refusal is
+    reported as a NAMED skip instead of a failed effect claim, exactly the shape
+    `test_lifecycle_exit_conformance.payload_host_or_skip` documents. The skip requires all three
+    of: the child exited exactly 3; `uncertified_platform()` -- the PRODUCT's own predicate over
+    the real host -- refuses this host too; and ONE stderr line carries both a platform-refusal
+    phrase AND this host's own observation quoted the way the product quotes it. A refusal about a
+    platform this host is not buys no skip and stays a failure, which is the positive control that
+    keeps this unreachable on the certified runner."""
+
+    def run_dispatcher(
+        self, dispatcher: Path, environment: dict[str, str], *arguments: str
+    ) -> subprocess.CompletedProcess[str]:
+        completed = super().run_dispatcher(dispatcher, environment, *arguments)
+        return self.payload_host_or_skip(
+            completed, f"`ccodex {' '.join(arguments[:2])}` through the installed dispatcher"
+        )
+
+    def payload_host_or_skip(
+        self, completed: subprocess.CompletedProcess[str], driven: str
+    ) -> subprocess.CompletedProcess[str]:
+        if completed.returncode != 3 or uncertified_platform() is None:
+            return completed
+        named = tuple(
+            line
+            for line in completed.stderr.splitlines()
+            if any(fragment in line for fragment in PLATFORM_REFUSAL_FRAGMENTS)
+            and any(f"'{observed}'" in line for observed in (platform.system(), platform.machine()))
+        )
+        if not named:
+            return completed
+        raise unittest.SkipTest(
+            f"{driven} needs a host the Linux-certified recover payload can run on; the product's"
+            f" own certified-platform predicate refuses this host, and the child refused it by name"
+            f" before any effect: {named[0].strip()}"
+        )
+
     def test_the_exact_digest_resumes_a_planted_interrupted_transaction_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

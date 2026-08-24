@@ -102,6 +102,7 @@ class MermaidRendererTests(unittest.TestCase):
         self.assertIn("render_mermaid_linux.py <definition> <final-svg>", stderr)
         self.assertIn("error:", stderr)
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_two_argument_call_is_unaffected_by_the_new_help_path(self) -> None:
         # Positive control for SP-9: the ordinary two-positional path must still reach past the
         # arity/help gate into the real renderer logic, proving --help was added without
@@ -140,6 +141,7 @@ class MermaidRendererTests(unittest.TestCase):
             self.assertEqual(code, renderer.EXIT_UNSUPPORTED)
             self.assertFalse(destination.exists())
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_source_config_directive_is_rejected_before_rendering(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "hostile.mmd"
@@ -266,7 +268,12 @@ class MermaidRendererTests(unittest.TestCase):
             executable.touch()
             (root / "raw.svg").write_bytes(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
             (root / "final.svg").write_bytes(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
-            with mock.patch.object(renderer, "ROOT", repo), mock.patch.object(renderer, "_runtime_receipt", return_value={"node_executable": "/bin/true"}), mock.patch.object(renderer, "_cache_digest", return_value=policy["browser"]["cache_tree_sha256"]), mock.patch.object(renderer, "_sha256", return_value=policy["browser"]["executable_sha256"]), mock.patch.object(renderer, "resolve_node_bin_shim", return_value=Path("/bin/true")), mock.patch.object(renderer, "write_owner_configs", return_value=(root / "mermaid.json", root / "puppeteer.json")), mock.patch.object(renderer, "_run_child") as child, mock.patch.object(renderer.time, "monotonic", side_effect=[10.0, 10.0, 12.0, 12.0]):
+            # A fixture file, not the host's `/bin/true`: `_render` only asks `is_file()` of the
+            # verified tools (`_run_child` is mocked, so nothing executes), and macOS has no
+            # `/bin/true` -- reading the host's filesystem layout is what failed this test there.
+            tool_stand_in = base / "verified-tool"
+            tool_stand_in.touch()
+            with mock.patch.object(renderer, "ROOT", repo), mock.patch.object(renderer, "_runtime_receipt", return_value={"node_executable": str(tool_stand_in)}), mock.patch.object(renderer, "_cache_digest", return_value=policy["browser"]["cache_tree_sha256"]), mock.patch.object(renderer, "_sha256", return_value=policy["browser"]["executable_sha256"]), mock.patch.object(renderer, "resolve_node_bin_shim", return_value=tool_stand_in), mock.patch.object(renderer, "write_owner_configs", return_value=(root / "mermaid.json", root / "puppeteer.json")), mock.patch.object(renderer, "_run_child") as child, mock.patch.object(renderer.time, "monotonic", side_effect=[10.0, 10.0, 12.0, 12.0]):
                 renderer._render(b"flowchart TD\\nA-->B\\n", root, policy, 20.0)
             # The unit test must not fabricate a runtime directory; on an already-provisioned
             # host a real one may legitimately exist, so only the creation is asserted.

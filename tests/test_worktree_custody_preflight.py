@@ -34,6 +34,34 @@ wcp = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = wcp
 _spec.loader.exec_module(wcp)
 
+def _mount_ids_answerable() -> bool:
+    """Whether THIS host answers statx mount IDs, asked through the tool's OWN seam.
+
+    A CAPABILITY probe, not a platform sniff: `_mount_id_fd` is exactly what every real
+    preflight run consults, so if a non-Linux host ever grows an answer this returns True and
+    the skips below stop firing. Where the host cannot answer, the product refuses
+    mount-containment BY NAME (`this host cannot verify mount containment`) on every real run,
+    so no unpatched run can reach a `clear` disposition or an `unevaluated` mount verdict.
+    """
+    try:
+        fd = os.open(os.getcwd(), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        wcp._mount_id_fd(fd)
+        return True
+    except wcp.MountUnsupported:
+        return False
+    finally:
+        os.close(fd)
+
+
+MOUNT_IDS_ANSWERABLE = _mount_ids_answerable()
+MOUNT_IDS_SKIP_REASON = (
+    "this host does not answer statx mount IDs, so mount-containment refuses by name on every "
+    "unpatched run and no real preflight can reach the verdict this test asserts"
+)
+
 #: An ALLOWLIST, not an inheritance -- mirrors the retired planning-snapshot tests' own
 #: `PASSTHROUGH_ENV`/`constructed_environment`, re-expressed rather than imported per this
 #: repository's own cross-test-module convention.
@@ -134,6 +162,7 @@ class DecisionNineTests(RepoCase):
         self.assertEqual(completed.returncode, wcp.EXIT_INPUT)
         self.assertIn(b"absolute", completed.stderr)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_a_clear_run_exits_zero(self) -> None:
         result, code = self.check(".worktrees/seed-slug")
         self.assertEqual(code, wcp.EXIT_OK)
@@ -275,6 +304,7 @@ class PathIntegrityTests(RepoCase):
         result, _ = self.check(".worktrees/brand-new-slug")
         self.assertEqual(statuses(result)["path-integrity"], wcp.MET)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_positive_control_a_preexisting_empty_directory_passes_path_integrity(self) -> None:
         # `references/worktree-lifecycle.md`'s verified fact 5: `git worktree add` tolerates an
         # existing EMPTY directory. This preflight must not refuse the case Git itself accepts.
@@ -284,6 +314,7 @@ class PathIntegrityTests(RepoCase):
         self.assertEqual(result["disposition"], "clear")
         self.assertEqual(code, wcp.EXIT_OK)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_gating_registration_checks_are_unevaluated_after_a_symlink_refusal(self) -> None:
         os.symlink("/tmp", self.repo / ".worktrees" / "evil2")
         result, _ = self.check(".worktrees/evil2/child")
@@ -313,6 +344,7 @@ class DestinationVacancyTests(RepoCase):
         self.assertIn("not empty", reasons(result)["destination-vacancy"])
         self.assertIn(".gitkeep", reasons(result)["destination-vacancy"])
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_positive_control_a_preexisting_empty_directory_is_vacant(self) -> None:
         empty = self.repo / ".worktrees" / "empty"
         empty.mkdir()
@@ -321,12 +353,14 @@ class DestinationVacancyTests(RepoCase):
         self.assertEqual(result["disposition"], "clear")
         self.assertEqual(code, wcp.EXIT_OK)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_positive_control_an_absent_destination_is_vacant(self) -> None:
         result, code = self.check(".worktrees/never-created")
         self.assertEqual(statuses(result)["destination-vacancy"], wcp.MET)
         self.assertEqual(result["disposition"], "clear")
         self.assertEqual(code, wcp.EXIT_OK)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_a_real_git_worktree_add_succeeds_after_a_clear_verdict_with_no_stranded_branch(
         self,
     ) -> None:
@@ -379,6 +413,7 @@ class MountContainmentTests(RepoCase):
         super().setUp()
         (self.repo / ".worktrees").mkdir()
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_a_component_on_a_foreign_mount_is_refused(self) -> None:
         original = wcp._mount_id_fd
         calls = {"n": 0}
@@ -402,6 +437,7 @@ class MountContainmentTests(RepoCase):
         self.assertIn("mount boundary", found["mount-containment"]["reason"])
         self.assertEqual(result["disposition"], "refused")
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_positive_control_the_unpatched_seam_reports_met(self) -> None:
         result = wcp.run_preflight(self.repo, ".worktrees/mnt-child")
         found = {entry["slug"]: entry["status"] for entry in result["checks"]}
@@ -427,6 +463,7 @@ class MountContainmentTests(RepoCase):
         # path-integrity does not depend on statx at all, and must still be decided.
         self.assertEqual(found["path-integrity"]["status"], wcp.MET)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_an_unanswerable_child_mount_id_is_refused_by_name_not_silently_passed(self) -> None:
         """Distinct from the ROOT-unanswerable case above: here the ROOT answers normally (so
         `mount_supported` is True and the walk actually reaches a child's own statx call), and
@@ -469,6 +506,7 @@ class MountContainmentTests(RepoCase):
         # exists and is empty, so this refusal is provably about mount containment alone.
         self.assertEqual(found["destination-vacancy"]["status"], wcp.MET)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_a_dev_mismatch_alone_is_refused_even_when_the_mount_id_is_unpatched(self) -> None:
         """Pins the containment comparison to BOTH `st_dev` and the mount id: a mutant that
         dropped `st_dev` from the `(child_dev, child_mount) != (...)` tuple and compared only the
@@ -517,6 +555,7 @@ class RegistrationOccupiedTests(RepoCase):
         # The companion check is a DIFFERENT question and must not be conflated with this one.
         self.assertEqual(statuses(result)["registration-drifted"], wcp.MET)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_positive_control_an_unregistered_path_passes(self) -> None:
         result, code = self.check(".worktrees/never-registered")
         self.assertEqual(statuses(result)["registration-occupied"], wcp.MET)
@@ -540,6 +579,7 @@ class RegistrationDriftedTests(RepoCase):
         # The companion check is a DIFFERENT question: the directory is gone, so it is not "active".
         self.assertEqual(statuses(result)["registration-occupied"], wcp.MET)
 
+    @unittest.skipUnless(MOUNT_IDS_ANSWERABLE, MOUNT_IDS_SKIP_REASON)
     def test_positive_control_a_pruned_registration_passes(self) -> None:
         wt = self.repo / ".worktrees" / "pruned"
         git("-C", str(self.repo), "worktree", "add", "-q", str(wt), "-b", "br-pruned")

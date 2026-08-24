@@ -407,7 +407,12 @@ class TemporaryRoot(unittest.TestCase):
     def setUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp.cleanup)
-        self.root = Path(self._temp.name)
+        # Resolved because the product admits only a fully PHYSICAL data home: on macOS `$TMPDIR`
+        # lives under `/var/folders/...` and `/var` is a symlink to `/private/var`, so the
+        # unresolved spelling trips `_require_physical_directory`'s redirected-component refusal
+        # on every fixture. The check under test is unaffected -- fixtures that plant their own
+        # symlinks do so UNDER this resolved root.
+        self.root = Path(self._temp.name).resolve()
 
     def fixture(self, **kwargs: Any) -> Fixture:
         directory = Path(tempfile.mkdtemp(dir=self.root))

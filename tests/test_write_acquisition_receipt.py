@@ -83,7 +83,11 @@ class ShimFixture(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        base = Path(self.temporary.name)
+        # Resolved so the layout the consumer derives from this data home matches the physical
+        # candidate-root path the producer records: on macOS the unresolved `/var/folders/...`
+        # spelling differs from the recorded `/private/var/...` one and `admit_candidate_root`
+        # refuses the pair as an out-of-layout payload.
+        base = Path(self.temporary.name).resolve()
         self.state_home = base / "state"
         self.data_home = base / "data"
         self.home = base / "operator-home"

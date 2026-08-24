@@ -731,7 +731,10 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_dispatcher_launches_claude_in_the_callers_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            # Resolved because the assertion compares against the CHILD's self-observed working
+            # directory, which is physical: on macOS `mkdtemp()` hands back the `/var/folders/...`
+            # spelling while the stub reports `/private/var/...`.
+            root = Path(temp).resolve()
             config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)
@@ -804,7 +807,9 @@ class OperatorToolsTests(unittest.TestCase):
 
     def test_python_route_uses_the_install_bound_uv_in_the_callers_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            # Resolved for the same reason as the dispatcher-workspace test above: the bound-uv
+            # stub reports its physical working directory.
+            root = Path(temp).resolve()
             config = self.config(root)
             operator_tools.install(config)
             environment = self.stub_environment(root, config.bin_dir)

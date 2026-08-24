@@ -105,7 +105,39 @@ class LauncherFixture:
         self.temporary.cleanup()
 
     def _run(self, argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True, check=True)
+        return subprocess.run(
+            argv, cwd=cwd, env=self._fixture_git_environment() if env is None else env,
+            text=True, capture_output=True, check=True,
+        )
+
+    def _fixture_git_environment(self) -> dict[str, str]:
+        """Hermetic environment for the FIXTURE's own git calls (agentic-sdlc-83b4).
+
+        The distribution's cleanliness claims are BYTE claims -- the launcher hashes a working
+        file with `hash-object --no-filters` against its index blob -- so an ambient config-level
+        `core.autocrlf`/eol/filter conversion applied while this fixture checks out or restores a
+        file fabricates exactly the drift the launcher refuses, and the refusal then lands on the
+        runner's git config instead of on anything under test (the CI runner's git 2.52.0 turned
+        that into a deterministic red the local git never showed). Every ambient `GIT_*` variable
+        is dropped, both config channels are closed, `HOME` is pinned, and identity comes from
+        env so no commit consults a config this fixture did not write. Deliberate git-config
+        hostility stays possible: a test that wants it passes its own `env`, as
+        `test_bootstrap_git_probes_ignore_repository_global_system_config_and_hooks` does.
+        """
+        home = self.root / "fixture-git-home"
+        home.mkdir(exist_ok=True)
+        scrubbed = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        return scrubbed | {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "Fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        }
 
     @staticmethod
     def _quote(value: str) -> str:
@@ -170,9 +202,17 @@ class LauncherFixture:
         (hostile_home / "ambient-mise-config-used").write_text("hostile\n", encoding="utf-8")
         hostile_npmrc = self.root / "hostile.npmrc"
         hostile_npmrc.write_text("registry=https://hostile.invalid/\n", encoding="utf-8")
+        # The hostility this environment models is DELIBERATE and deterministic (npm/mise/Bun
+        # axes below); the runner's own git config is neither, so both git config channels are
+        # closed here (agentic-sdlc-83b4/f8cc). The git-config-hostility axis stays covered by
+        # `test_bootstrap_git_probes_ignore_repository_global_system_config_and_hooks`, which
+        # re-opens these keys with a hostile config it wrote itself.
         return os.environ | {
             "HOME": str(hostile_home),
             "PATH": str(self.bin) + os.pathsep + os.defpath,
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
             "XDG_STATE_HOME": str(self.state),
             "BUN_OPTIONS": "--inspect=127.0.0.1:9229",
             "BUN_INSPECT_PRELOAD": "hostile",

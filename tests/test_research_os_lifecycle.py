@@ -807,6 +807,20 @@ class HyperResearchDoctrineTests(unittest.TestCase):
                 self.assertEqual(violations, [], "\n".join(violations))
 
 
+#: The simulated coarse birth clock binds `installer._linux_statx`, which is the installer's
+#: birth-witness source only where its OWN dispatch selects it (`_platform_system() == "Linux"`
+#: in `_path_identity`/`_fd_identity`); on Darwin the witness is `st_birthtime` and on Windows
+#: `st_ctime_ns`, so the simulation provably intercepts nothing there and a test whose CLAIM
+#: requires forced coarseness would silently assert against the host's real clock instead.
+#: Product-dispatch predicate, not an ambient platform sniff: it moves if the product's does.
+STATX_IS_THE_BIRTH_SOURCE = installer._platform_system() == "Linux"
+STATX_SKIP_REASON = (
+    "the installer sources birth witnesses through the _linux_statx seam only when its own "
+    "dispatch selects Linux; on this host the simulated coarse clock cannot bind, so this "
+    "claim about forced coarseness is untestable here"
+)
+
+
 class BirthWitnessSettlementTests(unittest.TestCase):
     """This installer records a `stat-v2` witness and re-verifies it milliseconds later, which is
     exactly the window a coarse birth clock leaves open: CI run 32554149554 (kernel 6.6.141,
@@ -939,6 +953,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
             ):
                 yield
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_same_quantum_witness_cannot_discriminate_a_reused_inode(self) -> None:
         """Positive control: with settlement removed the recorded witness is reproducible."""
         rel = "research/status.md"
@@ -1011,6 +1026,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                     self.assertEqual(installer.apply_install(root, files={})[rel], "removed")
                     self.assertFalse(target.exists())
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_recording_refuses_when_the_birth_clock_cannot_discriminate(self) -> None:
         rel = "research/status.md"
         with self.simulated_birth_clock(None):
@@ -1039,6 +1055,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                     self.assertEqual(actions[rel], "created")
                     self.assertEqual(list(root.iterdir()), [])
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_settle_refuses_within_its_bound_and_probes_once_per_round(self) -> None:
         self.assertGreater(installer.BIRTH_SETTLE_TIMEOUT_SECONDS, 0)
         self.assertLessEqual(installer.BIRTH_SETTLE_TIMEOUT_SECONDS, 5.0)
@@ -1120,6 +1137,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                         )
             self.assertGreater(probes, 0)
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_wait_count_does_not_grow_with_the_scaffold_file_count(self) -> None:
         """The wait budget must be independent of the file count -- the point of deferring.
 
@@ -1160,6 +1178,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
         # And the total, inline root settle included, stays constant too.
         self.assertEqual(len({total for _, _, total in observed}), 1, observed)
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_an_interrupted_run_leaves_a_witness_a_later_run_will_not_trust(self) -> None:
         """Crash safety: durable after a state write, never settled, never later trusted.
 
@@ -1324,6 +1343,7 @@ class BirthWitnessSettlementTests(unittest.TestCase):
                     json.loads(state_path.read_text(encoding="utf-8")), settled
                 )
 
+    @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_an_unprovable_inherited_marker_is_left_durable(self) -> None:
         """The degenerate host converges on nothing, which is still the fail-closed answer.
 

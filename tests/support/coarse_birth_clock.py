@@ -295,7 +295,16 @@ _SEAMS: tuple[tuple[Path, str, Callable[..., Any]], ...] = (
 
 
 def loaded_seams() -> list[tuple[Any, str, Callable[..., Any]]]:
-    """Every already-imported copy of a product module that owns a birth-timestamp seam."""
+    """Every already-imported copy of a product module that owns a LIVE birth-timestamp seam.
+
+    Presence of the attribute is not enough: `_linux_statx` exists as an attribute on every
+    platform but answers only where the installer's own dispatch consults it (Linux with btime
+    support). A seam that cannot report a birth timestamp for a file it just created would be
+    patched and then fail the collapse proof with a diagnosis about the HOST ("cannot host a
+    birth-witness reproduction") when the truth is the documented no-seam refusal -- and
+    `--allow-unpatched` could not opt out, because the seam list was non-empty. So an inert seam
+    is treated as NOT LOADED here, and the refusal below names it.
+    """
     found: dict[int, tuple[Any, str, Callable[..., Any]]] = {}
     for module in list(sys.modules.values()):
         origin = getattr(module, "__file__", None)
@@ -309,6 +318,14 @@ def loaded_seams() -> list[tuple[Any, str, Callable[..., Any]]]:
             if resolved == script and hasattr(module, attribute):
                 found[id(module)] = (module, attribute, factory)
     return list(found.values())
+
+
+def _seam_reports_birth(module: Any, attribute: str) -> bool:
+    """Whether this seam answers a birth timestamp for a file it just created, on THIS host."""
+    with tempfile.TemporaryDirectory(prefix="coarse-birth-live-") as directory:
+        probe = Path(directory) / "probe"
+        probe.write_bytes(b"")
+        return getattr(module, attribute)(os.fsencode(probe)) is not None
 
 
 def _prove_collapse(module: Any, attribute: str, *, attempts: int = 1) -> str:
@@ -383,11 +400,23 @@ def forced_coarse_birth_clock(
     """
     grid = QuantumGrid(max(1, int(quantum_seconds * 10**9)), anchor=anchor)
     with contextlib.ExitStack() as stack:
-        seams = loaded_seams()
+        candidates = loaded_seams()
+        seams = [entry for entry in candidates if _seam_reports_birth(entry[0], entry[1])]
+        inert = [
+            f"{module.__name__}.{attribute}"
+            for module, attribute, _ in candidates
+            if (module, attribute) not in {(m, a) for m, a, _ in seams}
+        ]
         names = [f"{module.__name__}.{attribute}" for module, attribute, _ in seams]
         if not seams and require_seam:
+            inert_note = (
+                f" A loaded seam answered no birth timestamp on this host and was not patched:"
+                f" {', '.join(inert)}." if inert else ""
+            )
             raise RuntimeError(
-                "no birth-timestamp seam is loaded, so this run would force nothing. Load a test "
+                "no birth-timestamp seam is loaded, so this run would force nothing."
+                + inert_note
+                + " Load a test "
                 f"module that imports {RESEARCH_OS_INSTALLER.name}, or pass --allow-unpatched to "
                 "run an unrelated target under a clock that is not actually forced."
             )

@@ -62,6 +62,15 @@ EXCLUDED_SURFACES = [
     "config",
     "queue mutation",
 ]
+#: A CAPABILITY skip, not a platform one: the observer reads instruction files and Git metadata
+#: only through `read_noatime`, which refuses BY NAME (`no-atime-unavailable`) wherever
+#: `os.O_NOATIME` does not exist (every Darwin host today). A test asserting a read-dependent
+#: verdict -- adopt, merge, or a READY preview over real files -- therefore cannot reach it there;
+#: if the capability ever arrives on such a host, these tests run again unchanged.
+O_NOATIME_SKIP_REASON = (
+    "os.O_NOATIME is unavailable, so every observer read refuses by name as no-atime-unavailable "
+    "and the read-dependent verdict this test asserts is unreachable on this host"
+)
 
 
 def read_bytes_without_atime(path: Path) -> bytes:
@@ -190,6 +199,7 @@ class OfflineObserverRegressionTests(unittest.TestCase):
                 {"id": "git-baseline", "action": "refuse", "reason": "invalid-git-metadata"},
             )
 
+    @unittest.skipUnless(hasattr(os, "O_NOATIME"), O_NOATIME_SKIP_REASON)
     def test_adopts_valid_linked_worktree_gitfile(self) -> None:
         with tempfile.TemporaryDirectory(prefix="offline-observer-worktree-") as temporary:
             root = Path(temporary)
@@ -217,6 +227,7 @@ class OfflineObserverRegressionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
             self.assertEqual(item(plan, "git-baseline")["action"], "adopt")
 
+    @unittest.skipUnless(hasattr(os, "O_NOATIME"), O_NOATIME_SKIP_REASON)
     def test_adopts_only_canonical_instruction_content_and_claude_preamble(self) -> None:
         with tempfile.TemporaryDirectory(prefix="offline-observer-instructions-") as temporary:
             target = Path(temporary)
@@ -232,6 +243,7 @@ class OfflineObserverRegressionTests(unittest.TestCase):
             self.assertEqual(item(plan, "instructions:AGENTS.md")["action"], "adopt")
             self.assertEqual(item(plan, "instructions:CLAUDE.md")["action"], "adopt")
 
+    @unittest.skipUnless(hasattr(os, "O_NOATIME"), O_NOATIME_SKIP_REASON)
     def test_marks_stale_bodies_and_wrong_claude_preamble_for_merge(self) -> None:
         with tempfile.TemporaryDirectory(prefix="offline-observer-stale-") as temporary:
             target = Path(temporary)
@@ -271,6 +283,7 @@ class OfflineObserverRegressionTests(unittest.TestCase):
 
 @unittest.skipIf(GIT is None, "Git is required for the brownfield acceptance fixture")
 class OfflineObserverReleaseCandidateTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "O_NOATIME"), O_NOATIME_SKIP_REASON)
     def test_copy_install_status_observe_and_uninstall_is_deterministic_and_read_only(self) -> None:
         self.assertTrue(Path(sys.executable).is_absolute())
         with tempfile.TemporaryDirectory(prefix="offline-observer-rc-") as temporary:
@@ -500,12 +513,12 @@ class OfflineObserverExitClassTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="offline-observer-classes-") as temporary:
             root = Path(temporary)
 
+            # An EMPTY target is READY through pure `create` verdicts, which need no reads at all,
+            # so this distinctness claim holds on every host -- including one without
+            # `os.O_NOATIME`, where a canonical-file fixture's adopt verdicts are unreachable
+            # (those live in the regression tests above, behind their named capability skip).
             ready = root / "ready"
             ready.mkdir()
-            (ready / "AGENTS.md").write_text(marked_content(CANONICAL_AGENTS_BODY), encoding="utf-8")
-            (ready / "CLAUDE.md").write_text(
-                marked_content(CANONICAL_CLAUDE_BODY, preamble="@AGENTS.md\n"), encoding="utf-8"
-            )
 
             not_ready = root / "not-ready"
             not_ready.mkdir()
@@ -552,9 +565,16 @@ class OfflineObserverExitClassTests(unittest.TestCase):
             target.mkdir()
             (target / ".git").write_text("gitdir: /definitely/missing\n", encoding="utf-8")
 
-            before = snapshot_tree(target, include_atime=True)
+            # The atime axis is captured only where the HARNESS can read without perturbing it:
+            # without `os.O_NOATIME`, `read_bytes_without_atime` degrades to a plain read and the
+            # `before` snapshot's own hashing bumps the very atimes `after` then records -- a
+            # self-inflicted diff about the harness, not the observer. Writes (content, mode,
+            # mtime, structure) stay asserted everywhere; the atime-preservation proof itself is
+            # `test_instruction_reads_preserve_access_times`, behind its named capability skip.
+            capture_atime = hasattr(os, "O_NOATIME")
+            before = snapshot_tree(target, include_atime=capture_atime)
             result = observe(OBSERVER, target, root)
-            after = snapshot_tree(target, include_atime=True)
+            after = snapshot_tree(target, include_atime=capture_atime)
 
             self.assertEqual(result.returncode, EXIT_NOT_READY, result.stderr.decode("utf-8", "replace"))
             self.assertEqual(after, before)
