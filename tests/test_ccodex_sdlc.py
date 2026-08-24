@@ -35,6 +35,12 @@ sys.modules[validator_spec.name] = validator
 validator_spec.loader.exec_module(validator)
 
 
+@unittest.skipIf(
+    os.name == "nt",
+    "the ccodex sdlc lifecycle writes through the POSIX-only durable-write plane "
+    "(os.open O_DIRECTORY fsync barriers) behind a bash dispatcher; native Windows fails "
+    "closed by name at the CLI",
+)
 class CcodexSdlcTests(unittest.TestCase):
     def make_shadow_reader(self, root: Path) -> Path:
         shadow = root / "shadow-checkout"

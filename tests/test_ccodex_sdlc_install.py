@@ -401,6 +401,17 @@ def sealed_receipt(fixture: Fixture) -> dict[str, Any]:
     return json.loads(paths[0].read_text(encoding="utf-8"))
 
 
+# Applied to every suite below whose fixtures publish through the shipped durable-write
+# plane. The three suites left undecorated (ReExpressedContractsTest, GuardInteractionTest,
+# ConfigSeamTest) compare constants, source, and config seams without touching it.
+WINDOWS_SKIP = unittest.skipIf(
+    os.name == "nt",
+    "the ccodex sdlc lifecycle writes through the POSIX-only durable-write plane "
+    "(os.open O_DIRECTORY fsync barriers) and pins exact path identity that Windows 8.3 "
+    "short-name roots break; native Windows fails closed by name at the CLI",
+)
+
+
 class TemporaryRoot(unittest.TestCase):
     """One temporary directory per test, so no test can observe another's plane."""
 
@@ -482,6 +493,7 @@ class ReExpressedContractsTest(TemporaryRoot):
         self.assertIn("transactional_create", code)
 
 
+@WINDOWS_SKIP
 class EndToEndInstallTest(TemporaryRoot):
     def test_install_copies_claude_entries_and_seals_one_receipt(self) -> None:
         fixture = self.fixture()
@@ -600,6 +612,7 @@ class EndToEndInstallTest(TemporaryRoot):
         self.assertEqual(1, len(fixture.activation_receipts()))
 
 
+@WINDOWS_SKIP
 class UninstallStatusSymmetryTest(TemporaryRoot):
     """A real install then a real uninstall leaves zero owned-entry conflicts (agentic-sdlc-42ec).
 
@@ -662,6 +675,7 @@ class UninstallStatusSymmetryTest(TemporaryRoot):
         self.assertIsNone(state["pending"])
 
 
+@WINDOWS_SKIP
 class PreservationTest(TemporaryRoot):
     def test_foreign_entry_is_preserved_and_named(self) -> None:
         fixture = self.fixture()
@@ -743,6 +757,7 @@ class PreservationTest(TemporaryRoot):
         self.assertEqual(0, call_main(fixture).code)
 
 
+@WINDOWS_SKIP
 class CompatibilityTest(TemporaryRoot):
     def contract_with_incompatible(self, version: str) -> dict[str, Any]:
         contract = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
@@ -831,6 +846,7 @@ class CompatibilityTest(TemporaryRoot):
         self.assertEqual(0, call_main(self.fixture(host_version="2.1.200")).code)
 
 
+@WINDOWS_SKIP
 class PlatformTest(TemporaryRoot):
     """Drives ``admit_platform`` through the injected ``Config.observed_system``/``observed_machine``
     seam rather than mocking ``platform.system``/``platform.machine``, so the refusal is exercised
@@ -921,6 +937,7 @@ class PlatformTest(TemporaryRoot):
             self.assertFalse(fixture.destination("skills/alpha-skill").exists())
 
 
+@WINDOWS_SKIP
 class AdmissionTest(TemporaryRoot):
     def test_absent_and_ambiguous_acquisition_are_different_refusals(self) -> None:
         fixture = self.fixture()
@@ -1059,6 +1076,7 @@ class AdmissionTest(TemporaryRoot):
         self.assertEqual(0, call_main(self.fixture()).code)
 
 
+@WINDOWS_SKIP
 class InterruptedTransactionTest(TemporaryRoot):
     def test_failure_after_one_effect_reports_partial_never_complete(self) -> None:
         fixture = self.fixture()
@@ -1146,6 +1164,7 @@ class InterruptedTransactionTest(TemporaryRoot):
         self.assertTrue(control.pointer.exists())
 
 
+@WINDOWS_SKIP
 class RecordedUnknownsTest(TemporaryRoot):
     def test_an_undigestable_entry_is_named_and_never_reported_complete(self) -> None:
         """An observation that could not be made is not a completion, and it is NAMED, not dropped."""
@@ -1245,6 +1264,7 @@ def acquire_second_candidate(fixture: Fixture) -> Path:
     return candidate_root
 
 
+@WINDOWS_SKIP
 class InstallThenUpdateTest(TemporaryRoot):
     """The two verbs meet at ONE document, and this test drives both of them for real.
 
@@ -1373,6 +1393,7 @@ class InstallThenUpdateTest(TemporaryRoot):
         self.assertIn("state-ambiguous", codes)
 
 
+@WINDOWS_SKIP
 class DispatchContractTest(TemporaryRoot):
     def test_main_returns_int_exit_classes_and_never_bool(self) -> None:
         cases = (

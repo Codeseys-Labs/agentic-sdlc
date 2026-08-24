@@ -16,7 +16,11 @@ BASH = shutil.which("bash")
 SENTINEL = "OCXTESTSENTINELTOKEN"
 
 
-@unittest.skipUnless(BASH, "Bash is required for bootstrap script tests")
+@unittest.skipIf(
+    BASH is None or os.name == "nt",
+    "bash launcher fixtures require a POSIX bash; Git Bash's MSYS path/argv conversion"
+    " rewrites argv and paths (and one fixture dirname is an illegal NTFS filename)",
+)
 class BootstrapAgenticSdlcTests(unittest.TestCase):
     def run_script(self, *args: str, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

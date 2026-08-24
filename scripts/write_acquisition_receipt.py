@@ -31,7 +31,9 @@ acquisition engine, so:
 Both are re-derivable by any reader holding the root, which the fabricated digests they replace
 were not.  ``installed_at`` is bookkeeping, not evidence.
 
-THE WRITE.  Create-only (``O_EXCL | O_NOFOLLOW``), fsynced, then READ BACK and compared in full
+THE WRITE.  Create-only (``O_EXCL``, plus ``O_NOFOLLOW`` where the platform defines it -- with
+``O_CREAT | O_EXCL`` a path naming a symlink, even a dangling one, already fails ``EEXIST``),
+fsynced, then READ BACK and compared in full
 before this run reports success -- seed ``agentic-sdlc-ba1a``'s remedy, carried into the
 replacement rather than deleted with its subject.  A readback that disagrees is exit 4 and the
 file is left in place: removing it would be a second effect, and a receipt this run cannot vouch
@@ -267,7 +269,12 @@ def write_receipt(
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{digest}.json"
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        # O_NOFOLLOW does not exist on Windows, so it is applied only where the platform
+        # defines it. It is reinforcement, not the control: with O_CREAT | O_EXCL the open
+        # already fails EEXIST when the path names a symlink, even a dangling one, and this
+        # receipt's documented threat model is drift detection, not a same-UID TOCTOU racer.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags, 0o644)
     except FileExistsError as exc:
         raise Refusal(
             f"{path} already exists; this producer never replaces a sealed receipt, so remove the"

@@ -22,6 +22,12 @@ sys.modules[spec.name] = operator_tools
 spec.loader.exec_module(operator_tools)
 
 
+@unittest.skipIf(
+    os.name == "nt",
+    "the operator-tools lifecycle writes through the POSIX-only durable-write plane "
+    "(sync_directory fsyncs directories opened with os.open O_DIRECTORY); native Windows "
+    "fails closed by name in main()",
+)
 class OperatorToolsTests(unittest.TestCase):
     def config(self, root: Path, *, dry_run: bool = False) -> object:
         runtime = root / "runtime"
@@ -1259,6 +1265,11 @@ class OperatorToolsTests(unittest.TestCase):
             self.assertFalse(config.state_path.exists())
 
 
+@unittest.skipIf(
+    os.name == "nt",
+    "the dispatcher pins a POSIX bash interpreter (/usr/bin/bash, /bin/bash); native Windows "
+    "resolves neither and fails closed by name in main()",
+)
 class DispatcherInterpreterTests(unittest.TestCase):
     """The dispatcher's shebang is a resolved pin, not a literal path.
 
@@ -1459,6 +1470,55 @@ class DispatcherInterpreterTests(unittest.TestCase):
                 operator_tools.desired_files(config)
 
             self.assertIn("unsubstituted @PINNED_placeholder", str(raised.exception))
+
+
+class WindowsRefusalOrderingTests(unittest.TestCase):
+    """main()'s Windows refusal is the plane's ONLY native-Windows surface, so it must not
+    depend on anything a Windows host may lack.
+
+    The ordering test is deliberately NOT under the module's os.name skips: the platform is
+    injected by patching ``os.name``, so it proves the refusal ordering on every host that runs
+    this suite. A scrubbed Windows CI environment carries no USERPROFILE, which makes
+    ``Path.home()`` raise RuntimeError -- and an eager argparse default evaluated it before the
+    named refusal could print, so ``Path.home`` is forced to raise here to pin that ordering.
+    """
+
+    REFUSAL = "operator tools are currently supported on Unix, WSL, and macOS only"
+
+    def test_the_nt_refusal_precedes_argument_parsing_and_home_resolution(self) -> None:
+        stderr = io.StringIO()
+        with mock.patch.object(os, "name", "nt"), mock.patch.object(
+            Path, "home", side_effect=RuntimeError("Could not determine home directory.")
+        ), contextlib.redirect_stderr(stderr):
+            code = operator_tools.main(["status"])
+        self.assertEqual(code, 2)
+        self.assertIn(self.REFUSAL, stderr.getvalue())
+
+    @unittest.skipIf(
+        os.name == "nt",
+        "the positive control asserts the POSIX branch, which this host really does not have",
+    )
+    def test_positive_control_a_posix_host_reaches_the_lifecycle_not_the_nt_refusal(self) -> None:
+        # Same entrypoint, no os.name injection: the refusal must be conditioned on the platform,
+        # not on the argv shape the negative test used.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stderr = io.StringIO()
+            stdout = io.StringIO()
+            with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                code = operator_tools.main(
+                    [
+                        "status",
+                        "--home",
+                        str(root / "home"),
+                        "--bin-dir",
+                        str(root / "home" / ".local" / "bin"),
+                        "--state-root",
+                        str(root / "state"),
+                    ]
+                )
+            self.assertNotIn(self.REFUSAL, stderr.getvalue())
+            self.assertNotIn(self.REFUSAL, stdout.getvalue())
 
 
 if __name__ == "__main__":

@@ -799,7 +799,10 @@ class WorkflowPayloadTests(unittest.TestCase):
     def test_the_plugin_tree_exposes_the_workflows_collection(self) -> None:
         link = ROOT / "plugin" / "workflows"
         self.assertTrue(link.is_symlink(), "the plugin tree links its component collections")
-        self.assertEqual(os.readlink(link), "../workflows")
+        # The checked-in blob's target is `../workflows`; Windows renders the reparse-point
+        # target with backslashes (`..\\workflows`), the same relative payload, so compare the
+        # normalized form rather than one platform's rendering.
+        self.assertEqual(Path(os.readlink(link)).as_posix(), "../workflows")
         self.assertTrue(link.is_dir())
 
     def test_the_shipped_workflow_refuses_before_dispatch_without_an_assignment(self) -> None:

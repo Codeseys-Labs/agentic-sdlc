@@ -13,7 +13,11 @@ SCRIPT = Path(__file__).parents[1] / "scripts" / "opencodex-claude.sh"
 BASH = shutil.which("bash")
 
 
-@unittest.skipUnless(BASH, "bash is required")
+@unittest.skipIf(
+    BASH is None or os.name == "nt",
+    "bash launcher fixtures require a POSIX bash; Git Bash's MSYS path/argv conversion"
+    " rewrites argv and paths",
+)
 class OpenCodexClaudeTests(unittest.TestCase):
     def run_launcher(
         self,

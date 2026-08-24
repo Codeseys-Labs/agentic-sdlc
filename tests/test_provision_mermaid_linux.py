@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,16 @@ from types import SimpleNamespace
 from unittest import mock
 
 from scripts import provision_mermaid_linux as provisioner
+
+
+# Mirrors tests/test_mermaid_renderer.py: off Linux x64 the provisioner refuses first
+# ("mermaid-provision: Linux x64 only", exit 3) before any later refusal or post-boundary
+# failure can be reached, so a test asserting one of those later exits or stderr messages
+# must name that host requirement instead of failing.
+LINUX_X64 = sys.platform == "linux" and os.uname().machine in {"x86_64", "amd64"}
+LINUX_X64_SKIP_REASON = (
+    "the provisioner is certified for Linux x64 only; other hosts refuse at 3 first"
+)
 
 
 class ProvisionMermaidLinuxArgvTests(unittest.TestCase):
@@ -189,6 +200,7 @@ class ProvisionExitSplitTests(unittest.TestCase):
             policy.assert_not_called()
             self.assert_untouched(root)
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_absent_mise_refuses_at_three_without_touching_the_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = self.tree(temp)
@@ -199,6 +211,7 @@ class ProvisionExitSplitTests(unittest.TestCase):
             self.assertIn("mise is required", stderr)
             self.assert_untouched(root)
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_unavailable_certified_tool_refuses_at_three_without_touching_the_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = self.tree(temp)
@@ -211,6 +224,7 @@ class ProvisionExitSplitTests(unittest.TestCase):
             self.assertIn("is unavailable", stderr)
             self.assert_untouched(root)
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_unsafe_certified_tool_path_refuses_at_three_without_touching_the_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = self.tree(temp)
@@ -223,6 +237,7 @@ class ProvisionExitSplitTests(unittest.TestCase):
             self.assertIn("path is unsafe", stderr)
             self.assert_untouched(root)
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_missing_pinned_executables_refuse_at_three_and_keep_node_modules(self) -> None:
         # This is the test the reordering exists for: before the mkdir/rmtree block moved below
         # tool resolution, this refusal had already created `.mermaid-runtime` and deleted
@@ -240,6 +255,7 @@ class ProvisionExitSplitTests(unittest.TestCase):
             self.assertIn("pinned mise Node/npm executables are unavailable", stderr)
             self.assert_untouched(root)
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_npm_ci_failure_after_the_boundary_exits_four(self) -> None:
         # Positive control for the four refusals above: an honest post-`npm ci` failure must
         # NOT be reported as a clean pre-effect refusal, and the effect it claims really
@@ -264,6 +280,7 @@ class ProvisionExitSplitTests(unittest.TestCase):
             self.assertFalse((root / "node_modules").exists())
             self.assertFalse((root / ".mermaid-runtime" / "runtime-receipt.json").exists())
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_browser_hash_mismatch_after_the_download_exits_four(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = self.tree(temp)
@@ -283,6 +300,7 @@ class ProvisionExitSplitTests(unittest.TestCase):
             self.assertIn("browser hash or cache digest mismatch", stderr)
             self.assertFalse((root / ".mermaid-runtime" / "runtime-receipt.json").exists())
 
+    @unittest.skipUnless(LINUX_X64, LINUX_X64_SKIP_REASON)
     def test_unsafe_npm_shim_after_the_download_exits_four_not_one(self) -> None:
         # `resolve_node_bin_shim` raises the renderer's error type, not the provisioner's. It is
         # still a post-download refusal, so it must land on 4 rather than escaping as a

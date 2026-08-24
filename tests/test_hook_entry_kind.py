@@ -243,7 +243,9 @@ class HookValidatorTests(unittest.TestCase):
                 (root / "elsewhere.sh").write_text(text, encoding="utf-8")
                 path.symlink_to(root / "elsewhere.sh")
             else:
-                path.write_text(text, encoding="utf-8")
+                # newline="\n" pins the on-disk bytes: the byte budget is over LF-shipped hook
+                # files, and Windows' default translation would inflate every \n to \r\n.
+                path.write_text(text, encoding="utf-8", newline="\n")
             result = validator.Validation()
             validator.validate_hooks(root, result)
             return result.errors

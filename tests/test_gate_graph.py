@@ -25,6 +25,27 @@ SECRETS_RUN = "uv run --python 3.12.11 --script scripts/secrets_scan.py"
 SECRETS_RUN_WINDOWS = "uv.exe run --python 3.12.11 --script scripts/secrets_scan.py"
 
 
+def retype_directory_symlinks(root: Path) -> None:
+    """Restore the source tree's symlink types after a copytree on Windows.
+
+    `shutil.copytree(symlinks=True)` recreates every symlink without `target_is_directory`, so
+    on Windows a copied directory link (the `plugin/*` entries) lands as a FILE-type link, and
+    every later stat through it answers WinError 5 instead of a kind. POSIX symlinks carry no
+    type, so this is a no-op everywhere else.
+    """
+    if os.name != "nt":
+        return
+    for directory, directories, filenames in os.walk(root):
+        for name in (*directories, *filenames):
+            link = Path(directory) / name
+            if not link.is_symlink():
+                continue
+            target = os.readlink(str(link))
+            if (Path(directory) / target).is_dir():
+                link.unlink()
+                link.symlink_to(target, target_is_directory=True)
+
+
 class GateGraphTests(unittest.TestCase):
     # Toolchain drift is caught by the mise.toml <-> mise.lock cross-check plus the lock's own
     # byte pin, not by a Python restatement of `[tools]` (removed 2026-08-22, seed
@@ -259,6 +280,7 @@ class GateGraphTests(unittest.TestCase):
             symlinks=True,
             ignore=shutil.ignore_patterns(".git", "node_modules", ".mermaid-runtime", "__pycache__"),
         )
+        retype_directory_symlinks(repo)
         return repo
 
     def run_validator(self, repo: Path) -> subprocess.CompletedProcess[str]:
@@ -313,6 +335,30 @@ class GateGraphTests(unittest.TestCase):
     def test_current_gate_graph_is_valid(self) -> None:
         result = self.run_validator(ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipIf(
+        os.name == "nt" or os.geteuid() == 0,
+        "the unstatable-path fixture needs POSIX permission semantics and a non-root euid",
+    )
+    def test_an_unstatable_path_does_not_crash_the_validator(self) -> None:
+        """An entry the walk can list but not stat must be skipped like an unreadable one.
+
+        Windows CI produced this shape organically (a file-typed symlink to a directory answers
+        WinError 5 on stat); a read-permission-only directory produces the same EACCES-on-stat on
+        POSIX, so the guard has a positive control on every platform the suite runs on.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            repo = self.copied_repo(temp)
+            trap = repo / "operator-notes"
+            trap.mkdir()
+            (trap / "unstatable.bin").write_bytes(b"kind unknown\n")
+            trap.chmod(0o400)
+            try:
+                result = self.run_validator(repo)
+            finally:
+                trap.chmod(0o700)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_toolchain_config_mutations_fail(self) -> None:
         executed = 0

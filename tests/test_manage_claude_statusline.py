@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shlex
+import stat
 import sys
 import tempfile
 import unittest
@@ -20,6 +22,13 @@ spec.loader.exec_module(manage)
 import install_operator_tools as operator_tools
 
 
+@unittest.skipIf(
+    os.name == "nt",
+    "every fixture here installs operator tools through the POSIX-only durable-write plane"
+    " (install_operator_tools.install -> lifecycle_lock -> sync_directory, whose os.open of a"
+    " directory Windows refuses), and native-Windows statusline activation is uncertified and"
+    " fails closed (AGENTS.md)",
+)
 class ManageClaudeStatuslineTests(unittest.TestCase):
     def setup_environment(self, root: Path) -> tuple[object, Path, Path]:
         home = root / "home"; bin_dir = home / ".local" / "bin"; state = root / "state"
@@ -322,6 +331,43 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
             )
             self.assertEqual(code, manage.EXIT_REFUSED)
             self.assertNotEqual(code, manage.EXIT_OK)
+
+
+@unittest.skipIf(
+    os.name == "nt",
+    "the simulation removes os.fchmod, which native Windows already lacks",
+)
+class SettingsIoAtomicBytesTests(unittest.TestCase):
+    """settings_io unit level: this module is imported as the shared settings_io library by
+    manage_claude_hooks.py and manage_claude_workflows.py, whose planes ARE Windows-supported,
+    so atomic_bytes must complete without os.fchmod and without leaking its mkstemp staging
+    file (the leaked descriptor is what made Windows unlink the temp with WinError 32 and
+    killed 29 hooks/workflows tests at TemporaryDirectory cleanup)."""
+
+    def staging_siblings(self, path: Path) -> list[Path]:
+        return sorted(path.parent.glob(f".{path.name}.*"))
+
+    def test_atomic_bytes_completes_without_fchmod_and_leaks_no_staging_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "settings.json"
+            saved = os.fchmod
+            delattr(os, "fchmod")
+            try:
+                manage.atomic_bytes(target, b"{}\n", 0o600)
+            finally:
+                os.fchmod = saved  # ALWAYS restore: other tests and code rely on it.
+            self.assertEqual(target.read_bytes(), b"{}\n")
+            self.assertEqual(self.staging_siblings(target), [])
+
+    def test_atomic_bytes_applies_the_mode_when_fchmod_is_present(self) -> None:
+        # Positive control for the guard: with os.fchmod present the requested mode is
+        # applied, so the hasattr guard skips only the chmod, never the write. 0o640 is
+        # deliberately NOT mkstemp's 0o600 default, so this stat can only pass through fchmod.
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "settings.json"
+            manage.atomic_bytes(target, b"{}\n", 0o640)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o640)
+            self.assertEqual(self.staging_siblings(target), [])
 
 
 if __name__ == "__main__":

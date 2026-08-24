@@ -34,6 +34,16 @@ SANDBOX_SKIP_REASON = f"the pinned sandbox binary {SANDBOX_BINARY} is unavailabl
 LINUX_X64 = sys.platform == "linux" and os.uname().machine in {"x86_64", "amd64"}
 LINUX_X64_SKIP_REASON = "the renderer is certified for Linux x64 only; other hosts return 3 first"
 
+# Narrower than LINUX_X64 on purpose: the fixtures below assert POSIX facts directly --
+# 0o700/0o600 mode bits, `os.getuid` ownership, npm's symlink `.bin` shims -- which Windows
+# cannot represent (npm writes .cmd shims there and `os.getuid` does not exist), while any
+# POSIX host (the macOS notes in this file are load-bearing) still exercises them for real.
+POSIX_SEMANTICS = os.name != "nt"
+POSIX_SEMANTICS_SKIP_REASON = (
+    "owner-private mode bits, os.getuid ownership, and npm symlink shims are POSIX semantics"
+    " with no Windows equivalent"
+)
+
 
 
 class MermaidRendererTests(unittest.TestCase):
@@ -180,6 +190,7 @@ class MermaidRendererTests(unittest.TestCase):
                 renderer.publish_final(destination, (FIXTURES / "forbidden-active.svg").read_bytes(), renderer.load_policy(POLICY_PATH))
             self.assertEqual(destination.read_bytes(), before)
 
+    @unittest.skipUnless(POSIX_SEMANTICS, POSIX_SEMANTICS_SKIP_REASON)
     def test_generated_configs_have_only_policy_keys(self) -> None:
         policy = renderer.load_policy(POLICY_PATH)
         with tempfile.TemporaryDirectory() as temp:
@@ -192,6 +203,7 @@ class MermaidRendererTests(unittest.TestCase):
             self.assertEqual(oct(mermaid.stat().st_mode & 0o777), "0o600")
             self.assertEqual(oct(puppeteer.stat().st_mode & 0o777), "0o600")
 
+    @unittest.skipUnless(POSIX_SEMANTICS, POSIX_SEMANTICS_SKIP_REASON)
     def test_node_bin_resolver_allows_npm_shim_only_when_target_stays_in_node_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             # RESOLVED ONCE, HERE, because `resolve_node_bin_shim` returns `shim.resolve(strict=True)`.
@@ -244,6 +256,7 @@ class MermaidRendererTests(unittest.TestCase):
         with mock.patch.object(renderer.time, "monotonic", return_value=13.0), self.assertRaises(renderer.RendererError):
             renderer._remaining_timeout(13.0, 5, "render")
 
+    @unittest.skipUnless(POSIX_SEMANTICS, POSIX_SEMANTICS_SKIP_REASON)
     def test_renderer_passes_absolute_child_deadlines(self) -> None:
         # renderer.ROOT is redirected at a throwaway repo so the fake browser cache never
         # lands in the working tree: a unit test must not leave a provisioned-looking runtime

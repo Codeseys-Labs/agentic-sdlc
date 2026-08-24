@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -50,7 +51,11 @@ COMPLETION = wire(
 EMPTY_COMPLETION = wire({"content": [], "model": "muse-spark-1.2", "stop_reason": "max_tokens"})
 
 
-@unittest.skipUnless(BASH, "bash is required")
+@unittest.skipIf(
+    BASH is None or os.name == "nt",
+    "bash launcher fixtures require a POSIX bash; Git Bash's MSYS path/argv conversion"
+    " rewrites argv and paths",
+)
 class MuseClaudeTests(unittest.TestCase):
     def run_launcher(
         self,
@@ -816,7 +821,11 @@ class MuseClaudeTests(unittest.TestCase):
         self.assertNotIn("planted-bedrock-bearer-not-a-credential", result.stdout + result.stderr)
 
 
-@unittest.skipUnless(BASH, "bash is required")
+@unittest.skipIf(
+    BASH is None or os.name == "nt",
+    "bash launcher fixtures require a POSIX bash; Git Bash's MSYS path/argv conversion"
+    " rewrites argv and paths",
+)
 class SharedEnvironmentPolicyTests(unittest.TestCase):
     """The shared helper itself (assets/claude/session-inheritance.sh).
 

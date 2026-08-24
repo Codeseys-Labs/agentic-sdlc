@@ -236,14 +236,22 @@ def render_selected(
 def read_target(path: Path) -> tuple[dict[str, Any], bytes | None]:
     """The target's prestate and bytes, opened so every non-regular node is refused at `EXIT_INPUT`.
 
-    `O_NOFOLLOW` refuses a planted symlink. `O_NONBLOCK` keeps a planted FIFO from blocking the open
-    until a writer appears, so the refusal below is reached instead of the process hanging. The raw
-    descriptor is `fstat`ed before it becomes a file object, because wrapping a directory descriptor
-    raises `IsADirectoryError` outside this function's refusal contract; the descriptor is closed on
-    that refusal path.
+    `O_NOFOLLOW` refuses a planted symlink where the platform defines it; where it does not
+    (Windows), the explicit `islink` check below carries the same refusal, so the semantics
+    survive the missing flag. `O_NONBLOCK` keeps a planted FIFO from blocking the open until a
+    writer appears, so the refusal below is reached instead of the process hanging -- a POSIX-only
+    concern, since Windows has no FIFOs reachable through this path, so the flag is likewise
+    applied only where it exists. The raw descriptor is `fstat`ed before it becomes a file object,
+    because wrapping a directory descriptor raises `IsADirectoryError` outside this function's
+    refusal contract; the descriptor is closed on that refusal path.
     """
+    if not hasattr(os, "O_NOFOLLOW") and os.path.islink(path):
+        raise GeneratorError(f"refusing target {path}: it is a symbolic link")
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
     except FileNotFoundError:
         return {"kind": "absent", "identity": None}, None
     except OSError as exc:
@@ -269,7 +277,10 @@ def write_target(path: Path, content: bytes) -> None:
 
     `os.replace` renames rather than opens, so it cannot be redirected through a symlink planted at
     the destination: the link itself is replaced. The directory is fsynced so the rename survives a
-    crash as either the old bytes or the new ones, never a truncated file.
+    crash as either the old bytes or the new ones, never a truncated file -- on POSIX. Windows
+    cannot open a directory via `os.open` at all, so there is no stdlib parent-directory durability
+    barrier there and the publication remains process-crash recoverable, not power-loss durable
+    (the `scripts/install_skill_bundle.py` `fsync_directory` precedent).
 
     A manifest entry may name a nested path, so the parent is checked before `mkstemp` is asked to
     create a temporary inside it: a directory this tool does not create is a refusal that names that
@@ -288,7 +299,11 @@ def write_target(path: Path, content: bytes) -> None:
     except BaseException:
         os.unlink(temporary)
         raise
-    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    if os.name == "nt":
+        # No parent-directory durability barrier exists on Windows: the docstring above
+        # records that the publication is process-crash recoverable, not power-loss durable.
+        return
+    parent = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(parent)
     finally:

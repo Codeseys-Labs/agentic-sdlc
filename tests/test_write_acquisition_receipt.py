@@ -313,6 +313,50 @@ class ReadbackTest(ShimFixture):
         self.assertEqual(path.read_bytes(), shim.canonical(self.receipt(path)))
 
 
+@unittest.skipUnless(
+    hasattr(os, "O_NOFOLLOW"),
+    "the simulation removes os.O_NOFOLLOW, which this platform already lacks",
+)
+class NoFollowFallbackTest(ShimFixture):
+    """``O_NOFOLLOW`` is reinforcement where the platform defines it, not the control: with
+    ``O_CREAT | O_EXCL`` the open already fails ``EEXIST`` when the path names a symlink, even a
+    dangling one, and the receipt's documented threat model is drift detection, not a same-UID
+    TOCTOU racer. These two tests pin both halves of that sentence on a platform without the
+    flag, simulated by removing it."""
+
+    def without_nofollow(self):
+        saved = os.O_NOFOLLOW
+
+        class _Restore:
+            def __enter__(self_inner) -> None:
+                delattr(os, "O_NOFOLLOW")
+
+            def __exit__(self_inner, *exc_info: object) -> None:
+                os.O_NOFOLLOW = saved  # ALWAYS restore.
+
+        return _Restore()
+
+    def test_a_normal_seal_still_succeeds_without_the_flag(self) -> None:
+        with self.without_nofollow():
+            path = self.seal()
+        self.assertTrue(path.is_file())
+        self.assertEqual(self.receipt(path)["archive_sha256"], self.archive_sha256)
+
+    def test_a_planted_symlink_is_still_refused_without_the_flag(self) -> None:
+        # POSITIVE CONTROL: the refusal that O_NOFOLLOW reinforced must survive the fallback.
+        directory = self.state_home.joinpath(*shim.RECEIPT_SEGMENTS)
+        directory.mkdir(parents=True)
+        elsewhere = Path(self.temporary.name) / "redirect-target.json"
+        planted = directory / f"{self.archive_sha256}.json"
+        planted.symlink_to(elsewhere)
+        with self.without_nofollow():
+            with self.assertRaises(shim.Refusal) as raised:
+                self.seal()
+        self.assertIn("already exists", str(raised.exception))
+        self.assertTrue(planted.is_symlink())
+        self.assertFalse(elsewhere.exists(), "the write must never follow the planted link")
+
+
 class RealAdmissionTest(ShimFixture):
     """``ccodex sdlc install``'s own admission code, run against a shim-produced receipt."""
 

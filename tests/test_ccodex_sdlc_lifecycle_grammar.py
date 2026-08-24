@@ -112,6 +112,12 @@ REFUSED_RECOVER_FORMS = (
 )
 
 
+@unittest.skipIf(
+    os.name == "nt",
+    "grammar refusals are asserted against the installed bash ccodex dispatcher, whose "
+    "lifecycle writes through the POSIX-only durable-write plane (os.open O_DIRECTORY "
+    "fsync barriers); native Windows fails closed by name at the CLI",
+)
 class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
     # ---- harness -----------------------------------------------------------------------------
 

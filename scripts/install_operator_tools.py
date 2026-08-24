@@ -1048,9 +1048,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--home",
         type=Path,
-        default=Path.home(),
+        # The default is resolved in main(), not here: argparse evaluates a default at parser
+        # construction, and Path.home() raises RuntimeError on a host with no home variable --
+        # before main()'s own named refusals could print.
+        default=None,
         metavar="PATH",
-        help="operator home used to derive default bin and state directories",
+        help="operator home used to derive default bin and state directories (default: the current user's home)",
     )
     parser.add_argument(
         "--bin-dir",
@@ -1073,15 +1076,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
-    repo_root = Path(__file__).resolve().parents[1]
+    # The platform refusal must be the FIRST thing an unsupported host reaches: a scrubbed
+    # Windows environment has no USERPROFILE, so any Path.home() evaluated before this line
+    # (including an eager argparse default) dies as an unnamed RuntimeError instead.
     if os.name == "nt":
         print("fatal: operator tools are currently supported on Unix, WSL, and macOS only", file=sys.stderr)
         return 2
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    repo_root = Path(__file__).resolve().parents[1]
     if args.command == "self-test":
         code, messages = self_test(repo_root)
     else:
-        home = absolute(args.home)
+        home = absolute(args.home if args.home is not None else Path.home())
         config = Config(
             repo_root,
             home,

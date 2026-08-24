@@ -838,7 +838,7 @@ def validate_python(root: Path, result: Validation) -> None:
         try:
             compile(source.read_text(encoding="utf-8"), str(source), "exec")
         except (OSError, SyntaxError, UnicodeError) as exc:
-            result.error(f"Python source failed to compile: {source.relative_to(root)}: {exc}")
+            result.error(f"Python source failed to compile: {source.relative_to(root).as_posix()}: {exc}")
     if shutil.which("git"):
         tracked = subprocess.run(
             ["git", "-C", str(root), "ls-files", "--", "*.pyc"],
@@ -1538,7 +1538,9 @@ def _release_candidate_policy_path(value: object) -> bool:
 
 def validate_release_candidate_policy(root: Path, result: Validation) -> None:
     """Keep the unpublished-candidate allowlist explicit, finite, and canonical."""
-    relative = RELEASE_CANDIDATE_POLICY_RELATIVE_PATH
+    # Diagnostics name the tracked file in posix form on every host; a Path here would render
+    # with backslashes on Windows.
+    relative = RELEASE_CANDIDATE_POLICY_RELATIVE_PATH.as_posix()
     path = root / relative
     if path.is_symlink() or not path.is_file():
         result.error(f"{relative}: required release-candidate policy is missing or linked")
@@ -1855,9 +1857,9 @@ def validate_agents(root: Path, result: Validation) -> None:
         if not data.get("name") or not data.get("description"):
             result.error(f"{agent}: missing metadata")
         if "model" in data:
-            result.error(f"{agent.relative_to(root)}: static model is forbidden")
+            result.error(f"{agent.relative_to(root).as_posix()}: static model is forbidden")
         if "model_reasoning_effort" in data:
-            result.error(f"{agent.relative_to(root)}: static model_reasoning_effort is forbidden")
+            result.error(f"{agent.relative_to(root).as_posix()}: static model_reasoning_effort is forbidden")
 
 
 def validate_secrets_config(root: Path, result: Validation) -> None:
@@ -2230,14 +2232,17 @@ def validate_policy(root: Path, result: Validation) -> None:
         directories[:] = [name for name in directories if name not in UNREVIEWED_TREES]
         for filename in filenames:
             path = Path(directory) / filename
-            if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
-                continue
+            # The kind probe sits inside the same guard as the read: on Windows, stat through a
+            # file-typed symlink whose target is a directory raises PermissionError rather than
+            # answering False, and an unstatable path is no more scannable than an unreadable one.
             try:
+                if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
+                    continue
                 text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeError):
                 continue
             if path.name != "validate_bundle.py" and SECRET_PATTERN.search(text):
-                result.error(f"possible secret or internal hostname found: {path.relative_to(root)}")
+                result.error(f"possible secret or internal hostname found: {path.relative_to(root).as_posix()}")
 
 
 def validate(root: Path) -> Validation:

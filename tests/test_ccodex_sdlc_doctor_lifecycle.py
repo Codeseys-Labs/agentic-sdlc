@@ -215,6 +215,14 @@ def inventory(*roots: Path) -> dict[str, str]:
     return seen
 
 
+WINDOWS_SKIP = unittest.skipIf(
+    os.name == "nt",
+    "this suite observes the acquisition/activation planes only the POSIX-only "
+    "durable-write ccodex sdlc lifecycle produces; native Windows fails closed by name "
+    "at the CLI, so no such plane exists there",
+)
+
+
 class ReadinessHarness(unittest.TestCase):
     """One injected host: an acquisition plane, an activation plane, and an acquired candidate."""
 
@@ -371,6 +379,7 @@ class ReadinessHarness(unittest.TestCase):
         )
 
 
+@WINDOWS_SKIP
 class DoctorLifecycleReadinessTests(ReadinessHarness):
     # ---- absence -------------------------------------------------------------------------------
 
@@ -1036,6 +1045,7 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         self.assertEqual(control.returncode, 0, control.stderr)
 
 
+@WINDOWS_SKIP
 class SupersededActivationHistoryTest(ReadinessHarness):
     """A RETAINED prior receipt is history, not an ambiguity (agentic-sdlc-7b2e).
 

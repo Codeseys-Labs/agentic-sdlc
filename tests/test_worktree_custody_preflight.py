@@ -113,6 +113,11 @@ def reasons(result: dict[str, Any]) -> dict[str, str | None]:
     return {entry["slug"]: entry["reason"] for entry in result["checks"]}
 
 
+@unittest.skipIf(
+    os.name == "nt",
+    "the wave chain that runs this preflight is Linux doctrine (statx mount-id containment); "
+    "these git fixtures are unproven on native Windows",
+)
 class RepoCase(unittest.TestCase):
     """One fresh throwaway repository per test method."""
 
@@ -589,6 +594,34 @@ class RegistrationDriftedTests(RepoCase):
         self.assertEqual(statuses(result)["registration-drifted"], wcp.MET)
         self.assertEqual(result["disposition"], "clear")
         self.assertEqual(code, wcp.EXIT_OK)
+
+
+class OffLinuxImportTests(unittest.TestCase):
+    """The module must import off-Linux so `_mount_id_fd`'s named refusal can actually fire.
+
+    Windows CI proved the inverse: a module-scope `ctypes.CDLL(None)` raised TypeError at import,
+    every custody test collapsed into one loader error, and the MountUnsupported refusal was dead
+    code. The probe stubs CDLL to fail loudly, so the guard — not a permissive loader — is what
+    the pass proves.
+    """
+
+    def test_off_linux_import_keeps_the_named_refusal_alive(self) -> None:
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("wcp_off_linux_probe", TOOL)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, "platform", "win32"), mock.patch(
+            "ctypes.CDLL", side_effect=AssertionError("CDLL must not be bound off-Linux")
+        ):
+            spec.loader.exec_module(module)
+            with self.assertRaises(module.MountUnsupported):
+                module._mount_id_fd(0)
+
+    def test_positive_control_the_linux_import_binds_statx(self) -> None:
+        if sys.platform != "linux":
+            self.skipTest("the statx binding exists only on Linux")
+        self.assertIsNotNone(wcp._LIBC)
 
 
 if __name__ == "__main__":

@@ -155,6 +155,12 @@ def json_bytes(value: dict[str, Any]) -> bytes:
 
 
 def sync_directory(path: Path) -> None:
+    if os.name == "nt":
+        # Windows cannot open a directory via os.open, so there is no stdlib
+        # parent-directory durability barrier here (the install_skill_bundle.py
+        # fsync_directory precedent): lifecycle transitions remain process-crash
+        # recoverable, not power-loss durable, on Windows.
+        return
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(descriptor)
@@ -172,8 +178,14 @@ def atomic_bytes(
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            # Mode bits are a POSIX concept and Windows lacks os.fchmod, so the call is
+            # guarded by existence (mkstemp already created the file 0o600) and sits inside
+            # the fdopen block so no exception can leave the descriptor open against the
+            # finally's unlink, which Windows refuses with WinError 32 while a handle is
+            # held (the install_skill_bundle.py atomic_write precedent).
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, mode)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())

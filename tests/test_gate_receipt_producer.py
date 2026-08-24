@@ -58,10 +58,13 @@ def _write_fake_gate(
     """An injected stand-in for the authoritative gate. Returns the argv that runs it."""
     body = [
         "import sys",
-        "sys.stdout.write('fake gate stdout\\n')",
-        "sys.stdout.flush()",
-        "sys.stderr.write('fake gate stderr\\n')",
-        "sys.stderr.flush()",
+        # The producer hashes the gate's raw emitted BYTES, and tests assert that digest over
+        # exact LF content; a text-mode `sys.stdout.write` would let Windows translate \n to
+        # \r\n in the pipe, changing the hashed subject, so the gate emits exact bytes.
+        "sys.stdout.buffer.write(b'fake gate stdout\\n')",
+        "sys.stdout.buffer.flush()",
+        "sys.stderr.buffer.write(b'fake gate stderr\\n')",
+        "sys.stderr.buffer.flush()",
     ]
     if marker is not None:
         body.append(f"open({str(marker)!r}, 'w').write('ran')")
@@ -616,6 +619,7 @@ class GateReceiptProducerCliTests(_ProducerTestCase):
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertEqual(json.loads((self.tmp / "ok.json").read_text(encoding="utf-8"))["outcome"], "passed")
 
+    @unittest.skipUnless(POSIX, "SIGKILL and negative returncodes are POSIX signal semantics")
     def test_signal_killed_gate_records_no_verdict_and_no_negative_status(self) -> None:
         """A killed gate RAN but returned no exit code; -9 is not an exit code."""
         script = self.tmp / "suicide.py"
@@ -2807,6 +2811,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
                     with contextlib.suppress(Exception):
                         proc.wait(timeout=10)
 
+    @unittest.skipUnless(POSIX, "SIGKILL and negative returncodes are POSIX signal semantics")
     def test_the_recorded_resourcewarning_symptom_is_gone(self) -> None:
         """The symptom this finding was RECORDED as, asserted with its own positive control.
 
@@ -2865,6 +2870,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         )
         self.assertEqual(reaped_messages, [])
 
+    @unittest.skipUnless(POSIX, "SIGKILL and negative returncodes are POSIX signal semantics")
     def test_a_gate_still_running_when_the_producer_fails_is_ended_with_sigterm(self) -> None:
         release = self.tmp / "release-sigterm"
         argv = self._write_blocking_gate(release=release, name="blocking_gate.py")
@@ -2940,6 +2946,7 @@ class AbandonedGateChildTests(_ProducerTestCase):
         self.assertEqual(ok_code, gate_receipt.EXIT_OK, ok_err.getvalue())
         self.assertTrue(gate_receipt.verify_receipt(json.loads(out.read_text(encoding="utf-8"))))
 
+    @unittest.skipUnless(POSIX, "SIGKILL and negative returncodes are POSIX signal semantics")
     def test_a_gate_that_ignores_sigterm_is_killed_and_never_hangs_the_producer(self) -> None:
         """The reason the wait is bounded: an unbounded `finally` reap is a hang, not a leak.
 

@@ -621,6 +621,17 @@ def plane_inventory(*roots: Path) -> dict[str, str]:
     return seen
 
 
+# Applied to every suite below whose fixtures publish through the shipped durable-write
+# plane. ReExpressedContractsTest stays undecorated: it compares constants and shipped
+# artifacts without touching that plane.
+WINDOWS_SKIP = unittest.skipIf(
+    os.name == "nt",
+    "the ccodex sdlc lifecycle writes through the POSIX-only durable-write plane "
+    "(os.open O_DIRECTORY fsync barriers) and pins exact path identity that Windows 8.3 "
+    "short-name roots break; native Windows fails closed by name at the CLI",
+)
+
+
 class TemporaryRoot(unittest.TestCase):
     """One temporary directory per test, so no test can observe another's plane."""
 
@@ -733,6 +744,7 @@ class ReExpressedContractsTest(TemporaryRoot):
         self.assertIn(update.CLASS_FOREIGN, blocking)
 
 
+@WINDOWS_SKIP
 class EndToEndUpdateTest(TemporaryRoot):
     def test_update_refreshes_owned_entries_and_seals_one_receipt_with_both_ancestors(self) -> None:
         fixture = self.fixture()
@@ -985,6 +997,7 @@ class EndToEndUpdateTest(TemporaryRoot):
         self.assertEqual("refreshed", rows["commands/sdlc-frame.md"]["disposition"])
 
 
+@WINDOWS_SKIP
 class AdmissionRefusalTest(TemporaryRoot):
     """Both admissions refuse BY NAME before any effect, and each refusal has a positive control."""
 
@@ -1219,6 +1232,7 @@ class AdmissionRefusalTest(TemporaryRoot):
         self.assertNotIsInstance(clean.code, bool)
 
 
+@WINDOWS_SKIP
 class BlockedRefreshTest(TemporaryRoot):
     """A modified or foreign entry is preserved, NAMED, and blocks the whole refresh pre-effect."""
 
@@ -1352,6 +1366,7 @@ class BlockedRefreshTest(TemporaryRoot):
         self.assertEqual("cartographer one\n", fixture.destination("agents/cartographer.md").read_text())
 
 
+@WINDOWS_SKIP
 class InterruptionTest(TemporaryRoot):
     """A kill mid-flight leaves the PRIOR receipt active, a recoverable journal, and an honest 4."""
 
@@ -1493,6 +1508,7 @@ class InterruptionTest(TemporaryRoot):
         self.assertEqual(0, call_main(fixture, config=fixture.config_at(LATER_INSTANT)).code)
 
 
+@WINDOWS_SKIP
 class ReportTest(TemporaryRoot):
     """Every rendered line derived from an artifact is escaped, and the report claims no authority."""
 

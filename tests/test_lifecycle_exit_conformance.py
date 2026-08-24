@@ -728,6 +728,15 @@ class Plane:
         return self.payload_host_or_skip(completed, driven)
 
 
+# Every Conformance subclass inherits this skip through __unittest_skip__: the exit-class
+# claims below all drive operator_tools.install()/lifecycle_lock through the durable-write
+# plane, which is POSIX-only.
+@unittest.skipIf(
+    os.name == "nt",
+    "every exit-class claim drives operator_tools.install()/lifecycle_lock through the "
+    "POSIX-only durable-write plane (os.open O_DIRECTORY fsync barriers); native Windows "
+    "fails closed by name at the CLI",
+)
 class Conformance(unittest.TestCase):
     """One temporary root per test, so no test can observe another's plane."""
 

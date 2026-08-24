@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import tempfile
@@ -9,6 +10,26 @@ from shutil import ignore_patterns
 
 ROOT = Path(__file__).parents[1]
 SELF = Path(__file__).name  # "test_cao_removal.py"
+
+
+def retype_directory_symlinks(root: Path) -> None:
+    """Restore symlink types after a copytree on Windows (same helper as test_gate_graph).
+
+    `shutil.copytree(symlinks=True)` recreates every symlink without `target_is_directory`, so
+    on Windows a copied directory link (the `plugin/*` entries) lands as a FILE-type link and
+    every later stat through it answers WinError 5. POSIX symlinks carry no type: no-op there.
+    """
+    if os.name != "nt":
+        return
+    for directory, directories, filenames in os.walk(root):
+        for name in (*directories, *filenames):
+            link = Path(directory) / name
+            if not link.is_symlink():
+                continue
+            target = os.readlink(str(link))
+            if (Path(directory) / target).is_dir():
+                link.unlink()
+                link.symlink_to(target, target_is_directory=True)
 
 # Categories from the removal contract: CAO-named path, INSTALL_CAO flag,
 # executable reference, profile, install path, and runtime command. The private
@@ -80,6 +101,7 @@ class CaoRemovalContract(unittest.TestCase):
             shutil.copytree(
                 ROOT, repo, symlinks=True, ignore=ignore_patterns(".git", "__pycache__")
             )
+            retype_directory_symlinks(repo)
             target = repo / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             if append is not None:

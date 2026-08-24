@@ -484,5 +484,50 @@ class ClassifyVerbTests(unittest.TestCase):
             self.assertIn(phrase, result.stdout)
 
 
+@unittest.skipUnless(
+    hasattr(os, "O_NOFOLLOW"),
+    "the simulation removes os.O_NOFOLLOW, which this platform already lacks",
+)
+class ReadTargetNoFollowFallbackTests(unittest.TestCase):
+    """`read_target` on a platform without `O_NOFOLLOW` (Windows), simulated by removing the flag:
+    the symlink refusal is the security-preservation control and must survive the fallback, and a
+    regular file must still read so the fallback is not refusing everything. In-process rather
+    than through `_run_cli`, because a subprocess would re-import an untouched `os`."""
+
+    def without_nofollow(self):
+        saved = os.O_NOFOLLOW
+
+        class _Restore:
+            def __enter__(self_inner) -> None:
+                delattr(os, "O_NOFOLLOW")
+
+            def __exit__(self_inner, *exc_info: object) -> None:
+                os.O_NOFOLLOW = saved  # ALWAYS restore.
+
+        return _Restore()
+
+    def test_a_symlinked_target_is_still_refused_without_the_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "outside.md"
+            outside.write_text("# not ours\n", encoding="utf-8")
+            target = Path(tmp) / "AGENTS.md"
+            target.symlink_to(outside)
+            with self.without_nofollow():
+                with self.assertRaises(gen.GeneratorError) as raised:
+                    gen.read_target(target)
+            self.assertIn("refusing target", str(raised.exception))
+            self.assertIn("symbolic link", str(raised.exception))
+
+    def test_a_regular_file_still_reads_without_the_flag(self) -> None:
+        # Positive control: the fallback refuses the symlink above, not every target.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "AGENTS.md"
+            target.write_text("# ours\n", encoding="utf-8")
+            with self.without_nofollow():
+                prestate, content = gen.read_target(target)
+        self.assertEqual(prestate["kind"], "regular")
+        self.assertEqual(content, b"# ours\n")
+
+
 if __name__ == "__main__":
     unittest.main()

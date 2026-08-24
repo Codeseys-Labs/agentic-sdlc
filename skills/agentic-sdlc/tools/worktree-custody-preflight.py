@@ -189,11 +189,17 @@ class _Statx(ctypes.Structure):
     ]
 
 
-# `statx` is a Linux-only symbol, so it is bound by lookup rather than attribute access: a plain
-# `_LIBC.statx` raises at IMPORT time on a libc without the symbol (dlsym failure), which made the
-# module unimportable on Darwin and unreachable for `_mount_id_fd`'s own named refusal below
-# (agentic-sdlc-fb05). `getattr(..., None)` is the same binding `install_research_os.py` uses.
-_LIBC_STATX = getattr(ctypes.CDLL(None, use_errno=True), "statx", None)
+# `CDLL(None)` is POSIX dlopen's global-namespace handle: Windows raises TypeError for it at
+# module scope, and Darwin loads the handle but owns no `statx` symbol, so an unguarded binding
+# makes this module unimportable off-Linux and turns `_mount_id_fd`'s named MountUnsupported
+# refusal into dead code (agentic-sdlc-fb05, agentic-sdlc-5ce7). The platform gate matches that
+# refusal's own condition, and on Linux the symbol is still bound by lookup rather than attribute
+# access, so a libc without `statx` degrades to the same named refusal instead of an import-time
+# dlsym failure.
+if sys.platform == "linux":
+    _LIBC_STATX = getattr(ctypes.CDLL(None, use_errno=True), "statx", None)
+else:
+    _LIBC_STATX = None
 if _LIBC_STATX is not None:
     _LIBC_STATX.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(_Statx)]
     _LIBC_STATX.restype = ctypes.c_int

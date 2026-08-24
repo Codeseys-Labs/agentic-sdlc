@@ -96,6 +96,17 @@ def tree_hash(*roots: Path) -> str:
     return digest.hexdigest()
 
 
+# Applied to every suite below that installs and drives the bash ccodex dispatcher through
+# the harness. RecoveryPlanLineTests stays undecorated: it exercises the reader in-process
+# with a mocked planner and never touches the durable-write plane.
+WINDOWS_SKIP = unittest.skipIf(
+    os.name == "nt",
+    "these suites install and drive the bash ccodex dispatcher through the POSIX-only "
+    "durable-write plane (os.open O_DIRECTORY fsync barriers); native Windows fails closed "
+    "by name at the CLI",
+)
+
+
 class RecoverApplyHarness(unittest.TestCase):
     """One installed dispatcher over a private home, plus planted interrupted journal state."""
 
@@ -285,6 +296,7 @@ class RecoverApplyHarness(unittest.TestCase):
         return digest, completed
 
 
+@WINDOWS_SKIP
 class RecoverApplyGrammarTests(RecoverApplyHarness):
     def test_every_malformed_apply_spelling_is_a_grammar_error_at_exit_two(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -348,6 +360,7 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
         self.assertIn("\\x00", recover.escape_display(probe))
 
 
+@WINDOWS_SKIP
 class RecoverPlanDerivationTests(RecoverApplyHarness):
     def test_the_plan_is_canonical_and_refuses_non_finite_values(self) -> None:
         plan = {"b": [2, 1], "a": {"z": None, "y": True}}
@@ -610,6 +623,7 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
             )
 
 
+@WINDOWS_SKIP
 class RecoverApplyExecutionTests(RecoverApplyHarness):
     """Every test here drives the REAL dispatcher end to end, so no observation this harness could
     inject reaches `admit_platform` across the process boundary. Off the certified platform the
@@ -922,6 +936,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             self.assertTrue(journal.is_symlink())
 
 
+@WINDOWS_SKIP
 class RecoverApplyBoundaryTests(RecoverApplyHarness):
     def test_an_uncertified_platform_refuses_by_name(self) -> None:
         with self.assertRaises(recover.Refusal) as refused:
