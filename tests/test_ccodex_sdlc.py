@@ -36,7 +36,7 @@ validator_spec.loader.exec_module(validator)
 
 
 class CcodexSdlcTests(unittest.TestCase):
-    def make_shadow_reader(self, root: Path, *, manifest: bytes | None = None) -> Path:
+    def make_shadow_reader(self, root: Path) -> Path:
         shadow = root / "shadow-checkout"
         for relative in (
             "policy/ccodex-sdlc-read-report.v1.json",
@@ -49,8 +49,6 @@ class CcodexSdlcTests(unittest.TestCase):
             destination = shadow / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, destination)
-        if manifest is not None:
-            (shadow / "manifest.json").write_bytes(manifest)
         return shadow
 
     def make_dispatcher(self, root: Path) -> tuple[Path, dict[str, str], Path]:
@@ -152,53 +150,6 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertTrue(report["runtime"]["isolated"])
             self.assertEqual(report["runtime"]["state"], "admitted")
             self.assertFalse(query_state.exists())
-
-    def test_unrelated_root_manifest_does_not_select_candidate_mode(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            shadow = self.make_shadow_reader(root, manifest=b'{"application":"ordinary"}\n')
-            query_state = root / "query-state"
-            completed = subprocess.run(
-                [str(Path(sys.executable)), "-I", "-B", str(shadow / "scripts" / "ccodex_sdlc.py"), "inspect", "--json"],
-                env={
-                    "HOME": str(root / "query-home"),
-                    "LANG": "C",
-                    "LC_ALL": "C",
-                    "PATH": "",
-                    "XDG_STATE_HOME": str(query_state),
-                },
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            report = json.loads(completed.stdout)
-            self.assertEqual(report["schema_version"], "ccodex-sdlc-read-report/v1")
-            self.assertEqual(report["checkout"]["plane"], "checkout-development")
-            self.assertFalse(query_state.exists())
-
-    def test_internal_candidate_discriminator_refuses_a_normal_checkout(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            shadow = self.make_shadow_reader(root)
-            completed = subprocess.run(
-                [
-                    str(Path(sys.executable)),
-                    "-I",
-                    "-B",
-                    str(shadow / "scripts" / "ccodex_sdlc.py"),
-                    "--candidate-observation-v1",
-                    "inspect",
-                    "--json",
-                ],
-                env={"HOME": str(root / "home"), "LANG": "C", "LC_ALL": "C", "PATH": ""},
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 3)
-            self.assertIn("candidate subordinate observation refused", completed.stderr)
-            self.assertEqual(completed.stdout, "")
 
     def test_all_read_only_verbs_and_renderer_parity_share_one_semantic_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

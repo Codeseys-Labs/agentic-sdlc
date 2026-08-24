@@ -4,8 +4,7 @@ This module covers exactly the grammar/dispatch boundary. It does not test lifec
 because no lifecycle behavior exists yet: ``scripts/ccodex_sdlc_install.py``,
 ``ccodex_sdlc_update.py``, and ``ccodex_sdlc_uninstall.py`` are separate tickets. What must hold
 today is that a mutating verb parses, resolves ONE named module path, and refuses BY NAME at exit 3
-before any effect when that module is absent -- never an exit-1 traceback, and never a silent
-widening of what the read-only candidate projection admits.
+before any effect when that module is absent -- never an exit-1 traceback.
 
 Every negative assertion here carries a positive control in the same test: an absence proves
 nothing unless the same harness is shown to detect the presence.
@@ -28,7 +27,6 @@ import unittest
 ROOT = Path(__file__).parents[1]
 READER_SCRIPT = ROOT / "scripts" / "ccodex_sdlc.py"
 GUARD_SCRIPT = ROOT / "scripts" / "ccodex_sdlc_readonly.py"
-LAUNCHER_TEMPLATE = ROOT / "assets" / "launchers" / "ccodex.in"
 
 OPERATOR_SCRIPT = ROOT / "scripts" / "install_operator_tools.py"
 _operator_spec = importlib.util.spec_from_file_location("lifecycle_grammar_operator_tools", OPERATOR_SCRIPT)
@@ -213,44 +211,6 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             check=False,
         )
 
-    def make_candidate_projection(self, root: Path) -> tuple[Path, Path]:
-        """Render the candidate read-only profile of the dispatcher over a stub interpreter."""
-        # The interpreter comes from the installer's own resolver, never from a literal path: this
-        # harness used to render `#!/usr/bin/bash` and then check its syntax with `/usr/bin/bash -n`,
-        # which is a path macOS does not have -- so on macOS the test errored with FileNotFoundError
-        # against the interpreter instead of measuring the grammar it exists to measure.
-        interpreter = operator_tools.bash_interpreter()
-        rendered = (
-            LAUNCHER_TEMPLATE.read_text(encoding="utf-8")
-            .replace("@CANDIDATE_READONLY_PROFILE@", "true")
-            .replace("@CANONICAL_LAUNCHER@", "''")
-            .replace("@CANONICAL_ROOT@", "''")
-            .replace("@PINNED_BASH@", str(interpreter))
-            .replace("@PINNED_OCX@", "''")
-            .replace("@PINNED_JQ@", "''")
-            .replace("@PINNED_UV@", "''")
-            .replace("@PINNED_SDLC_PYTHON@", "''")
-        )
-        self.assertNotIn("@CANDIDATE_", rendered)
-        self.assertNotIn("@PINNED_", rendered)
-        projection = root / "candidate"
-        (projection / "bin").mkdir(parents=True)
-        (projection / "scripts").mkdir()
-        (projection / "runtime" / "python" / "bin").mkdir(parents=True)
-        dispatcher = projection / "bin" / "ccodex"
-        dispatcher.write_text(rendered, encoding="utf-8")
-        dispatcher.chmod(0o755)
-        syntax = subprocess.run(
-            [str(interpreter), "-n", str(dispatcher)], capture_output=True, text=True, check=False
-        )
-        self.assertEqual(syntax.returncode, 0, syntax.stderr)
-        (projection / "scripts" / "ccodex_sdlc.py").write_text("# stub reader\n", encoding="utf-8")
-        marker = root / "candidate-interpreter-ran"
-        interpreter = projection / "runtime" / "python" / "bin" / "python3.12"
-        interpreter.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{marker}'\nexit 0\n")
-        interpreter.chmod(0o755)
-        return dispatcher, marker
-
     # ---- dispatch ----------------------------------------------------------------------------
 
     def test_each_mutating_verb_dispatches_to_its_own_named_module_with_the_admitted_vector(self) -> None:
@@ -388,78 +348,6 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                 forwarded = self.run_reader(shadow, "uninstall")
                 self.assertEqual(forwarded.returncode, returned, forwarded.stderr)
                 self.assertEqual(forwarded.stderr, "")
-
-    # ---- candidate projection ----------------------------------------------------------------
-
-    def test_candidate_dispatcher_refuses_every_mutating_verb_and_still_admits_readers(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            dispatcher, marker = self.make_candidate_projection(root)
-            for vector in MUTATING_VECTORS:
-                with self.subTest(verb=vector[0]):
-                    completed = subprocess.run(
-                        [str(dispatcher), "sdlc", *vector],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertEqual(completed.returncode, 2, completed.stderr)
-                    self.assertIn("candidate ccodex admits only read-only sdlc inspection", completed.stderr)
-                    self.assertEqual(completed.stdout, "")
-                    self.assertFalse(marker.exists(), "a refused candidate vector must not reach the interpreter")
-            # Positive control: the same rendered dispatcher does admit each read-only vector and
-            # reaches the projected interpreter, so the refusals above are verb-specific.
-            for reader_vector in (
-                ("inspect",),
-                ("inspect", "--json"),
-                ("status",),
-                ("status", "--json"),
-                ("doctor",),
-                ("doctor", "--json"),
-                ("recover", "--dry-run"),
-                ("recover", "--dry-run", "--json"),
-            ):
-                with self.subTest(reader=reader_vector):
-                    completed = subprocess.run(
-                        [str(dispatcher), "sdlc", *reader_vector],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertTrue(marker.is_file())
-            forwarded = marker.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(len(forwarded), 8)
-            for line in forwarded:
-                self.assertIn("--candidate-observation-v1", line)
-            self.assertTrue(any(line.endswith("--candidate-observation-v1 inspect") for line in forwarded))
-            self.assertTrue(
-                any(line.endswith("--candidate-observation-v1 recover --dry-run --json") for line in forwarded)
-            )
-
-    def test_candidate_reader_invoked_directly_also_refuses_mutating_verbs(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            shadow = self.make_shadow_reader(root)
-            for verb, extra in (("install", ("--host", "claude")), ("update", ()), ("uninstall", ())):
-                with self.subTest(verb=verb):
-                    marker = root / f"{verb}-ran.json"
-                    self.write_module(shadow, verb, self.marker_module(marker))
-
-                    refused = self.run_reader(shadow, "--candidate-observation-v1", verb, *extra)
-
-                    self.assertEqual(refused.returncode, 3, refused.stderr)
-                    self.assertIn("candidate ccodex sdlc admits only read-only inspection", refused.stderr)
-                    self.assertIn(f"{verb} is a mutating lifecycle verb", refused.stderr)
-                    self.assertEqual(refused.stdout, "")
-                    self.assertFalse(marker.exists())
-            # Positive control: the candidate flag itself is not what refuses. A reader verb gets
-            # past this gate and is declined later, by the candidate discriminator, with its own
-            # distinct message.
-            control = self.run_reader(shadow, "--candidate-observation-v1", "inspect", "--json")
-            self.assertEqual(control.returncode, 3, control.stderr)
-            self.assertIn("candidate subordinate observation refused", control.stderr)
-            self.assertNotIn("mutating lifecycle verb", control.stderr)
 
     # ---- grammar errors ----------------------------------------------------------------------
 

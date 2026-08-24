@@ -1294,7 +1294,11 @@ def validate_release_candidate_policy(root: Path, result: Validation) -> None:
     canonical = json.dumps(policy, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
     if raw != canonical.encode("ascii"):
         result.error(f"{relative}: policy must use canonical ASCII compact JSON")
-    expected_top = {"archive", "canonical_json", "disclosures", "limits", "manifest", "payload", "runtime", "schema_version"}
+    # `archive` and `runtime` stanzas are deliberately absent from this closed set: the deleted
+    # acquisition engine was their only producer, and pinning them here defended contracts
+    # (a candidate-digest archive name, a bundled Python runtime) that `scripts/build_release.py`
+    # can never satisfy. The builder's real naming is derived from `manifest.product_version`.
+    expected_top = {"canonical_json", "disclosures", "limits", "manifest", "payload", "schema_version"}
     if set(policy) != expected_top or policy.get("schema_version") != RELEASE_CANDIDATE_POLICY_SCHEMA:
         result.error(f"{relative}: closed policy schema mismatch")
         return
@@ -1306,8 +1310,6 @@ def validate_release_candidate_policy(root: Path, result: Validation) -> None:
         "trailing_newline": True,
     }:
         result.error(f"{relative}: canonical JSON contract mismatch")
-    if policy.get("archive") != {"prefix": "agentic-sdlc-candidate-", "suffix": "-linux-x64.tar.gz"}:
-        result.error(f"{relative}: archive naming contract mismatch")
     if policy.get("disclosures") != {"licensing": "incomplete", "provenance": "unverified", "sbom": "absent"}:
         result.error(f"{relative}: disclosure contract must remain incomplete and unverified")
 
@@ -1371,20 +1373,6 @@ def validate_release_candidate_policy(root: Path, result: Validation) -> None:
             required_trees = {"agents", "assets", "commands", "policy", "scripts", "skills", "workflows"}
             if not required_files.issubset(files) or not required_trees.issubset(trees):
                 result.error(f"{relative}: minimal authored payload roots are missing")
-
-    runtime = policy.get("runtime")
-    if not isinstance(runtime, dict) or set(runtime) != {"destination", "license_paths", "python_executable", "python_version"}:
-        result.error(f"{relative}: runtime descriptor is invalid")
-    elif (
-        runtime.get("destination") != "runtime/python"
-        or runtime.get("python_executable") != "bin/python3.12"
-        or runtime.get("python_version") != PYTHON_VERSION
-        or not isinstance(runtime.get("license_paths"), list)
-        or not runtime["license_paths"]
-        or runtime["license_paths"] != sorted(runtime["license_paths"])
-        or not all(_release_candidate_policy_path(value) for value in runtime["license_paths"])
-    ):
-        result.error(f"{relative}: private Python runtime contract is invalid")
 
 
 def validate_packaged_policy_copies(root: Path, result: Validation) -> None:
@@ -1896,6 +1884,7 @@ def validate_versions(root: Path, result: Validation) -> None:
     manifest_path = root / ".version-bump.json"
     if not manifest_path.is_file():
         return
+    expected: object = None
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         expected = manifest["current"]
@@ -1908,6 +1897,24 @@ def validate_versions(root: Path, result: Validation) -> None:
                 result.error(f"version drift: {target['file']} {target['jq']} = {value} (expect {expected})")
     except (KeyError, IndexError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         result.error(f"invalid version manifest contract: {exc}")
+    if expected is None:
+        return
+    # The release contract is deliberately NOT a bump target: its version transition is a reviewed
+    # edit (scripts/ccodex_sdlc.py refuses any other checkout identity). But build_release.py stamps
+    # and names the archive from the contract-tied policy version, so a routine bump-version.sh run
+    # that moved `current` without that reviewed edit would ship a mislabeled archive under a green
+    # gate. Fail closed on the skew instead.
+    try:
+        contract = load_release_contract_json(root / RELEASE_CONTRACT_RELATIVE_PATH)
+        checkout = contract.get("checkout")
+        contract_version = checkout.get("version") if isinstance(checkout, dict) else None
+    except ValueError:
+        contract_version = None
+    if contract_version != expected:
+        result.error(
+            f".version-bump.json current = {expected!r} but policy/release-contract.v1.json "
+            f"checkout.version = {contract_version!r}; bump both in one reviewed change"
+        )
 
 
 def validate_scripts(root: Path, result: Validation) -> None:

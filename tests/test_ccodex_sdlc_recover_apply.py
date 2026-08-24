@@ -25,7 +25,6 @@ from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
-LAUNCHER_TEMPLATE = ROOT / "assets" / "launchers" / "ccodex.in"
 
 
 def _load(name: str, path: Path):
@@ -329,92 +328,6 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
         self.assertEqual(recover.escape_display(probe), dar.escape_display(probe))
         # Positive control: the comparison above is a measurement, not two empty strings.
         self.assertIn("\\x00", recover.escape_display(probe))
-
-    def test_candidate_mode_refuses_the_apply_form_twice_and_runs_no_module(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            projection, marker = self.make_candidate_projection(root)
-            refused = subprocess.run(
-                [str(projection), "sdlc", "recover", "--apply", FOREIGN_DIGEST],
-                env={"HOME": str(root / "home"), "LANG": "C", "LC_ALL": "C", "PATH": ""},
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(refused.returncode, 2, refused.stderr)
-            self.assertIn("candidate ccodex admits only read-only sdlc inspection", refused.stderr)
-            self.assertFalse(marker.exists())
-            # Positive control: the closed allowlist admits the read-only form, so the refusal above
-            # is the apply FORM being declined and not the candidate profile refusing everything.
-            control = subprocess.run(
-                [str(projection), "sdlc", "recover", "--dry-run"],
-                env={"HOME": str(root / "home"), "LANG": "C", "LC_ALL": "C", "PATH": ""},
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(control.returncode, 0, control.stderr)
-            self.assertTrue(marker.exists())
-
-            # The reader refuses the same vector a second time when invoked directly, so a caller
-            # that bypasses the launcher cannot reach the module either.
-            direct = subprocess.run(
-                [
-                    str(Path(sys.executable)),
-                    "-I",
-                    "-B",
-                    str(ROOT / "scripts" / "ccodex_sdlc.py"),
-                    "--candidate-observation-v1",
-                    "recover",
-                    "--apply",
-                    FOREIGN_DIGEST,
-                ],
-                env={"HOME": str(root / "home"), "LANG": "C", "LC_ALL": "C", "PATH": ""},
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(direct.returncode, 3, direct.stderr)
-            self.assertIn("candidate ccodex sdlc admits only read-only inspection", direct.stderr)
-            self.assertIn("recover --apply is a mutating lifecycle verb", direct.stderr)
-            self.assertEqual(direct.stdout, "")
-
-    def make_candidate_projection(self, root: Path) -> tuple[Path, Path]:
-        """Render the candidate read-only profile of the dispatcher over a stub interpreter."""
-        # Resolved through the installer, not written as a literal: `/usr/bin/bash` does not exist
-        # on macOS, so both the rendered shebang and the syntax check below have to come from the
-        # same probe the product uses.
-        interpreter = operator_tools.bash_interpreter()
-        rendered = (
-            LAUNCHER_TEMPLATE.read_text(encoding="utf-8")
-            .replace("@CANDIDATE_READONLY_PROFILE@", "true")
-            .replace("@CANONICAL_LAUNCHER@", "''")
-            .replace("@CANONICAL_ROOT@", "''")
-            .replace("@PINNED_BASH@", str(interpreter))
-            .replace("@PINNED_OCX@", "''")
-            .replace("@PINNED_JQ@", "''")
-            .replace("@PINNED_UV@", "''")
-            .replace("@PINNED_SDLC_PYTHON@", "''")
-        )
-        self.assertNotIn("@CANDIDATE_", rendered)
-        self.assertNotIn("@PINNED_", rendered)
-        projection = root / "candidate"
-        (projection / "bin").mkdir(parents=True)
-        (projection / "scripts").mkdir()
-        (projection / "runtime" / "python" / "bin").mkdir(parents=True)
-        dispatcher = projection / "bin" / "ccodex"
-        dispatcher.write_text(rendered, encoding="utf-8")
-        dispatcher.chmod(0o755)
-        syntax = subprocess.run(
-            [str(interpreter), "-n", str(dispatcher)], capture_output=True, text=True, check=False
-        )
-        self.assertEqual(syntax.returncode, 0, syntax.stderr)
-        (projection / "scripts" / "ccodex_sdlc.py").write_text("# stub reader\n", encoding="utf-8")
-        marker = root / "candidate-interpreter-ran"
-        interpreter = projection / "runtime" / "python" / "bin" / "python3.12"
-        interpreter.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{marker}'\nexit 0\n")
-        interpreter.chmod(0o755)
-        return dispatcher, marker
 
 
 class RecoverPlanDerivationTests(RecoverApplyHarness):

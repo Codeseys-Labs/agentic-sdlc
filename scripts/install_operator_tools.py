@@ -336,7 +336,6 @@ def desired_files(config: Config) -> dict[str, bytes]:
     dispatcher = (
         (templates / "ccodex.in")
         .read_text(encoding="utf-8")
-        .replace("@CANDIDATE_READONLY_PROFILE@", "false")
         .replace("@CANONICAL_LAUNCHER@", shell_quote(str(launcher)))
         .replace("@CANONICAL_ROOT@", shell_quote(str(config.repo_root)))
         .replace("@PINNED_BASH@", str(bash))

@@ -167,6 +167,7 @@ def enforce_limits(limits: dict[str, Any], rows: list[dict[str, Any]], archive_b
         ("max_entries", len(rows), "inventoried entries"),
         ("max_file_bytes", max((int(row["size"]) for row in rows), default=0), "largest member size"),
         ("max_path_bytes", max((len(str(row["path"]).encode("utf-8")) for row in rows), default=0), "longest member path"),
+        ("max_total_bytes", sum(int(row["size"]) for row in rows), "summed member size"),
         ("max_uncompressed_bytes", tar_bytes, "uncompressed archive size"),
         ("max_archive_bytes", archive_bytes, "compressed archive size"),
     )

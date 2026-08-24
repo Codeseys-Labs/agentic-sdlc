@@ -298,6 +298,12 @@ model selection as policy.
   `ocx:launch -- --model muse/muse-spark-1.2` selects one exactly as a gpt id is selected. It is a
   row in a provider list, never a plane (ADR-0007 amendment, ADR-0010)
 - `mermaid:provision`, `mermaid:linux-test` — explicit Linux x64 renderer steps, never gate leaves
+- `release:build` — build the deterministic unpublished-candidate archive of the committed HEAD
+  tree into `dist/` (`scripts/build_release.py`). `scripts/write_acquisition_receipt.py` is the
+  sole producer of the acquisition receipt `ccodex sdlc install`/`update` admit; placement of a
+  built archive under `$XDG_DATA_HOME/agentic-sdlc/acquisition/candidates` is documented in
+  `docs/plans/2026-08-14T163833Z-Install-UX.md`. A built archive is evidence of what was archived,
+  never a release or a publication
 - `libraries:list`, `libraries:status`, `libraries:install`, `libraries:migrate` — external skill
   libraries through their own front doors, opt-in and dry-run without `--yes`; `migrate` retires
   another channel's copies of the same upstream through that channel's own removal path before
