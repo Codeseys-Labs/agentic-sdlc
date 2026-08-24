@@ -21,6 +21,16 @@ tools, immutable injection evidence, and a known post-run receipt path. An inher
 prompt prose, alias, missing injection support, incompatible tool surface, or absent receipt stops
 before spawn.
 
+Require the route/class cell to be qualified too, and ask that question BEFORE the assignment is
+written rather than here: `route_qualification.py admit` in `model-tier-rightsizing` derives one
+`admit-dispatch`/`refuse-dispatch` verdict over recorded evidence for one exact route and one task
+class. A resolved assignment is not qualification evidence — the receipt carries no task class, so
+it cannot express the question — and a refusal returns one `SeedProposal` instead of a dispatch.
+Its `cell-quarantined` refusal is the standing consequence of the identity-mismatch and
+default-provider-fallthrough events the verification step below detects: record the quarantine that
+`quarantine_required` names, because a detected misroute that leaves the cell dispatchable will be
+dispatched again.
+
 ## Select the real injection surface
 
 - **generated `ocx-*` Agent types:** the agent definition owns the exact route. Its public `model`

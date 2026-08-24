@@ -141,6 +141,62 @@ has reviewed routes, attempts, data egress, budgets, usage-credit implications, 
 conditions. Never turn the evaluator into a worker scheduler, queue, daemon, or production
 launcher.
 
+## Route qualification admission boundary
+
+A measured cell and a *currently qualified* cell are different facts, and the second is what a
+conductor needs at dispatch time. `skills/model-tier-rightsizing/scripts/route_qualification.py`
+owns that durable layer against `policy/route-qualification-v1.json`: `issue` turns one recorded
+`rightsize-evidence/v1` artifact into one immutable `route-qualification/v1` generation for one
+exact route/class cell, `validate` checks a store, `admit` derives the pre-dispatch verdict,
+and `quarantine`/`recover` take a cell out of service and bring it back. Every verb is pure over
+documents named on the command line: none reaches a network, runs a subprocess, or writes a file —
+a transform prints the store the caller would persist and the caller decides whether to keep it.
+
+**Where a conductor asks the question.** Before writing a resolved `RuntimeAssignment`, run
+`admit --store <store> --route-id <digest> --task-class <class> --at <instant>` with the observed
+provider and model the conductor actually holds. `admit-dispatch` means the cell holds a current
+qualified generation and the presented identity correlates to it. `refuse-dispatch` means no
+assignment is written: return one `SeedProposal` instead. The verdict names one closed reason —
+`no-generation-for-cell`, `generation-unqualified`, `ambiguous-current-generation`,
+`qualification-expired`, `floor-policy-drift`, `route-identity-uncorrelated`,
+`default-provider-fallthrough`, `identity-evidence-missing`, or `cell-quarantined` — and carries
+`quarantine_required` with the cause when the refusal is itself a quarantine event.
+
+This is deliberately a **separate gate rather than a clause inside receipt validation**, for two
+reasons that are not stylistic. Decision 50 makes the lifecycle layers independent, so a valid
+receipt must not be able to *imply* qualification. And qualification is class-specific while the
+v1 receipt carries no task class at all, so the receipt cannot express the question. Passing this
+gate authorizes nothing further: request injection, runtime-receipt admission, and host identity
+readback remain separate and unproven by it.
+
+**One floor, not two.** The promotion floor is not reimplemented here. `route_qualification.py`
+imports `rightsize.qualification_floor`, the same function `summarize_route` uses, because Decision
+49 delegates qualification to the one rightsizing evaluator and two floors that can disagree would
+mean a route qualified by whichever was consulted. The contract therefore states no threshold of
+its own; it names `rightsize-evaluation-v1.json#/qualification` and records that block's digest in
+every generation, so a threshold change refuses old generations as `floor-policy-drift` while an
+unrelated budget edit does not.
+
+**Freshness, immutability, and scope.** A generation is current for at most 30 days from
+`issued_at` (Decision 41) and `expires_at` is derived, never supplied; only a qualification refresh
+renews it, and no probe or credential refresh can. Generations, quarantines, and recoveries are
+append-only, and `generation_id` digests the generation's own content, so an edited record stops
+naming itself. A quarantine names one exact `route_id` and one `task_class` (story 67): the same
+route in another class and another route in the same class stay admissible, and the last-good
+generation is preserved beside the quarantine rather than removed, which is what keeps a failed or
+quarantined cell visible and non-dispatchable (Decision 40). Re-qualification is the only exit:
+`recover` requires a qualified generation for that cell issued strictly after the quarantine plus
+an acknowledgement of the quarantine's own cause. Mined evidence cannot issue a qualification at
+all, so its separate 90-day horizon bounds nomination rather than promotion.
+
+**What this control is not.** Both instants are supplied by the caller and this surface reads no
+clock, so freshness is checked arithmetic over declared values rather than observed elapsed time: a
+backdated `--issued-at` widens its own horizon and a past `--at` makes an expired generation compare
+as current. Closing that needs host/boot/monotonic binding on the issuing receipt, which a
+generation does not carry today. Nor is the gate an interlock — like `receipt_admission.py` it is a
+control the conductor must invoke, so it makes an unqualified dispatch *refusable and recorded*, not
+impossible. Under Decision 54 it is mechanical against the documents it is given and no stronger.
+
 ## Receipt admission boundary
 
 `skills/model-tier-rightsizing/scripts/receipt_admission.py` validates one concrete

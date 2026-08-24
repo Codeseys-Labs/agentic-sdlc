@@ -1381,6 +1381,73 @@ def sum_available(values: Iterable[int | float | None]) -> float | None:
     return sum(present) if present else None
 
 
+def qualification_floor(
+    relevant: list[dict[str, Any]],
+    task_class: str,
+    depth: str,
+    target_representative: bool,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply the promotion floor to already-recorded attempts for one exact route/class cell.
+
+    Pure over its inputs: it reads attempt records and thresholds and calls nothing. That is what
+    lets the durable qualification lifecycle in `route_qualification.py` reach its verdicts through
+    this same function instead of reimplementing the floor — product-spec Decision 49 delegates
+    qualification to the ONE rightsizing evaluator, and two floors that can disagree would mean a
+    route qualified by whichever one was consulted.
+
+    Every requirement is named rather than collapsed into a bare boolean, because Decision 40
+    keeps a cell that misses the floor visible and non-dispatchable, and the requirement it missed
+    is what makes it reviewable.
+    """
+    qualification = policy["qualification"]
+    total = len(relevant)
+    successes = sum(attempt["accepted"] for attempt in relevant)
+    lower, upper = wilson_interval(successes, total, qualification["confidence_z"])
+    task_ids = {attempt["task_id"] for attempt in relevant}
+    per_task = {task_id: sum(attempt["task_id"] == task_id for attempt in relevant) for task_id in task_ids}
+    route_failures = sum(attempt["failure_class"] in {"transport", "identity"} for attempt in relevant)
+    critical_failures = sum(attempt["critical"] and not attempt["accepted"] for attempt in relevant)
+    # An empty cell has no rate to compare rather than a rate of zero, and it is already unmet on
+    # the distinct-task and attempts-per-task requirements below.
+    accepted_rate = successes / total if total else 0.0
+
+    unmet: list[str] = []
+    if depth != "qualification":
+        unmet.append("evaluation-depth-is-not-qualification")
+    if not target_representative:
+        unmet.append("task-pack-is-not-target-representative")
+    if len(task_ids) < qualification["minimum_distinct_tasks"]:
+        unmet.append("fewer-than-minimum-distinct-tasks")
+    if not task_ids or any(count < qualification["minimum_attempts_per_task"] for count in per_task.values()):
+        unmet.append("fewer-than-minimum-attempts-per-task")
+    if accepted_rate < qualification["minimum_accepted_rate"]:
+        unmet.append("accepted-rate-below-floor")
+    if lower < qualification["minimum_wilson_lower_bound"]:
+        unmet.append("wilson-lower-bound-below-floor")
+    if route_failures > qualification["maximum_route_or_identity_failures"]:
+        unmet.append("route-or-identity-failure-present")
+    if critical_failures:
+        unmet.append("critical-task-failure-present")
+    if task_class == "authority_or_frontier" and not all(attempt["critical"] for attempt in relevant):
+        unmet.append("authority-or-frontier-task-not-marked-critical")
+
+    return {
+        "met": not unmet,
+        "unmet_requirements": unmet,
+        "measured": {
+            "attempts": total,
+            "accepted": successes,
+            "accepted_rate": accepted_rate,
+            "distinct_tasks": len(task_ids),
+            "minimum_attempts_per_task_observed": min(per_task.values()) if per_task else 0,
+            "wilson_95": {"lower": lower, "upper": upper},
+            "transport_or_identity_failures": route_failures,
+            "critical_failures": critical_failures,
+        },
+    }
+
+
 def summarize_route(
     route: dict[str, Any],
     task_class: str,
@@ -1391,35 +1458,18 @@ def summarize_route(
     runtime_admitted: bool,
 ) -> dict[str, Any]:
     relevant = [attempt for attempt in attempts if attempt["route_id"] == digest(route) and attempt["task_class"] == task_class]
-    successes = sum(attempt["accepted"] for attempt in relevant)
-    total = len(relevant)
-    lower, upper = wilson_interval(successes, total, policy["qualification"]["confidence_z"])
-    route_failures = sum(attempt["failure_class"] in {"transport", "identity"} for attempt in relevant)
-    critical_failures = sum(attempt["critical"] and not attempt["accepted"] for attempt in relevant)
-    distinct_tasks = len({attempt["task_id"] for attempt in relevant})
+    floor = qualification_floor(relevant, task_class, depth, pack["target_representative"], policy)
+    measured = floor["measured"]
+    successes = measured["accepted"]
+    total = measured["attempts"]
+    lower = measured["wilson_95"]["lower"]
+    upper = measured["wilson_95"]["upper"]
+    route_failures = measured["transport_or_identity_failures"]
+    critical_failures = measured["critical_failures"]
     costs = [attempt["cost"]["api_equivalent_cost_usd"] for attempt in relevant]
     tokens = [attempt["usage"]["total_tokens"] for attempt in relevant]
     durations = [attempt["duration_ms"] for attempt in relevant]
-    qualification = policy["qualification"]
-    role_qualified = (
-        depth == "qualification"
-        and pack["target_representative"]
-        and distinct_tasks >= qualification["minimum_distinct_tasks"]
-        and total >= distinct_tasks * qualification["minimum_attempts_per_task"]
-        and all(
-            sum(attempt["task_id"] == task_id for attempt in relevant)
-            >= qualification["minimum_attempts_per_task"]
-            for task_id in {attempt["task_id"] for attempt in relevant}
-        )
-        and successes / total >= qualification["minimum_accepted_rate"]
-        and lower >= qualification["minimum_wilson_lower_bound"]
-        and route_failures <= qualification["maximum_route_or_identity_failures"]
-        and critical_failures == 0
-        and (
-            task_class != "authority_or_frontier"
-            or all(attempt["critical"] for attempt in relevant)
-        )
-    )
+    role_qualified = floor["met"]
 
     def per_success(values: list[int | float | None]) -> float | None:
         total_value = sum_available(values)
@@ -1431,7 +1481,7 @@ def summarize_route(
         "task_class": task_class,
         "attempts": total,
         "accepted": successes,
-        "accepted_rate": successes / total if total else 0.0,
+        "accepted_rate": measured["accepted_rate"],
         "wilson_95": {"lower": lower, "upper": upper},
         "transport_or_identity_failure_rate": route_failures / total if total else 0.0,
         "critical_failures": critical_failures,

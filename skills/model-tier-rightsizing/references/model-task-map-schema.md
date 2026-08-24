@@ -178,6 +178,14 @@ observed route vocabulary.
 
 ## Qualification and Pareto rules
 
+A map's `role-qualified` state is a measurement recorded at evaluation time. It carries no expiry,
+no quarantine, and no identity correlation against what a later dispatch would actually reach, so
+it is not the question a conductor asks before writing a `RuntimeAssignment`. That question is
+`route_qualification.py admit` over a `route-qualification-store/v1` document, whose generations are
+issued from this evidence artifact and expire 30 days after issue; see
+[SKILL](../SKILL.md)'s route qualification admission boundary. A map entry marked
+`dispatchable_recommendation` whose cell has since expired or been quarantined is not dispatchable.
+
 The local ladder is `catalog-only` → `route-probed` → task-class-scoped `role-qualified`.
 `builtin:harness-smoke-v1` can produce pilot evidence only. Qualification requires a fixed,
 target-representative pack with at least five distinct held-out tasks in every selected class,
