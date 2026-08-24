@@ -757,6 +757,10 @@ function bootstrapEnvironment(distribution, directory, mise) {
   ensurePrivateDirectory(home);
   const userconfig = trustedEmptyFile(directory, 'bootstrap-user.npmrc');
   const globalconfig = trustedEmptyFile(directory, 'bootstrap-global.npmrc');
+  // mise infers a config parser from the file NAME, so 2026.8.x refuses /dev/null and NUL as
+  // "unknown config file type" before installing anything. An owned empty .toml in the same
+  // private directory is admissible to every generation and still masks ambient system config.
+  const systemconfig = trustedEmptyFile(directory, 'bootstrap-system-mise.toml');
   return Object.freeze({
     HOME: home,
     USERPROFILE: home,
@@ -764,7 +768,7 @@ function bootstrapEnvironment(distribution, directory, mise) {
     MISE_DATA_DIR: join(directory, 'bootstrap-mise-data'),
     MISE_CACHE_DIR: join(directory, 'bootstrap-mise-cache'),
     MISE_GLOBAL_CONFIG_FILE: join(distribution, 'mise.toml'),
-    MISE_SYSTEM_CONFIG_FILE: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    MISE_SYSTEM_CONFIG_FILE: systemconfig,
     MISE_OVERRIDE_CONFIG_FILENAMES: MISE_CONFIG_SENTINEL,
     MISE_NO_ENV: '1',
     MISE_NO_HOOKS: '1',

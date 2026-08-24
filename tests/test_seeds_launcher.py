@@ -259,7 +259,8 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
             self.assertEqual(Path(environment["npm_config_userconfig"]).read_bytes(), b"")
             self.assertEqual(Path(environment["npm_config_globalconfig"]).read_bytes(), b"")
             self.assertEqual(Path(environment["mise_global_config_file"]), self.distribution / "mise.toml")
-            self.assertEqual(environment["mise_system_config_file"], os.devnull)
+            self.assertEqual(Path(environment["mise_system_config_file"]), active.parent / "bootstrap-system-mise.toml")
+            self.assertEqual(Path(environment["mise_system_config_file"]).read_bytes(), b"")
             self.assertEqual(environment["mise_override_config_filenames"], "__agentic_sdlc_reviewed_config_only__")
             self.assertEqual(environment["mise_no_env"], "1")
             self.assertEqual(environment["mise_no_hooks"], "1")
@@ -269,6 +270,63 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         second = self.bootstrap()
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertTrue((active.parent / "previous.json").is_file())
+
+    def test_bootstrap_mise_system_config_is_an_owned_empty_typed_file_not_a_device(self) -> None:
+        """mise infers a config parser from the file NAME, so 2026.8.x refuses a name without a
+        recognized config type before installing anything -- 'unknown config file type: /dev/null'
+        in the fresh-env container (agentic-sdlc-3f5b) -- while 2026.4.27 accepted the device
+        node. An owned empty .toml in the private receipt directory is admissible to both
+        generations and still masks any ambient system config from selecting acquisition."""
+        self.assertEqual(self.bootstrap().returncode, 0)
+        environments = [json.loads(line) for line in self.mise_environment.read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(environments)
+        for environment in environments:
+            system_config = Path(environment["mise_system_config_file"])
+            self.assertNotEqual(str(system_config), os.devnull)
+            self.assertEqual(system_config.suffix, ".toml")
+            self.assertEqual(system_config.parent, self.active_receipt_path().parent)
+            node = system_config.lstat()
+            self.assertTrue(stat.S_ISREG(node.st_mode))
+            self.assertEqual(node.st_size, 0)
+            self.assertEqual(stat.S_IMODE(node.st_mode) & 0o077, 0)
+
+    def test_recorded_mise_system_config_is_admissible_to_a_real_mise_config_loader(self) -> None:
+        """Replays the launcher-constructed system-config value against a real mise on a trivial
+        empty-tools config: the exact command shape the container bootstrap failed under mise
+        2026.8.11. Version-conditional by nature -- a host mise that still accepts /dev/null
+        cannot distinguish the spellings, so the hermetic typed-file test above carries the
+        regression and this test is the canary against the host's real config loader."""
+        real_mise = shutil.which("mise")
+        if real_mise is None:
+            self.skipTest("a real mise is required to admit the recorded isolation environment")
+        self.assertEqual(self.bootstrap().returncode, 0)
+        environment = json.loads(self.mise_environment.read_text(encoding="utf-8").splitlines()[0])
+        trivial = self.root / "trivial-distribution"
+        trivial.mkdir()
+        (trivial / "mise.toml").write_text("[tools]\n", encoding="utf-8")
+        (trivial / "mise.lock").write_text("", encoding="utf-8")
+        replay_home = self.root / "replay-home"
+        replay_home.mkdir()
+        completed = subprocess.run(
+            [real_mise, "--locked", "install"],
+            cwd=replay_home,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={
+                "PATH": os.defpath,
+                "HOME": str(replay_home),
+                "MISE_DATA_DIR": str(self.root / "replay-mise-data"),
+                "MISE_CACHE_DIR": str(self.root / "replay-mise-cache"),
+                "MISE_GLOBAL_CONFIG_FILE": str(trivial / "mise.toml"),
+                "MISE_SYSTEM_CONFIG_FILE": environment["mise_system_config_file"],
+                "MISE_OVERRIDE_CONFIG_FILENAMES": environment["mise_override_config_filenames"],
+                "MISE_NO_ENV": environment["mise_no_env"],
+                "MISE_NO_HOOKS": environment["mise_no_hooks"],
+            },
+        )
+        self.assertNotIn("unknown config file type", completed.stderr)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_bootstrap_supersedes_a_structurally_intact_prior_tuple_receipt(self) -> None:
         self.assertEqual(self.bootstrap().returncode, 0)
