@@ -154,12 +154,15 @@ class ExtractedTreeFixture(unittest.TestCase):
         }
 
     def untrusted_mise_environment(self) -> dict[str, str]:
-        """Real host PATH (mise reachable), every mise root pointed at empty scratch state."""
-        environment = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith("MISE_") and key != "CI"
-        }
+        """Real host PATH (mise reachable), every mise root pointed at empty scratch state.
+
+        The environment is an ALLOWLIST, not os.environ minus a blocklist: mise auto-trusts
+        configs when it detects CI, and that detection reads more than the CI variable —
+        GITHUB_ACTIONS on the real runner made these refusal tests read the fixture root as
+        trusted and pass a verb that must refuse (reproduced locally by exporting it). Only
+        PATH crosses from the host; everything else is scratch.
+        """
+        environment = {"PATH": os.environ.get("PATH", "")}
         environment |= {
             "HOME": str(Path(self.temporary.name) / "home"),
             "MISE_DATA_DIR": str(Path(self.temporary.name) / "mise-data"),
