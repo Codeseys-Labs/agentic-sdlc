@@ -314,10 +314,14 @@ Claude (`agents/claude/*.md`) and Codex (`agents/codex/*.toml`) form:
 commands, unknowns-that-would-change-the-plan), `sdlc-planner`, `sdlc-implementer`,
 `sdlc-reviewer`, `sdlc-researcher` (bounded load-bearing-unknown resolution,
 stops-when-decided), `sdlc-critic` (the standing critique team — snapshot-only,
-classified seeds, attacks-never-fixes), and `sdlc-integrator` (the ONLY merging agent —
-merge-base footprints, placeholder-trap assembly, re-gate-on-integration). The full loop
+classified seeds, attacks-never-fixes), `sdlc-integrator` (the ONLY merging agent —
+merge-base footprints, placeholder-trap assembly, re-gate-on-integration), and
+`sdlc-documentarian` (read-only documentation worker — runs every checkable sentence,
+proposes evidence-linked doc refreshes for conductor capture, writes only its own
+artifact). The full loop
 wiring: cartographers (parallel, per area) → planner → implementers (one per worktree)
-→ reviewers → integrator, with the critic standing concurrent and researchers on demand. REPO-SCOPED extra roster: `agents/codex/research/` carries the 17-role
+→ reviewers → integrator, with the critic standing concurrent, researchers on demand,
+and the documentarian after a wave lands. REPO-SCOPED extra roster: `agents/codex/research/` carries the 17-role
 research team (see its README — installed per-repo via the codex-research-os scaffolder,
 never globally). Slash commands (Claude Code): `/sdlc-init`, `/sdlc-frame`, `/sdlc-wave`,
 `/sdlc-mission`. Other hosts invoke the flagship skill with the same activation/frame/wave/mission intents. Optional cmux bus helper: `scripts/cmux-bus.sh` (pub/sub/seq).

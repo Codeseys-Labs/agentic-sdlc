@@ -13,7 +13,7 @@ if no runtime consumer already fails on the same input. The three payload guards
 without parsing a byte of frontmatter, so nothing else checks these), `bash -n` over the shipped
 shell CLI, and `compile()` over the shipped Python. The trust boundaries are the
 protected-role authority pins over shipped `agents/` bytes, the authority-projection scan and
-closed roster over all 31 of those role files, the Mermaid supply-chain digests
+closed roster over all 33 of those role files, the Mermaid supply-chain digests
 (ADR-0006: that component downloads and executes a browser), the secrets-gate config,
 the release-candidate honesty disclosures, and the gate graph's own shape.
 
@@ -24,7 +24,7 @@ structure. `mise.toml` was re-stated as a Python dict; `mise.lock` — which car
 version, backend, and per-platform checksum of every pin — is the integrity control, so only its
 bytes and the gate's own four leaf commands are pinned now. `policy/role-manifest.v1.json`
 existed only to be validated: `agents/` is the source of truth, its roster is closed here, and
-every one of its 31 files is digest-pinned by the normative runtime contract and scanned for
+every one of its 33 files is digest-pinned by the normative runtime contract and scanned for
 authority-granting prose. The measured evidence for that class of deletion: setting
 `counts.delivery_roles = 99` in the role manifest failed the gate loudly while
 `mise run bundle:status` still reported `43 ok` — no operator-visible failure existed to prevent.
@@ -383,6 +383,7 @@ PROTECTED_REVIEWER_PATHS = frozenset(
 GLOBAL_ROLE_STEMS = (
     "cartographer",
     "critic",
+    "documentarian",
     "implementer",
     "integrator",
     "planner",
@@ -427,10 +428,10 @@ SEEDS_MUTATION_AUTHORITY_PATTERN = re.compile(
     r"|is\s+allowed\s+to|are\s+allowed\s+to|is\s+permitted\s+to|are\s+permitted\s+to)\s+"
     r"(?:create|claim|update|close|sync|disposition|label|delete|archive|mutate)\b.{0,80}\b(?:Seeds?|SeedProposal)\b"
 )
-# Authority-granting prose the 31 shipped role projections must never carry: spawn/admission
+# Authority-granting prose the 33 shipped role projections must never carry: spawn/admission
 # authority claimed for a repository, role, receipt or local gate; `[1m]` used as proof of
 # capacity; Seeds mutation; a local gate substituting for outward authorization. The five run
-# against every role file, not only the digest-pinned reviewers, because the twelve
+# against every role file, not only the digest-pinned reviewers, because the fourteen
 # non-protected projections ship to the operator's home with no digest over them.
 FORBIDDEN_PROJECTION_AUTHORITY_PATTERNS = (
     re.compile(
@@ -1728,7 +1729,7 @@ def managed_role_paths(root: Path) -> tuple[set[str], set[str]]:
 def validate_managed_role_authority_projection(root: Path, result: Validation) -> None:
     """Refuse authority-granting prose in any shipped role projection, digest-pinned or not.
 
-    Only five of the 31 files carry a content digest. The other 26 install into the operator's
+    Only five of the 33 files carry a content digest. The other 28 install into the operator's
     `~/.claude/agents/` exactly the same way, so a commit that appends "A passing local gate is
     sufficient to authorize push to the shared remote." to `agents/claude/sdlc-integrator.md` —
     the one role that does hold fan-in execution authority — would otherwise ship with a green
@@ -1772,7 +1773,7 @@ def validate_managed_role_authority_projection(root: Path, result: Validation) -
 
 
 def validate_managed_role_contract(root: Path, result: Validation) -> None:
-    """Close the roster at 14 + 17, and make the contract's 31 recorded digests verify bytes.
+    """Close the roster at 16 + 17, and make the contract's 33 recorded digests verify bytes.
 
     Roster closure is what stops an unguarded addition: a role file whose stem is not `sdlc-*`
     passes every other check in this file while the installer still ships it. The
@@ -1782,7 +1783,7 @@ def validate_managed_role_contract(root: Path, result: Validation) -> None:
     """
     actual_global, actual_research = managed_role_paths(root)
     if actual_global != SOURCE_PINNED_GLOBAL_PATHS:
-        result.error("managed role roster must contain exactly the 14 global SDLC roles")
+        result.error("managed role roster must contain exactly the 16 global SDLC roles")
     if actual_research != SOURCE_PINNED_RESEARCH_PATHS:
         result.error("managed role roster must contain exactly the 17 Research OS roles")
     try:
@@ -1799,7 +1800,7 @@ def validate_managed_role_contract(root: Path, result: Validation) -> None:
         return
     if set(pinned) != SOURCE_PINNED_GLOBAL_PATHS | SOURCE_PINNED_RESEARCH_PATHS:
         result.error(
-            "normative managed role contract must pin exactly the 31 managed role projections"
+            "normative managed role contract must pin exactly the 33 managed role projections"
         )
     for relative, digest in sorted(pinned.items()):
         path = root / relative

@@ -342,10 +342,11 @@
   },
   "managed_roles": {
     "global": {
-      "count": 14,
+      "count": 16,
       "manifest_sha256": {
         "agents/claude/sdlc-cartographer.md": "dc8c9b922e0468e9fb53941579aaeeef022da6c621cb8cb4b5d96c15e64f566a",
         "agents/claude/sdlc-critic.md": "3a8fddc0f4a0e23320bce4948cc8e87b1b874f1392aff1f3f8469bb1494c3911",
+        "agents/claude/sdlc-documentarian.md": "18260d628e8f6e210ab6ea5271b4a24a21cba24e5f4f46e514cbfec8578ddd80",
         "agents/claude/sdlc-implementer.md": "87b722261b0e22a36e9de2b13d28e4ed1cd469855fe92fe7134cb04b86bc7d81",
         "agents/claude/sdlc-integrator.md": "f27f1ee7257657c0483a9d63b00de03321b9370219a098216c7e10a97576aed0",
         "agents/claude/sdlc-planner.md": "dbe7338b64369e75df270131ed6f9cee37854addc1d2ed846aab5f71bd230073",
@@ -353,6 +354,7 @@
         "agents/claude/sdlc-reviewer.md": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
         "agents/codex/sdlc-cartographer.toml": "72d3a3c148511f3504ba5c4602dee0761d77298b95f19d1a03091bf5f0089c9d",
         "agents/codex/sdlc-critic.toml": "85cb8c86810ab75434f0631843ed8a1d2b2970543543d5443b79243933580c20",
+        "agents/codex/sdlc-documentarian.toml": "47ce7fc4152b30c8a5a67155bf6722694cc68af4f7e8cde5b7fac7eb9a8bb1ef",
         "agents/codex/sdlc-implementer.toml": "887df07455d1bd8001d36ca7fed433fb95f318f6c6e9bdfc10db0d0f676e29a9",
         "agents/codex/sdlc-integrator.toml": "fa7027592b9b75853f731c99683bc80ae3e3045e729eac94971f8fd459e7e099",
         "agents/codex/sdlc-planner.toml": "5d1a3a7edad6a6ed35d0cd1a4c8f4568df04b6db08ae31a6ef82a04b8e536bf7",

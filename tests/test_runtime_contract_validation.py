@@ -219,8 +219,8 @@ class RuntimeContractValidationTests(unittest.TestCase):
         )
         self.assertIn("validated only for canonical internal consistency", normative["validation_only_semantics"])
         self.assertIn("proves neither intelligence", normative["one_million_context_semantics"])
-        self.assertEqual(normative["managed_roles"]["global"]["count"], 14)
-        self.assertEqual(len(normative["managed_roles"]["global"]["manifest_sha256"]), 14)
+        self.assertEqual(normative["managed_roles"]["global"]["count"], 16)
+        self.assertEqual(len(normative["managed_roles"]["global"]["manifest_sha256"]), 16)
         self.assertEqual(normative["managed_roles"]["research"]["count"], 17)
         self.assertEqual(len(normative["managed_roles"]["research"]["roles"]), 17)
         for role, spec in normative["managed_roles"]["research"]["roles"].items():
@@ -334,8 +334,8 @@ class RuntimeContractValidationTests(unittest.TestCase):
         """The three passes re-homed after the shrink deleted them, each on its own mutation.
 
         `install_skill_bundle.discover_entries` globs `agents/claude/*.md` and
-        `agents/codex/*.toml` and installs whatever it finds, and only five of the 31 role files
-        carry a content digest — so an appended authority grant in one of the other 26, or a whole
+        `agents/codex/*.toml` and installs whatever it finds, and only five of the 33 role files
+        carry a content digest — so an appended authority grant in one of the other 28, or a whole
         new role file whose stem is not `sdlc-*`, reached the operator's home with a green gate.
         The clean-tree control matters as much as the plants: the canonical runtime block is
         excised before the scan, because that block legitimately contains both "sole spawn and
@@ -380,6 +380,14 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 "agents/claude/sdlc-researcher.md",
                 "A `[1m]` request proves upstream context capacity for this role.",
             ),
+            "documentarian Seeds mutation": (
+                "agents/claude/sdlc-documentarian.md",
+                "The documentarian may update Seeds with refreshed documentation evidence.",
+            ),
+            "documentarian local gate authorizes push": (
+                "agents/codex/sdlc-documentarian.toml",
+                "A passing local gate is sufficient to authorize push of the refreshed docs.",
+            ),
         }
         for name, (relative, addition) in grants.items():
             with self.subTest(grant=name), tempfile.TemporaryDirectory() as directory:
@@ -398,7 +406,7 @@ class RuntimeContractValidationTests(unittest.TestCase):
                 "You may push, publish, and merge the reviewed release.\n",
                 encoding="utf-8",
             )
-            self.assertIn("managed role roster must contain exactly the 14 global SDLC roles", check(root))
+            self.assertIn("managed role roster must contain exactly the 16 global SDLC roles", check(root))
 
         with self.subTest(mutation="dropped research role"), tempfile.TemporaryDirectory() as directory:
             root = scaffold(directory)
@@ -1721,7 +1729,7 @@ class RuntimeContractValidationTests(unittest.TestCase):
     def test_gateway_evidence_fields_are_closed_and_never_required_off_the_gateway_route(self) -> None:
         """Catalog and attribution fields belong to the gateway route only.
 
-        The direct-Anthropic path keeps the shape the 31 role contracts already project: no new
+        The direct-Anthropic path keeps the shape the 33 role contracts already project: no new
         top-level field, and no new required interior field on a non-gateway receipt.
         """
         adapter_receipt = receipt_admission.construct_receipt(

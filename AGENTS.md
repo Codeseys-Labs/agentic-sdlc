@@ -57,9 +57,10 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
 - `skills/reviewing-overengineering/` — independent complexity/deletion audit for an immutable
   plan or diff. It applies deletion pressure plus a safety-preservation rebuttal and requires any
   remediated candidate to be reviewed again. Ponytail is optional, never a dependency.
-- `agents/` — seven global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
-  critic, integrator) in Claude `.md` and Codex `.toml` forms, plus the repo-scoped
-  research roster under `agents/codex/research/`.
+- `agents/` — eight global SDLC role agents (cartographer, planner, implementer, reviewer, researcher,
+  critic, integrator, and documentarian — the read-only documentation worker that proposes
+  evidence-linked doc refreshes for conductor capture) in Claude `.md` and Codex `.toml` forms,
+  plus the repo-scoped research roster under `agents/codex/research/`.
 - `commands/` — `/sdlc-init` activates repository-specific DevEx, tracked baseline,
   gates, trust, and shared guidance; `/sdlc-frame`, `/sdlc-wave`, and `/sdlc-mission`
   run the delivery loop. `/sdlc-rightsize` is the user-facing Claude Code command that loads

@@ -745,7 +745,7 @@ await agent(calibrationExample, { model: 'gpt-5.6-terra[1m]', effort: 'ultra' })
                 self.assertNotRegex(text, r"(?im)^\s*(?:edit|change|mutate|write)\s+(?:user )?(?:settings|trust)\b")
 
     def test_all_runtime_role_manifests_share_the_canonical_receipt_projection(self) -> None:
-        self.assertEqual(len(GLOBAL_ROLE_SURFACES), 14)
+        self.assertEqual(len(GLOBAL_ROLE_SURFACES), 16)
         self.assertEqual(len(RESEARCH_ROLE_SURFACES), 17)
         for path in GLOBAL_ROLE_SURFACES + RESEARCH_ROLE_SURFACES:
             with self.subTest(role_surface=path):
@@ -755,7 +755,7 @@ await agent(calibrationExample, { model: 'gpt-5.6-terra[1m]', effort: 'ultra' })
                 self.assertNotRegex(text, r"\b(?:request_injection|model_readback|effort_readback|context_readback)_source\b")
 
     def test_all_global_role_manifests_require_one_runtime_assignment_contract(self) -> None:
-        self.assertEqual(len(GLOBAL_ROLE_SURFACES), 14)
+        self.assertEqual(len(GLOBAL_ROLE_SURFACES), 16)
         for path in GLOBAL_ROLE_SURFACES:
             with self.subTest(role_surface=path):
                 _assert_global_runtime_role_contract(path.read_text(encoding="utf-8"))

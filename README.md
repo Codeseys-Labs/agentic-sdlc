@@ -159,10 +159,12 @@ no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
     separation-of-powers (attacker ≠ fixer, writer ≠ originator), one-loop discipline
     with a recorded next-action, greenfield/brownfield loops, the cheapest-decisive-
     experiment rule, gates-as-executables (no decorative model pins).
-- `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: seven role agents in both CLI
+- `agents/claude/sdlc-*.md` + `agents/codex/sdlc-*.toml`: eight role agents in both CLI
   forms (symlinked globally) — **cartographer** (read-only Discover mapper), planner,
   implementer, reviewer, **researcher** (bounded unknown-resolution), **critic** (standing
-  snapshot-only critique team), **integrator** (the only merging agent). Full loop wiring:
+  snapshot-only critique team), **integrator** (the only merging agent), **documentarian**
+  (read-only documentation worker — evidence-linked doc proposals for conductor capture,
+  writes only its own artifact). Full loop wiring:
   cartographers (parallel, per area) → planner → implementers → reviewers → integrator,
   critic concurrent, researchers on demand. Provider-neutral role definitions contain no static
   model/effort pin, never dispatch, and consume a conductor-supplied certified
@@ -835,8 +837,8 @@ claude plugin install agentic-sdlc@agentic-sdlc
 
 The first command writes an `extraKnownMarketplaces` entry to user settings and clones the
 catalog; the second copies `plugin/` into the versioned plugin cache and writes
-`enabledPlugins`. Claude Code then serves the skills under their own names and the seven SDLC
-roles under the plugin namespace (`agentic-sdlc:sdlc-planner` and its six peers). The bundled
+`enabledPlugins`. Claude Code then serves the skills under their own names and the eight SDLC
+roles under the plugin namespace (`agentic-sdlc:sdlc-planner` and its seven peers). The bundled
 output style appears as `agentic-sdlc:BLUF`, taking its name from the file's frontmatter rather
 than its filename. Confirm what a given install actually contributes with
 `claude plugin details agentic-sdlc@agentic-sdlc`, which prints the component inventory and a
