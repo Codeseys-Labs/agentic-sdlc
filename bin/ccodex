@@ -13,8 +13,10 @@
 #     bin/, and every tool resolves through that root's reviewed mise.toml + mise.lock: the
 #     launch-family verbs exec scripts/opencodex-claude.sh with AGENTIC_SDLC_OCX and
 #     AGENTIC_SDLC_JQ left unset, so the launcher's own direct-checkout branches take the pinned
-#     `mise -C <root> exec` routes, and the Python-backed verbs run
-#     `mise -C <root> exec -- uv run --python 3.12.11 --script`.
+#     `mise -C <root> exec` routes, and the Python-backed lifecycle verbs run
+#     `mise -C <root> exec -- uv run --python 3.12.11 --script`. The sdlc family alone resolves
+#     the same pinned uv's managed CPython 3.12.11 and execs it directly with `-I -B`, because
+#     the reader's runtime admission refuses every other execution shape by name.
 #   * Bare `set-fast-model` (the interactive selector) is refused by name — pass an exact id
 #     from `ccodex models`, a Claude family alias, or `-` to clear; the one-argument form works
 #     unchanged.
@@ -151,6 +153,38 @@ run_ocx() {
   exec mise -C "$root" exec -- ocx "$@"
 }
 
+# `ccodex sdlc` intentionally does not share run_python: the reader's runtime admission refuses
+# any interpreter that is not an isolated, bytecode-free Python 3.12.11 ("expected direct -I -B
+# execution"), and `uv run --script` cannot carry those flags. This route mirrors the rendered
+# plane's run_sdlc_python with the one divergence this file declares at the top: no install-time
+# interpreter binding exists here, so the pinned uv is asked for its managed CPython 3.12.11 and
+# the resolved path is exec'd directly. `uv python find` never downloads, so on a fresh trusted
+# tree the interpreter is installed once, explicitly -- the same post-trust download class as
+# every other first-verb tool resolution. Resolution noise stays on stderr; stdout belongs to
+# the reader's report. A `mise WARN ... not in the lockfile` on these resolution calls is the
+# operator's own global config carrying a locked-mode tool with no lockfile entry; it is honest,
+# global-plane, and deliberately not masked here (MISE_LOCKED=0 would unpin the tree's own
+# resolution, and excluding the global config would silently change which settings govern).
+run_sdlc_python() {
+  [ -f "$root/scripts/ccodex_sdlc.py" ] || {
+    printf 'error: the checkout-development sdlc entry is unavailable in this distribution\n' >&2
+    exit 3
+  }
+  require_toolchain
+  local interpreter
+  if ! interpreter="$(mise -C "$root" exec -- uv python find --managed-python 3.12.11 2>/dev/null)"; then
+    mise -C "$root" exec -- uv python install 3.12.11 1>&2 || {
+      printf 'error: uv could not provision the pinned CPython 3.12.11 that ccodex sdlc requires\n' >&2
+      exit 1
+    }
+    interpreter="$(mise -C "$root" exec -- uv python find --managed-python 3.12.11)" || {
+      printf 'error: uv installed CPython 3.12.11 but cannot resolve its interpreter path\n' >&2
+      exit 1
+    }
+  fi
+  exec "$interpreter" -I -B "$root/scripts/ccodex_sdlc.py" "$@"
+}
+
 set_fast_model_help() {
   cat <<'EOF'
 usage: ccodex set-fast-model <exact-model-id|->
@@ -281,7 +315,7 @@ case "$route" in
     # Readers and the mutating lifecycle verbs take one route on purpose: every verb decision --
     # admit, refuse by name, or hand off to a per-verb module -- belongs to scripts/ccodex_sdlc.py,
     # so the argument vector is forwarded unchanged.
-    run_python ccodex_sdlc.py "$@"
+    run_sdlc_python "$@"
     ;;
   version)
     printf 'ccodex (agentic-sdlc self-located dispatcher)\n'

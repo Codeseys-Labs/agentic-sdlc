@@ -41,6 +41,19 @@ BUILDER_PATH = ROOT / "scripts" / "build_release.py"
 # toolchain config its trust boundary names, and the launcher its launch family execs.
 REAL_PAYLOAD_FILES = ("bin/ccodex", "mise.toml", "mise.lock", "scripts/opencodex-claude.sh")
 
+# The additional real bytes the isolated sdlc exec proof needs: the reader whose runtime
+# admission is the assertion, the siblings it loads by absolute path, and the two policies it
+# reads. Everything on this list is stdlib-only, so the reader runs under `-I -B` with no venv.
+READER_PAYLOAD_FILES = (
+    "scripts/ccodex_sdlc.py",
+    "scripts/ccodex_sdlc_readonly.py",
+    "scripts/install_operator_tools.py",
+    "scripts/install_skill_bundle.py",
+    "scripts/distribution_activation_receipt.py",
+    "policy/ccodex-sdlc-read-report.v1.json",
+    "policy/release-contract.v1.json",
+)
+
 
 def _load(path: Path, name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
@@ -81,6 +94,8 @@ def git_environment(home: Path) -> dict[str, str]:
 class ExtractedTreeFixture(unittest.TestCase):
     """Build the archive from a policy-generated fixture repo, then extract it once per test."""
 
+    real_payload_files: tuple[str, ...] = REAL_PAYLOAD_FILES
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -117,7 +132,7 @@ class ExtractedTreeFixture(unittest.TestCase):
             path = repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
-        for relative in REAL_PAYLOAD_FILES:
+        for relative in self.real_payload_files:
             source = ROOT / relative
             destination = repo / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -252,6 +267,110 @@ class UntrustedConfigRefusalTest(ExtractedTreeFixture):
 
     def test_bundle_status_on_an_untrusted_root_refuses_naming_the_remedy(self) -> None:
         self.assert_trust_refusal(self.run_ccodex(["bundle", "status"], self.untrusted_mise_environment()))
+
+
+@unittest.skipUnless(
+    sys.version_info[:3] == (3, 12, 11),
+    "the isolated sdlc exec proof hands the suite's own interpreter to the REAL reader, whose"
+    " runtime admission demands exactly 3.12.11 (the repository gate runs the suite under it)",
+)
+class IsolatedSdlcExecTest(ExtractedTreeFixture):
+    """Post-trust shape of `ccodex sdlc`: resolve the pinned interpreter, exec it `-I -B`.
+
+    Real mise never appears here, on purpose twice over: the trust boundary itself is
+    ``UntrustedConfigRefusalTest``'s subject and stays proven there, and granting real trust in a
+    scratch plane would auto-install the full pinned toolset. A recording stub ``mise`` stands at
+    the probe-and-resolution boundary instead: it answers the trusted probe, answers the
+    interpreter resolution with this suite's own interpreter, and logs every argv. What is proven
+    end-to-end is therefore the dispatcher's execution shape -- the exact resolution argv, the
+    absence of any ``uv run --script`` invocation, and the direct ``-I -B`` exec -- admitted by
+    the REAL reader's own runtime admission from the REAL built archive.
+    """
+
+    real_payload_files = REAL_PAYLOAD_FILES + READER_PAYLOAD_FILES
+
+    def stub_mise_environment(self, *, fresh_tree: bool) -> tuple[dict[str, str], Path]:
+        """A PATH whose only ``mise`` records its argv and stands in for the resolution boundary.
+
+        ``fresh_tree`` simulates a tree whose managed CPython is not yet installed: ``find``
+        fails until an explicit ``install`` has recorded its marker, which is exactly what the
+        real ``uv python find`` does (it never downloads).
+        """
+        base = Path(self.temporary.name)
+        stub_bin = base / "stub-bin"
+        stub_bin.mkdir(exist_ok=True)
+        log = base / "mise-argv.log"
+        marker = base / "python-installed.marker"
+        root = str(self.extracted)
+        find_argv = f"-C {root} exec -- uv python find --managed-python 3.12.11"
+        install_argv = f"-C {root} exec -- uv python install 3.12.11"
+        if fresh_tree:
+            find_body = f"[ -e '{marker}' ] || exit 2\n    printf '%s\\n' '{sys.executable}'"
+            install_body = f": > '{marker}'"
+        else:
+            find_body = f"printf '%s\\n' '{sys.executable}'"
+            install_body = "printf 'unexpected install: find already answered\\n' >&2; exit 97"
+        stub = stub_bin / "mise"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -eu\n"
+            f"printf '%s\\n' \"$*\" >> '{log}'\n"
+            'case "$*" in\n'
+            f"  '-C {root} tasks') exit 0 ;;\n"
+            f"  '{find_argv}')\n    {find_body}\n    ;;\n"
+            f"  '{install_argv}')\n    {install_body}\n    ;;\n"
+            "  *) printf 'unexpected mise argv: %s\\n' \"$*\" >&2; exit 97 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        environment = {
+            "PATH": f"{stub_bin}{os.pathsep}{self.toolless_path()}",
+            "HOME": str(base / "home"),
+        }
+        return environment, log
+
+    def assert_admitted_report(self, completed: subprocess.CompletedProcess[str]) -> dict:
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["runtime"]["state"], "admitted")
+        self.assertIs(report["runtime"]["isolated"], True)
+        self.assertEqual(report["runtime"]["version"], "3.12.11")
+        self.assertNotIn(
+            "runtime-admission-refused", {finding["code"] for finding in report["findings"]}
+        )
+        self.assertEqual(report["overall"]["exit_class"], "ok")
+        return report
+
+    def test_sdlc_status_is_admitted_through_the_direct_isolated_exec(self) -> None:
+        environment, log = self.stub_mise_environment(fresh_tree=False)
+        completed = self.run_ccodex(["sdlc", "status", "--json"], environment)
+        self.assert_admitted_report(completed)
+        self.assertEqual(
+            log.read_text(encoding="utf-8").splitlines(),
+            [
+                f"-C {self.extracted} tasks",
+                f"-C {self.extracted} exec -- uv python find --managed-python 3.12.11",
+            ],
+            "the resolution route must be the trusted probe plus ONE managed-interpreter find;"
+            " any other mise invocation (an install with find answered, a `uv run --script`)"
+            " is a route regression",
+        )
+
+    def test_a_fresh_tree_installs_the_interpreter_once_then_execs_it(self) -> None:
+        environment, log = self.stub_mise_environment(fresh_tree=True)
+        completed = self.run_ccodex(["sdlc", "status", "--json"], environment)
+        self.assert_admitted_report(completed)
+        self.assertEqual(
+            log.read_text(encoding="utf-8").splitlines(),
+            [
+                f"-C {self.extracted} tasks",
+                f"-C {self.extracted} exec -- uv python find --managed-python 3.12.11",
+                f"-C {self.extracted} exec -- uv python install 3.12.11",
+                f"-C {self.extracted} exec -- uv python find --managed-python 3.12.11",
+            ],
+            "a failed find must be followed by exactly one explicit install and one retry",
+        )
 
 
 class ValidatorCoverageTest(unittest.TestCase):
