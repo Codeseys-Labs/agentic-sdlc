@@ -989,7 +989,7 @@ def _validate_release_version_map(
 
 
 def _validate_release_checkout(
-    checkout: dict[str, object], rows: list[dict[str, object]], result: Validation
+    root: Path, checkout: dict[str, object], rows: list[dict[str, object]], result: Validation
 ) -> None:
     _release_contract_exact_keys(checkout, RELEASE_CHECKOUT_KEYS, "checkout", result)
     version = _release_contract_version(checkout.get("version"), "checkout.version", result)
@@ -1022,17 +1022,32 @@ def _validate_release_checkout(
         if public_channel == "preview" and certification_claim != "none":
             result.error("policy/release-contract.v1.json: preview cannot inherit a stable certification claim")
 
-    if version == (0, 7, 3):
+    # This block is keyed to the CURRENT version from .version-bump.json, never a literal tuple:
+    # a literal survives a version bump as dead code, which is exactly how it silently stopped
+    # applying at the 0.7.3 -> 0.7.4 transition (caught in review). Unreadable current version
+    # fails closed rather than skipping the claim checks.
+    bump_current = None
+    current_version = None
+    bump_manifest = root / ".version-bump.json"
+    if bump_manifest.is_file():
+        try:
+            bump_current = str(json.loads(bump_manifest.read_text(encoding="utf-8"))["current"])
+            current_version = tuple(int(part) for part in bump_current.split("."))
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            bump_current = None
+            current_version = None
+            result.error("policy/release-contract.v1.json: the current-version claim guard cannot read .version-bump.json")
+    if current_version is not None and version == current_version:
         if plane != "checkout-development":
-            result.error("policy/release-contract.v1.json: 0.7.4 must remain checkout-development")
+            result.error(f"policy/release-contract.v1.json: {bump_current} must remain checkout-development")
         if public_channel is not None:
-            result.error("policy/release-contract.v1.json: 0.7.4 must not have a public channel")
+            result.error(f"policy/release-contract.v1.json: {bump_current} must not have a public channel")
         if certification_claim != "none":
-            result.error("policy/release-contract.v1.json: 0.7.4 must not make a certification claim")
+            result.error(f"policy/release-contract.v1.json: {bump_current} must not make a certification claim")
         if adr_status != "proposed":
-            result.error("policy/release-contract.v1.json: 0.7.4 keeps the release-topology ADR proposed")
+            result.error(f"policy/release-contract.v1.json: {bump_current} keeps the release-topology ADR proposed")
         if rows:
-            result.error("policy/release-contract.v1.json: 0.7.4 checkout-development has no support rows")
+            result.error(f"policy/release-contract.v1.json: {bump_current} checkout-development has no support rows")
 
 
 def _validate_release_dated_references(
@@ -1487,7 +1502,7 @@ def validate_release_contract(root: Path, result: Validation) -> None:
         _validate_release_claim_lint(root, claim_lint, result)
     if checkout is not None and compatibility is not None:
         core, rows = _validate_release_compatibility(compatibility, checkout, result)
-        _validate_release_checkout(checkout, rows, result)
+        _validate_release_checkout(root, checkout, rows, result)
         if core is not None:
             _validate_release_stable_admission(checkout, rows, core, result)
 

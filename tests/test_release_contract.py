@@ -78,6 +78,38 @@ class ReleaseContractIdentityTests(unittest.TestCase):
             bundle_validator.validate_release_contract(root, result)
             return result.errors
 
+    def test_current_version_claim_guard_fires_and_tracks_the_bump_manifest(self) -> None:
+        contract = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+        current = contract["checkout"]["version"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "policy").mkdir()
+            mutated = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+            mutated["compatibility"]["support_rows"] = [
+                {"planted": "a support row the checkout-development plane must refuse"}
+            ]
+            (root / "policy" / "release-contract.v1.json").write_text(
+                bundle_validator.canonical_release_contract_json(mutated), encoding="utf-8"
+            )
+            (root / ".version-bump.json").write_text(
+                json.dumps({"current": current, "targets": []}), encoding="utf-8"
+            )
+            result = bundle_validator.Validation()
+            bundle_validator.validate_release_contract(root, result)
+            self.assertTrue(
+                any("checkout-development has no support rows" in error for error in result.errors),
+                result.errors,
+            )
+            stale = root / ".version-bump.json"
+            stale.write_text(json.dumps({"current": "9.9.9", "targets": []}), encoding="utf-8")
+            unguarded = bundle_validator.Validation()
+            bundle_validator.validate_release_contract(root, unguarded)
+            self.assertFalse(
+                any("has no support rows" in error for error in unguarded.errors),
+                "the guard must key off the bump manifest, not a literal: "
+                + repr(unguarded.errors),
+            )
+
     def test_shipped_contract_is_canonical_checkout_development_policy(self) -> None:
         result = bundle_validator.Validation()
         bundle_validator.validate_release_contract(ROOT, result)
