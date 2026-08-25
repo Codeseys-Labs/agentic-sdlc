@@ -1,0 +1,247 @@
+name: release-artifact
+#
+# The tag gate that executes the SHIPPED bytes (issue #9, seed agentic-sdlc-6b68).
+#
+# WHY THIS EXISTS. v0.7.3 and v0.7.4 both published a `bin/ccodex` whose `ccodex sdlc` family
+# routed through `uv run --script`, which the reader's own `runtime_admission()` refuses by name
+# ("expected direct -I -B execution"). Every verb of the receipts lifecycle exited 3 from the only
+# artifacts an operator could download, and nothing was red: exit 3 is a CORRECT status for a
+# clean refusal, so the product refused itself with a well-formed report. The root cause was not
+# the twenty lines of bash. It was that `.github/workflows/` held no job that built, extracted, or
+# executed what `scripts/build_release.py` produces. This workflow is that job.
+#
+# WHAT IT PROVES. `build` archives the committed ref once; every downstream job consumes THOSE
+# EXACT BYTES through the artifact store, so the gate and the publication cannot diverge. `smoke`
+# extracts them OUTSIDE the checkout on ubuntu and macos and runs the extracted tree's own
+# `bin/ccodex` against `policy/release-smoke.v1.json`, which asserts report CONTENT on every case
+# and never a bare exit code. `mutation` restores the v0.7.4 route and requires that same smoke to
+# go red for the named reason, so a green `smoke` is evidence rather than a claim.
+#
+# WHAT IT DOES NOT PROVE. Admission, not correctness: `runtime.state == "admitted"` says the
+# interpreter is right, not that the report body is. And a green run authorizes nothing — `publish`
+# uploads to a release a maintainer already created, because creating one is a publication decision
+# this workflow does not make.
+#
+# HOW THE CONDUCTOR RUNS THE MUTATION PROOF. Both jobs run on `workflow_dispatch` too, so the gate
+# is exercisable before any tag exists:
+#   gh workflow run release-artifact --ref <branch>
+# `mutation` applies .github/mutations/restore-v0.7.4-uv-run-sdlc-route.patch to a scratch commit,
+# rebuilds, and passes only when the smoke FAILS naming `runtime-admission-refused`. To prove the
+# job is not vacuously green, drop `--expect-refusal` from its smoke step on a throwaway branch:
+# the same reverted build then reports 6 failing cases and the job goes red.
+#
+# WHY `mise trust` IS HERE ANYWAY. Measured 2026-08-25 with mise 2026.4.27: `CI=true` plus
+# `GITHUB_ACTIONS=true` makes mise auto-trust a never-trusted config, so the extracted tree would
+# resolve its toolchain without this step. It stays because it is the operator's real step and
+# because the consequence matters — the untrusted-tree refusal (also exit 3, and NOT the admission
+# refusal) cannot be exercised on a runner, so no case here may lean on an exit code alone. That is
+# what every `expect_stderr_absent: ["expected direct -I -B execution"]` in the manifest defends.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build the archive once
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    outputs:
+      stem: ${{ steps.build.outputs.stem }}
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # jdx/mise-action v2.4.7
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+        with:
+          install: true
+      # `git archive` reads the checked-out commit and `require_clean` refuses a dirty tree, so
+      # depth 1 is sufficient. The mutation job needs no history either, because it applies a
+      # patch instead of reverting an ancient commit.
+      - name: Build the deterministic archive of this exact commit
+        id: build
+        run: |
+          set -euo pipefail
+          mise run release:build
+          archive="$(ls dist/*.tar.gz)"
+          stem="$(basename "${archive%.tar.gz}")"
+          printf 'stem=%s\n' "$stem" >> "$GITHUB_OUTPUT"
+          printf 'built %s\n' "$archive"
+          cat dist/SHA256SUMS
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-candidate
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  smoke:
+    name: execute the shipped bytes (${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - blacksmith-2vcpu-ubuntu-2404
+          - blacksmith-6vcpu-macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      # actions/checkout v4.3.1 -- for the smoke reader and its manifest, never as the subject.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # jdx/mise-action v2.4.7
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+        with:
+          install: true
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-candidate
+          path: candidate
+      - name: Verify the archive against its own SHA256SUMS and extract outside the checkout
+        id: extract
+        env:
+          STEM: ${{ needs.build.outputs.stem }}
+        run: |
+          set -euo pipefail
+          # python3 rather than sha256sum/shasum: the two runner images do not agree on which of
+          # those exists, and mise-managed python is not on PATH before the tree resolves.
+          python3 - <<'PY'
+          import hashlib, pathlib, sys
+          directory = pathlib.Path("candidate")
+          for line in (directory / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+              expected, name = line.split(maxsplit=1)
+              observed = hashlib.sha256((directory / name.strip()).read_bytes()).hexdigest()
+              if observed != expected:
+                  sys.exit(f"digest mismatch for {name.strip()}: {observed} != {expected}")
+              print(f"verified {name.strip()} {observed}")
+          PY
+          mkdir -p "$RUNNER_TEMP/artifact"
+          tar -xzf "candidate/$STEM.tar.gz" -C "$RUNNER_TEMP/artifact"
+          tree="$RUNNER_TEMP/artifact/$STEM"
+          test -x "$tree/bin/ccodex"
+          printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
+          printf 'extracted to %s (outside %s)\n' "$tree" "$GITHUB_WORKSPACE"
+      # Every value crossing into a shell body goes through `env:`, never through `${{ }}` inline:
+      # these particular values are this workflow's own derived paths, and the habit is the control.
+      - name: Review-and-trust the extracted tree's own config
+        env:
+          TREE: ${{ steps.extract.outputs.tree }}
+        run: mise trust "$TREE/mise.toml"
+      # Bounded retry on PROVISIONING ONLY, never on an assertion. The first `ccodex sdlc` verb on
+      # a fresh tree resolves the pinned toolset and asks uv for its managed CPython 3.12.11,
+      # downloading it if absent -- honest operator behavior, and an upstream availability
+      # dependency inside a correctness gate. Doing it here keeps a network flake out of the
+      # verdict; the smoke still takes the identical dispatcher route afterwards.
+      - name: Provision the extracted tree's pinned toolchain (bounded, retried)
+        env:
+          TREE: ${{ steps.extract.outputs.tree }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            if mise -C "$TREE" exec -- uv python install 3.12.11; then
+              exit 0
+            fi
+            printf 'provisioning attempt %s failed; retrying\n' "$attempt" >&2
+            sleep 15
+          done
+          printf 'error: could not provision the pinned CPython after 3 attempts\n' >&2
+          exit 1
+      - name: Run the smoke manifest against the EXTRACTED tree
+        env:
+          TREE: ${{ steps.extract.outputs.tree }}
+        run: mise run release:smoke -- --tree "$TREE"
+
+  mutation:
+    name: the gate must go red on the v0.7.4 route
+    needs: build
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # jdx/mise-action v2.4.7
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+        with:
+          install: true
+      # The builder archives the committed tree and refuses a dirty one, so the mutation must be
+      # committed. `git -c` supplies the identity for this one command instead of persisting a
+      # config. The commit is local to a disposable runner and is never pushed.
+      - name: Restore the v0.7.4 sdlc route and rebuild from the mutated tree
+        id: mutate
+        run: |
+          set -euo pipefail
+          git apply --check -v .github/mutations/restore-v0.7.4-uv-run-sdlc-route.patch
+          git apply .github/mutations/restore-v0.7.4-uv-run-sdlc-route.patch
+          grep -n 'run_python ccodex_sdlc.py' bin/ccodex
+          git -c user.name='release-artifact gate' \
+              -c user.email='release-artifact@invalid' \
+              commit --quiet --no-verify -a -m 'MUTATION: restore the v0.7.4 sdlc route'
+          mise run release:build
+          archive="$(ls dist/*.tar.gz)"
+          stem="$(basename "${archive%.tar.gz}")"
+          mkdir -p "$RUNNER_TEMP/mutated"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/mutated"
+          printf 'tree=%s\n' "$RUNNER_TEMP/mutated/$stem" >> "$GITHUB_OUTPUT"
+      - name: Review-and-trust the mutated tree's own config
+        env:
+          TREE: ${{ steps.mutate.outputs.tree }}
+        run: mise trust "$TREE/mise.toml"
+      - name: Provision the mutated tree's pinned toolchain (bounded, retried)
+        env:
+          TREE: ${{ steps.mutate.outputs.tree }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            if mise -C "$TREE" exec -- uv python install 3.12.11; then
+              exit 0
+            fi
+            printf 'provisioning attempt %s failed; retrying\n' "$attempt" >&2
+            sleep 15
+          done
+          printf 'error: could not provision the pinned CPython after 3 attempts\n' >&2
+          exit 1
+      # Green ONLY IF the smoke fails and every failure is attributed to one of these markers.
+      # A run that failed for an unrelated reason, and a run that passed because the mutation
+      # stopped mattering, both fail this step. `git checkout` restores the route afterwards so no
+      # later step reads mutated bytes.
+      - name: The smoke must fail, and fail by name
+        env:
+          TREE: ${{ steps.mutate.outputs.tree }}
+        run: |
+          set -euo pipefail
+          git checkout HEAD~1 -- bin/ccodex
+          mise run release:smoke -- \
+            --tree "$TREE" \
+            --expect-refusal \
+            --require-marker runtime-admission-refused \
+            --require-marker 'expected direct -I -B execution'
+
+  publish:
+    name: attach the smoked bytes to the tag's release
+    needs: [smoke, mutation]
+    # A tag push only. A manual dispatch exercises the gate and never publishes.
+    if: github.event_name == 'push'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: write
+    steps:
+      # actions/download-artifact v8.0.1 -- the same bytes `smoke` and `mutation` gated.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-candidate
+          path: candidate
+      # The release must already exist: creating one is a publication decision, so this step
+      # attaches assets to a maintainer's release and refuses (nonzero) rather than creating it.
+      - name: Upload the archive and its digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            candidate/*.tar.gz candidate/SHA256SUMS

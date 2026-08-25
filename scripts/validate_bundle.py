@@ -514,6 +514,21 @@ mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest" "$repo
 CI_WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "validate.yml"
 CI_WORKFLOW_SHA256 = "9e8a1c3f9c142cc82ad42ee920d31151381b309488e6cf51bbca375ec9177dc5"
 
+# The tag gate (issue #9, seed agentic-sdlc-6b68) is the second reviewed CI surface, pinned in the
+# same digest form and for the same three reasons as the graph above. It earns a pin of its own
+# because of what it is allowed to do that `validate.yml` is not: it executes an extracted archive's
+# own bytes, and its `publish` job carries `contents: write`. An unreviewed edit there could weaken
+# the `needs: [smoke, mutation]` gating, drop `--expect-refusal` from the mutation proof so the job
+# passes vacuously, or point the smoke at the checkout instead of the extracted tree -- each of
+# which leaves a green run that proves nothing while looking exactly like one that proves something.
+# tests/test_release_smoke.py additionally asserts the STRUCTURE this pin only freezes, so a
+# legitimate edit that re-pins here still has to keep those properties.
+# Re-pin with
+# `python3 -c "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('.github/workflows/release.yml').read_text(encoding='utf-8').encode()).hexdigest())"`
+# after reviewing the diff.
+RELEASE_WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "release.yml"
+RELEASE_WORKFLOW_SHA256 = "31ba01e4d65a5dd3c8a5b819db032356a130f9dd77c873e2a8199232d8d1ffdb"
+
 
 class Validation:
     def __init__(self) -> None:
@@ -2156,6 +2171,20 @@ pre-push:
 """
     if not hooks.is_file() or hooks.read_text(encoding="utf-8") != expected_hooks:
         result.error("lefthook.yml must contain the documented best-effort gate subsets")
+
+    release_workflow = root / RELEASE_WORKFLOW_RELATIVE_PATH
+    if not release_workflow.is_file():
+        result.error(".github/workflows/release.yml is required")
+    else:
+        # Exact-content pin, digest form. See RELEASE_WORKFLOW_SHA256 for why this surface carries
+        # its own pin and for the re-pin command.
+        try:
+            release_text: str | None = release_workflow.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            result.error(f"release workflow is unreadable: {exc}")
+            release_text = None
+        if release_text is not None and sha256_bytes(release_text.encode("utf-8")) != RELEASE_WORKFLOW_SHA256:
+            result.error("release workflow must equal the reviewed tag gate that executes the shipped archive")
 
     workflow = root / CI_WORKFLOW_RELATIVE_PATH
     if not workflow.is_file():

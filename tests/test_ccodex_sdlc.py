@@ -150,7 +150,7 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertEqual(report["schema_version"], "ccodex-sdlc-read-report/v1")
             self.assertEqual(report["command"]["verb"], "inspect")
             self.assertEqual(report["checkout"]["plane"], "checkout-development")
-            self.assertEqual(report["checkout"]["version"], "0.7.4")
+            self.assertEqual(report["checkout"]["version"], "0.7.5")
             self.assertIsNone(report["checkout"]["public_channel"])
             self.assertEqual(report["checkout"]["certification_claim"], "none")
             self.assertTrue(report["runtime"]["isolated"])

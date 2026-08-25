@@ -1,0 +1,42 @@
+Restore the v0.7.4 `ccodex sdlc` dispatch, so the tag gate's smoke run MUST go red.
+
+This is a MUTATION FIXTURE, never a change anyone should land. It reverts the one line
+`cd3fd3dec33e429fddb0a2acfe5a1d4bc2f01428` fixed, putting `ccodex sdlc` back on the shared
+`uv run --script` route that `runtime_admission()` in scripts/ccodex_sdlc.py refuses by name
+("expected direct -I -B execution"). That regression shipped in BOTH published prereleases,
+v0.7.3 and v0.7.4, because no gate executed the archive; issue #9 is the record.
+
+.github/workflows/release.yml's `mutation` job applies this file to a scratch checkout, rebuilds
+the archive from the mutated tree, and requires `mise run release:smoke --expect-refusal` to
+report the failure by name. A gate that stays green with this applied has stopped proving
+anything, so the job fails when the smoke PASSES.
+
+The mechanism is a patch file rather than `git revert cd3fd3d` on purpose: a revert makes an
+ancient commit load-bearing CI history, which a later squash or re-root would turn into a hard
+error, and it would also revert that commit's tests. A patch that no longer applies also fails
+the job -- the right direction -- and names bin/ccodex as the file to re-derive it from.
+
+Re-derive after an intended change to that route:
+  1. edit bin/ccodex's `sdlc)` case to call `run_python ccodex_sdlc.py "$@"`
+  2. git diff -U6 -- bin/ccodex   (keep this preamble; `git apply` ignores it)
+  3. git checkout -- bin/ccodex
+
+diff --git a/bin/ccodex b/bin/ccodex
+index 561f27c..8f0f1a0 100755
+--- a/bin/ccodex
++++ b/bin/ccodex
+@@ -313,13 +313,13 @@ case "$route" in
+     ;;
+   sdlc)
+     shift
+     # Readers and the mutating lifecycle verbs take one route on purpose: every verb decision --
+     # admit, refuse by name, or hand off to a per-verb module -- belongs to scripts/ccodex_sdlc.py,
+     # so the argument vector is forwarded unchanged.
+-    run_sdlc_python "$@"
++    run_python ccodex_sdlc.py "$@"
+     ;;
+   version)
+     printf 'ccodex (agentic-sdlc self-located dispatcher)\n'
+     printf '  distribution root : %s\n' "$root"
+     printf '  root source       : self-located (parent of this command'"'"'s own bin/)\n'
+     printf '  launcher          : %s%s\n' "$launcher" "$([ -f "$launcher" ] || printf ' (MISSING)')"

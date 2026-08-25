@@ -34,7 +34,7 @@ EXPECTED_CHECKOUT = {
     "plane": "checkout-development",
     "public_channel": None,
     "release_topology_adr_status": "proposed",
-    "version": "0.7.4",
+    "version": "0.7.5",
 }
 READER_VERBS = ("inspect", "status", "doctor", "recover")
 # The three mutating lifecycle verbs. This file stays a reader: it parses the closed grammar and

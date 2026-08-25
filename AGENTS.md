@@ -448,6 +448,18 @@ model selection as policy.
   built archive under `$XDG_DATA_HOME/agentic-sdlc/acquisition/candidates` is documented in
   `docs/plans/2026-08-14T163833Z-Install-UX.md`. A built archive is evidence of what was archived,
   never a release or a publication
+- `release:smoke` — run `policy/release-smoke.v1.json` against an EXTRACTED archive
+  (`-- --tree <extracted-root>`, `scripts/smoke_release.py`). It exists because v0.7.3 and v0.7.4
+  both shipped a `ccodex sdlc` plane that refused itself at exit 3 while no gate executed the
+  archive, so every case asserts report CONTENT and no case may assert a bare exit code: exit 3 is
+  a legitimate status here, and only the body separates "the host is not certified" from "the
+  dispatcher built the wrong interpreter invocation". A tree inside this checkout is refused rather
+  than smoke-tested as the artifact. `--expect-refusal` inverts the verdict for
+  `.github/workflows/release.yml`'s mutation job, which restores the v0.7.4 route from
+  `.github/mutations/restore-v0.7.4-uv-run-sdlc-route.patch` and requires the smoke to go red
+  naming `runtime-admission-refused`. Never a gate leaf — it needs an artifact built and extracted
+  outside the checkout, which `check` neither produces nor should require — and a passing smoke is
+  evidence, never authorization to publish
 - `libraries:list`, `libraries:status`, `libraries:install`, `libraries:migrate` — external skill
   libraries through their own front doors, opt-in and dry-run without `--yes`; `migrate` retires
   another channel's copies of the same upstream through that channel's own removal path before

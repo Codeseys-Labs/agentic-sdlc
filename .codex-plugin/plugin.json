@@ -1,6 +1,6 @@
 {
   "name": "agentic-sdlc",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Provider-native multi-agent SDLC with Seeds, git worktree waves, and evidence-graded research teams; cmux remains an optional view/event layer",
   "author": {
     "name": "Baladithya Balamurugan"
