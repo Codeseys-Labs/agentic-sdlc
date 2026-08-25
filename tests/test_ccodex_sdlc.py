@@ -10,15 +10,29 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
-OPERATOR_SCRIPT = ROOT / "scripts" / "install_operator_tools.py"
-spec = importlib.util.spec_from_file_location("ccodex_sdlc_operator_tools", OPERATOR_SCRIPT)
-assert spec and spec.loader
-operator_tools = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = operator_tools
-spec.loader.exec_module(operator_tools)
+#: The real reader, driven directly under -I -B (gh #10 phase 4 deleted the rendered
+#: assets/launchers/ccodex.in template and the install_operator_tools.py plane that rendered it).
+#: There is no install step any more: the committed bin/ccodex resolves the "sdlc" route's pinned
+#: interpreter at run time through `mise -C <root> exec`, which requires this checkout's own
+#: mise.toml to be trusted under the REAL operator HOME -- a fact an isolated test HOME can never
+#: carry without a persistent trust mutation. Driving scripts/ccodex_sdlc.py directly, exactly as
+#: bin/ccodex's own run_sdlc_python resolves and execs it, sidesteps that boundary; the boundary
+#: itself is proven elsewhere (tests/test_bin_ccodex.py, tests/test_ccodex_seam.py).
+READER_SCRIPT = ROOT / "scripts" / "ccodex_sdlc.py"
+DISPATCHER_SCRIPT = ROOT / "bin" / "ccodex"
+#: The reader loaded IN-PROCESS, for the unit-level `retired_store_findings` coverage below. Every
+#: subprocess-driven test above still exercises the real file at its own real physical path; this
+#: import is a second, in-process view of the identical bytes for a function this file's other
+#: tests have no reason to fork a process to reach.
+reader_spec = importlib.util.spec_from_file_location("ccodex_sdlc_reader", READER_SCRIPT)
+assert reader_spec and reader_spec.loader
+reader = importlib.util.module_from_spec(reader_spec)
+sys.modules[reader_spec.name] = reader
+reader_spec.loader.exec_module(reader)
 
 BUNDLE_SCRIPT = ROOT / "scripts" / "install_skill_bundle.py"
 bundle_spec = importlib.util.spec_from_file_location("ccodex_sdlc_bundle", BUNDLE_SCRIPT)
@@ -42,61 +56,43 @@ validator_spec.loader.exec_module(validator)
     "closed by name at the CLI",
 )
 class CcodexSdlcTests(unittest.TestCase):
-    def make_shadow_reader(self, root: Path) -> Path:
-        shadow = root / "shadow-checkout"
-        for relative in (
-            "policy/ccodex-sdlc-read-report.v1.json",
-            "policy/release-contract.v1.json",
-            "scripts/ccodex_sdlc.py",
-            "scripts/ccodex_sdlc_readonly.py",
-            "scripts/install_operator_tools.py",
-            "scripts/install_skill_bundle.py",
-        ):
-            destination = shadow / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(ROOT / relative, destination)
-        return shadow
-
     def make_dispatcher(self, root: Path) -> tuple[Path, dict[str, str], Path]:
-        runtime = root / "runtime"
-        runtime.mkdir()
-        for name in ("ocx", "jq", "uv"):
-            executable = runtime / name
-            executable.write_text("#!/bin/sh\nexit 0\n")
-            executable.chmod(0o755)
-        install_home = root / "install-home"
-        config = operator_tools.Config(
-            ROOT,
-            install_home,
-            root / "bin",
-            root / "installer-state",
-            False,
-            False,
-            runtime / "ocx",
-            runtime / "jq",
-            runtime / "uv",
-            Path(sys.executable),
-        )
-        installed, messages = operator_tools.install(config)
-        self.assertEqual(installed, 0, messages)
+        """An isolated per-test query plane for the ``ccodex sdlc`` reader, no install step.
+
+        See the module-level note on ``READER_SCRIPT``/``DISPATCHER_SCRIPT``: ``run_dispatcher``
+        drives the reader directly under ``-I -B`` for the "sdlc"-prefixed vectors this file
+        exercises, so no synthetic ``ocx``/``jq``/``uv``/interpreter binding is rendered here.
+        """
         query_home = root / "query-home"
         query_state = root / "query-state"
         environment = os.environ.copy()
         environment.update(
             {
-                "AGENTIC_SDLC_ROOT": str(ROOT),
                 "HOME": str(query_home),
-                "XDG_BIN_HOME": str(root / "query-bin"),
                 "XDG_STATE_HOME": str(query_state),
                 "CODEX_HOME": str(query_home / ".codex"),
                 "PYTHONPATH": str(root / "poisoned-pythonpath"),
             }
         )
-        return config.bin_dir / "ccodex", environment, query_state
+        return DISPATCHER_SCRIPT, environment, query_state
 
     def run_dispatcher(
         self, dispatcher: Path, environment: dict[str, str], *arguments: str
     ) -> subprocess.CompletedProcess[str]:
+        """Drive one ``ccodex`` invocation, routed the way ``bin/ccodex`` itself would route it.
+
+        A leading ``sdlc`` is this suite's own subject and is driven directly against the real
+        reader under ``-I -B``; the toolchain-resolution boundary above it is proven elsewhere
+        (``tests/test_bin_ccodex.py``, ``tests/test_ccodex_seam.py``), not duplicated here.
+        """
+        if arguments and arguments[0] == "sdlc":
+            return subprocess.run(
+                [str(Path(sys.executable)), "-I", "-B", str(READER_SCRIPT), *arguments[1:]],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         return subprocess.run(
             [str(dispatcher), *arguments],
             env=environment,
@@ -104,9 +100,6 @@ class CcodexSdlcTests(unittest.TestCase):
             text=True,
             check=False,
         )
-
-    def operator_state_path(self, environment: dict[str, str]) -> Path:
-        return Path(environment["XDG_STATE_HOME"]) / "agentic-sdlc-operator-tools" / "state.json"
 
     def bundle_state_path(self, environment: dict[str, str]) -> Path:
         return Path(environment["XDG_STATE_HOME"]) / "agentic-sdlc-installer" / "state.json"
@@ -139,6 +132,21 @@ class CcodexSdlcTests(unittest.TestCase):
     def valid_install_transition(self, destination: Path, record: dict[str, object]) -> dict[str, object]:
         return bundle.pending_slot("install", str(destination), None, record)
 
+    def foreign_bundle_record(
+        self, root: Path, environment: dict[str, str], name: str
+    ) -> tuple[Path, dict[str, object]]:
+        """A recorded entry whose live bytes drifted from the digest this lifecycle published.
+
+        Built on ``valid_bundle_record``'s own construction so the destination is a real,
+        config-derived path, but the destination is left ON DISK with DIFFERENT content instead
+        of being removed: ``entry_matches_record`` recomputes the live digest, which no longer
+        equals the recorded one, so the projection's entry state is "foreign".
+        """
+        destination, record = self.valid_bundle_record(root, environment, name)
+        destination.mkdir(parents=True)
+        (destination / "SKILL.md").write_text("---\nname: replaced-after-recording\n---\n")
+        return destination, record
+
     def test_inspect_json_is_a_read_only_checkout_development_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             dispatcher, environment, query_state = self.make_dispatcher(Path(temp))
@@ -165,6 +173,12 @@ class CcodexSdlcTests(unittest.TestCase):
         declares `state_paths`, so the field survives its second value. A report that fails
         `validate_report` never reaches stdout, which is why exit 0 plus parseable JSON is the
         validation assertion here.
+
+        gh #10 phase 4 deleted the operator-tools plane and its `operator_tools` top-level report
+        field with it: `report_top_level_fields` is now exactly `bundle`'s neighbours (see
+        `test_validator_pins_both_ccodex_report_policies_by_digest` for the closed list), and
+        `_exact_keys` in `validate_report` refuses ANY extra key -- so the absence asserted below
+        is enforced structurally, not merely by this one test happening not to look for it.
         """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -177,7 +191,11 @@ class CcodexSdlcTests(unittest.TestCase):
                     self.assertEqual(machine.returncode, 0, machine.stderr)
                     report = json.loads(machine.stdout)
                     self.assertEqual(report["bundle"]["state_paths"], [expected])
-                    self.assertEqual(len(report["operator_tools"]["state_paths"]), 1)
+                    self.assertNotIn("operator_tools", report)
+                    # Positive control: the same membership test DOES catch a field that is really
+                    # there, so the absence above is a fact about this report and not a check that
+                    # would pass over any key at all.
+                    self.assertIn("bundle", report)
 
     def test_all_read_only_verbs_and_renderer_parity_share_one_semantic_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -204,26 +222,27 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertFalse(query_state.exists())
 
     def test_pending_recovery_blocker_has_human_json_parity_without_state_mutation(self) -> None:
+        """Re-anchored onto the bundle plane (gh #10 phase 4 deleted the operator-tools store).
+
+        The subject -- human/JSON parity plus zero mutation around a blocked pending recovery --
+        survives unchanged; only the substrate that can still carry a pending transition moved.
+        """
         with tempfile.TemporaryDirectory() as temp:
-            dispatcher, environment, _query_state = self.make_dispatcher(Path(temp))
-            state_path = self.operator_state_path(environment)
-            command_path = Path(environment["XDG_BIN_HOME"]) / "ccodex"
-            state = {
-                "version": 2,
-                "entries": {},
-                "pending": {
-                    "operation": "install",
-                    "path": str(command_path),
-                    "before": None,
-                    "after": {
-                        "path": str(command_path),
-                        "digest": "0" * 64,
-                        "removable": "true",
-                    },
-                },
-            }
+            root = Path(temp)
+            dispatcher, environment, _query_state = self.make_dispatcher(root)
+            destination, record = self.valid_bundle_record(root, environment, "pending-parity-fixture")
+            state_path = self.bundle_state_path(environment)
             state_path.parent.mkdir(parents=True)
-            state_path.write_text(json.dumps(state, sort_keys=True))
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": bundle.STATE_VERSION,
+                        "entries": {},
+                        "pending": self.valid_install_transition(destination, record),
+                    },
+                    sort_keys=True,
+                )
+            )
             before = state_path.read_bytes()
 
             human = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run")
@@ -240,15 +259,27 @@ class CcodexSdlcTests(unittest.TestCase):
             for proposal in report["recovery"]["proposals"]:
                 self.assertIn(proposal["path"], human.stdout)
             self.assertEqual(state_path.read_bytes(), before)
-            self.assertFalse(state_path.with_name("lock").exists())
+            self.assertFalse(state_path.with_name("installer.lock").exists())
 
-    def test_public_reader_types_malformed_symlinked_and_foreign_operator_evidence(self) -> None:
+    def test_public_reader_types_malformed_symlinked_and_foreign_bundle_evidence(self) -> None:
+        """Re-anchored onto the bundle plane; the "foreign dispatcher" sub-case has no successor.
+
+        gh #10 phase 4 deleted the operator-tools store this test used to type malformed,
+        symlinked, and foreign evidence against; malformed and symlinked survive unchanged onto
+        the bundle's own `agentic-sdlc-installer/state.json`, which the reader still reads through
+        the identical `_readonly_read_file`/`_readonly_json_document` path. The retired sub-case
+        was about a `ccodex` command file the operator-tools installer owned on PATH -- a concept
+        that left with the plane, since the committed `bin/ccodex` carries no install-time
+        ownership record at all -- so it is replaced with the bundle plane's own equivalent
+        conflict: a recorded entry whose live bytes drifted from what was published, which the
+        projection reports as "foreign" and the report as `owned-entry-conflict`.
+        """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, _query_state = self.make_dispatcher(root)
-            state_path = self.operator_state_path(environment)
+            state_path = self.bundle_state_path(environment)
             state_path.parent.mkdir(parents=True)
-            state_path.write_text('{"version":2,"entries":{},"entries":{},"pending":null}')
+            state_path.write_text('{"version":4,"entries":{},"entries":{},"pending":null}')
             malformed_before = state_path.read_bytes()
 
             malformed = self.run_dispatcher(dispatcher, environment, "sdlc", "inspect", "--json")
@@ -264,7 +295,7 @@ class CcodexSdlcTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, _query_state = self.make_dispatcher(root)
-            state_path = self.operator_state_path(environment)
+            state_path = self.bundle_state_path(environment)
             state_path.parent.mkdir(parents=True)
             external = root / "external-state"
             external.write_text("{}")
@@ -280,61 +311,57 @@ class CcodexSdlcTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            dispatcher, environment, query_state = self.make_dispatcher(root)
-            foreign = Path(environment["XDG_BIN_HOME"]) / "ccodex"
-            foreign.parent.mkdir(parents=True)
-            foreign.write_text("foreign dispatcher")
+            dispatcher, environment, _query_state = self.make_dispatcher(root)
+            destination, record = self.foreign_bundle_record(root, environment, "foreign-fixture")
+            state_path = self.bundle_state_path(environment)
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(
+                json.dumps(
+                    {"version": bundle.STATE_VERSION, "entries": {str(destination): record}, "pending": None},
+                    sort_keys=True,
+                )
+            )
+            foreign_before = state_path.read_bytes()
 
             foreign_result = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
 
             self.assertEqual(foreign_result.returncode, 0, foreign_result.stderr)
             foreign_report = json.loads(foreign_result.stdout)
             self.assertEqual(foreign_report["overall"]["state"], "degraded")
-            self.assertIn("foreign-entry", {finding["code"] for finding in foreign_report["findings"]})
-            self.assertFalse(query_state.exists())
+            self.assertIn("owned-entry-conflict", {finding["code"] for finding in foreign_report["findings"]})
+            self.assertEqual(foreign_report["bundle"]["entries"][0]["state"], "foreign")
+            # The reader is read-only: the drifted entry is reported, never repaired or overwritten.
+            self.assertEqual(state_path.read_bytes(), foreign_before)
 
     def test_hostile_state_values_are_redacted_from_json_and_human_reports(self) -> None:
+        """Re-anchored onto the bundle plane: three sub-cases, not six.
+
+        gh #10 phase 4 deleted the operator-tools store, so the four `operator-*` sub-cases lost
+        their subject. `operator-version` and `operator-pending` were exactly the shapes
+        `bundle-version` and `bundle-transition` already cover on the surviving plane, so nothing
+        is lost by dropping them rather than doubling them. `operator-duplicate` and
+        `operator-record` tested a DIFFERENT structural position -- a canary that could only leak
+        through a document-level PARSE failure, never through a validated field -- and that
+        position survives here as `bundle-malformed`: `_readonly_json_document` raises on a
+        duplicate top-level key and the caller reports the FIXED literal "bundle state is
+        malformed", so the canary cannot reach either report by construction, whether it names a
+        duplicate key or a duplicate entries record.
+        """
         canaries = {
-            "operator-version": "AK" + "IA" + "0" * 16,
-            "operator-duplicate": "sk" + "-ant-api-duplicate-canary",
-            "operator-pending": "gh" + "p_pending-canary",
-            "operator-record": "xox" + "b-record-canary",
-            "bundle-version": "AK" + "IA" + "1" * 16,
-            "bundle-transition": "sk" + "-ant-api-transition-canary",
+            "bundle-version": "AK" + "IA" + "0" * 16,
+            "bundle-malformed": "sk" + "-ant-api-malformed-canary",
+            "bundle-transition": "gh" + "p_transition-canary",
         }
-
-        def operator_version(root: Path, environment: dict[str, str], canary: str) -> None:
-            path = self.operator_state_path(environment)
-            path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"version": canary, "entries": {}, "pending": None}))
-
-        def operator_duplicate(root: Path, environment: dict[str, str], canary: str) -> None:
-            path = self.operator_state_path(environment)
-            path.parent.mkdir(parents=True)
-            path.write_text(f'{{"version":2,"{canary}":"{canary}","{canary}":"{canary}"}}')
-
-        def operator_pending(root: Path, environment: dict[str, str], canary: str) -> None:
-            path = self.operator_state_path(environment)
-            path.parent.mkdir(parents=True)
-            path.write_text(
-                json.dumps(
-                    {
-                        "version": 2,
-                        "entries": {},
-                        "pending": {"operation": "install", "path": canary, "before": None, "after": None},
-                    }
-                )
-            )
-
-        def operator_record(root: Path, environment: dict[str, str], canary: str) -> None:
-            path = self.operator_state_path(environment)
-            path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"version": 2, "entries": {canary: {}}, "pending": None}))
 
         def bundle_version(root: Path, environment: dict[str, str], canary: str) -> None:
             path = self.bundle_state_path(environment)
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps({"version": canary, "entries": {}, "pending": None}))
+
+        def bundle_malformed(root: Path, environment: dict[str, str], canary: str) -> None:
+            path = self.bundle_state_path(environment)
+            path.parent.mkdir(parents=True)
+            path.write_text(f'{{"version":{bundle.STATE_VERSION},"{canary}":"{canary}","{canary}":"{canary}"}}')
 
         def bundle_transition(root: Path, environment: dict[str, str], canary: str) -> None:
             path = self.bundle_state_path(environment)
@@ -350,11 +377,8 @@ class CcodexSdlcTests(unittest.TestCase):
             )
 
         scenarios = {
-            "operator-version": operator_version,
-            "operator-duplicate": operator_duplicate,
-            "operator-pending": operator_pending,
-            "operator-record": operator_record,
             "bundle-version": bundle_version,
+            "bundle-malformed": bundle_malformed,
             "bundle-transition": bundle_transition,
         }
         for name, builder in scenarios.items():
@@ -496,21 +520,38 @@ class CcodexSdlcTests(unittest.TestCase):
                     self.assertIn("usage: ccodex sdlc", completed.stderr)
             self.assertFalse(query_state.exists())
 
-    def test_missing_and_wrong_bound_interpreters_refuse_without_fallback(self) -> None:
+    def test_wrong_or_unisolated_interpreters_refuse_before_any_report_is_trusted(self) -> None:
+        """``runtime_admission()``'s own refusal ladder, driven directly.
+
+        gh #10 phase 4 deleted the rendered ``assets/launchers/ccodex.in`` template entirely, so
+        there is no more install-time ``installed_sdlc_python='...'`` marker to substitute a
+        missing or wrong interpreter into -- that whole mechanism (and its "missing interpreter"
+        refusal) left with the rendering plane. What survives is ``runtime_admission()`` itself,
+        which this test drives directly with (a) the pinned interpreter missing its own isolation
+        flags and (b) a genuinely different interpreter under full isolation. ``-B`` is kept on
+        the unisolated invocation specifically so it writes no ``.pyc`` into this checkout's own
+        ``scripts/`` directory -- it alone still forces ``sys.flags.isolated`` False, which is the
+        one fact this sub-case needs.
+        """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, query_state = self.make_dispatcher(root)
-            original = dispatcher.read_text()
-            marker = "installed_sdlc_python='"
-            self.assertIn(marker, original)
-            missing = root / "missing-python"
-            dispatcher.write_text(original.replace(f"installed_sdlc_python='{Path(sys.executable)}'", f"installed_sdlc_python='{missing}'"))
-            dispatcher.chmod(0o755)
 
-            missing_result = self.run_dispatcher(dispatcher, environment, "sdlc", "inspect", "--json")
-
-            self.assertEqual(missing_result.returncode, 3)
-            self.assertIn("ccodex sdlc Python 3.12.11 interpreter is unavailable", missing_result.stderr)
+            unisolated = subprocess.run(
+                [str(Path(sys.executable)), "-B", str(READER_SCRIPT), "inspect", "--json"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(unisolated.returncode, 3, unisolated.stderr)
+            unisolated_report = json.loads(unisolated.stdout)
+            self.assertEqual(unisolated_report["runtime"]["state"], "refused")
+            self.assertFalse(unisolated_report["runtime"]["isolated"])
+            self.assertEqual(unisolated_report["overall"]["exit_class"], "safe-refusal")
+            self.assertIn(
+                "runtime-admission-refused", {item["code"] for item in unisolated_report["findings"]}
+            )
             self.assertFalse(query_state.exists())
 
             wrong = next(
@@ -534,11 +575,14 @@ class CcodexSdlcTests(unittest.TestCase):
                 None,
             )
             self.assertIsNotNone(wrong, "a wrong interpreter is required to test runtime admission")
-            dispatcher.write_text(original.replace(f"installed_sdlc_python='{Path(sys.executable)}'", f"installed_sdlc_python='{wrong}'"))
-            dispatcher.chmod(0o755)
 
-            wrong_result = self.run_dispatcher(dispatcher, environment, "sdlc", "inspect", "--json")
-
+            wrong_result = subprocess.run(
+                [str(wrong), "-I", "-B", str(READER_SCRIPT), "inspect", "--json"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             self.assertEqual(wrong_result.returncode, 3, wrong_result.stderr)
             report = json.loads(wrong_result.stdout)
             self.assertEqual(report["runtime"]["state"], "refused")
@@ -546,20 +590,12 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertIn("runtime-admission-refused", {item["code"] for item in report["findings"]})
             self.assertFalse(query_state.exists())
 
-    def test_top_level_gateway_status_route_remains_the_gateway_route(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            dispatcher, environment, _query_state = self.make_dispatcher(root)
-            launcher = root / "shadow-root" / "scripts" / "opencodex-claude.sh"
-            launcher.parent.mkdir(parents=True)
-            launcher.write_text("#!/bin/sh\nprintf 'GATEWAY-STATUS:%s\\n' \"$1\"\n")
-            launcher.chmod(0o755)
-            environment["AGENTIC_SDLC_ROOT"] = str(launcher.parents[1])
-
-            completed = self.run_dispatcher(dispatcher, environment, "status")
-
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(completed.stdout, "GATEWAY-STATUS:status\n")
+            # Positive control: the SAME reader, under the SAME pinned interpreter this suite runs
+            # on, is admitted -- so the two refusals above are about the interpreter and not about a
+            # report that refuses unconditionally.
+            admitted = self.run_dispatcher(dispatcher, environment, "sdlc", "inspect", "--json")
+            self.assertEqual(admitted.returncode, 0, admitted.stderr)
+            self.assertEqual(json.loads(admitted.stdout)["runtime"]["state"], "admitted")
 
     def test_validator_pins_both_ccodex_report_policies_by_digest(self) -> None:
         """The structural re-derivation collapsed to a digest; the predicate got stronger.
@@ -635,7 +671,16 @@ class CcodexSdlcTests(unittest.TestCase):
                     linked.errors,
                 )
 
-    def test_generated_dispatcher_does_not_fall_back_to_poisoned_external_tools(self) -> None:
+    def test_the_reader_does_not_fall_back_to_poisoned_external_tools(self) -> None:
+        """The reader loads every sibling by absolute path and never shells out by name.
+
+        Driven directly rather than through a rendered dispatcher (gh #10 phase 4 deleted that
+        rendering plane): ``run_dispatcher`` strips the leading ``sdlc`` and execs the real
+        ``scripts/ccodex_sdlc.py`` under ``-I -B``, so a poisoned ``PATH`` still proves the same
+        claim it always did -- nothing in the reader's own code resolves ``ocx``/``mise``/``uv``/
+        ``curl``/``git``/``claude``/``seeds``/``node`` by name, and its read-only guard blocks
+        ``subprocess`` outright.
+        """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment, query_state = self.make_dispatcher(root)
@@ -715,10 +760,18 @@ print('guard blocked every attempted effect')
         sys.platform.startswith("linux") and shutil.which("strace"),
         "Linux strace is unavailable; portable sentinel coverage remains active",
     )
-    def test_generated_dispatcher_has_no_effectful_syscalls_or_external_tool_fallbacks(self) -> None:
+    def test_the_reader_has_no_effectful_syscalls_or_external_tool_fallbacks(self) -> None:
+        """The real reader's own syscall trace, driven directly: no bash layer, no mise, no child.
+
+        gh #10 phase 4 deleted the rendered dispatcher this trace used to cover, along with the
+        install-time plane that rendered it. What this test proves is scoped to exactly what
+        ``run_dispatcher`` drives for every ``sdlc`` vector in this file -- the real
+        ``scripts/ccodex_sdlc.py`` under ``-I -B`` -- so the trace covers the one process this
+        suite's other assertions exercise, with no bash-initialization noise to except.
+        """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            dispatcher, environment, query_state = self.make_dispatcher(root)
+            _dispatcher, environment, query_state = self.make_dispatcher(root)
             sentinel_bin = root / "sentinel-bin"
             sentinel_bin.mkdir()
             marker = root / "external-tool-ran"
@@ -737,8 +790,10 @@ print('guard blocked every attempted effect')
                     str(trace),
                     "-e",
                     "trace=open,openat,creat,mkdir,mkdirat,rename,renameat,renameat2,unlink,unlinkat,fsync,fdatasync,flock,fcntl,connect,socket,socketpair,execve",
-                    str(dispatcher),
-                    "sdlc",
+                    str(Path(sys.executable)),
+                    "-I",
+                    "-B",
+                    str(READER_SCRIPT),
                     "doctor",
                     "--json",
                 ],
@@ -754,9 +809,8 @@ print('guard blocked every attempted effect')
             syscalls = trace.read_text()
             effectful: list[str] = []
             for line in syscalls.splitlines():
-                # Bash probes /dev/tty read/write while initializing the dispatcher. That failed
-                # probe neither targets a filesystem state surface nor writes any bytes; every
-                # other write-capable open remains prohibited.
+                # No bash layer remains to probe /dev/tty, but the exception is kept harmlessly in
+                # case the calling harness's own stdio is ever a pty passed through.
                 if "O_RDWR" in line and '"/dev/tty"' not in line:
                     effectful.append(line)
                 if any(token in line for token in ("O_WRONLY", "O_CREAT", "O_TRUNC", "O_APPEND")):
@@ -785,6 +839,61 @@ print('guard blocked every attempted effect')
             self.assertFalse(effectful, "\n".join(effectful))
             for name in ("ocx", "mise", "uv", "curl", "git", "claude", "seeds", "node"):
                 self.assertNotIn(f'{sentinel_bin}/{name}",', syscalls)
+
+
+class RetiredOperatorToolsStoreFindingTests(unittest.TestCase):
+    """``retired_store_findings`` is now the ONLY producer of the ``operator-tools`` finding.
+
+    Unit-level and in-process, over the real ``reader``/``bundle`` modules loaded by absolute
+    path at module scope above -- the same admission shape the reader itself uses to load its own
+    optional siblings. ``Path.home()`` and ``state_root_for`` both read the process environment
+    rather than taking an injected location, so isolation here is ``HOME``/``XDG_STATE_HOME``
+    patched through ``mock.patch.dict`` for the duration of one call, exactly as this module's
+    other isolated-HOME tests isolate a subprocess's environment instead.
+    """
+
+    def test_an_absent_store_is_silent_and_a_present_store_is_named_with_its_remedy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            state = Path(temp) / "state"
+            home.mkdir()
+
+            with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_STATE_HOME": str(state)}, clear=False):
+                absent = reader.retired_store_findings(bundle)
+            self.assertEqual(absent, [])
+
+            store = state / reader.RETIRED_OPERATOR_TOOLS_STORE
+            store.mkdir(parents=True)
+            (store / "state.json").write_text('{"version":2,"entries":{},"pending":null}')
+
+            with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_STATE_HOME": str(state)}, clear=False):
+                present = reader.retired_store_findings(bundle)
+
+            # Positive control for the absence assertion above: the SAME lookup, over a host that
+            # DOES carry the leftover store, is not silent -- so the empty list above is a fact
+            # about an absent store, not a function that always answers empty.
+            self.assertEqual(len(present), 1)
+            finding = present[0]
+            self.assertEqual(finding["code"], "foreign-state")
+            self.assertEqual(finding["component"], "operator-tools")
+            self.assertIn(reader.RETIRED_OPERATOR_TOOLS_REMEDY, finding["message"])
+            self.assertIn(str(store), finding["path"])
+
+    def test_a_store_replaced_by_a_dangling_symlink_is_still_named_without_being_followed(self) -> None:
+        """``lstat`` sees the leftover even when it no longer resolves to real content."""
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            state = Path(temp) / "state"
+            home.mkdir()
+            state.mkdir()
+            store = state / reader.RETIRED_OPERATOR_TOOLS_STORE
+            store.symlink_to(state / "nowhere")
+
+            with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_STATE_HOME": str(state)}, clear=False):
+                findings = reader.retired_store_findings(bundle)
+
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0]["path"], str(store))
 
 
 if __name__ == "__main__":

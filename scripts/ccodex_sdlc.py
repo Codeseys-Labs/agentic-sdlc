@@ -276,7 +276,6 @@ def validate_policy(policy: dict[str, Any]) -> None:
         "command",
         "checkout",
         "runtime",
-        "operator_tools",
         "bundle",
         "recovery",
         "future_dimensions",
@@ -1267,6 +1266,18 @@ def observe_host_compatibility(
     verdict taken is exact membership in the declared-incompatible list.  The host version itself is
     not observable by a read-only command -- it requires executing the host -- so it is unknown with
     that reason unless a caller supplies an already-observed value.
+
+    PER-PLANE, and that is a FIX rather than a refinement (found by wave WX's audit, repaired here).
+    A ``known_incompatible_host_versions`` entry is a ``{host, reason, version}`` record -- the shape
+    ``ccodex_sdlc_install`` and ``ccodex_sdlc_update`` both validate and both filter by host -- and
+    this function used to build its set with ``isinstance(value, str)``, which matches no record at
+    all.  The declared-incompatible verdict was therefore UNREACHABLE, and ``declared_incompatible``
+    was always empty; the defect was unobservable only because the shipped list is empty.  Now that
+    the lifecycle is two-agent, a version declared about one host must never refuse the other, so the
+    filter is the same one the mutating verbs apply: this reader's compatibility row is ``core``, so a
+    record is admitted only when its ``host`` equals ``core``'s.  A record of any other shape is
+    skipped rather than guessed at -- the mutating verbs refuse it by name at their own boundary, and
+    a reader that reclassified a malformed record would state a verdict the contract never declared.
     """
     compatibility = contract.get("compatibility")
     core = compatibility.get("core") if isinstance(compatibility, dict) else None
@@ -1280,7 +1291,18 @@ def observe_host_compatibility(
             "reason": "the release contract declares no compatibility surface",
             "declared_incompatible": [],
         }
-    incompatible = sorted({value for value in declared if isinstance(value, str) and value})
+    declared_host = core.get("host")
+    incompatible = sorted(
+        {
+            record["version"]
+            for record in declared
+            if isinstance(record, dict)
+            and set(record) == {"host", "reason", "version"}
+            and isinstance(record["version"], str)
+            and record["version"]
+            and record["host"] == declared_host
+        }
+    )
     supplied = safe_version(observed_host_version)
     if observed_host_version is None:
         state, reason = "unknown", (
@@ -1515,9 +1537,9 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
 def state_root_for(home: Path) -> Path:
     """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
 
-    This is the one path derivation the ownership planes share, and it lives here rather than being
-    imported from ``install_operator_tools`` because that module is the retiring PATH plane
-    (gh #10) and a helper the report still needs must not be deleted with it.
+    This is the one path derivation the ownership planes share, and it lives here rather than in the
+    deleted ``install_operator_tools`` PATH plane (gh #10) because a helper the report still needs
+    must not be deleted with it.
     ``install_skill_bundle.state_directory()`` is deliberately NOT the substitute: it reads
     ``Path.home()`` itself, so it cannot honour a caller-supplied home, and on Windows it prefers
     ``LOCALAPPDATA`` -- either difference would make this reader and
@@ -1531,7 +1553,7 @@ def state_root_for(home: Path) -> Path:
 
 
 def observe_host_readiness(
-    contract: dict[str, Any], adapters: tuple[ModuleType, ModuleType, ModuleType]
+    contract: dict[str, Any], adapters: tuple[ModuleType, ModuleType]
 ) -> dict[str, Any]:
     """Resolve this host's two lifecycle planes and observe them, reusing the guarded adapters.
 
@@ -1540,7 +1562,7 @@ def observe_host_readiness(
     ``write_acquisition_receipt`` seals into.  Resolution is separated from observation so a test
     can hand ``observe_readiness`` its own directories.
     """
-    guard, _operator_tools, bundle = adapters
+    guard, bundle = adapters
     state_root = state_root_for(bundle.operational_path(Path.home()))
     plane = state_root / STATE_PLANE_DIRECTORY
     validator, validator_reason = load_activation_validator(Path(__file__), guard)
@@ -1553,53 +1575,49 @@ def observe_host_readiness(
     )
 
 
-def load_read_only_adapters() -> tuple[ModuleType, ModuleType, ModuleType]:
-    """Install the process guard once and load the two ownership adapters by absolute path.
+def load_read_only_adapters() -> tuple[ModuleType, ModuleType]:
+    """Install the process guard once and load the ownership adapter by absolute path.
 
-    Extracted so the ownership projections and the readiness observation share ONE guarded load:
-    installing the guard twice would nest its wrappers, and loading the adapters twice would give
+    Extracted so the ownership projection and the readiness observation share ONE guarded load:
+    installing the guard twice would nest its wrappers, and loading the adapter twice would give
     two module objects whose blocked-mutator state is separately owned.
+
+    ONE adapter since gh #10 phase 4 deleted the operator-tools PATH plane. Its projection, its
+    configuration, and its report field left with it; what survives of that plane in this reader is
+    ``retired_store_findings``, which names a leftover store instead of projecting it.
     """
     script_path = Path(__file__)
     guard = load_guard(script_path)
     guard.install()
-    operator_tools = guard.load_sibling(script_path, "install_operator_tools")
     bundle = guard.load_sibling(script_path, "install_skill_bundle")
-    guard.block_lifecycle_mutators(operator_tools, bundle)
-    return guard, operator_tools, bundle
+    guard.block_lifecycle_mutators(bundle)
+    return guard, bundle
 
 
-def recovery_configs(
-    root: Path, operator_tools: ModuleType, bundle: ModuleType
-) -> tuple[Any, Any, Path]:
-    """Resolve the two substrate configurations and this host's activation receipts plane, once.
+def recovery_configs(root: Path, bundle: ModuleType) -> tuple[Any, Path]:
+    """Resolve the substrate configuration and this host's activation receipts plane, once.
 
-    ONE construction site, because the ownership projections and the recovery plan must describe the
+    ONE construction site, because the ownership projection and the recovery plan must describe the
     same selection: a plan derived against a differently-configured home would carry a digest that
     the mutating form could never re-derive.  Only ``dry_run`` differs on the mutating side, and it
     participates in no classification.
     """
     home = bundle.operational_path(Path.home())
     state_root = state_root_for(home)
-    bin_dir = operator_tools.default_bin_dir(home)
-    operator_config = operator_tools.Config(root, home, bin_dir, state_root, True, False)
     codex_home_value = os.environ.get("CODEX_HOME")
     codex_home = Path(codex_home_value) if codex_home_value and codex_home_value.strip() else home / ".codex"
     bundle_config = bundle.Config(root, home, codex_home, "auto", True, "all", state_root)
     plane = state_root / STATE_PLANE_DIRECTORY
-    return operator_config, bundle_config, plane.joinpath(*ACTIVATION_PLANE)
+    return bundle_config, plane.joinpath(*ACTIVATION_PLANE)
 
 
 def observe_projections(
-    root: Path, adapters: tuple[ModuleType, ModuleType, ModuleType] | None = None
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    _guard, operator_tools, bundle = adapters if adapters is not None else load_read_only_adapters()
+    root: Path, adapters: tuple[ModuleType, ModuleType] | None = None
+) -> dict[str, Any]:
+    _guard, bundle = adapters if adapters is not None else load_read_only_adapters()
 
-    operator_config, bundle_config, _receipts = recovery_configs(root, operator_tools, bundle)
-    return (
-        sorted_projection(operator_tools.readonly_projection(operator_config)),
-        sorted_projection(bundle.readonly_projection(bundle_config)),
-    )
+    bundle_config, _receipts = recovery_configs(root, bundle)
+    return sorted_projection(bundle.readonly_projection(bundle_config))
 
 
 def load_recovery_planner(
@@ -1630,7 +1648,7 @@ def load_recovery_planner(
     return module, None
 
 
-def recovery_plan_line(root: Path, adapters: tuple[ModuleType, ModuleType, ModuleType]) -> str:
+def recovery_plan_line(root: Path, adapters: tuple[ModuleType, ModuleType]) -> str:
     """Render the ONE line that carries the approval token of this exact assessment.
 
     It is written to stderr rather than into the report, and that is deliberate twice over: the v1
@@ -1638,15 +1656,13 @@ def recovery_plan_line(root: Path, adapters: tuple[ModuleType, ModuleType, Modul
     ``recover --dry-run`` must stay byte-for-byte the read-only assessment it already is on stdout in
     BOTH its human and its canonical JSON form.  The digest is an approval token, not report data.
     """
-    guard, operator_tools, bundle = adapters
+    guard, bundle = adapters
     planner, reason = load_recovery_planner(Path(__file__), guard)
     if planner is None:
         return f"recovery plan: unavailable ({bounded_message(reason or 'no reason was stated')})\n"
     try:
-        operator_config, bundle_config, receipts = recovery_configs(root, operator_tools, bundle)
+        bundle_config, receipts = recovery_configs(root, bundle)
         plan, digest = planner.derive_plan(
-            operator_tools=operator_tools,
-            operator_config=operator_config,
             bundle=bundle,
             bundle_config=bundle_config,
             activation_receipts=receipts,
@@ -1675,16 +1691,54 @@ def make_finding(code: str, component: str, message: str, path: Path) -> dict[st
     return {"code": code, "component": component, "message": message, "path": str(path)}
 
 
-def overall_state(operator_tools: dict[str, Any], bundle: dict[str, Any]) -> str:
-    states = {operator_tools["state"], bundle["state"]}
-    if "unreadable" in states:
-        return "unreadable"
-    if "blocked" in states:
-        return "blocked"
-    if "degraded" in states:
-        return "degraded"
-    if states == {"absent"}:
-        return "absent"
+#: The retired operator-tools PATH plane's own state directory, and the two commands it rendered into
+#: ``${XDG_BIN_HOME:-~/.local/bin}``.  gh #10 phase 4 deleted the module, its five mise tasks, and the
+#: ``operator-tools:uninstall`` verb that would have retired those files, so an operator who ran the
+#: retiring installer still OWNS real bytes with no product path left to remove them.  Ratified
+#: decision D3 collapsed the deprecation release into the demolition wave on the condition that the
+#: uninstall remedy survives; this finding is where it survives, reached by every reader verb rather
+#: than by a task that no longer exists.
+#:
+#: Nothing here reads, resumes, repairs, or removes any of it.  An ARMED ``pending`` slot inside that
+#: store is preserved and named exactly like this, and deliberately not resumed: the substrate that
+#: knew how to converge it is gone, and this reader does not guess at a half-finished transition.
+RETIRED_OPERATOR_TOOLS_STORE = "agentic-sdlc-operator-tools"
+RETIRED_OPERATOR_TOOLS_REMEDY = (
+    "the retired operator-tools PATH plane left this store; nothing in this distribution reads, "
+    "resumes, or removes it. Remove it, and any ccodex or agentic-sdlc-statusline it rendered into "
+    "${XDG_BIN_HOME:-~/.local/bin}, by hand"
+)
+
+
+def retired_store_findings(bundle: ModuleType) -> list[dict[str, str]]:
+    """Name a leftover operator-tools store, or say nothing at all.
+
+    ``lstat`` and not ``exists``: a store replaced by a symlink is still a leftover this reader
+    reports, and following it to decide would be following a link out of the state root.  Absence is
+    the ordinary case and is not a finding -- a host that never ran the retired installer must read
+    byte-identically to one on a tree that never shipped it.
+    """
+    store = state_root_for(bundle.operational_path(Path.home())) / RETIRED_OPERATOR_TOOLS_STORE
+    try:
+        store.lstat()
+    except OSError:
+        return []
+    return [
+        make_finding("foreign-state", "operator-tools", bounded_message(RETIRED_OPERATOR_TOOLS_REMEDY), store)
+    ]
+
+
+def overall_state(bundle: dict[str, Any]) -> str:
+    """The whole-host state, now read off the ONE surviving ownership projection.
+
+    It stays a function over a projection rather than becoming ``bundle["state"]`` inlined at the call
+    site: the mapping from a projection state to an overall state is a decision the report policy's
+    two separate vocabularies (``component_states``, ``overall_states``) make explicit, and collapsing
+    it would tie the two vocabularies together by accident the next time either widens.
+    """
+    state = bundle["state"]
+    if state in ("unreadable", "blocked", "degraded", "absent"):
+        return state
     return "healthy"
 
 
@@ -1694,19 +1748,18 @@ def make_report(
     dry_run: bool,
     checkout: dict[str, Any],
     runtime: dict[str, Any],
-    operator_tools: dict[str, Any],
     bundle: dict[str, Any],
     extra_findings: list[dict[str, str]],
     *,
     exit_class: str,
 ) -> dict[str, Any]:
     proposals = sorted(
-        [*operator_tools["recovery"], *bundle["recovery"]],
+        bundle["recovery"],
         key=lambda item: (item["component"], item["path"], item["action"]),
     )
     recovery_state = "proposed" if command == "recover" and proposals else "pending" if proposals else "not-needed"
     findings = sorted(
-        [*extra_findings, *operator_tools["findings"], *bundle["findings"]],
+        [*extra_findings, *bundle["findings"]],
         key=lambda item: (item["component"], item["path"], item["code"], item["message"]),
     )
     report = {
@@ -1714,14 +1767,13 @@ def make_report(
         "command": {"dry_run": dry_run, "verb": command},
         "checkout": checkout,
         "runtime": runtime,
-        "operator_tools": operator_tools,
         "bundle": bundle,
         "recovery": {"effect": "none", "proposals": proposals, "state": recovery_state},
         "future_dimensions": {"activation": "unsupported", "release": "not-selected", "waves": "unsupported"},
         "findings": findings,
         "overall": {
             "exit_class": exit_class,
-            "state": "blocked" if runtime["state"] == "refused" else overall_state(operator_tools, bundle),
+            "state": "blocked" if runtime["state"] == "refused" else overall_state(bundle),
         },
     }
     validate_report(report, policy)
@@ -1764,23 +1816,23 @@ def validate_report(report: dict[str, Any], policy: dict[str, Any]) -> None:
         raise ReportInvariantError("report runtime is invalid")
     if not all(isinstance(runtime[field], str) and runtime[field] for field in ("interpreter", "version")):
         raise ReportInvariantError("report runtime identity is invalid")
-    for component in ("operator_tools", "bundle"):
-        projection = _exact_keys(report[component], fields["bundle"], f"report.{component}")
-        if projection["state"] not in vocab["component_states"]:
-            raise ReportInvariantError(f"report {component} state is invalid")
-        paths = _require_string_list(projection["state_paths"], f"report {component} state paths")
-        if paths != sorted(set(paths)):
-            raise ReportInvariantError(f"report {component} state paths are not deterministic")
-        for entry in projection["entries"]:
-            entry = _exact_keys(entry, fields["projection_entry"], f"report {component} entry")
-            if entry["state"] not in vocab["entry_states"] or not all(
-                isinstance(entry[field], str) and entry[field] for field in ("name", "path")
-            ):
-                raise ReportInvariantError(f"report {component} entry is invalid")
-        for item in projection["recovery"]:
-            validate_recovery_item(item, fields, vocab)
-        for finding in projection["findings"]:
-            validate_finding(finding, fields, vocab)
+    component = "bundle"
+    projection = _exact_keys(report[component], fields["bundle"], f"report.{component}")
+    if projection["state"] not in vocab["component_states"]:
+        raise ReportInvariantError(f"report {component} state is invalid")
+    paths = _require_string_list(projection["state_paths"], f"report {component} state paths")
+    if paths != sorted(set(paths)):
+        raise ReportInvariantError(f"report {component} state paths are not deterministic")
+    for entry in projection["entries"]:
+        entry = _exact_keys(entry, fields["projection_entry"], f"report {component} entry")
+        if entry["state"] not in vocab["entry_states"] or not all(
+            isinstance(entry[field], str) and entry[field] for field in ("name", "path")
+        ):
+            raise ReportInvariantError(f"report {component} entry is invalid")
+    for item in projection["recovery"]:
+        validate_recovery_item(item, fields, vocab)
+    for finding in projection["findings"]:
+        validate_finding(finding, fields, vocab)
     recovery = _exact_keys(report["recovery"], fields["recovery"], "report.recovery")
     if recovery["effect"] not in vocab["recovery_effects"] or recovery["state"] not in vocab["recovery_states"]:
         raise ReportInvariantError("report recovery is invalid")
@@ -1801,10 +1853,16 @@ def validate_report(report: dict[str, Any], policy: dict[str, Any]) -> None:
 
 
 def validate_recovery_item(item: object, fields: dict[str, Any], vocab: dict[str, Any]) -> None:
+    """One recovery proposal, over the ONE component that can still carry a resumable transition.
+
+    ``operator-tools`` left this set with its plane (gh #10 phase 4): a leftover store on an upgraded
+    host is reported as a finding, never as a proposal, because nothing remains that could resume it
+    and offering to would be a proposal no code can honour.
+    """
     item = _exact_keys(item, fields["recovery_item"], "report recovery proposal")
     if (
         item["action"] not in vocab["recovery_actions"]
-        or item["component"] not in {"operator-tools", "bundle"}
+        or item["component"] != "bundle"
         or item["state"] not in vocab["recovery_item_states"]
         or not isinstance(item["path"], str)
         or not item["path"]
@@ -1827,7 +1885,6 @@ def render_human(report: dict[str, Any]) -> str:
         f"ccodex sdlc {report['command']['verb']}: {report['overall']['state']}",
         f"checkout: {checkout['version']} {checkout['plane']}; public channel: {checkout['public_channel'] or 'not-selected'}; public release: not-selected; certification: {checkout['certification_claim']}",
         f"runtime: {runtime['state']} ({runtime['version']}, isolated={str(runtime['isolated']).lower()})",
-        f"operator-tools: {report['operator_tools']['state']}",
         f"bundle: {report['bundle']['state']}",
         f"recovery: {report['recovery']['state']} (no effects)",
         "future dimensions: release=not-selected, activation=unsupported, waves=unsupported",
@@ -1888,14 +1945,13 @@ def main(argv: list[str] | None = None) -> int:
                 checkout,
                 runtime,
                 empty_projection(),
-                empty_projection(),
                 [make_finding("runtime-admission-refused", "runtime", reason or "runtime admission refused", Path(sys.executable))],
                 exit_class="safe-refusal",
             )
             emit(report, json_output)
             return 3
         adapters = load_read_only_adapters()
-        operator_tools, bundle = observe_projections(root, adapters)
+        bundle = observe_projections(root, adapters)
         # The host-level readiness dimensions are read for every reader verb rather than for
         # `doctor` alone: the four verbs render ONE semantic report, and a verb that hid a
         # malformed activation receipt the neighbouring verb reported would make `inspect --json`
@@ -1907,9 +1963,11 @@ def main(argv: list[str] | None = None) -> int:
             dry_run,
             checkout,
             runtime,
-            operator_tools,
             bundle,
-            readiness_findings(readiness),
+            [
+                *readiness_findings(readiness),
+                *retired_store_findings(adapters[1]),
+            ],
             exit_class="ok",
         )
         emit(report, json_output)

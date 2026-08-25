@@ -50,20 +50,19 @@ itself guarantees — never a count, version, or wall time pulled from a specifi
    43 ok, 0 conflict, 0 absent
    ```
 
-7. **`mise run operator-tools:install`** then **`operator-tools:status`**. `status` prints one
-   `ok`/`absent`/`unmanaged` line per desired command plus a closing summary line in the shape
-   `X ok, Y conflict, Z absent, W pending`. Example captured in the same container:
+7. **`mise run claude:statusline:status`**. The statusline is a bundle ledger row, so step 6
+   already published it; this step reads whether it is wired into settings. It prints one of five
+   distinguishable states — `active`, `inactive`, `unmanaged`, `conflict`, or a pending recovery —
+   in the MESSAGE and not in the exit code, so read the line rather than the status.
 
-   ```
-   ok: /home/dev/.local/bin/agentic-sdlc-statusline
-   ok: /home/dev/.local/bin/ccodex
-   status summary: 2 ok, 0 conflict, 0 absent, 0 pending
-   ```
+   The step this replaced ran `mise run operator-tools:install` then `operator-tools:status`, and
+   both tasks are deleted along with the PATH plane they managed (gh #10 phase 4). There is no
+   longer a step that puts a second `ccodex` on `PATH`: `bin/ccodex` is committed and self-locating.
+   If a host being verified was set up under an earlier release, README's retirement section has
+   the manual removal, and `ccodex sdlc doctor` names the leftover store.
 
-8. **`./scripts/install-skill-bundle.sh self-test`** (or `mise run operator-tools:self-test` for
-   the operator-tools half). Success shape: the process exits 0 and the last line is literally
-   `self-test passed` for the installer (the operator-tools task's line is
-   `operator-tools self-test passed`). Observed verbatim in `asdlc-fresh` today.
+8. **`./scripts/install-skill-bundle.sh self-test`**. Success shape: the process exits 0 and the
+   last line is literally `self-test passed`. Observed verbatim in `asdlc-fresh` today.
 9. **`mise run validate`**. Success shape: exit 0 with a line of the form
    `validate-bundle: 0 error(s), 0 warning(s)`. A nonzero error count exits 1; warnings exit 0 —
    the gate does not fail on them, so treat a nonzero warning count as a stop yourself rather

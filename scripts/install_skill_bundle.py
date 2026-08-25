@@ -30,8 +30,10 @@ several FUSE and overlay mounts) and on a libc without `renameat2`, so this modu
 markdown on hosts where `cp -r` has always worked. A same-UID racer that mutates a managed path
 while a write command holds the lock remains out of scope, as it always was.
 
-Crash consistency is one `pending` slot, mirrored from `scripts/install_operator_tools.py`: a write
-arms the intended transition durably, moves the bytes, then commits. A later run reads the live
+Crash consistency is one `pending` slot: a write arms the intended transition durably, moves the
+bytes, then commits. The shape arrived here as a mirror of `scripts/install_operator_tools.py`, whose
+PATH plane was deleted at gh #10 phase 4; this module is now the ONLY copy, so the `Mirrors ...`
+notes below record where each rule came from rather than pointing at live code to compare against. A later run reads the live
 bytes and decides commit or abort by comparing them to the armed `before`/`after` records. Bytes
 that match neither are reported and preserved, never guessed at.
 """
@@ -413,10 +415,10 @@ def validate_owned_entries(config: Config, state: dict[str, Any]) -> dict[str, d
 def validate_pending(config: Config, state: dict[str, Any]) -> None:
     """Reject any armed transition that is not one of the three this lifecycle can resolve.
 
-    Mirrors `install_operator_tools.validate_pending` (scripts/install_operator_tools.py:377-403):
-    the same closed operation set, the same before/after record validation, and the same three
-    transition rules cross-checked against the live `entries` map. Only the record validator differs,
-    because a bundle record names an agent, a kind, and a source rather than a single command path.
+    Adapted from the deleted `install_operator_tools.validate_pending`: the same closed operation
+    set, the same before/after record validation, and the same three transition rules cross-checked
+    against the live `entries` map. The record validator was the one deliberate divergence, because a
+    bundle record names an agent, a kind, and a source rather than a single command path.
     """
     del config
     pending = state.get("pending")
@@ -437,8 +439,8 @@ def validate_pending(config: Config, state: dict[str, Any]) -> None:
     entries = state["entries"]
     valid = (
         (operation == "install" and before is None and after is not None and key not in entries)
-        # A refresh does NOT require the two records to differ. `install_operator_tools` can demand
-        # that because it only rewrites a command whose bytes changed; a copy-mode bundle entry is
+        # A refresh does NOT require the two records to differ. The retired command plane could demand
+        # that because it only rewrote a command whose bytes changed; a copy-mode bundle entry is
         # refreshed on every run so its published bytes track a source this lifecycle cannot diff
         # cheaply, and the armed transition is then before == after. Requiring inequality here would
         # refuse the ordinary refresh path outright.
@@ -474,7 +476,7 @@ def flush_descriptor(descriptor: int, *, full: bool) -> None:
 
 
 def fsync_directory(path: Path) -> None:
-    """Flush one directory entry. Mirrors `install_operator_tools.sync_directory` (lines 427-432)."""
+    """Flush one directory entry. Adapted from the deleted `install_operator_tools.sync_directory`."""
     if platform_system() == "Windows":
         # Windows has no stdlib parent-directory durability barrier. Lifecycle
         # transitions remain process-crash recoverable, not power-loss durable.
@@ -493,8 +495,8 @@ def fsync_directory(path: Path) -> None:
 def durable_mkdir(path: Path) -> None:
     """Create a directory chain and flush every new parent entry where supported.
 
-    Mirrors `install_operator_tools.durable_mkdir` (scripts/install_operator_tools.py:435-444),
-    with this module's pre-existing tolerance for a concurrently created directory retained.
+    Adapted from the deleted `install_operator_tools.durable_mkdir`, with this module's pre-existing
+    tolerance for a concurrently created directory retained.
     """
     missing: list[Path] = []
     current = path
@@ -517,7 +519,7 @@ def durable_mkdir(path: Path) -> None:
 def atomic_write(path: Path, content: bytes, mode: int) -> None:
     """Replace one file's bytes atomically and durably, never in place.
 
-    Lifted from `install_operator_tools.atomic_write` (scripts/install_operator_tools.py:447-466):
+    Lifted from the deleted `install_operator_tools.atomic_write`:
     `durable_mkdir` the parent, `mkstemp` a sibling, `fchmod` it, write and flush, `F_FULLFSYNC` on
     Darwin and `fsync` elsewhere, `os.replace` into place, then flush the parent directory. This
     spelling routes the two flushes through `flush_descriptor`/`fsync_directory` so a barrier
@@ -1240,8 +1242,8 @@ def arm_pending(
 ) -> None:
     """Record the intended transition durably BEFORE the bytes move.
 
-    Mirrors `install_operator_tools.arm` (scripts/install_operator_tools.py:554-561), plus this
-    module's own pre-write validation so an inadmissible transition is refused rather than persisted.
+    Adapted from the deleted `install_operator_tools.arm`, plus this module's own pre-write
+    validation so an inadmissible transition is refused rather than persisted.
     """
     candidate = copy.deepcopy(state)
     candidate["pending"] = pending_slot(operation, key, before, after)
@@ -1265,7 +1267,7 @@ def resolved_pending_state(state: dict[str, Any], outcome: str) -> dict[str, Any
 
 
 def commit_pending(config: Config, state: dict[str, Any]) -> None:
-    """Mirrors `install_operator_tools.commit_pending` (scripts/install_operator_tools.py:564-574)."""
+    """Adapted from the deleted `install_operator_tools.commit_pending`."""
     persist_state(config, state, resolved_pending_state(state, "commit"))
 
 
@@ -1280,9 +1282,9 @@ def recover_pending(
 ) -> tuple[list[str], bool]:
     """Resolve one interrupted transition by reading the bytes that are actually live.
 
-    Mirrors `install_operator_tools.recover_pending` (scripts/install_operator_tools.py:500-540):
-    the same three operations, the same abort-if-`before`/commit-if-`after` comparison, and the same
-    refusal to guess when the live bytes match neither. Two things differ, both deliberately. This
+    Adapted from the deleted `install_operator_tools.recover_pending`: the same three operations, the
+    same abort-if-`before`/commit-if-`after` comparison, and the same refusal to guess when the live
+    bytes match neither. Two things diverged, both deliberately. This
     resolution makes NO filesystem move at all -- it only decides whether the armed record becomes
     ownership -- because `publish` already made the byte-level outcome unambiguous. And bytes that
     match neither side are REPORTED and preserved rather than raised, which is this module's

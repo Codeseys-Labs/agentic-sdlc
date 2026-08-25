@@ -30,6 +30,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -63,6 +64,10 @@ def _load(name: str, path: Path) -> ModuleType:
 reader = _load("doctor_lifecycle_reader", READER_SCRIPT)
 guard = _load("doctor_lifecycle_guard", GUARD_SCRIPT)
 receipts = _load("doctor_lifecycle_receipts", VALIDATOR_SCRIPT)
+#: The ownership substrate, loaded for FIXTURE CONSTRUCTION only: `write_bundle_pending`
+#: builds an armed `pending` slot with the installer's own constructors so the planted
+#: document is its shape rather than a second hand-typed spelling of it.
+bundle = _load("doctor_lifecycle_bundle", ROOT / "scripts" / "install_skill_bundle.py")
 
 BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@2"
 #: The read-only historical generation: admitted by `validate`, never sealed again.
@@ -374,6 +379,38 @@ class ReadinessHarness(unittest.TestCase):
 
     # ---- subprocess ---------------------------------------------------------------------------
 
+    def write_bundle_pending(self) -> Path:
+        """Arm the ownership plane's own `pending` slot, through the installer's own helpers.
+
+        Built with `install_skill_bundle`'s constructors rather than hand-typed JSON: the document has
+        to satisfy `validate_state` and `pending_selects_config`, and a hand-typed copy would pass this
+        fixture's eye while failing the reader's, or drift silently when the schema moves.
+        """
+        config = bundle.Config(ROOT, self.home, self.home / ".codex", "auto", True, "all", self.state)
+        source = self.root / "bundle-source" / "doctor-pending-fixture"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "SKILL.md").write_text("---\nname: doctor-pending-fixture\n---\n", encoding="utf-8")
+        entry = bundle.Entry("claude", "skill", "doctor-pending-fixture", source)
+        destination = bundle.destination_for(entry, config)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            shutil.copytree(source, destination)
+        record = bundle.entry_record(entry, "copy", installed_digest=bundle.digest(destination))
+        document = config.state_path
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_text(
+            json.dumps(
+                {
+                    "version": bundle.STATE_VERSION,
+                    "entries": {},
+                    "pending": bundle.pending_slot("install", str(destination), None, record),
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return document
+
     def run_reader(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, "-I", "-B", str(READER_SCRIPT), *arguments],
@@ -619,27 +656,11 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         self.assertIn("pending-recovery", self.codes(findings))
         self.assertTrue(any("did not complete" in finding["message"] for finding in findings))
 
-        # The operator-tools plane keeps its own outstanding transition, and the two are reported
-        # side by side rather than one dimension shadowing the other.
-        operator_state = self.state / "agentic-sdlc-operator-tools" / "state.json"
-        operator_state.parent.mkdir(parents=True, exist_ok=True)
-        command_path = self.root / "bin" / "ccodex"
-        operator_state.write_text(
-            json.dumps(
-                {
-                    "version": 2,
-                    "entries": {},
-                    "pending": {
-                        "operation": "install",
-                        "path": str(command_path),
-                        "before": None,
-                        "after": {"path": str(command_path), "digest": "0" * 64, "removable": "true"},
-                    },
-                },
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
+        # The OWNERSHIP plane keeps its own outstanding transition, and the two are reported side by
+        # side rather than one dimension shadowing the other. That second plane used to be
+        # operator-tools; gh #10 phase 4 deleted it, and the bundle journal is now the one substrate
+        # that can carry an armed slot, so the claim is unchanged and its subject moved.
+        self.write_bundle_pending()
         completed = self.run_reader("doctor", "--json")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         report = json.loads(completed.stdout)
@@ -649,7 +670,17 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
             if finding["code"] == "pending-recovery"
         }
         self.assertIn(("checkout", "pending-recovery"), components)
-        self.assertIn(("operator-tools", "pending-recovery"), components)
+        self.assertIn(("bundle", "pending-recovery"), components)
+        # And a leftover store from the DELETED plane is a third, independent dimension: it is named
+        # rather than resumed, so it must appear beside both of the above without shadowing either and
+        # without borrowing `pending-recovery` for something nothing can recover.
+        (self.state / reader.RETIRED_OPERATOR_TOOLS_STORE).mkdir(parents=True, exist_ok=True)
+        retired = json.loads(self.run_reader("doctor", "--json").stdout)["findings"]
+        retired_pairs = {(finding["component"], finding["code"]) for finding in retired}
+        self.assertIn(("operator-tools", "foreign-state"), retired_pairs)
+        self.assertIn(("checkout", "pending-recovery"), retired_pairs)
+        self.assertIn(("bundle", "pending-recovery"), retired_pairs)
+        self.assertNotIn(("operator-tools", "pending-recovery"), retired_pairs)
         # Positive control: a completed transition in the same plane produces no checkout pending
         # finding, so the assertion above is the recorded effect state and not a constant.
         self.write_activation(effect_state="complete", terminal_phase="activated")
@@ -749,7 +780,10 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
 
     def test_a_declared_incompatible_host_version_surfaces_as_an_unsupported_finding(self) -> None:
         contract = copy.deepcopy(self.contract)
-        contract["compatibility"]["known_incompatible_host_versions"] = ["2.1.199", "2.1.200"]
+        contract["compatibility"]["known_incompatible_host_versions"] = [
+            incompatible_record("2.1.199"),
+            incompatible_record("2.1.200"),
+        ]
 
         findings = self.findings(contract=contract, observed_host_version="2.1.199")
         readiness = self.observe(contract=contract, observed_host_version="2.1.199")
@@ -757,6 +791,7 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         self.assertEqual(readiness["compatibility"]["state"], "declared-incompatible")
         self.assertEqual(readiness["compatibility"]["host"], "claude-code")
         self.assertEqual(readiness["compatibility"]["minimum_host_version"], "2.1.154")
+        self.assertEqual(readiness["compatibility"]["declared_incompatible"], ["2.1.199", "2.1.200"])
         self.assertIn("state-unsupported", self.codes(findings))
         self.assertTrue(any("2.1.199" in finding["message"] for finding in findings))
         # Positive control: a host version that is not on the declared list, same contract, same
@@ -765,6 +800,54 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         clean = self.observe(contract=contract, observed_host_version="2.1.233")
         self.assertEqual(clean["compatibility"]["state"], "not-declared-incompatible")
         self.assertEqual(reader.readiness_findings(clean), [])
+
+    def test_an_incompatibility_declared_about_another_host_never_refuses_this_one(self) -> None:
+        """The per-plane half of the fix, and the direction that made it necessary.
+
+        Two hosts' version spaces are unrelated, and the mutating verbs already filter a declared
+        incompatibility by the host it names. This reader reports the CORE row, so a record about
+        `codex-cli` must leave it `not-declared-incompatible` even when the observed version string is
+        character-for-character the declared one. Before the filter existed the whole verdict was
+        unreachable, so this direction could not have been observed either way.
+        """
+        foreign = incompatible_contract(self.contract, host="codex-cli")
+        observed = self.observe(contract=foreign, observed_host_version="2.1.199")
+
+        self.assertEqual(observed["compatibility"]["state"], "not-declared-incompatible")
+        self.assertEqual(observed["compatibility"]["declared_incompatible"], [])
+        self.assertEqual(reader.readiness_findings(observed), [])
+        # Positive control: the SAME version, the SAME harness, the record re-declared about the core
+        # host -- so the pass above is the host axis and not a fixture that declares nothing.
+        native = self.observe(contract=incompatible_contract(self.contract), observed_host_version="2.1.199")
+        self.assertEqual(native["compatibility"]["state"], "declared-incompatible")
+        self.assertEqual(native["compatibility"]["declared_incompatible"], ["2.1.199"])
+
+    def test_a_malformed_declared_incompatibility_is_skipped_rather_than_guessed_at(self) -> None:
+        """A record the contract's own validators refuse is not evidence for a reader verdict either.
+
+        The mutating verbs refuse a non-`{host, reason, version}` entry BY NAME at their own boundary.
+        A read-only verb has no such boundary to refuse from, so it reports what the contract
+        DECLARED, which for an unreadable entry is nothing -- reclassifying it would state a verdict
+        the contract never made.
+        """
+        malformed = copy.deepcopy(self.contract)
+        malformed["compatibility"]["known_incompatible_host_versions"] = [
+            "2.1.199",
+            {"version": "2.1.199"},
+            {"host": "claude-code", "reason": "no version key", "extra": "2.1.199"},
+        ]
+        observed = self.observe(contract=malformed, observed_host_version="2.1.199")
+
+        self.assertEqual(observed["compatibility"]["state"], "not-declared-incompatible")
+        self.assertEqual(observed["compatibility"]["declared_incompatible"], [])
+        # Positive control: one well-formed record among the malformed ones IS read, so the empty
+        # list above is the shape filter and not a reader that stopped looking.
+        mixed = copy.deepcopy(malformed)
+        mixed["compatibility"]["known_incompatible_host_versions"].append(incompatible_record("2.1.199"))
+        self.assertEqual(
+            self.observe(contract=mixed, observed_host_version="2.1.199")["compatibility"]["state"],
+            "declared-incompatible",
+        )
 
     def test_an_unobservable_host_version_is_unknown_with_a_reason_and_not_a_failure(self) -> None:
         readiness = self.observe()
@@ -1491,9 +1574,20 @@ def readable_reason(findings: list[dict[str, str]]) -> bool:
     )
 
 
-def incompatible_contract(contract: dict[str, Any]) -> dict[str, Any]:
+#: One declared incompatibility in the shape the CONTRACT actually carries. It used to be built here
+#: as a bare string, which no reader could ever match: `ccodex_sdlc_install` and `ccodex_sdlc_update`
+#: both validate every entry as exactly `{host, reason, version}` and refuse anything else, and the
+#: reader's own `isinstance(value, str)` filter therefore selected nothing at all -- so the
+#: `declared-incompatible` verdict was unreachable and this fixture was asserting against a shape the
+#: product never sees. The reader's filter is now per-host, so the `host` field is load-bearing: the
+#: value below names the CORE host because that is the row `observe_host_compatibility` reports about.
+def incompatible_record(version: str, host: str = "claude-code") -> dict[str, str]:
+    return {"host": host, "reason": f"{host} {version} is declared incompatible", "version": version}
+
+
+def incompatible_contract(contract: dict[str, Any], *, host: str = "claude-code") -> dict[str, Any]:
     changed = copy.deepcopy(contract)
-    changed["compatibility"]["known_incompatible_host_versions"] = ["2.1.199"]
+    changed["compatibility"]["known_incompatible_host_versions"] = [incompatible_record("2.1.199", host)]
     return changed
 
 

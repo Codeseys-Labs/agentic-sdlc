@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
 # ccodex — self-locating Agentic SDLC operator dispatcher (the distribution tree's own bin/).
 #
-# This is the COMMITTED sibling of assets/launchers/ccodex.in, for a tree acquired WITHOUT the
-# operator-tools install step: the mise `github:` backend, a plain extracted release archive, or
-# a checkout. The rendered ccodex.in cannot ship as committed bytes — its shebang and its five
-# tool paths are install-time substitutions, and install_operator_tools.py fails closed on a
-# leftover placeholder — so this file exists, and it diverges from the rendered plane in exactly
-# three declared ways:
-#   * `#!/usr/bin/env bash`: a committed cross-host file cannot carry the per-host absolute
-#     interpreter pin; the pinned-shebang doctrine stays on the rendered operator-tools plane.
-#   * No install-time tool bindings. The distribution root is the parent of this file's own
-#     bin/, and every tool resolves through that root's reviewed mise.toml + mise.lock: the
+# THE ONLY DISPATCHER. Until gh #10 phase 4 this file was the committed sibling of a rendered
+# assets/launchers/ccodex.in, whose shebang and five tool paths were install-time substitutions
+# written by an operator-tools PATH installer. That whole plane is deleted: mise's `github:`
+# backend already exposes this file directly, so a second dispatcher existed only to be put on
+# PATH by a lifecycle that refused to edit PATH. What were three declared divergences from it are
+# now simply how this command works:
+#   * `#!/usr/bin/env bash`. A committed cross-host file carries no per-host absolute interpreter
+#     pin, and there is no longer a rendered plane for that doctrine to live on.
+#   * No install-time tool bindings anywhere. The distribution root is the parent of this file's
+#     own bin/, and every tool resolves through that root's reviewed mise.toml + mise.lock: the
 #     launch-family verbs exec scripts/opencodex-claude.sh with AGENTIC_SDLC_OCX and
 #     AGENTIC_SDLC_JQ left unset, so the launcher's own direct-checkout branches take the pinned
 #     `mise -C <root> exec` routes, and the Python-backed lifecycle verbs run
 #     `mise -C <root> exec -- uv run --python 3.12.11 --script`. The sdlc family alone resolves
 #     the same pinned uv's managed CPython 3.12.11 and execs it directly with `-I -B`, because
 #     the reader's runtime admission refuses every other execution shape by name.
-#   * Bare `set-fast-model` (the interactive selector) is refused by name — pass an exact id
-#     from `ccodex models`, a Claude family alias, or `-` to clear; the one-argument form works
-#     unchanged.
+#   * Bare `set-fast-model` is refused by name — pass an exact id from `ccodex models`, a Claude
+#     family alias, or `-` to clear; the one-argument form works unchanged. The interactive
+#     selector it used to offer was deleted with the rendered plane and was not ported.
+#
+# RETIRED PLANE, and the remedy an operator still needs. Deleting the installer also deleted
+# `mise run operator-tools:uninstall`, so anyone who ran that installer still owns real files at
+# ${XDG_BIN_HOME:-~/.local/bin}/{ccodex,agentic-sdlc-statusline} plus a state store, and a stale
+# copy earlier on PATH than mise's shim keeps answering. `ccodex sdlc doctor` names the store and
+# the manual removal whenever it is present; README's retirement section carries the same recipe.
+# Nothing removes those bytes on the operator's behalf: they are the operator's own.
+#
 # `version` and `--help` stay tool-free: they answer before mise, any trust step, or any
 # download. This command NEVER runs `mise trust`. The first tool-needing verb on an untrusted
 # root is refused at exit 3 naming the exact remedy; after the operator's explicit
@@ -60,12 +68,14 @@ Providers and models (what a launched session can actually pick):
   models                      The running gateway's flat live catalog. Muse models appear here
                               as ordinary namespaced entries, not as a separate plane.
   set-fast-model <id|->       Set Claude Code's Haiku/background small-fast model to an exact
-                              id from \`ccodex models\` or a Claude family alias; - clears. The
-                              interactive selector ships only with the installed operator tools.
+                              id from \`ccodex models\` or a Claude family alias; - clears. There
+                              is no interactive selector; the bare form is refused by name.
   configure [args...]         Reviewed provider configuration.
 
 Installed-bundle lifecycle:
-  bundle <install|status|uninstall>
+  bundle <install|status|uninstall> --agent <claude|codex> [args...]
+                              --agent is required on every bundle verb: no default and no
+                              wildcard, so one agent's plane is never reached by accident.
   libraries <list|status|install|migrate|uninstall> [args...]
   statusline <status|activate|deactivate> [args...]
 
@@ -192,7 +202,8 @@ usage: ccodex set-fast-model <exact-model-id|->
 
 Set Claude Code's Haiku/background small-fast slot to an exact Claude or routed id without
 prompting; pass - to clear it. Ids come from `ccodex models` or a Claude family alias
-(sonnet|opus|fable). The interactive selector ships only with the installed operator tools.
+(sonnet|opus|fable). There is no interactive selector: the one that existed shipped only with
+the deleted operator-tools plane and was not ported, so the bare form is refused by name.
 
 This is not the Auto mode permission classifier. A selection persists operator
 configuration; help and cancellation do not.
@@ -253,7 +264,7 @@ case "$route" in
     esac
     [ "$#" -le 1 ] || { printf 'usage: ccodex set-fast-model <exact-model-id|->\n' >&2; exit 2; }
     if [ "$#" -eq 0 ]; then
-      printf 'refused: the interactive selector ships only with the installed operator tools.\n' >&2
+      printf 'refused: this command has no interactive model selector.\n' >&2
       printf 'Pass an exact id from `ccodex models` or a Claude family alias, or - to clear.\n' >&2
       exit 3
     fi

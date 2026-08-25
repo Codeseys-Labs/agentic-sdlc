@@ -52,12 +52,12 @@ EXECUTABLE_PAYLOAD_FILES = ("bin/ccodex", "scripts/opencodex-claude.sh")
 # than a shebang, so `CreateProcess` on it raises `[WinError 193] %1 is not a valid Win32
 # application` -- the 9 errors these three classes contributed on windows-2025 (agentic-sdlc-5ce7).
 # Reaching it through Git Bash would not rescue the claims either: their isolation is a
-# `os.symlink`-built allowlist PATH of POSIX utilities and a `mise trust` remedy string, and
-# native Windows operator-tool activation is uncertified (AGENTS.md). ArchiveShapeTest keeps
-# running here, because the archive's shape is platform-independent and reads no executable bit.
+# `os.symlink`-built allowlist PATH of POSIX utilities that native Windows cannot resolve the same
+# way. ArchiveShapeTest keeps running here, because the archive's shape is platform-independent
+# and reads no executable bit.
 DISPATCHER_IS_POSIX_SHELL_SKIP_REASON = (
     "bin/ccodex is a POSIX shell dispatcher that Windows cannot execute directly (WinError 193), "
-    "and its operator-tools plane is uncertified on native Windows (agentic-sdlc-5ce7)"
+    "and the fixtures build a symlinked POSIX allowlist PATH (agentic-sdlc-5ce7)"
 )
 
 # The additional real bytes the isolated sdlc exec proof needs: the reader whose runtime
@@ -66,7 +66,6 @@ DISPATCHER_IS_POSIX_SHELL_SKIP_REASON = (
 READER_PAYLOAD_FILES = (
     "scripts/ccodex_sdlc.py",
     "scripts/ccodex_sdlc_readonly.py",
-    "scripts/install_operator_tools.py",
     "scripts/install_skill_bundle.py",
     "scripts/distribution_activation_receipt.py",
     "scripts/ccodex_sdlc_host_planes.py",
@@ -419,13 +418,13 @@ class ValidatorCoverageTest(unittest.TestCase):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / relative, destination)
             intact = validator.Validation()
-            validator.validate_operator_tools(root, intact)
+            validator.validate_shell_payload(root, intact)
             self.assertEqual(intact.errors, [])
 
             with (root / "bin" / "ccodex").open("a", encoding="utf-8") as handle:
                 handle.write("\nfi\n")
             broken = validator.Validation()
-            validator.validate_operator_tools(root, broken)
+            validator.validate_shell_payload(root, broken)
             self.assertTrue(
                 any("bin/ccodex" in error for error in broken.errors),
                 broken.errors,

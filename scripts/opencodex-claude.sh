@@ -388,12 +388,13 @@ exit codes: 0 ok · 1 failure/unhealthy · 2 usage · 3 refused (the gateway rou
 EOF
 }
 
-# The bound `ocx` is a `#!/usr/bin/env node` script: an absolute path to it does not make its
-# INTERPRETER reachable, and the kernel looks `node` up by name in the child's PATH. An
-# operator-tools install binds the pinned node alongside ocx and exports it, so its directory goes
-# first here; the direct-checkout branch below needs nothing, because `mise exec` already puts the
-# pinned node on PATH. Guarded rather than required, so an install predating the binding keeps its
-# current behaviour and gets the named diagnostic in require_ocx instead (agentic-sdlc-21f4).
+# A bound `ocx` is a `#!/usr/bin/env node` script: an absolute path to it does not make its
+# INTERPRETER reachable, and the kernel looks `node` up by name in the child's PATH. A caller who
+# exports $AGENTIC_SDLC_NODE alongside $AGENTIC_SDLC_OCX gets that directory first here; the
+# direct-checkout branch below needs nothing, because `mise exec` already puts the pinned node on
+# PATH, and that branch is now the only one any shipped dispatcher takes -- the operator-tools plane
+# that bound the pair is deleted. Guarded rather than required, so a caller who binds only the
+# executable gets the named diagnostic in require_ocx instead (agentic-sdlc-21f4).
 ocx_child_path() {
   if [ -n "${AGENTIC_SDLC_NODE:-}" ]; then
     printf '%s' "${AGENTIC_SDLC_NODE%/*}:$PATH"
@@ -410,9 +411,10 @@ ocx() {
   fi
 }
 
-# An installed ccodex injects the exact ocx executable bound by operator-tools installation, so
-# daily launch neither re-evaluates repo-scoped mise nor changes cwd. Direct checkout use keeps a
-# mise fallback, but resolves the executable first and then starts it from the caller workspace.
+# A caller may inject an exact ocx executable through $AGENTIC_SDLC_OCX so a launch neither
+# re-evaluates repo-scoped mise nor changes cwd; the deleted operator-tools plane used to bind it,
+# and no shipped dispatcher does now. The mise route resolves the executable first and then starts
+# it from the caller workspace.
 launch_ocx_claude() {
   local executable="${AGENTIC_SDLC_OCX:-}" interpreter="${AGENTIC_SDLC_NODE:-}"
   if [ -z "$executable" ]; then
@@ -431,9 +433,11 @@ launch_ocx_claude() {
 
 # TWO ADMITTED ROUTES, IN THIS ORDER, AND NO jq NAME IS EVER RESOLVED FROM AMBIENT PATH.
 #
-#   1. $AGENTIC_SDLC_JQ -- the exact executable operator-tools bound at install time (see
-#      assets/launchers/ccodex.in, which exports it). Highest, because it IS the reviewed binding.
-#      Admitted only as an ABSOLUTE path or the literal pinned sentinel; see the guard below.
+#   1. $AGENTIC_SDLC_JQ -- an exact executable a caller bound. Highest, because an exact absolute
+#      identity is stronger evidence than a resolution. The operator-tools plane that used to set it
+#      is deleted, so nothing this distribution ships populates it, and the seam is kept only for a
+#      caller who has an exact copy to name. Admitted only as an ABSOLUTE path or the literal pinned
+#      sentinel; see the guard below.
 #   2. the repository's pinned route, `mise -C "$root" exec -- jq` (mise.toml, jq = 1.8.2).
 #
 # RESIDUAL, STATED RATHER THAN HIDDEN: the pinned route locates `mise` itself on ambient PATH,
@@ -455,13 +459,13 @@ launch_ocx_claude() {
 #
 # NO SILENT SUBSTITUTION EITHER WAY (ADR-0020 decision 4). A bound-but-broken $AGENTIC_SDLC_JQ does
 # NOT quietly fall back to the pinned route, and an unresolvable pinned route does NOT fall back to
-# anything: the surface that needed jq blocks with a named reason, and refreshing the binding stays
-# an explicit `operator-tools:install` lifecycle step.
+# anything: the surface that needed jq blocks with a named reason, and the caller who bound the value
+# is the one who rebinds it.
 jq() {
   if [ -z "${resolved_jq:-}" ]; then
     resolved_jq="${AGENTIC_SDLC_JQ:-mise}"
-    # AN ADMITTED EXACT IDENTITY IS AN ABSOLUTE PATH (install_operator_tools.py binds one:
-    # "pinned runtime executables are deliberately absolute") or the pinned sentinel. A bare NAME
+    # AN ADMITTED EXACT IDENTITY IS AN ABSOLUTE PATH -- pinned runtime executables are deliberately
+    # absolute -- or the pinned sentinel. A bare NAME
     # is neither: `AGENTIC_SDLC_JQ=gojq` sends this trust-boundary parse straight back through
     # ambient PATH, and `AGENTIC_SDLC_JQ=jq` re-enters THIS function until the shell dies -- a
     # death that `$(bypassing_settings_document_and_key)` reads as `clean`. A relative path
@@ -530,7 +534,7 @@ interpreter_unreachable() {
 require_ocx() {
   if [ -n "${AGENTIC_SDLC_OCX:-}" ]; then
     [ -x "$AGENTIC_SDLC_OCX" ] || {
-      printf 'error: the installed pinned opencodex executable is unavailable; refresh operator tools from the reviewed distribution\n' >&2
+      printf 'error: $AGENTIC_SDLC_OCX names no executable file; point it at an exact opencodex or unset it to use this tree'"'"'s pinned route\n' >&2
       exit 1
     }
   elif ! command -v mise >/dev/null 2>&1; then
@@ -549,11 +553,12 @@ require_ocx() {
     fi
     if [ -n "$interpreter" ] && interpreter_unreachable "$interpreter"; then
       printf 'error: the pinned opencodex at %s cannot start: its interpreter `%s` is not reachable.\n' "$AGENTIC_SDLC_OCX" "$interpreter" >&2
-      printf 'opencodex is installed -- `mise --locked install` will not change this. Re-run\n' >&2
-      printf '`mise run operator-tools:install` from the reviewed distribution so the interpreter is\n' >&2
+      printf 'opencodex is installed -- `mise --locked install` will not change this. That path came\n' >&2
+      printf 'from $AGENTIC_SDLC_OCX, which no lifecycle in this distribution sets any more (the\n' >&2
+      printf 'operator-tools PATH plane that bound it is deleted). Unset it to take this tree'"'"'s own\n' >&2
       case "$interpreter" in
-        /*) printf 'bound alongside it, or restore that exact file.\n' >&2 ;;
-        *) printf 'bound alongside it, or put a `%s` on PATH.\n' "$interpreter" >&2 ;;
+        /*) printf 'pinned route, restore that exact interpreter, or bind one beside the executable.\n' >&2 ;;
+        *) printf 'pinned route, put a `%s` on PATH, or bind one beside the executable.\n' "$interpreter" >&2 ;;
       esac
       exit 1
     fi
@@ -2086,17 +2091,18 @@ ADR-0003), and it cannot be decided without reading the provider config.
 
 Exactly two routes are admitted, and a \`jq\` merely present on PATH is deliberately NOT one of
 them (ADR-0020: an execution dependency at a trust boundary is exact or it is refused). Seeing
-this means neither admitted route ran. They are, in this order, the exact copy an
-operator-tools install bound and this checkout's pinned copy (mise.toml, jq = 1.8.2):
+this means neither admitted route ran. They are, in this order, a caller-supplied exact absolute
+override and this checkout's pinned copy (mise.toml, jq = 1.8.2):
 
   \$AGENTIC_SDLC_JQ
   mise -C $root exec -- jq
 
-Fix whichever applies -- rebind the installed executables, or resolve the pin in this checkout:
+No lifecycle in this distribution sets \$AGENTIC_SDLC_JQ any more -- the operator-tools PATH plane
+that bound it is deleted -- so the pinned route is the one to fix. Resolve it in this checkout:
 
-  mise run operator-tools:install
   mise -C $root --locked install
 
+If you set \$AGENTIC_SDLC_JQ yourself, either point it at an exact absolute jq or unset it.
 Installing jq with your own package manager does NOT satisfy either route. Then re-run the same
 command. Nothing was changed.
 EOF

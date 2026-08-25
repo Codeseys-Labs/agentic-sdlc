@@ -167,31 +167,6 @@ run_windows = "uv.exe run --python 3.12.11 --script scripts/secrets_scan.py"
 description = "Run validation, installer tests, lifecycle self-test, and the secrets scan"
 depends = ["validate", "test", "self-test", "secrets"]
 
-[tasks."operator-tools:install"]
-description = "Install the statusline and existing operator commands into a user-owned PATH directory"
-run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py install"
-run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py install"
-
-[tasks."operator-tools:status"]
-description = "Inspect operator-command ownership without writing files or PATH"
-run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py status"
-run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py status"
-
-[tasks."operator-tools:retire-aliases"]
-description = "Retire unchanged owned historical ocx command aliases"
-run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py retire-aliases"
-run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py retire-aliases"
-
-[tasks."operator-tools:uninstall"]
-description = "Remove unchanged owned operator commands and preserve conflicts"
-run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py uninstall"
-run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py uninstall"
-
-[tasks."operator-tools:self-test"]
-description = "Exercise operator command lifecycle in an isolated home"
-run = "uv run --python 3.12.11 --script scripts/install_operator_tools.py self-test"
-run_windows = "uv.exe run --python 3.12.11 --script scripts/install_operator_tools.py self-test"
-
 # Opt-in third-party skill library installs (docs/adr/0009). Explicit and separate from
 # `bundle:install`: no task here is a dependency of `setup`, `check`, or any gate leaf, and
 # `install` refuses without an explicitly named library. Front doors are each library's own

@@ -3,8 +3,8 @@ name: real-key-testing
 # Dispatch-only, never a gate leaf. Runs the fresh-environment operator journey with the
 # real provider credentials held by the `real-key-testing` environment, on a runner that
 # starts with no mise, no bundle, no gateway, and no Claude login. A green run is evidence
-# that install + operator tools + provider onboarding + a routed inference work from
-# nothing; it authorizes no outward effect. What it cannot test: `ccodex launch` itself,
+# that install + provider onboarding + a routed inference work from nothing; it authorizes no
+# outward effect. What it cannot test: `ccodex launch` itself,
 # which needs a Claude login no environment secret provides.
 on:
   workflow_dispatch:
@@ -32,16 +32,19 @@ jobs:
         shell: bash
         run: |
           mise run bundle:install -- --agent claude
-          STATUS=$(mise run bundle:status 2>&1)
+          STATUS=$(mise run bundle:status -- --agent claude 2>&1)
           echo "$STATUS" | tail -3
           echo "$STATUS" | grep -E " 0 conflict"
 
-      - name: Install operator tools and read doctor
+      # The operator-tools PATH plane that used to render a `ccodex` here is deleted (gh #10
+      # phase 4), so this job reaches the dispatcher where the release exposes it: the checkout's
+      # own bin/. `PATH` still gains mise's node directory, because the pinned `ocx` is a
+      # `#!/usr/bin/env node` script and the kernel resolves that name from the child's PATH
+      # (seed agentic-sdlc-21f4) -- that hazard belongs to ocx's shebang, not to the deleted plane.
+      - name: Read doctor through the tree's own dispatcher
         shell: bash
         run: |
-          mise run operator-tools:install
-          # seed agentic-sdlc-21f4: the bound ocx is a node script but node is not bound
-          export PATH="$(dirname "$(mise which node)"):$HOME/.local/bin:$PATH"
+          export PATH="$(dirname "$(mise which node)"):$PWD/bin:$PATH"
           ccodex sdlc doctor
 
       - name: Onboard OpenRouter and prove a routed inference
@@ -49,7 +52,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          export PATH="$(dirname "$(mise which node)"):$HOME/.local/bin:$PATH"
+          export PATH="$(dirname "$(mise which node)"):$PWD/bin:$PATH"
           ccodex ensure
           ccodex ocx configure provider add openrouter
           # the restart is the publish step: the running gateway learns the provider here

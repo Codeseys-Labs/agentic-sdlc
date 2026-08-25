@@ -135,11 +135,6 @@ REQUIRED_TASKS = {
     "bundle:status:all-hosts",
     "release:build",
     "research-os:install",
-    "operator-tools:install",
-    "operator-tools:status",
-    "operator-tools:retire-aliases",
-    "operator-tools:uninstall",
-    "operator-tools:self-test",
     "claude:statusline:status",
     "claude:statusline:activate",
     "claude:statusline:deactivate",
@@ -211,7 +206,6 @@ MERMAID_BROWSER_IDENTITY = {
 SHELL_SYNTAX_PATHS = (
     "assets/claude/statusline-command.sh",
     "assets/claude/session-inheritance.sh",
-    "assets/launchers/ccodex.in",
     "bin/ccodex",
     "scripts/opencodex-claude.sh",
 )
@@ -272,7 +266,11 @@ RELEASE_CANDIDATE_POLICY_SCHEMA = "release-candidate-policy/v1"
 # does not already prove — and the v2 pass measured that itself, running its structural lines and
 # then comparing the same bytes against a pin that strictly dominated them.
 CCODEX_SDLC_REPORT_POLICY_SHA256 = {
-    "policy/ccodex-sdlc-read-report.v1.json": "eadce0fd12af79be3727c1fdb8505a291805741d951e67baa35162dc4d18b7dd",
+    # v1 moved once, at gh #10 phase 4: the `operator_tools` top-level report field left the exact-key
+    # set with the plane that produced it. Re-pin deliberately, never by copying whatever the tree now
+    # holds -- the point of the pin is that a policy edit is reviewed, and the reader carries the same
+    # field list a second time so the two must be changed together or the gate fails closed.
+    "policy/ccodex-sdlc-read-report.v1.json": "6cd42ca48e91806e6ab5f6bc775b3adab7c5c59093a7239497dc858e3bfa612a",
     "policy/ccodex-sdlc-read-report.v2.json": "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9",
 }
 RELEASE_CONTRACT_TOP_LEVEL_KEYS = (
@@ -2123,18 +2121,21 @@ def validate_mermaid_renderer(root: Path, result: Validation) -> None:
         result.error(f"Mermaid renderer artifacts missing: {', '.join(missing)}")
 
 
-def validate_operator_tools(root: Path, result: Validation) -> None:
+def validate_shell_payload(root: Path, result: Validation) -> None:
     """Parse the shipped shell CLI. A stray `fi` here kills `ccodex launch` on first use.
 
     This is the one check that reaches `assets/`, which the `scripts/*.sh` glob in
     validate_scripts does not. A missing file is caught by the same run: `bash -n` on a path that
     does not exist exits nonzero and names it.
 
-    Scope change to state plainly: the pre-shrink list also required 19 operator-tool artifacts to
-    exist, including `tests/test_operator_tools.py` and `tests/test_claude_statusline.py`. Deleting
-    a test module for the shipped operator CLI is therefore no longer a gate failure here. The two
-    remaining Python artifacts (`scripts/ccodex_sdlc_readonly.py`,
-    `scripts/manage_claude_statusline.py`) still have test-leaf importers, so their disappearance
+    Named for what it checks rather than for the plane it was born in: the operator-tools PATH plane
+    is deleted (gh #10 phase 4), and the rendered `assets/launchers/ccodex.in` this list used to
+    carry went with it. What is left is the payload the release ships and executes.
+
+    Scope note, stated plainly because it is a weakening this check inherited rather than chose: an
+    earlier list also required 19 operator-tool artifacts to EXIST, so deleting a test module for the
+    shipped operator CLI is not a gate failure here. `scripts/ccodex_sdlc_readonly.py` and
+    `scripts/manage_claude_statusline.py` still have test-leaf importers, so their disappearance
     still reddens the gate — through the test leaf, not this check.
     """
     bash = shutil.which("bash")
@@ -2542,7 +2543,7 @@ def validate(root: Path) -> Validation:
     validate_agents(root, result)
     validate_python(root, result)
     validate_scripts(root, result)
-    validate_operator_tools(root, result)
+    validate_shell_payload(root, result)
     validate_manifests(root, result)
     validate_plugin_tree(root, result)
     validate_versions(root, result)

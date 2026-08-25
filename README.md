@@ -12,8 +12,11 @@ git clone https://github.com/Codeseys-Labs/agentic-sdlc.git && cd agentic-sdlc
 mise trust ./mise.toml          # persistent, per-path, and needs your explicit approval
 mise --locked install           # 12 pinned tools, ~1.3 GB
 mise run bundle:install -- --agent claude   # or --agent codex; one plane per run, no default
-mise run operator-tools:install             # optional: puts `ccodex` on your PATH
 ```
+
+The dispatcher is `bin/ccodex` in the tree you just cloned; run it from there, or let mise expose
+it (see [`ccodex` — the operator dispatcher](#ccodex-the-operator-dispatcher)). There is no
+separate step that copies it into `~/.local/bin`.
 
 Then `mise run bundle:status -- --agent claude` should report `N ok, 0 conflict, 0 absent`. Full walkthrough with
 the reasoning behind each step: [Quickstart from a clean clone](#quickstart-from-a-clean-clone).
@@ -383,14 +386,12 @@ replaces step 1 only.
    installation for Claude, not both. Foreign or changed entries are preserved with a reason and
    a retry instruction; never delete a reported path merely to make the installer green.
 
-6. Optional, and a separate approval: put the `ccodex` dispatcher on your `PATH`, so the
-   installed bundle is usable without `mise` in front of every command. This writes into
-   `${XDG_BIN_HOME:-$HOME/.local/bin}` and only when that directory already exists and is on
-   `PATH` — see [the dispatcher section](#ccodex-the-operator-dispatcher):
-
-   ```bash
-   mise run operator-tools:install
-   ```
+6. Nothing further is needed to reach the dispatcher. `bin/ccodex` is committed in the tree and
+   self-locates its distribution root as the parent of its own `bin/`, so `<checkout>/bin/ccodex`
+   works immediately and mise's `github:` backend exposes exactly that one command on an installed
+   release. There is no install step that writes a second copy into `${XDG_BIN_HOME:-$HOME/.local/bin}`
+   — see [the dispatcher section](#ccodex-the-operator-dispatcher) and, if you ran the retired
+   installer on an earlier release, [Retired: the operator-tools PATH plane](#retired-the-operator-tools-path-plane).
 
 Each bundle lifecycle action ends in a terminal summary. `mise run bundle:status -- --agent
 <claude|codex>` reports only
@@ -487,8 +488,6 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 | `bundle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
 | `bundle:status:all-hosts` | Report current-host and native-Windows state when run from WSL. |
 | `research-os:install` | Scaffold the repo-scoped research OS through pinned uv/Python; pass installer arguments after `--`. `--target` is required, so there is no implicit current-directory scaffold. |
-| `operator-tools:install` / `operator-tools:status` / `operator-tools:retire-aliases` / `operator-tools:uninstall` | Manage `ccodex` and its statusline support in an existing Unix PATH; explicitly retire only unchanged owned historical aliases. |
-| `operator-tools:self-test` | Exercise the operator-command lifecycle in an isolated home. |
 | `claude:statusline:status` / `claude:statusline:activate` / `claude:statusline:deactivate` | Inspect or explicitly manage only Claude Code's `statusLine` fields. |
 | `ocx:launch` / `ocx:ultracode` | Launch Claude Code through the gateway using your own `~/.claude` login — native Claude models on your subscription, gateway models on their own providers — normally or with session-only Ultracode. Ordinary permissions are the default; a first `--yolo` is the explicit unsafe bypass profile. |
 | `ocx:status` / `ocx:restart` / `ocx:configure` | Report opencodex gateway reachability, restart it cleanly, or configure providers through their own login flows. |
@@ -529,21 +528,54 @@ The native Windows path runs the ordinary current-host task; it does not invoke 
 current-host lifecycle first and then invokes the native Windows mise task. The two host
 summaries remain separate, and the native task's arguments and exit code are preserved.
 
-### Optional statusline and anywhere opencodex commands
+### Where the statusline comes from
 
-The Claude/Codex bundle installer and the plugin do not own shell aliases, PATH, or global
-Claude settings. Installing into a PATH directory is a persistent user-environment mutation.
-It requires explicit operation-specific approval for that exact directory; a general install
-approval never covers it. A separate Unix operator-tools plane can then install its existing executable surface into
-`${XDG_BIN_HOME:-$HOME/.local/bin}`, and only when that physical user-owned directory is already
-on `PATH`. After that explicit operation-specific approval, it never creates shell aliases or edits
-PATH: if the directory is absent from PATH, the refusal names the directory and tells you to update
-your shell configuration, start a new shell, and retry:
+The Claude/Codex bundle installer and the plugin do not own shell aliases, PATH, or global Claude
+settings, and no lifecycle here writes into a PATH directory at all. Writing your `settings.json` is
+a persistent user-environment mutation that requires explicit operation-specific approval for that
+exact file; a general install approval never covers it.
+
+The packaged statusline is one **bundle ledger row**: `bundle:install -- --agent claude` publishes
+`assets/claude/statusline-command.sh` to `<claude-home>/.claude/statusline/agentic-sdlc-statusline`
+at mode `0755`, and that owned path is the only place `claude:statusline:activate` will take a
+command from — so a statusline that is absent, unowned, drifted, or unexecutable is a named refusal
+rather than a `statusLine.command` pointing at bytes no lifecycle owns. Installing it does not
+activate it; writing `statusLine.type` and `statusLine.command` into your settings is the separate
+operation-specific grant below.
 
 ```bash
-mise run operator-tools:install
-mise run operator-tools:status
+mise run bundle:install -- --agent claude   # publishes the owned statusline command
+mise run claude:statusline:status           # read-only: active | inactive | unmanaged | conflict
 ```
+
+Activation, dry run, and removal are covered under
+[Which login a launch uses](#which-login-a-launch-uses), which is where the settings-mutation grant
+is described.
+
+### Retired: the operator-tools PATH plane
+
+An earlier release shipped a separate Unix operator-tools lifecycle that rendered `ccodex` and
+`agentic-sdlc-statusline` into `${XDG_BIN_HOME:-$HOME/.local/bin}` and refused unless that directory
+was already on `PATH`. **It is deleted.** `bin/ccodex` is committed, self-locating, and exposed
+directly by mise, so a second dispatcher existed only to be placed on `PATH` by a lifecycle that
+would not edit `PATH`.
+
+Deleting the installer deleted `operator-tools:uninstall` with it, so **if you ran it, you still own
+those files and nothing here will remove them for you.** `ccodex sdlc doctor` names the leftover
+store whenever it is present. Remove them by hand:
+
+```bash
+rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/ccodex" \
+      "${XDG_BIN_HOME:-$HOME/.local/bin}/agentic-sdlc-statusline"
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/agentic-sdlc-operator-tools"
+```
+
+Two things worth checking while you are there. A stale `~/.local/bin/ccodex` earlier on `PATH` than
+mise's shim keeps answering as if nothing changed — `type ccodex` tells you which file wins. And if
+you activated the statusline through the old plane, `statusLine.command` in your Claude settings
+still points into `~/.local/bin`; re-run `claude:statusline:activate` after a
+`bundle:install -- --agent claude` so it names the owned ledger path instead. The historical
+`ocx-launch` and `ocx-ultracode` aliases, if you have them, are removed the same manual way.
 
 ### `ccodex` — the operator dispatcher
 
@@ -551,9 +583,8 @@ mise run operator-tools:status
 Anthropic-routed CLI; `ccodex launch` adds the gateway to that same login, so one session serves
 both catalogs — native claude ids pass through to Anthropic on your subscription and gateway ids
 route to their own providers (ADR-0014). It is not a separate non-Anthropic-only route. Fresh
-operator-tools installs no longer create `ocx-launch` or `ocx-ultracode`. Existing lifecycle-owned
-copies remain recognized and can be retired explicitly with `mise run operator-tools:retire-aliases`;
-changed, foreign, and adopted copies are preserved. Every gateway command remains reachable as
+Nothing here creates `ocx-launch` or `ocx-ultracode`; if an old release left you copies, remove them
+by hand (see [the retirement section](#retired-the-operator-tools-path-plane)). Every gateway command remains reachable as
 `ccodex ocx <verb>`, the low-level compatibility form; `ccodex --help` prints the surface at any time.
 
 **Gateway plane** — running one Claude Code session that can reach both catalogs:
@@ -635,9 +666,10 @@ means one ownership record, one place a new verb appears, and no PATH namespace 
 **A shell function or alias named `ccodex` will shadow this command.** Bash resolves functions
 and aliases before `PATH`, so a leftover definition silently wins and the installed dispatcher is
 never reached — the symptom is `ccodex --help` printing the *wrapped tool's* help instead of the
-table above. Diagnose with `type ccodex`: it must report a **file** under
-`${XDG_BIN_HOME:-$HOME/.local/bin}`, not a function or alias. `which ccodex` is not enough, since
-it reports the file that a function is hiding.
+table above. Diagnose with `type ccodex`: it must report a **file** inside a distribution tree's own
+`bin/` — a checkout's, or mise's install directory for the version you selected — not a function, not
+an alias, and not a leftover copy in `${XDG_BIN_HOME:-$HOME/.local/bin}` from the retired PATH plane.
+`which ccodex` is not enough, since it reports the file that a function is hiding.
 
 ### Adding a provider that needs an API key
 
@@ -696,18 +728,18 @@ on reasoning for a two-word answer. A `max_tokens` that looks generous for the v
 returns `content: null` with `finish_reason: "length"` — which reads exactly like a broken
 credential and is not. Size the budget for the reasoning trace.
 
-**The repository clone is required, but repository-scoped mise is not part of daily installed
-`ccodex` use.** `ccodex` remains a thin, owned entry point rather than a self-contained copy: its
-launcher and Python lifecycle scripts live in the checkout, while `operator-tools:install` resolves
-the reviewed `ocx`, `jq`, and `uv` pins once and renders their absolute executable paths into the
-installed dispatcher. Launch and Ultracode invoke that bound `ocx` directly from the caller's physical current
-workspace; the checkout selects code and runtime identity, not the project Claude works on. A moved
-checkout may be selected with `AGENTIC_SDLC_ROOT`, but moving or replacing the mise tool store
-requires an explicit `mise run operator-tools:install` refresh from the reviewed distribution.
-Ordinary commands never silently re-resolve, install, or update those tools. Direct execution of
-source launchers retains a repository-scoped mise fallback for development and maintenance.
-Python-backed bundle, library, and statusline routes use the same install-bound
-`uv`; caller PATH cannot substitute it.
+**A distribution tree is required, and `ccodex` resolves every tool through that tree's own pins.**
+`ccodex` is a thin entry point rather than a self-contained copy: its launcher and Python lifecycle
+scripts live in the tree beside it, and it resolves `ocx`, `jq`, `uv`, and the pinned CPython through
+that tree's reviewed `mise.toml` + `mise.lock` at the moment a verb needs them. Nothing is bound at
+install time any more — the retired operator-tools plane was the only thing that ever rendered
+absolute tool paths into a dispatcher, and deleting it removed both the binding step and the refresh
+step that kept it current. The consequence to know is that the pinned toolchain must be resolvable
+in the tree the dispatcher located, and `mise` itself is found on `PATH` because it is this
+repository's documented sole bootstrap prerequisite. Launch and Ultracode start Claude Code in the
+caller's physical current workspace; the tree selects code and runtime identity, not the project
+Claude works on. `$AGENTIC_SDLC_OCX` and `$AGENTIC_SDLC_JQ` remain caller-supplied exact-absolute
+overrides, admitted only as absolute paths, and nothing shipped here sets either.
 
 No shell startup file or PATH value is edited. Every launch route delegates to
 `scripts/opencodex-claude.sh`, so identity-checked supervision and the route-integrity

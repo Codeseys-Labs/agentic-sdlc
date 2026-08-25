@@ -53,6 +53,7 @@ executing suites skip on ``nt`` by name, and on any filesystem that cannot carry
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -91,6 +92,30 @@ PINNED_INTERPRETER_SKIP_REASON = (
     "the seam hands this suite's own interpreter to the REAL reader, whose runtime admission demands"
     " exactly 3.12.11 (the repository gate runs the suite under it)"
 )
+
+
+def _load_installer():
+    """Load `install_skill_bundle` for FIXTURE CONSTRUCTION only, once, by absolute path.
+
+    The subject under test is still the dispatcher as a subprocess; this import exists so a planted
+    ownership document is the installer's own shape rather than a second hand-typed spelling of it.
+    Nothing here calls a lifecycle mutator, and `Config(dry_run=True)` is passed so a helper that
+    ever grew a write would refuse rather than touch the fixture.
+    """
+    global _INSTALLER
+    if _INSTALLER is None:
+        spec = importlib.util.spec_from_file_location(
+            "_seam_harness_installer", ROOT / "scripts" / "install_skill_bundle.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _INSTALLER = module
+    return _INSTALLER
+
+
+_INSTALLER: Any = None
 
 
 def executable_bit_is_honored() -> bool:
@@ -319,16 +344,44 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         argv=("sdlc", "doctor", "--json"),
         expect_exit=0,
         route_sensitive=True,
-        state="operator-tools-pending",
+        state="bundle-pending",
         json_paths={
             "command.verb": "doctor",
             "overall.state": "blocked",
-            "operator_tools.state": "blocked",
+            "bundle.state": "blocked",
             **_ADMITTED_RUNTIME,
         },
         require_finding_codes=("pending-recovery",),
         forbid_finding_codes=("runtime-admission-refused",),
-        stdout_present=("agentic-sdlc-operator-tools",),
+        stdout_present=("agentic-sdlc-installer",),
+        # The deleted plane's report field must not come back under any name: an exact-key set
+        # refuses it in-process, and this is the same claim read off the shipped dispatcher's stdout.
+        stdout_absent=('"operator_tools"',),
+        canonical_json_stdout=True,
+    ),
+    # The collapsed deprecation phase's one operator-facing promise, driven through the real
+    # dispatcher: a store the deleted installer left behind is NAMED with its manual remedy, and it
+    # does not block -- an upgraded host is not a degraded host.
+    SeamCase(
+        identifier="sdlc-doctor-names-the-retired-operator-tools-store-and-its-manual-remedy",
+        argv=("sdlc", "doctor", "--json"),
+        expect_exit=0,
+        route_sensitive=True,
+        state="retired-operator-tools-store",
+        json_paths={
+            "command.verb": "doctor",
+            "overall.state": "absent",
+            "bundle.state": "absent",
+            **_ADMITTED_RUNTIME,
+        },
+        require_finding_codes=("foreign-state",),
+        forbid_finding_codes=("runtime-admission-refused", "pending-recovery"),
+        stdout_present=(
+            "agentic-sdlc-operator-tools",
+            "nothing in this distribution reads, resumes, or removes it",
+            "by hand",
+        ),
+        stdout_absent=('"operator_tools"',),
         canonical_json_stdout=True,
     ),
     SeamCase(
@@ -336,7 +389,7 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         argv=("sdlc", "recover", "--dry-run", "--json"),
         expect_exit=0,
         route_sensitive=True,
-        state="operator-tools-pending",
+        state="bundle-pending",
         json_paths={
             "command.dry_run": True,
             "recovery.state": "proposed",
@@ -587,30 +640,62 @@ def dispatcher_utilities_path(directory: Path) -> Path:
     return directory
 
 
-#: The interrupted operator-tools transition the ``operator-tools-pending`` fixture plants. It is the
-#: installer's own v2 ownership shape with one armed ``pending`` slot: real state bytes, written by
-#: the test rather than by a lifecycle mutation, so the seam can prove a document on disk reaches the
-#: report and the derived plan digest.
-def write_operator_tools_pending(state_root: Path, home: Path) -> Path:
-    directory = state_root / "agentic-sdlc-operator-tools"
-    directory.mkdir(parents=True, exist_ok=True)
-    document = directory / "state.json"
-    destination = (home / ".local" / "bin" / "ccodex").as_posix()
+#: The interrupted bundle transition the ``bundle-pending`` fixture plants: the installer's own
+#: ownership shape with one armed ``pending`` slot, real state bytes written by the test rather than
+#: by a lifecycle mutation, so the seam can prove a document on disk reaches the report and the
+#: derived plan digest.
+#:
+#: IT REPLACED AN OPERATOR-TOOLS FIXTURE (gh #10 phase 4). The two cases below used to arm the PATH
+#: plane's own store, which is deleted -- the reader projects no such plane, `derive_plan` reads no
+#: such journal, and a case still arming it would have gone quietly green on a report that no longer
+#: mentioned it. The bundle journal is the ONE surviving substrate that can carry an armed slot, so
+#: the case's claim (planted state bytes reach the report and the approval token) is unchanged while
+#: the subject moved. Built through the installer's own helpers rather than hand-typed JSON: the
+#: document has to satisfy `validate_state` and `pending_selects_config`, and a hand-typed copy would
+#: pass this fixture's own eye while failing the reader's, or drift silently when the schema moves.
+def write_bundle_pending(state_root: Path, home: Path) -> Path:
+    bundle = _load_installer()
+    config = bundle.Config(ROOT, home, home / ".codex", "auto", True, "all", state_root)
+    source = state_root / "seam-bundle-source" / "seam-pending-fixture"
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "SKILL.md").write_text("---\nname: seam-pending-fixture\n---\n", encoding="utf-8")
+    entry = bundle.Entry("claude", "skill", "seam-pending-fixture", source)
+    destination = bundle.destination_for(entry, config)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        shutil.copytree(source, destination)
+    record = bundle.entry_record(entry, "copy", installed_digest=bundle.digest(destination))
+    document = config.state_path
+    document.parent.mkdir(parents=True, exist_ok=True)
     document.write_text(
         json.dumps(
             {
-                "version": 2,
+                "version": bundle.STATE_VERSION,
                 "entries": {},
-                "pending": {
-                    "operation": "install",
-                    "path": destination,
-                    "before": None,
-                    "after": {"path": destination, "digest": "0" * 64, "removable": "true"},
-                },
+                "pending": bundle.pending_slot("install", str(destination), None, record),
             },
             sort_keys=True,
         )
         + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return document
+
+
+#: The leftover store the ``retired-operator-tools-store`` fixture plants. gh #10 phase 4 deleted the
+#: PATH plane's module, its five mise tasks, and the `operator-tools:uninstall` verb, so an operator
+#: who ran that installer still owns real bytes with nothing left to retire them. The reader names the
+#: store and the manual remedy instead, and this fixture is how that promise is checked through the
+#: real dispatcher rather than asserted in prose. The document's CONTENT is deliberately irrelevant --
+#: an armed slot inside it is preserved and named, never resumed -- so what is planted is the
+#: directory plus one file, which is exactly what an upgraded host has.
+def write_retired_operator_tools_store(state_root: Path) -> Path:
+    directory = state_root / "agentic-sdlc-operator-tools"
+    directory.mkdir(parents=True, exist_ok=True)
+    document = directory / "state.json"
+    document.write_text(
+        json.dumps({"version": 2, "entries": {}, "pending": None}, sort_keys=True) + "\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -679,8 +764,10 @@ class SeamRunner:
         stub_bin = cell / "stub-bin"
         for directory in (home, state, data, working, stub_bin):
             directory.mkdir(parents=True)
-        if case.state == "operator-tools-pending":
-            write_operator_tools_pending(state, home)
+        if case.state == "bundle-pending":
+            write_bundle_pending(state, home)
+        elif case.state == "retired-operator-tools-store":
+            write_retired_operator_tools_store(state)
         elif case.state != "clean":
             raise ValueError(f"{case.identifier} declares an unknown fixture state {case.state!r}")
         log = cell / "mise-argv.log"

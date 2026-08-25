@@ -20,10 +20,11 @@ arrives from a BUILT ARCHIVE -- the archive's mode bits, the tool-free ``version
 the missing-mise refusal, and the trust boundary against REAL mise.  ``scripts/smoke_release.py``
 plus ``policy/release-smoke.v1.json`` own the EXTRACTED artifact and the per-platform refusal texts.
 The in-process suites (``tests/test_ccodex_sdlc*.py``) own the reader's grammar, its report schema,
-and each lifecycle module's refusal ladder, and their dispatcher is the RENDERED operator-tools
-launcher, which is why the mutation patch to ``bin/ccodex`` leaves them green.  This module's
-distinctive subject is the committed ``bin/ccodex`` in the tree it sits in, across the whole ``sdlc``
-grammar.
+and each lifecycle module's refusal ladder.  Their dispatcher used to be the RENDERED operator-tools
+launcher, which is why the mutation patch to ``bin/ccodex`` left them green; that launcher is deleted
+(gh #10 phase 4), so they now reach the ONE committed dispatcher through this module's own recording
+stub ``mise``.  This module's distinctive subject is still what it always was: the committed
+``bin/ccodex`` in the tree it sits in, driven as a real process across the whole ``sdlc`` grammar.
 """
 
 from __future__ import annotations
@@ -247,20 +248,18 @@ class SeamCasesTest(unittest.TestCase):
         home = cell / "home"
         state.mkdir(parents=True)
         home.mkdir(parents=True)
-        document = harness.write_operator_tools_pending(state, home)
+        document = harness.write_retired_operator_tools_store(state)
+        relative = "state/agentic-sdlc-operator-tools/state.json"
         before = harness.SeamRunner.inventory(cell)
-        self.assertIn("state/agentic-sdlc-operator-tools/state.json", before)
+        self.assertIn(relative, before)
         document.write_text(
-            document.read_text(encoding="utf-8").replace('"install"', '"uninstall"'),
+            document.read_text(encoding="utf-8").replace('"version": 2', '"version": 3'),
             encoding="utf-8",
             newline="\n",
         )
         after = harness.SeamRunner.inventory(cell)
         self.assertEqual(set(before), set(after))
-        self.assertNotEqual(
-            before["state/agentic-sdlc-operator-tools/state.json"],
-            after["state/agentic-sdlc-operator-tools/state.json"],
-        )
+        self.assertNotEqual(before[relative], after[relative])
 
 
 @executing
@@ -364,9 +363,10 @@ class RouteRegressionLeverTest(unittest.TestCase):
                 self.assertIn("expected direct -I -B execution", observation.stdout)
         self.assertEqual(
             witnessed,
-            len(reader.READER_VERBS) * 2 + 2,
+            len(reader.READER_VERBS) * 2 + 3,
             "the reader-verb selection drifted from the inventory: four verbs in both render forms,"
-            " plus the two planted-state cases",
+            " plus the THREE planted-state cases (the armed bundle transition in both doctor and"
+            " recover --dry-run, and the retired operator-tools store)",
         )
 
 

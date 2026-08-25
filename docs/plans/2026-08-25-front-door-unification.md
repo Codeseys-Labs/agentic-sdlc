@@ -462,6 +462,23 @@ journal deletion — and its digest movement must be **measured, not assumed** (
 row is unconditional, so it should move; W1's probe technique applies: one `recover --dry-run`
 on a fixed fixture before and after). The paragraph below is retained for that one reshape:
 
+**MEASURED (2026-08-25, wave D3+D4 executed): reshape #2 IS REAL, and it is two deletions rather than
+one.** On a fixed fixture carrying an armed operator-tools slot AND an armed bundle slot, the plan
+digest moved from `0ac01f63cb88dfa00a0b11d5cc152b72e8fbaeeb3715d336f73764df370b0eb6` to
+`6ba8b79c4b30df5c01baebc47688e9ca3ba4c882cd69acce3293f0fb798ebb71`, with the bundle journal row's own
+byte digest identical on both sides — so the movement is the plan's membership, not the fixture. Each
+deletion moves it independently: `35c481cb…` for the plan document's unread `host` field alone (the
+WX conductor ruling, folded in here), `8311b864…` for the operator-tools journal row and item alone.
+`recover --apply 0ac01f63…` on the reshaped tree refuses at exit 3 with `moved=False`, naming both
+digests, the staleness, and the re-derive remedy; the control — `--apply` of the digest the reshaped
+tree derives — recovers at exit 0. **One release note is owed**, naming the invalidation and the new
+one-row `journal` membership. Disposition of an ALREADY-ARMED operator-tools pending slot on a live
+host, decided here: it is preserved byte-identically and NAMED, never resumed — `derive_plan` reads no
+such journal, and the reader reports the leftover store as one `foreign-state` finding carrying the
+manual removal remedy (the collapsed deprecation phase's surviving deliverable, ratified §8 D3).
+Measured in the same run: the armed document's bytes were unchanged and the file still present after a
+successful `--apply`.
+
 - Each reshape invalidates **every** previously rendered `recover --dry-run` digest on every host,
   including hosts that never had the deleted plane — the digest is derived from the plan document's
   bytes, and the `journal` array's membership is part of those bytes.

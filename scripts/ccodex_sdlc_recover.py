@@ -14,11 +14,17 @@ spelling of the plan that could disagree with the one an ``--apply`` re-derives.
 observation -- it reads, classifies, and digests, and it writes nothing -- which is why the reader
 may call it while its process-wide read-only guard is installed.
 
-Resume and roll back happen ONLY through the reused substrate's own machinery -- each substrate's own
-``recover_pending`` over its own single ``pending`` slot (``install_skill_bundle`` for the bundle
-journal, ``install_operator_tools`` for the operator-tools journal).  This module classifies, admits,
-and reports; it invents no repair of its own.  Foreign, modified, ambiguous, and unknown-effect state
-is preserved and NAMED rather than overwritten or deleted.
+Resume and roll back happen ONLY through the reused substrate's own machinery -- ``install_skill_bundle``'s
+``recover_pending`` over its single ``pending`` slot.  This module classifies, admits, and reports; it
+invents no repair of its own.  Foreign, modified, ambiguous, and unknown-effect state is preserved and
+NAMED rather than overwritten or deleted.
+
+ONE SUBSTRATE, since gh #10 phase 4 deleted the operator-tools PATH plane: the second journal row, its
+item derivation, and its resume arm left with it, and that RESHAPED this plan's digest on every host
+(see ``derive_plan``).  A retired store left on an upgraded host is not silently dropped -- the reader
+reports it by name as leftover state with the manual removal remedy -- but nothing here reads or repairs
+it, because the machinery that knew how to resume it no longer exists and guessing at a half-finished
+transition is exactly what this module refuses to do.
 
 A completed recovery is evidence, never authorization: no push, publication, PR mutation, merge, or
 deployment follows from it.  ``public_channel`` stays null and the release claim stays ``none``.
@@ -56,18 +62,6 @@ EXIT_PARTIAL = 4
 #: constants stay distinct because the reported lines distinguish them.
 EXIT_UNKNOWN = 4
 
-#: The primary product host this plan's ``host`` field names, and DELIBERATELY NOT a per-agent
-#: selector. ``recover`` takes no selectors by design -- it resumes the one pending slot each substrate
-#: can carry -- and the ownership ledger is one user-global document, so this module's own bundle
-#: configuration is built with the whole-box ``agent="all"`` projection. A codex transition armed by
-#: ``bundle install --agent codex`` is therefore ALREADY selectable here, and this field has ALREADY
-#: overstated the plan's scope since before the codex plane was receipted: nothing reads it (there is
-#: no consumer of ``plan["host"]`` in this module or in the reader), so it contributes to the digest
-#: and to nothing else. It is left byte-identical on purpose. Correcting or deleting it would reshape
-#: the plan digest and invalidate every rendered ``recover --dry-run`` approval on every host, and WX
-#: has no reshape to announce; the measurement and the handoff are in this wave's report. Do not widen
-#: this into a lookup -- there is no per-agent recovery plane to look one up for.
-PLAN_PRIMARY_HOST = "claude"
 OPERATION = "recover"
 APPLY_FLAG = "--apply"
 
@@ -117,15 +111,14 @@ JOURNAL_PRESENT = "present"
 JOURNAL_ABSENT = "absent"
 JOURNAL_BLOCKING_STATES = ("irregular", "oversized", "symlinked", "unreadable")
 
-#: The one item action. Both substrates now carry one ``pending`` slot resolved by their own
+#: The one item action. The surviving substrate carries one ``pending`` slot resolved by its own
 #: ``recover_pending``, so ``resume-transaction`` -- the per-entry phase-machine action that named the
 #: retired bundle journal -- has no subject left and is gone rather than kept as a synonym.
 ACTION_RESUME_PENDING = "resume-pending"
 
-#: Both halves spell the same one classified conflict: the live destination matches NEITHER recorded
-#: record, which is the state each substrate's ``recover_pending`` preserves and names rather than
-#: acts through. The plan's conflict count reads this suffix, so a `/live-other` item is counted
-#: whichever component observed it.
+#: The one classified conflict: the live destination matches NEITHER recorded record, which is the
+#: state ``recover_pending`` preserves and names rather than acts through. The plan's conflict count
+#: reads this suffix.
 CONFLICT_OBSERVATION = "/live-other"
 
 
@@ -371,13 +364,12 @@ def observe_receipts(directory: Path) -> dict[str, Any]:
 def bundle_items(bundle: ModuleType, bundle_config: Any, journal: dict[str, Any]) -> list[dict[str, Any]]:
     """Observe the bundle's interrupted transition without deciding its outcome here.
 
-    This mirrors ``operator_tools_items`` exactly, because the two substrates now carry the same one
-    ``pending`` slot: the derivation records only what is OBSERVABLE -- the recorded operation and
-    which of the two recorded records the live destination matches -- and leaves the verdict to
-    ``recover_pending``, which fsyncs on the way in and would be blocked by the reader's read-only
-    guard.  ``live-other`` is the shape ``recover_pending`` preserves and names rather than acts
-    through.  The locator is the reused installer's OWN read-only locator, so a plan item names
-    exactly the proposal the operator already saw in ``recover --dry-run``.
+    The derivation records only what is OBSERVABLE -- the recorded operation and which of the two
+    recorded records the live destination matches -- and leaves the verdict to ``recover_pending``,
+    which fsyncs on the way in and would be blocked by the reader's read-only guard.  ``live-other``
+    is the shape ``recover_pending`` preserves and names rather than acts through.  The locator is the
+    reused installer's OWN read-only locator, so a plan item names exactly the proposal the operator
+    already saw in ``recover --dry-run``.
     """
     if journal["state"] != JOURNAL_PRESENT:
         return []
@@ -420,60 +412,8 @@ def bundle_items(bundle: ModuleType, bundle_config: Any, journal: dict[str, Any]
     ]
 
 
-def operator_tools_items(
-    operator_tools: ModuleType, operator_config: Any, journal: dict[str, Any]
-) -> list[dict[str, Any]]:
-    """Observe the operator-tools pending transition without deciding its outcome here.
-
-    ``recover_pending`` owns the decision and it fsyncs the containing directory on the way in, which
-    the reader's read-only guard would block, so this derivation records only what is OBSERVABLE: the
-    recorded operation and which of the two recorded contents the live file matches.  That is enough
-    to make the digest move when the file moves, and it leaves the verdict with the substrate.
-    """
-    if journal["state"] != JOURNAL_PRESENT:
-        return []
-    raw, _state = read_bounded_document(Path(journal["path"]), MAX_JOURNAL_BYTES)
-    if raw is None:
-        raise PlanUnavailable("the operator-tools journal became unreadable while the plan was derived")
-    try:
-        state = operator_tools._readonly_json_document(raw, Path(journal["path"]))
-    except Exception as exc:  # noqa: BLE001 - a malformed journal states no plan
-        raise PlanUnavailable(
-            f"the operator-tools journal is not one strict JSON object ({show(exc)})"
-        ) from exc
-    if set(state) != {"version", "entries", "pending"} or state.get("version") != operator_tools.STATE_VERSION:
-        raise PlanUnavailable("the operator-tools journal is not one readable current-version document")
-    pending = state["pending"]
-    if pending is None:
-        return []
-    try:
-        operator_tools.validate_pending(operator_config, state)
-    except Exception as exc:  # noqa: BLE001 - the substrate's own verdict on its own journal
-        raise PlanUnavailable(f"the operator-tools pending transition is malformed ({show(exc)})") from exc
-    path = operator_config.bin_dir / Path(str(pending["path"])).name
-    observed = "live-other"
-    if not path.exists() and not path.is_symlink():
-        observed = "live-absent"
-    else:
-        for role in ("before", "after"):
-            record = pending.get(role)
-            if isinstance(record, dict) and operator_tools.live_matches(path, record):
-                observed = f"live-{role}"
-                break
-    return [
-        {
-            "action": ACTION_RESUME_PENDING,
-            "classification": f"{pending['operation']}/{observed}",
-            "component": "operator-tools",
-            "path": str(path),
-        }
-    ]
-
-
 def derive_plan(
     *,
-    operator_tools: ModuleType,
-    operator_config: Any,
     bundle: ModuleType,
     bundle_config: Any,
     activation_receipts: Path,
@@ -484,21 +424,32 @@ def derive_plan(
     is taken, which is what lets the read-only reader call this to render a digest.  The returned
     plan is exactly what an ``--apply`` re-derives, so a digest computed here and a digest computed
     there differ only when the state itself moved.
+
+    RESHAPE #2 (gh #10 phase 4, MEASURED not assumed).  Deleting the operator-tools PATH plane
+    removed its unconditional journal row and its item derivation from this plan, and the same change
+    deleted the plan's unread ``host`` field -- one fact nothing in this module or the reader ever
+    consumed, kept byte-identical through WX precisely so its removal would be announced with a
+    reshape rather than smuggled into one.  Both deletions move the digested BYTES, so every
+    previously rendered ``recover --dry-run`` digest is invalidated on EVERY host, including one that
+    never installed the retired plane.  There is deliberately no migration: ``run`` refuses a stale
+    approval by name, which is the control working rather than breaking.  Measured on a fixed fixture
+    carrying both an armed operator-tools slot and an armed bundle slot:
+    ``0ac01f63cb88dfa00a0b11d5cc152b72e8fbaeeb3715d336f73764df370b0eb6`` before,
+    ``6ba8b79c4b30df5c01baebc47688e9ca3ba4c882cd69acce3293f0fb798ebb71`` after -- the second value is
+    re-derived by a test rather than trusted from this comment.  Each deletion moves the digest on its
+    own -- ``35c481cb…`` for the ``host`` field alone, ``8311b864…`` for the journal row and item alone
+    -- so neither is riding along on the other's movement.
     """
-    journals = [
-        {**observe_journal("operator-tools", "operator-tools/state", operator_config.state_path),
-         "path": str(operator_config.state_path)},
-    ]
-    # ONE bundle journal, because one configuration selects one state document. The retired
-    # configured-home-relative mirror is gone, and with it the ambiguity branch that refused a plan
-    # when both were present.
+    # ONE journal, because one configuration selects one state document. The retired
+    # configured-home-relative mirror is gone (W1), and so is the operator-tools store (this wave),
+    # and with them the ambiguity branch that refused a plan when two documents were present.
     bundle_journal = {
         **observe_journal("bundle", "bundle/state", bundle_config.state_path),
         "path": str(bundle_config.state_path),
     }
-    journals.append(bundle_journal)
+    journals = [bundle_journal]
 
-    items = operator_tools_items(operator_tools, operator_config, journals[0])
+    items: list[dict[str, Any]] = []
     if bundle_journal["state"] == JOURNAL_PRESENT:
         items.extend(bundle_items(bundle, bundle_config, bundle_journal))
     items.sort(key=lambda item: (item["component"], item["path"], item["action"]))
@@ -509,7 +460,6 @@ def derive_plan(
             "items": len(items),
             "recoverable": len(items) - conflicts,
         },
-        "host": PLAN_PRIMARY_HOST,
         "items": items,
         # ``path`` is the local read key, never part of the digested plan: an operator's absolute
         # paths are not this plan's to publish, and the opaque locator plus the byte digest already
@@ -536,9 +486,9 @@ def _absolute(path: Path) -> Path:
 def _state_root_for(home: Path) -> Path:
     """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
 
-    Re-expressed from ``ccodex_sdlc.state_root_for`` rather than imported from
-    ``install_operator_tools``, whose PATH plane is retiring (gh #10) and must not take a derivation
-    the recovery plane still needs with it.  ``install_skill_bundle.state_directory()`` is not the
+    Re-expressed from ``ccodex_sdlc.state_root_for`` rather than imported from the deleted
+    ``install_operator_tools`` (gh #10 phase 4), whose PATH plane must not take a derivation the
+    recovery plane still needs with it.  ``install_skill_bundle.state_directory()`` is not the
     substitute: it reads ``Path.home()`` itself, which would defeat ``run(..., home=...)`` -- the
     test-injection seam every fixture host in this suite depends on -- and on Windows it prefers
     ``LOCALAPPDATA``, so the reader and this module would resolve two different state roots and
@@ -710,10 +660,8 @@ def verify_receipt_evidence(dar: ModuleType, receipts: dict[str, Any], directory
 # ---- apply: configuration ---------------------------------------------------------------------------
 
 
-def build_configs(
-    operator_tools: ModuleType, bundle: ModuleType, *, home: Path | None = None
-) -> tuple[Any, Any, Path]:
-    """Build the two substrate configurations the reader builds, with writing enabled.
+def build_configs(bundle: ModuleType, *, home: Path | None = None) -> tuple[Any, Path]:
+    """Build the substrate configuration the reader builds, with writing enabled.
 
     Identity fields are resolved exactly as ``ccodex_sdlc.recovery_configs`` resolves them, because a
     plan derived against one selection and applied against another would compare two different
@@ -722,16 +670,13 @@ def build_configs(
     resolved_home = bundle.operational_path(Path.home() if home is None else home)
     state_root = _state_root_for(resolved_home)
     root = _absolute(Path(__file__).parent.parent)
-    operator_config = operator_tools.Config(
-        root, resolved_home, operator_tools.default_bin_dir(resolved_home), state_root, False, False
-    )
     codex_home_value = os.environ.get("CODEX_HOME")
     codex_home = (
         Path(codex_home_value) if codex_home_value and codex_home_value.strip() else resolved_home / ".codex"
     )
     bundle_config = bundle.Config(root, resolved_home, codex_home, "auto", False, "all", state_root)
     activation = state_root / STATE_PLANE_DIRECTORY
-    return operator_config, bundle_config, activation.joinpath(*ACTIVATION_RECEIPTS)
+    return bundle_config, activation.joinpath(*ACTIVATION_RECEIPTS)
 
 
 # ---- apply: execution --------------------------------------------------------------------------------
@@ -747,50 +692,6 @@ def admit_journals(plan: dict[str, Any]) -> None:
             )
 
 
-def resume_operator_tools(
-    operator_tools: ModuleType, operator_config: Any, plan: dict[str, Any], ledger: dict[str, bool]
-) -> tuple[list[str], bool]:
-    """Resume or roll back the operator-tools pending transition through its own machinery.
-
-    The journal's exact bytes are re-checked UNDER the lifecycle lock against the digest the approved
-    plan recorded, mirroring ``resume_bundle``'s own pattern: a plan verified before the lock and
-    executed after it would otherwise have admitted whatever moved in between.
-    """
-    if not any(item["component"] == "operator-tools" for item in plan["items"]):
-        return [], False
-    recorded = {
-        journal["locator"]: journal["digest"]
-        for journal in plan["journal"]
-        if journal["component"] == "operator-tools" and journal["state"] == JOURNAL_PRESENT
-    }
-    moved_before = ledger["moved"]
-    with operator_tools.lifecycle_lock(operator_config):
-        locator = "journal://operator-tools/state"
-        if locator in recorded:
-            raw, state_name = read_bounded_document(operator_config.state_path, MAX_JOURNAL_BYTES)
-            if raw is None or sha256_bytes(raw) != recorded[locator]:
-                raise Refusal(
-                    f"the operator-tools journal {locator} changed between the approval and the lock"
-                    f" (now {state_name}): the state moved and nothing was touched"
-                )
-        state = operator_tools.load_state(operator_config.state_path, operator_config)
-        try:
-            # Pessimistic on purpose: the flag is raised BEFORE the call, because the write happens
-            # inside it and a flag raised afterwards would claim an absence of effect nobody saw.
-            ledger["moved"] = True
-            message = operator_tools.recover_pending(operator_config, state, read_only=False)
-        except operator_tools.OperatorToolsError as exc:
-            # ``recover_pending`` refuses a conflicting live file BEFORE it writes anything, which is
-            # why the flag may be lowered here and only here: the transition is preserved exactly as
-            # found and named for the operator.
-            ledger["moved"] = moved_before
-            return [f"operator-tools: preserved conflict: {escape_display(str(exc))}"], True
-    if message is None:
-        ledger["moved"] = moved_before
-        return ["operator-tools: nothing pending remained to recover"], True
-    return [f"operator-tools: {escape_display(message)}"], False
-
-
 def resume_bundle(
     bundle: ModuleType,
     bundle_config: Any,
@@ -804,9 +705,8 @@ def resume_bundle(
     admitted whatever moved in between.
 
     ``recover_pending`` REPORTS a live destination matching neither recorded record and returns it as
-    partial, rather than raising the way the operator-tools half does.  It returns that verdict before
-    it writes anything, which is why -- exactly as on the operator-tools side -- the pessimistic flag
-    may be lowered again on that one path and only on it.
+    partial rather than raising.  It returns that verdict before it writes anything, which is why the
+    pessimistic flag may be lowered again on that one path and only on it.
     """
     if not any(item["component"] == "bundle" for item in plan["items"]):
         return [], False
@@ -841,13 +741,10 @@ def run(argv: list[str], ledger: dict[str, bool], *, home: Path | None = None) -
     admit_platform()
     dar = load_sibling("distribution_activation_receipt")
     bundle = load_sibling("install_skill_bundle")
-    operator_tools = load_sibling("install_operator_tools")
-    operator_config, bundle_config, receipts_dir = build_configs(operator_tools, bundle, home=home)
+    bundle_config, receipts_dir = build_configs(bundle, home=home)
 
     try:
         plan, digest = derive_plan(
-            operator_tools=operator_tools,
-            operator_config=operator_config,
             bundle=bundle,
             bundle_config=bundle_config,
             activation_receipts=receipts_dir,
@@ -878,13 +775,9 @@ def run(argv: list[str], ledger: dict[str, bool], *, home: Path | None = None) -
         f" verified journal and receipt state ({plan['counts']['items']} item(s),"
         f" {plan['counts']['conflicts']} classified conflict(s))",
     ]
-    operator_lines, operator_partial = resume_operator_tools(
-        operator_tools, operator_config, plan, ledger
-    )
     bundle_lines, bundle_partial = resume_bundle(bundle, bundle_config, plan, ledger)
-    lines.extend(operator_lines)
     lines.extend(bundle_lines)
-    partial = operator_partial or bundle_partial or bool(plan["counts"]["conflicts"])
+    partial = bundle_partial or bool(plan["counts"]["conflicts"])
     lines.append(
         "preserved state is never overwritten or deleted: foreign, modified, retargeted, and"
         " ambiguous entries are reported by name and left exactly as found"

@@ -25,11 +25,19 @@ test, so a table a module quietly renumbered fails here instead of agreeing with
 
 HOW THE VERBS ARE DRIVEN.  Three levels, all real, chosen per claim:
 
-* THE INSTALLED DISPATCHER.  ``operator-tools`` installs a real ``ccodex`` once for the module, and
-  every verb runs as ``ccodex sdlc <verb> ...`` in a subprocess over a private ``HOME``,
-  ``XDG_STATE_HOME``, ``XDG_DATA_HOME``, and ``XDG_BIN_HOME``.  This is the level the operator
-  types, and it is the ONLY level that can prove the exit-2 grammar matrix, because a malformed
-  vector never reaches a per-verb module at all.
+* THE REAL READER, DRIVEN DIRECTLY.  gh #10 phase 4 deleted the rendered
+  ``assets/launchers/ccodex.in`` template and its install-time ``ocx``/``jq``/``uv``/interpreter
+  binding along with it: the committed ``bin/ccodex`` self-locates its root and resolves
+  ``sdlc``'s pinned interpreter at RUN time through ``mise -C <root> exec``, which requires this
+  exact root's ``mise.toml`` to be trusted under the REAL operator ``HOME`` -- a fact this suite's
+  isolated ``HOME`` can never carry without a persistent trust mutation.  ``Plane.dispatch`` drives
+  ``scripts/ccodex_sdlc.py`` directly instead, under the same ``-I -B`` isolation the installed
+  dispatcher's own ``run_sdlc_python`` route resolves and execs, over a private ``HOME``,
+  ``XDG_STATE_HOME``, and ``XDG_DATA_HOME``.  This is still the level the operator types once
+  ``bin/ccodex`` hands off, and it is the ONLY level that can prove the exit-2 grammar matrix,
+  because a malformed vector never reaches a per-verb module at all; the toolchain-resolution
+  boundary above it is proven elsewhere (``tests/test_bin_ccodex.py``,
+  ``tests/test_ccodex_seam.py``), not duplicated here.
 * THE REAL PER-VERB ENTRY POINT IN A SUBPROCESS.  ``driver.py`` loads one shipped module by absolute
   path exactly as ``scripts/ccodex_sdlc.py`` does, wraps ONE named shipped-installer primitive with
   a fault, and calls the module's own ``main(argv)``.  Configuration still comes from the
@@ -98,9 +106,10 @@ def _load(path: Path, name: str) -> ModuleType:
 
 
 bundle = _load(ROOT / "scripts" / "install_skill_bundle.py", "exit_conformance_bundle")
-operator_tools = _load(ROOT / "scripts" / "install_operator_tools.py", "exit_conformance_operator_tools")
 dar = _load(ROOT / "scripts" / "distribution_activation_receipt.py", "exit_conformance_receipts")
 recover = _load(ROOT / "scripts" / "ccodex_sdlc_recover.py", "exit_conformance_recover")
+#: The reader ``Plane.dispatch`` drives directly for every ``sdlc`` route (see the module docstring).
+READER_SCRIPT = ROOT / "scripts" / "ccodex_sdlc.py"
 
 #: The phrases a shipped verb's OWN platform refusal carries: install and update refuse to activate
 #: or refresh a linux-x64 CANDIDATE, recover refuses to resume a linux-x64 PLANE, and each names the
@@ -418,12 +427,14 @@ def document_authority_claims(document: Any) -> list[str]:
 
 
 class _InstalledDispatcher:
-    """One real ``ccodex`` installed once for the whole module, over per-test operator planes.
+    """The one real, committed ``bin/ccodex``, plus a reusable ``claude`` stub for every test.
 
-    ``operator-tools`` binds the launcher to absolute ``ocx``/``jq``/``uv`` paths and to the exact
-    interpreter running this suite, which is why the binary is reusable: it carries no per-test
-    state.  Every plane a test drives is supplied as environment, so no two tests can observe each
-    other's home.
+    There is no install step any more (gh #10 phase 4 deleted the rendered
+    ``assets/launchers/ccodex.in`` template and its ``ocx``/``jq``/``uv``/interpreter binding):
+    this checkout's own ``bin/ccodex`` is already the one file an operator runs, so it needs no
+    per-module rendering and carries no per-test state on its own.  What THIS class still builds
+    once per module is the ``claude`` stub every plane's ``PATH`` needs, because
+    ``ccodex_sdlc_install.py`` observes the host version by running ``claude --version``.
     """
 
     def __init__(self) -> None:
@@ -439,27 +450,6 @@ class _InstalledDispatcher:
         # would leave a tree behind on an interrupted run and warn on a clean one.
         atexit.register(self._root.cleanup)
         root = Path(self._root.name)
-        runtime = root / "runtime"
-        runtime.mkdir()
-        for name in ("ocx", "jq", "uv"):
-            executable = runtime / name
-            executable.write_text("#!/bin/sh\nexit 0\n")
-            executable.chmod(0o755)
-        config = operator_tools.Config(
-            ROOT,
-            root / "install-home",
-            root / "bin",
-            root / "installer-state",
-            False,
-            False,
-            runtime / "ocx",
-            runtime / "jq",
-            runtime / "uv",
-            Path(sys.executable),
-        )
-        installed, messages = operator_tools.install(config)
-        if installed != 0:
-            raise AssertionError(f"operator tools did not install: {messages}")
         stub_bin = root / "stub-bin"
         stub_bin.mkdir()
         # `install` observes the host version by running `claude --version`. A stub makes that
@@ -468,7 +458,7 @@ class _InstalledDispatcher:
         claude = stub_bin / "claude"
         claude.write_text(f"#!/bin/sh\nprintf '%s (Claude Code)\\n' '{HOST_VERSION}'\nexit 0\n")
         claude.chmod(0o755)
-        self.dispatcher = config.bin_dir / "ccodex"
+        self.dispatcher = ROOT / "bin" / "ccodex"
         self.stub_bin = stub_bin
         return self.dispatcher, self.stub_bin
 
@@ -629,15 +619,17 @@ class Plane:
     # ---- running --------------------------------------------------------------------------------
 
     def environment(self) -> dict[str, str]:
-        dispatcher, stub_bin = DISPATCHER.ensure()
+        # Neither AGENTIC_SDLC_ROOT nor XDG_BIN_HOME is read anywhere in this product any more: the
+        # committed bin/ccodex self-locates its root from its own physical path, and the operator-tools
+        # PATH plane that once read XDG_BIN_HOME is gone (gh #10 phase 4). Carrying either here would
+        # claim an env-var contract this checkout no longer honours.
+        _dispatcher, stub_bin = DISPATCHER.ensure()
         environment = os.environ.copy()
         environment.update(
             {
-                "AGENTIC_SDLC_ROOT": str(ROOT),
                 "HOME": str(self.home),
                 "XDG_STATE_HOME": str(self.state_home),
                 "XDG_DATA_HOME": str(self.data_home),
-                "XDG_BIN_HOME": str(self.bin_home),
                 "CODEX_HOME": str(self.codex_home),
                 "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}",
                 "LANG": "C.UTF-8",
@@ -686,10 +678,20 @@ class Plane:
         )
 
     def dispatch(self, *arguments: str) -> subprocess.CompletedProcess[str]:
-        """Run one verb through the REAL installed ``ccodex`` dispatcher."""
-        dispatcher, _stub = DISPATCHER.ensure()
+        """Run one ``sdlc`` verb the way the installed dispatcher's own ``run_sdlc_python`` does.
+
+        Every call in this module starts with ``"sdlc"``: that argument is stripped and the rest is
+        handed straight to the real ``scripts/ccodex_sdlc.py`` under ``-I -B``, the exact isolation
+        ``bin/ccodex``'s ``run_sdlc_python`` route resolves and execs once it has trusted the
+        toolchain. Driving it directly is what lets this suite keep an isolated ``HOME`` -- the real
+        dispatcher's ``sdlc`` route requires this checkout's ``mise.toml`` to be trusted under the
+        REAL operator ``HOME``, which an isolated plane can never carry.
+        """
+        if not arguments or arguments[0] != "sdlc":
+            raise ValueError(f"Plane.dispatch only drives the sdlc route; received {arguments!r}")
+        _dispatcher, _stub = DISPATCHER.ensure()
         completed = subprocess.run(
-            [str(dispatcher), *arguments],
+            [str(Path(sys.executable)), "-I", "-B", str(READER_SCRIPT), *arguments[1:]],
             env=self.environment(),
             capture_output=True,
             text=True,
@@ -697,7 +699,7 @@ class Plane:
             timeout=600,
         )
         return self.payload_host_or_skip(
-            completed, f"`ccodex {' '.join(arguments[:2])}` through the installed dispatcher"
+            completed, f"`ccodex {' '.join(arguments[:2])}` through the real reader"
         )
 
     def drive(
@@ -739,11 +741,11 @@ class Plane:
 
 
 # Every Conformance subclass inherits this skip through __unittest_skip__: the exit-class
-# claims below all drive operator_tools.install()/lifecycle_lock through the durable-write
-# plane, which is POSIX-only.
+# claims below all drive the shipped install/update/uninstall/recover-apply modules' own
+# installer_lock through the durable-write plane, which is POSIX-only.
 @unittest.skipIf(
     os.name == "nt",
-    "every exit-class claim drives operator_tools.install()/lifecycle_lock through the "
+    "every exit-class claim drives the shipped lifecycle modules' own installer_lock through the "
     "POSIX-only durable-write plane (os.open O_DIRECTORY fsync barriers); native Windows "
     "fails closed by name at the CLI",
 )
@@ -1469,7 +1471,6 @@ class InternalFailureExitOneTest(Conformance):
             "policy/release-contract.v1.json",
             "scripts/ccodex_sdlc.py",
             "scripts/ccodex_sdlc_readonly.py",
-            "scripts/install_operator_tools.py",
             "scripts/install_skill_bundle.py",
         ):
             destination = shadow / relative

@@ -1616,7 +1616,6 @@ class DispatchContractTest(TemporaryRoot):
             "scripts/ccodex_sdlc_readonly.py",
             "scripts/ccodex_sdlc_install.py",
             "scripts/ccodex_sdlc_host_planes.py",
-            "scripts/install_operator_tools.py",
             "scripts/install_skill_bundle.py",
             "scripts/distribution_activation_receipt.py",
         ):

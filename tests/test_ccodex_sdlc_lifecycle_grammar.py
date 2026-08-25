@@ -27,13 +27,11 @@ import unittest
 ROOT = Path(__file__).parents[1]
 READER_SCRIPT = ROOT / "scripts" / "ccodex_sdlc.py"
 GUARD_SCRIPT = ROOT / "scripts" / "ccodex_sdlc_readonly.py"
-
-OPERATOR_SCRIPT = ROOT / "scripts" / "install_operator_tools.py"
-_operator_spec = importlib.util.spec_from_file_location("lifecycle_grammar_operator_tools", OPERATOR_SCRIPT)
-assert _operator_spec and _operator_spec.loader
-operator_tools = importlib.util.module_from_spec(_operator_spec)
-sys.modules[_operator_spec.name] = operator_tools
-_operator_spec.loader.exec_module(operator_tools)
+#: The committed, self-locating dispatcher (gh #10 phase 4 deleted the rendered
+#: assets/launchers/ccodex.in template and its install_operator_tools.py renderer). There is no
+#: install step any more: this file IS the dispatcher a real checkout ships, so the grammar tests
+#: below drive it directly rather than rendering a synthetic copy.
+DISPATCHER_SCRIPT = ROOT / "bin" / "ccodex"
 
 _reader_spec = importlib.util.spec_from_file_location("lifecycle_grammar_reader", READER_SCRIPT)
 assert _reader_spec and _reader_spec.loader
@@ -145,7 +143,6 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             "policy/release-contract.v1.json",
             "scripts/ccodex_sdlc.py",
             "scripts/ccodex_sdlc_readonly.py",
-            "scripts/install_operator_tools.py",
             "scripts/install_skill_bundle.py",
         ):
             destination = shadow / relative
@@ -187,44 +184,50 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
         )
 
     def make_dispatcher(self, root: Path) -> tuple[Path, dict[str, str], Path]:
-        runtime = root / "runtime"
-        runtime.mkdir()
-        for name in ("ocx", "jq", "uv"):
-            executable = runtime / name
-            executable.write_text("#!/bin/sh\nexit 0\n")
-            executable.chmod(0o755)
-        config = operator_tools.Config(
-            ROOT,
-            root / "install-home",
-            root / "bin",
-            root / "installer-state",
-            False,
-            False,
-            runtime / "ocx",
-            runtime / "jq",
-            runtime / "uv",
-            Path(sys.executable),
-        )
-        installed, messages = operator_tools.install(config)
-        self.assertEqual(installed, 0, messages)
+        """An isolated per-test query plane for the ``ccodex sdlc`` grammar, no install step.
+
+        gh #10 phase 4 deleted the rendered ``assets/launchers/ccodex.in`` template and its
+        install-time ``ocx``/``jq``/``uv``/interpreter binding along with it: the committed
+        ``bin/ccodex`` self-locates its root and resolves ``sdlc``'s pinned interpreter at RUN time
+        through ``mise -C <root> exec``, which in turn requires this exact root's ``mise.toml`` to
+        be trusted under the REAL operator ``HOME`` -- a fact this suite's isolated ``HOME`` can
+        never carry without a persistent trust mutation. ``run_dispatcher`` therefore drives the
+        reader directly, under the same ``-I -B`` isolation the installed dispatcher's own
+        ``run_sdlc_python`` route resolves and execs, over exactly this isolated environment; the
+        toolchain-resolution boundary itself is proven elsewhere (``tests/test_bin_ccodex.py``,
+        ``tests/test_ccodex_seam.py``), not duplicated here.
+        """
         query_home = root / "query-home"
         query_state = root / "query-state"
         environment = os.environ.copy()
         environment.update(
             {
-                "AGENTIC_SDLC_ROOT": str(ROOT),
                 "HOME": str(query_home),
-                "XDG_BIN_HOME": str(root / "query-bin"),
                 "XDG_STATE_HOME": str(query_state),
                 "CODEX_HOME": str(query_home / ".codex"),
                 "PYTHONPATH": str(root / "poisoned-pythonpath"),
             }
         )
-        return config.bin_dir / "ccodex", environment, query_state
+        return DISPATCHER_SCRIPT, environment, query_state
 
     def run_dispatcher(
         self, dispatcher: Path, environment: dict[str, str], *arguments: str
     ) -> subprocess.CompletedProcess[str]:
+        """Drive one ``ccodex`` invocation, routed the way ``bin/ccodex`` itself would route it.
+
+        A leading ``sdlc`` is this suite's OWN entire subject and is driven directly against the
+        real reader under ``-I -B`` (see ``make_dispatcher``); every other route in this file is
+        tool-free (``--help``, ``version``) and is answered by the real committed ``dispatcher``
+        itself with no toolchain involved, so it is driven exactly as an operator would type it.
+        """
+        if arguments and arguments[0] == "sdlc":
+            return subprocess.run(
+                [str(Path(sys.executable)), "-I", "-B", str(READER_SCRIPT), *arguments[1:]],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         return subprocess.run(
             [str(dispatcher), *arguments],
             env=environment,

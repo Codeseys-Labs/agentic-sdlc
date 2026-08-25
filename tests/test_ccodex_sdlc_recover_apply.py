@@ -40,12 +40,17 @@ def _load(name: str, path: Path):
 # The reader is loaded for its constants and its grammar only. Its projection entry points install a
 # process-wide read-only guard that would block this harness's own writes, so every end-to-end check
 # below runs the reader as a subprocess instead.
-operator_tools = _load("recover_apply_operator_tools", ROOT / "scripts" / "install_operator_tools.py")
 reader = _load("recover_apply_reader", ROOT / "scripts" / "ccodex_sdlc.py")
 recover = _load("recover_apply_module", ROOT / "scripts" / "ccodex_sdlc_recover.py")
 bundle = _load("recover_apply_bundle", ROOT / "scripts" / "install_skill_bundle.py")
-operator_tools = _load("recover_apply_operator_tools", ROOT / "scripts" / "install_operator_tools.py")
 dar = _load("recover_apply_receipts", ROOT / "scripts" / "distribution_activation_receipt.py")
+# `install_operator_tools.py` is deleted (gh #10 phase 4): the PATH plane it rendered is gone, and
+# there is no installed copy of `ccodex` left for this harness to build. `tests/seam_harness.py`
+# already solves driving the tree's OWN `bin/ccodex` -- the ONE dispatcher left -- through a
+# recording stub `mise` that grants no real trust and resolves no real toolchain; reused here rather
+# than re-implemented so a second hand-rolled stub cannot silently drift from the one already proven
+# faithful to both call shapes `bin/ccodex` can make (see `RecoverApplyHarness.make_dispatcher`).
+seam = _load("recover_apply_seam_harness", ROOT / "tests" / "seam_harness.py")
 
 #: One well-formed digest that is not the digest of any plan this suite derives.
 FOREIGN_DIGEST = hashlib.sha256(b"a plan no host derives").hexdigest()
@@ -111,39 +116,47 @@ class RecoverApplyHarness(unittest.TestCase):
     """One installed dispatcher over a private home, plus planted interrupted journal state."""
 
     def make_dispatcher(self, root: Path) -> tuple[Path, dict[str, str]]:
-        runtime = root / "runtime"
-        runtime.mkdir()
-        for name in ("ocx", "jq", "uv"):
-            executable = runtime / name
-            executable.write_text("#!/bin/sh\nexit 0\n")
-            executable.chmod(0o755)
-        config = operator_tools.Config(
-            ROOT,
-            root / "install-home",
-            root / "bin",
-            root / "installer-state",
-            False,
-            False,
-            runtime / "ocx",
-            runtime / "jq",
-            runtime / "uv",
-            Path(sys.executable),
+        """Point the harness at the tree's ONLY dispatcher, ``bin/ccodex``.
+
+        ``operator_tools.install()`` used to render a per-operator COPY of ``ccodex`` under a
+        private ``bin/``; gh #10 phase 4 deleted that whole PATH plane
+        (``scripts/install_operator_tools.py``, ``assets/launchers/ccodex.in``), so there is
+        nothing left to install and nothing to point AT except the committed dispatcher itself.
+        ``bin/ccodex`` self-locates its distribution root as the parent of its own ``bin/`` and,
+        before it hands off to the reader, clears two upstream boundaries this suite must not grant
+        for real: ``require_toolchain``'s ``mise -C <root> tasks`` trust probe, and
+        ``run_sdlc_python``'s ``mise -C <root> exec -- uv python find --managed-python 3.12.11``
+        interpreter resolution. Granting real ``mise trust`` would be a persistent operator
+        mutation, and resolving the real pinned toolchain would download an interpreter.
+
+        ``tests/seam_harness.py`` already solves exactly this for the OTHER suite that drives this
+        same dispatcher (``tests/test_ccodex_seam.py``): ``write_stub_mise`` is a recording stub
+        ``mise`` that answers the trust probe cleanly and serves BOTH call shapes the dispatcher can
+        make by handing back THIS suite's own interpreter, which the dispatcher then execs directly
+        under ``-I -B`` -- the real reader is reached through a genuinely isolated interpreter
+        without granting any trust or touching the network. Reused (imported as ``seam`` above)
+        rather than copied, so the two suites cannot drift apart on what "faithful" means here.
+        """
+        stub_bin = root / "stub-bin"
+        stub_bin.mkdir()
+        seam.write_stub_mise(
+            stub_bin,
+            root=seam.ROOT,
+            interpreter=Path(sys.executable),
+            log=root / "mise-argv.log",
+            probe="trusted",
         )
-        installed, messages = operator_tools.install(config)
-        self.assertEqual(installed, 0, messages)
+        utilities = seam.dispatcher_utilities_path(root / "utilities")
         query_home = root / "query-home"
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "AGENTIC_SDLC_ROOT": str(ROOT),
-                "HOME": str(query_home),
-                "XDG_BIN_HOME": str(root / "query-bin"),
-                "XDG_STATE_HOME": str(root / "query-state"),
-                "CODEX_HOME": str(query_home / ".codex"),
-                "PYTHONPATH": str(root / "poisoned-pythonpath"),
-            }
-        )
-        return config.bin_dir / "ccodex", environment
+        environment = {
+            "PATH": os.pathsep.join([str(stub_bin), str(utilities)]),
+            "HOME": str(query_home),
+            "XDG_STATE_HOME": str(root / "query-state"),
+            "CODEX_HOME": str(query_home / ".codex"),
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+        return seam.BIN_CCODEX, environment
 
     def run_dispatcher(
         self, dispatcher: Path, environment: dict[str, str], *arguments: str
@@ -157,10 +170,11 @@ class RecoverApplyHarness(unittest.TestCase):
         )
 
     def observed_roots(self, environment: dict[str, str]) -> tuple[Path, ...]:
+        # No XDG_BIN_HOME any more: the operator-tools PATH plane that rendered a copy of `ccodex`
+        # there is deleted (gh #10 phase 4), so no product write ever reaches it now.
         return (
             Path(environment["HOME"]),
             Path(environment["XDG_STATE_HOME"]),
-            Path(environment["XDG_BIN_HOME"]),
         )
 
     def bundle_config(self, environment: dict[str, str]):
@@ -241,43 +255,6 @@ class RecoverApplyHarness(unittest.TestCase):
         )
         journal = self.write_journal(environment, self.armed_install(destination, record))
         return destination, stage, journal
-
-    def plant_operator_tools_pending(
-        self, environment: dict[str, str], *, live: bytes | None
-    ) -> tuple[Path, Path]:
-        """An interrupted operator-tools install: the recorded file either arrived or it did not."""
-        bin_dir = Path(environment["XDG_BIN_HOME"])
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        command = bin_dir / "ccodex"
-        payload = b"#!/bin/sh\nexit 0\n"
-        if live is not None:
-            command.write_bytes(live)
-            command.chmod(0o755)
-        state = (
-            Path(environment["XDG_STATE_HOME"]) / "agentic-sdlc-operator-tools" / "state.json"
-        )
-        state.parent.mkdir(parents=True, exist_ok=True)
-        state.write_text(
-            json.dumps(
-                {
-                    "version": 2,
-                    "entries": {},
-                    "pending": {
-                        "operation": "install",
-                        "path": str(command),
-                        "before": None,
-                        "after": {
-                            "path": str(command),
-                            "digest": hashlib.sha256(payload).hexdigest(),
-                            "removable": "true",
-                        },
-                    },
-                },
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
-        return state, command
 
     # ---- the dry-run digest ------------------------------------------------------------------
 
@@ -362,17 +339,16 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
 
 @WINDOWS_SKIP
 class RecoverPlanDerivationTests(RecoverApplyHarness):
-    def test_the_plan_journal_carries_exactly_one_locator_per_plane(self) -> None:
+    def test_the_plan_journal_now_carries_exactly_one_bundle_locator(self) -> None:
         """The `journal` array is part of the digested bytes, so its membership is a contract.
 
-        The retired `journal://bundle/legacy-state` row is gone. It could only ever appear for a
-        configuration with NO `state_root`, and neither `derive_plan` caller builds one -- both
-        `ccodex_sdlc.recovery_configs` and `ccodex_sdlc_recover.build_configs` resolve a state root
-        and pass it -- so on every host the two paths were the same file and the old derivation
-        de-duplicated them to this same one row. Which is why deleting the row moved no digest:
-        measured on a fixed fixture, `recover --dry-run` rendered
-        c87ce4f4b2427f86ccc2af475ab044c2ff853fa7f468c21930b868cfc8806c55 before and after.
-        A re-added second bundle row would change these bytes and every approved digest with them.
+        RESHAPE #2 (gh #10 phase 4, MEASURED not assumed -- see `derive_plan`'s own docstring):
+        deleting the operator-tools PATH plane deleted its unconditional `journal://operator-tools/
+        state` row along with the module that could resume it, so the plan's `journal` array now
+        carries exactly the bundle's own row.  A re-added second journal row would change these
+        bytes and every approved digest with them, which is exactly why the digest exists.  The
+        plan's `host` field and `PLAN_PRIMARY_HOST` were deleted in the same reshape (one unread
+        fact nothing here or in the reader ever consumed), so this plan carries no `host` key either.
         """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -381,12 +357,10 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
             with mock.patch.dict(
                 os.environ, {"XDG_STATE_HOME": environment["XDG_STATE_HOME"]}, clear=False
             ):
-                operator_config, bundle_config, receipts = recover.build_configs(
-                    operator_tools, bundle, home=Path(environment["HOME"])
+                bundle_config, receipts = recover.build_configs(
+                    bundle, home=Path(environment["HOME"])
                 )
                 plan, _digest = recover.derive_plan(
-                    operator_tools=operator_tools,
-                    operator_config=operator_config,
                     bundle=bundle,
                     bundle_config=bundle_config,
                     activation_receipts=receipts,
@@ -394,9 +368,11 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
 
             self.assertEqual(
                 [journal["locator"] for journal in plan["journal"]],
-                ["journal://bundle/state", "journal://operator-tools/state"],
+                ["journal://bundle/state"],
             )
             self.assertEqual(bundle_config.state_path, self.bundle_state_path(environment))
+            self.assertNotIn("host", plan)
+            self.assertFalse(hasattr(recover, "PLAN_PRIMARY_HOST"))
 
     def test_the_plan_is_canonical_and_refuses_non_finite_values(self) -> None:
         plan = {"b": [2, 1], "a": {"z": None, "y": True}}
@@ -541,6 +517,42 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
             digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
             self.assertTrue(recover.is_plan_digest(digest))
 
+    def test_a_retired_operator_tools_store_never_moves_the_plan_digest(self) -> None:
+        """RESHAPE #2's own control (gh #10 phase 4, see `derive_plan`'s docstring): the retired
+        PATH plane's leftover store is named by the READER as a `foreign-state` finding
+        (`ccodex_sdlc.retired_store_findings`), but `derive_plan` never reads it -- the plan's
+        `journal` array carries only the bundle's own row -- so planting or removing that store
+        underneath a derived plan must NOT move its digest.
+
+        The positive control is the bundle journal itself: an ordinary further operator action
+        (installing an unrelated skill) DOES move the digest, so the two equalities below are the
+        reshape's own control and not evidence that nothing here can ever move a digest.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dispatcher, environment = self.make_dispatcher(root)
+            self.plant_finalizable_transaction(root, environment)
+            baseline, _ = self.plan_digest_from_dry_run(dispatcher, environment)
+
+            store = Path(environment["XDG_STATE_HOME"]) / "agentic-sdlc-operator-tools"
+            seam.write_retired_operator_tools_store(Path(environment["XDG_STATE_HOME"]))
+            self.assertTrue(store.is_dir())
+            with_store, _ = self.plan_digest_from_dry_run(dispatcher, environment)
+            self.assertEqual(baseline, with_store)
+
+            shutil.rmtree(store)
+            without_store, _ = self.plan_digest_from_dry_run(dispatcher, environment)
+            self.assertEqual(baseline, without_store)
+
+            # Positive control: the SAME host's bundle journal moving DOES move the digest.
+            neighbour, record, _source = self.planted_entry(root, environment, "reshape-control-neighbour")
+            journal = self.bundle_state_path(environment)
+            document = json.loads(journal.read_text(encoding="utf-8"))
+            document["entries"] = {str(neighbour): record}
+            journal.write_text(json.dumps(document), encoding="utf-8")
+            moved, _ = self.plan_digest_from_dry_run(dispatcher, environment)
+            self.assertNotEqual(baseline, moved)
+
     def test_an_absent_derivation_module_is_named_and_never_assumed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -552,7 +564,6 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
                 "policy/release-contract.v1.json",
                 "scripts/ccodex_sdlc.py",
                 "scripts/ccodex_sdlc_readonly.py",
-                "scripts/install_operator_tools.py",
                 "scripts/install_skill_bundle.py",
             ):
                 shutil.copy2(ROOT / relative, shadow / relative)
@@ -620,7 +631,6 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
                 "scripts/ccodex_sdlc.py",
                 "scripts/ccodex_sdlc_readonly.py",
                 "scripts/ccodex_sdlc_recover.py",
-                "scripts/install_operator_tools.py",
                 "scripts/install_skill_bundle.py",
             ):
                 shutil.copy2(ROOT / relative, shadow / relative)
@@ -842,58 +852,50 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             document = json.loads(journal.read_text(encoding="utf-8"))
             self.assertEqual(document["pending"]["path"], str(destination))
 
-    def test_the_operator_tools_plane_is_rolled_back_through_its_own_machinery(self) -> None:
+    def test_a_digest_derived_before_the_plan_moved_is_refused_as_stale_by_name(self) -> None:
+        """`recover --apply` re-derives the plan at apply time and compares digests byte for byte
+
+        (THE APPROVAL IS THE DIGEST): a digest approved against one state and applied against a
+        DIFFERENT one -- moved by an ordinary further operator action, not by tampering a byte -- is
+        refused by name rather than silently resumed against whatever is found now.  This is the
+        control that makes RESHAPE #2 safe rather than merely different: `derive_plan`'s own
+        docstring states there is "deliberately no migration" for the digest it moved on every host,
+        so an old approval simply goes stale, which is the control working rather than breaking.
+        """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             dispatcher, environment = self.make_dispatcher(root)
-            state, command = self.plant_operator_tools_pending(environment, live=None)
-            digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
+            self.plant_finalizable_transaction(root, environment)
+            journal = self.bundle_state_path(environment)
+            stale, _ = self.plan_digest_from_dry_run(dispatcher, environment)
 
-            applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+            # A further, ordinary operator action -- installing an unrelated skill -- moves the
+            # journal's own bytes and therefore the plan this host now derives.
+            neighbour, record, _source = self.planted_entry(root, environment, "post-approval-neighbour")
+            document = json.loads(journal.read_text(encoding="utf-8"))
+            document["entries"] = {str(neighbour): record}
+            journal.write_text(json.dumps(document), encoding="utf-8")
+            before = tree_hash(*self.observed_roots(environment))
+
+            refused = self.run_dispatcher(
+                dispatcher, environment, "sdlc", "recover", "--apply", stale
             )
 
-            self.assertEqual(applied.returncode, 0, applied.stderr)
-            self.assertIn("operator-tools: recovered abort:", applied.stdout)
-            document = json.loads(state.read_text(encoding="utf-8"))
-            self.assertIsNone(document["pending"])
-            self.assertEqual(document["entries"], {})
-            self.assertFalse(command.exists())
-
-    def test_an_operator_tools_conflict_is_preserved_named_and_reported_as_attention(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            dispatcher, environment = self.make_dispatcher(root)
-            state, command = self.plant_operator_tools_pending(
-                environment, live=b"#!/bin/sh\n# a foreign file nobody recorded\n"
-            )
-            before_state = state.read_bytes()
-            before_command = command.read_bytes()
-            digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
-
-            applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
-            )
-
-            # Decision 9's class 4: an admitted partial effect, named and preserved.  It was 1 --
-            # "unexpected internal failure" -- for one release (agentic-sdlc-d7b3).
-            self.assertEqual(applied.returncode, 4, applied.stderr)
-            self.assertIn("operator-tools: preserved conflict:", applied.stdout)
-            self.assertEqual(state.read_bytes(), before_state)
-            self.assertEqual(command.read_bytes(), before_command)
-            # Positive control: the same plane with the recorded content live DOES commit, so the
-            # preservation above is the conflict boundary and not an inability to recover at all.
-            command.write_bytes(b"#!/bin/sh\nexit 0\n")
+            self.assertEqual(refused.returncode, 3, refused.stderr)
+            self.assertIn("is not the plan this host's state derives", refused.stderr)
+            self.assertIn("the approval is stale", refused.stderr)
+            self.assertEqual(refused.stdout, "")
+            self.assertEqual(before, tree_hash(*self.observed_roots(environment)))
+            # Positive control: the digest the moved state DOES derive is admitted (a healthy apply,
+            # or a named partial), so the refusal above is about staleness and not about this host
+            # being generally unrecoverable.
             fresh, _ = self.plan_digest_from_dry_run(dispatcher, environment)
-            # The live file is part of what the plan observed, so replacing it moves the digest: an
-            # approval granted against a foreign file cannot be spent on the recorded one.
-            self.assertNotEqual(fresh, digest)
-            committed = self.run_dispatcher(
+            self.assertNotEqual(fresh, stale)
+            applied = self.run_dispatcher(
                 dispatcher, environment, "sdlc", "recover", "--apply", fresh
             )
-            self.assertEqual(committed.returncode, 0, committed.stderr)
-            self.assertIn("operator-tools: recovered commit:", committed.stdout)
-            self.assertIn(str(command), json.loads(state.read_text(encoding="utf-8"))["entries"])
+            self.assertIn(applied.returncode, (0, 4), applied.stderr)
+            self.assertNotIn("is not the plan this host's state derives", applied.stderr)
 
     def test_unverifiable_receipt_evidence_refuses_and_preserves_the_recorded_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1040,7 +1042,6 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
                 "policy/release-contract.v1.json",
                 "scripts/ccodex_sdlc.py",
                 "scripts/ccodex_sdlc_readonly.py",
-                "scripts/install_operator_tools.py",
                 "scripts/install_skill_bundle.py",
             ):
                 shutil.copy2(ROOT / relative, shadow / relative)
@@ -1078,7 +1079,6 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
                 "policy/release-contract.v1.json",
                 "scripts/ccodex_sdlc.py",
                 "scripts/ccodex_sdlc_readonly.py",
-                "scripts/install_operator_tools.py",
                 "scripts/install_skill_bundle.py",
             ):
                 shutil.copy2(ROOT / relative, shadow / relative)
@@ -1142,71 +1142,6 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
             self.assertIsNone(json.loads(journal.read_text(encoding="utf-8"))["pending"])
             self.assertIn(str(destination), json.loads(journal.read_text(encoding="utf-8"))["entries"])
 
-    def test_an_operator_tools_state_swapped_between_derivation_and_the_lock_refuses(self) -> None:
-        """``resume_operator_tools`` mirrors ``resume_bundle``'s own lock-time byte recheck.
-
-        The plan derived at T0 records the operator-tools journal's exact digest. If the live state
-        moves AFTER that derivation and BEFORE the lock is taken at T1, the mismatch is refused by
-        name rather than acted on -- the same race ``resume_bundle`` already declines for the bundle
-        journal (agentic-sdlc-cd9f).
-        """
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            _dispatcher, environment = self.make_dispatcher(root)
-            state, command = self.plant_operator_tools_pending(environment, live=None)
-            operator_config = operator_tools.Config(
-                ROOT,
-                Path(environment["HOME"]),
-                Path(environment["XDG_BIN_HOME"]),
-                Path(environment["XDG_STATE_HOME"]),
-                False,
-                False,
-            )
-            before = state.read_bytes()
-            plan = {
-                "items": [{"component": "operator-tools", "path": str(command)}],
-                "journal": [
-                    {
-                        "component": "operator-tools",
-                        "digest": hashlib.sha256(before).hexdigest(),
-                        "locator": "journal://operator-tools/state",
-                        "state": "present",
-                    }
-                ],
-            }
-            real_lock = operator_tools.lifecycle_lock
-
-            @contextlib.contextmanager
-            def swap_then_lock(config):
-                # The race this recheck defends against: the plan was derived over ``before``, and
-                # the live state moves AFTER that derivation but BEFORE the lock is taken here.
-                state.write_bytes(before + b"\n")
-                with real_lock(config):
-                    yield
-
-            ledger = {"moved": False}
-            with mock.patch.object(operator_tools, "lifecycle_lock", swap_then_lock):
-                with self.assertRaises(recover.Refusal) as refused:
-                    recover.resume_operator_tools(operator_tools, operator_config, plan, ledger)
-            self.assertIn("changed between the approval and the lock", str(refused.exception))
-            self.assertFalse(ledger["moved"])
-            # Nothing was touched beyond the planted swap itself.
-            self.assertEqual(state.read_bytes(), before + b"\n")
-            self.assertFalse(command.exists())
-
-            # Positive control: with the state UNSWAPPED, the exact same plan resumes under the real
-            # lock, so the refusal above is the recheck and not an inability to resume at all.
-            state.write_bytes(before)
-            messages, partial = recover.resume_operator_tools(
-                operator_tools, operator_config, plan, ledger
-            )
-            self.assertTrue(ledger["moved"])
-            self.assertFalse(partial, messages)
-            self.assertIn("operator-tools: recovered abort:", messages[0])
-            document = json.loads(state.read_text(encoding="utf-8"))
-            self.assertIsNone(document["pending"])
-            self.assertEqual(document["entries"], {})
-
     def test_the_reader_maps_the_apply_form_onto_its_own_named_module(self) -> None:
         self.assertEqual(
             reader.lifecycle_module_path("recover"),
@@ -1224,7 +1159,9 @@ class RecoveryPlanLineTests(RecoverApplyHarness):
     the optional recovery-plan sibling lies about its own return shape (agentic-sdlc-cd9f)."""
 
     def line_for(self, root: Path, derive_plan) -> str:
-        adapters = (None, operator_tools, bundle)
+        # `recovery_plan_line` unpacks exactly `guard, bundle = adapters`; the mocked planner below
+        # ignores both positional arguments it is handed, so `None` stands in for the guard.
+        adapters = (None, bundle)
 
         def fake_load_recovery_planner(script_path: Path, guard: object) -> tuple[object, None]:
             planner = type("LyingPlanner", (), {"derive_plan": staticmethod(derive_plan)})()

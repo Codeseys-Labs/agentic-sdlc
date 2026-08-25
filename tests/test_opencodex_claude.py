@@ -2980,7 +2980,16 @@ class OpenCodexClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertIn("MISSING TOOL", result.stderr)
         self.assertIn("AGENTIC_SDLC_JQ", result.stderr)
-        self.assertIn("operator-tools:install", result.stderr)
+        # Both admitted routes, named in the order the refusal lists them: a caller-supplied
+        # exact absolute override, then this checkout's pinned `mise exec -- jq`.
+        self.assertIn("$AGENTIC_SDLC_JQ", result.stderr)
+        self.assertIn("exec -- jq", result.stderr)
+        # The real remedy: no lifecycle sets $AGENTIC_SDLC_JQ any more now that the
+        # operator-tools PATH plane that used to bind it is gone, so the pinned `mise exec`
+        # route is the one to fix with an explicit `--locked install`.
+        self.assertIn("the operator-tools PATH plane", result.stderr)
+        self.assertIn("that bound it is deleted", result.stderr)
+        self.assertIn("--locked install", result.stderr)
         self.assertNotIn("anthropic-or-unclassifiable-provider", result.stderr)
         self.assertNotIn("approved opencodex configuration route", result.stdout)
         # Classification legitimately reads the provider config, and nothing else may have run.
@@ -3164,7 +3173,15 @@ class BoundOcxInterpreterTests(unittest.TestCase):
             # The wrong remedy is the defect, so its absence is the assertion: `mise --locked
             # install` had already succeeded on the host that hit this.
             self.assertNotIn("pinned opencodex is not installed", result.stderr)
-            self.assertIn("operator-tools:install", result.stderr)
+            # The real remedy: $AGENTIC_SDLC_OCX is orphaned now that the operator-tools PATH
+            # plane that used to set it is gone, so the fix is to unset it and either put the
+            # bare interpreter on PATH or bind one beside the executable.
+            self.assertIn(
+                "operator-tools PATH plane that bound it is deleted", result.stderr
+            )
+            self.assertIn(
+                "put a `node` on PATH, or bind one beside the executable", result.stderr
+            )
 
     def test_a_bound_interpreter_makes_the_same_fixture_start(self) -> None:
         # Positive control for the binding: nothing about the ocx script changed, only that the
@@ -3200,7 +3217,7 @@ class BoundOcxInterpreterTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertIn("its interpreter `/opt/absent-node/bin/node` is not reachable", result.stderr)
-            self.assertIn("restore that exact file", result.stderr)
+            self.assertIn("restore that exact interpreter", result.stderr)
             self.assertNotIn("pinned opencodex is not installed", result.stderr)
 
     def test_an_ocx_that_is_broken_for_any_other_reason_keeps_the_original_message(self) -> None:

@@ -204,7 +204,7 @@ digest-matched, receipted uninstall reading clean). The UNVERSIONED
 `mise use -g github:Codeseys-Labs/agentic-sdlc` does not resolve a prerelease (prerelease listing
 exclusion plus mise's built-in `minimum_release_age` filter while a release is young) and stays
 unclaimed. The release tree carries no `.git`, so gates, Seeds bootstrap, and `ccodex sdlc`
-copy-activation stay on the managed checkout and the operator-tools plane. Payload, activation
+copy-activation stay on the managed checkout. Payload, activation
 boundary, and limits are recorded in `docs/plans/2026-08-14T163833Z-Install-UX.md`; ADR-0011 as
 amended 2026-08-24 carries the executed evidence.
 
@@ -311,8 +311,6 @@ model selection as policy.
 - `bundle:install`, `bundle:status`, `bundle:uninstall`
 - `bundle:install:claude`, `bundle:install:codex`
 - `bundle:install:all-hosts`, `bundle:status:all-hosts`
-- `operator-tools:install`, `operator-tools:status`, `operator-tools:retire-aliases`,
-  `operator-tools:uninstall`, `operator-tools:self-test`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `claude:hooks:status`, `claude:hooks:activate`, `claude:hooks:deactivate` — inspect or
   explicitly wire installed agent hooks into the operator's Claude settings, one hook and one
@@ -469,24 +467,47 @@ model selection as policy.
   `test`, `self-test`, `secrets`, `check`, `hooks:install`, `contributor:setup`, `setup` (the
   one-release deprecated forwarder)
 
-That list is every task `mise tasks` reports; re-run `mise tasks` and re-diff it against this
-list whenever a task is added or renamed, because a stale list here reads as an authoritative
-inventory. `mise run bundle:status` always ends with one
+That list is every task this tree's own `mise.toml` defines; re-diff it whenever a task is added or
+renamed, because a stale list here reads as an authoritative inventory. **Do not diff it against
+`mise tasks` from inside a linked worktree under `.worktrees/`**: mise loads every config file on the
+path to the cwd, so a nested worktree's `mise tasks` reports the UNION of its own tasks and the
+PARENT checkout's, and a task correctly deleted in the worktree still appears (measured 2026-08-25 on
+agentic-sdlc-7a2b — five deleted `operator-tools:*` rows were still listed while the worktree's own
+`mise.toml` had none, and `mise config` names both files). Diff against the `[tasks.*]` blocks in the
+`mise.toml` you actually edited, or run `mise tasks` from a standalone clone.
+`mise run bundle:status` always ends with one
 terminal line — either `no owned entries for this host` or an `N ok, M conflict, K absent`
 summary — so a silent exit 0 is a defect, not a clean host. Status inventories lifecycle-owned
 records, not every unowned name in a configured collection. Use `bundle:install -- --agent
 <claude|codex> --dry-run` to detect an occupied unowned destination without adopting, overwriting,
 or deleting it.
 
-Operator tools are an explicit Unix lifecycle plane, not part of plugin or ordinary bundle
-installation. They install only `ccodex` plus its packaged statusline support command into an
-existing user-owned PATH directory and never edit shell startup files or PATH. The statusline
-remains inactive until the operation-specific `claude:statusline:activate` command; it owns only
-`statusLine.type` and `statusLine.command` and preserves conflicts. Historical `ocx-launch` and
-`ocx-ultracode` names remain recognized in v1/v2 ownership state and pending transitions, but
-fresh installs neither require nor recreate them. `operator-tools:retire-aliases` removes only
-unchanged removable owned copies through the crash-consistent unlink lifecycle; modified,
-foreign, and adopted copies are preserved and reported. `ccodex ultracode` enables session
+**The operator-tools PATH plane is DELETED (gh #10 phase 4), and the deletion left an operator
+obligation behind.** It rendered `ccodex` plus a statusline support command into
+`${XDG_BIN_HOME:-$HOME/.local/bin}` and refused unless that directory was already on PATH; `bin/ccodex`
+is committed, self-locating, and exposed directly by mise's `github:` backend, so a second dispatcher
+existed only to be placed on PATH by a lifecycle that would not edit PATH. Gone with it:
+`scripts/install_operator_tools.py`, the rendered `assets/launchers/ccodex.in`, the five
+`operator-tools:*` tasks, the `<state_root>/agentic-sdlc-operator-tools/` store, and the interactive
+`set-fast-model` selector (refused by name, not ported). `mise run operator-tools:uninstall` is gone
+TOO, which is the obligation: an operator who ran that installer still owns those files and nothing
+here removes them. `ccodex sdlc doctor` names the leftover store as one `foreign-state` finding with
+the manual remedy — that finding is the collapsed deprecation release's whole surviving deliverable
+(ratified decision D3) — and README's retirement section carries the same recipe. Historical
+`ocx-launch` and `ocx-ultracode` copies are removed the same manual way. An ARMED `pending` slot
+inside that store is preserved and NAMED, never resumed: the substrate that knew how to converge it
+is deleted, and `recover` does not guess at a half-finished transition. Nothing shipped here sets
+`$AGENTIC_SDLC_OCX`, `$AGENTIC_SDLC_JQ`, or `$AGENTIC_SDLC_NODE` any more; they remain
+caller-supplied exact-absolute overrides.
+
+The packaged statusline is now one BUNDLE LEDGER ROW (gh #10 phase 2): `bundle:install -- --agent
+claude` publishes `assets/claude/statusline-command.sh` to
+`<claude-home>/.claude/statusline/agentic-sdlc-statusline` at mode 0o755, and
+`install_skill_bundle.exact_owned_statusline` is the only place `manage_claude_statusline` takes a
+command path from, so an absent, unowned, drifted, or unexecutable statusline is a named refusal
+rather than a `statusLine.command` pointing at bytes no lifecycle owns. It remains inactive until the
+operation-specific `claude:statusline:activate`, which owns only `statusLine.type` and
+`statusLine.command` and preserves conflicts. `ccodex ultracode` enables session
 Ultracode with ordinary permissions by default. A first `--yolo` on either `ccodex launch` or
 `ccodex ultracode` is an explicit unsafe opt-in to Claude Code permission bypass; it is consumed
 by the wrapper, cannot be combined with another permission-mode control, and does not weaken the
@@ -496,26 +517,29 @@ for Claude Code's Haiku/background small-fast slot. Bare invocation offers curre
 (entitlement checked when used), the gateway's live OCX catalog, and clear-to-normal-Haiku; one
 argument preserves exact noninteractive selection and `-` clears. A completed choice is a
 persistent operator mutation and is not an Auto-mode classifier selector. Native Windows
-statusline/operator-tool activation is not certified and fails closed.
-`operator-tools:status` reports a never-installed desired command as `absent` and reserves
-`unmanaged` for a desired file that exists but is not owned; historical aliases are never
-reported as required or absent.
+statusline activation is not certified and fails closed.
+`claude:statusline:status` reports its read-only verdict in the returned MESSAGE rather than in the
+exit code, so read the line: the five distinguishable states are `active`, `inactive`, `unmanaged`,
+`conflict`, and a pending recovery.
 
-`ccodex` has NO private plane (ADR-0014). Its `launch` and `ultracode` resolve the launcher from
-the distribution checkout and directly execute the absolute `ocx` path bound by the last explicit
-`operator-tools:install`; the same install binds `jq` and `uv` for catalog/config and Python-backed
-routes, so ordinary installed use does not invoke repository-scoped mise or substitute caller-PATH
-copies. That property did not hold for the ONE tool no absolute path can pin: the pinned `ocx` is a
-`#!/usr/bin/env node` script, so the kernel resolves its interpreter by NAME from the child's PATH,
-and a host where node existed only inside mise's install tree killed every gateway verb while the
-bound ocx sat there executable — with a diagnostic blaming an install that had already succeeded
-(agentic-sdlc-21f4). The install therefore binds the pinned `node` too and the dispatcher puts its
-directory FIRST, which makes the name resolve to the reviewed interpreter rather than to whatever
-the caller has; the consequence to know is that the same directory's `npm`/`npx`/`corepack` also
-precede the caller's for every child, including a launched Claude Code. When nothing is bound, the
-launcher reads ocx's shebang and names the unreachable interpreter instead of the install.
+`ccodex` has NO private plane (ADR-0014) and, since gh #10 phase 4, NO install-time tool bindings
+either. Its `launch` and `ultracode` resolve the launcher from the distribution tree beside them and
+take that tree's pinned `mise -C <root> exec` routes for `ocx`, `jq`, `uv`, and the pinned CPython.
+The retired operator-tools installer was the only thing that ever rendered absolute tool paths into a
+dispatcher, so deleting it deleted both the binding step and the reinstall that refreshed it; what
+remains are the `$AGENTIC_SDLC_OCX`/`$AGENTIC_SDLC_JQ`/`$AGENTIC_SDLC_NODE` override seams, which no
+shipped code populates and which a caller may still set to an exact absolute path.
 
-A DIRECT source-checkout launch carries no such binding and therefore resolves `jq` through
+Keep the hazard the deleted binding existed to close, because it belongs to `ocx`'s shebang rather
+than to the plane: the pinned `ocx` is a `#!/usr/bin/env node` script, so the kernel resolves its
+interpreter by NAME from the child's PATH, and a host where node existed only inside mise's install
+tree killed every gateway verb while a bound ocx sat there executable — with a diagnostic blaming an
+install that had already succeeded (agentic-sdlc-21f4). The pinned route closes it structurally,
+because `mise exec` already puts the pinned node on PATH; a CALLER who binds `$AGENTIC_SDLC_OCX`
+without `$AGENTIC_SDLC_NODE` re-opens it, and the launcher then reads ocx's shebang and names the
+unreachable interpreter rather than blaming an install.
+
+Every launch therefore resolves `jq` through
 the pinned `mise -C <root> exec -- jq` route: no `jq` NAME is ever looked up, and `$AGENTIC_SDLC_JQ`
 is admitted only as an absolute path or the literal pinned sentinel, so a bare or relative binding
 is refused instead of resolved through ambient PATH. That `jq` classifies
@@ -526,9 +550,9 @@ pinned route locates `mise` itself on PATH, because mise is the documented sole 
 prerequisite and is not itself pinned, so a substituted `mise` still governs this parse exactly as
 it governs `ocx`. A bound-but-broken `$AGENTIC_SDLC_JQ` does not fall
 back to the pin either — the surface that needed it blocks by name (exit 3 for a launch refusal,
-`unknown` for the advisory catalog comparison), and rebinding stays an explicit
-`operator-tools:install`. Claude Code therefore starts in the caller's physical current workspace. A reviewed toolchain refresh requires a
-separate explicit operator-tools reinstall; ordinary commands never silently re-resolve, install, or
+`unknown` for the advisory catalog comparison), and rebinding stays the caller's own act.
+Claude Code therefore starts in the caller's physical current workspace. A reviewed toolchain refresh
+is a `mise --locked install` in the tree; ordinary commands never silently re-resolve, install, or
 update tools. They use the operator's own `~/.claude` — configuration, plugins, agents, and login —
 which is what lets Claude Code present its existing session to the gateway. `ocx claude` therefore
 writes its `ocx-*.md` roster agents and
@@ -598,10 +622,12 @@ The installer admits exactly ONE ownership schema. A document written by any oth
 refused by name, naming the version it found and the remedy — remove it and reinstall — and its bytes
 are never retrofitted. There is no `--migrate-state` flag and no per-generation reader: the physical
 witnesses and the transaction journal those documents carried no longer exist, so there is nothing a
-migration could faithfully convert. Crash consistency is one `pending` slot mirrored from
-`install_operator_tools.py`: a write arms the intended transition durably, moves the bytes, then
-commits, and a later run resolves it by comparing the live bytes to the armed `before`/`after`
-records. Bytes matching neither are reported and preserved, never guessed at. A copy-mode tree swap
+migration could faithfully convert. Crash consistency is one `pending` slot: a write arms the intended
+transition durably, moves the bytes, then commits, and a later run resolves it by comparing the live
+bytes to the armed `before`/`after` records. The shape arrived as a mirror of the retired
+`install_operator_tools.py`, which is deleted, so `install_skill_bundle.py` is now the only copy and
+its `Adapted from the deleted ...` notes record provenance rather than pointing at code to diff
+against. Bytes matching neither are reported and preserved, never guessed at. A copy-mode tree swap
 is a rename-aside pair rather than one atomic replace, so an interruption inside it can leave the
 previous tree parked in a named `.<name>.old-*` sibling; every such leftover is NAMED in the report
 for the operator to remove by hand and is never deleted on their behalf. Linux/macOS

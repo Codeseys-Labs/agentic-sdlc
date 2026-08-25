@@ -10,7 +10,6 @@ ROOT = Path(__file__).parents[1]
 RUNBOOK = ROOT / "docs" / "runbooks" / "verification.md"
 VALIDATE_BUNDLE_PY = ROOT / "scripts" / "validate_bundle.py"
 OPENCODEX_CLAUDE_SH = ROOT / "scripts" / "opencodex-claude.sh"
-INSTALL_OPERATOR_TOOLS_PY = ROOT / "scripts" / "install_operator_tools.py"
 INSTALL_SKILL_BUNDLE_PY = ROOT / "scripts" / "install_skill_bundle.py"
 
 
@@ -121,14 +120,6 @@ CLAIM_OPENCODEX_SUPERVISION_TOKENS = (
         r'''printf '  state   : HALF-UP (something is bound or a pid is alive, but no healthy identity probe)\n' ''',
         r'''printf '  state   : DOWN\n' ''',
     ),
-)
-
-# docs/runbooks/verification.md, section 1 step 7; scripts/install_operator_tools.py's status
-# branch of the shared lifecycle-summary renderer.
-CLAIM_OPERATOR_TOOLS_STATUS_SUMMARY_FORMAT = (
-    "`status` prints one `ok`/`absent`/`unmanaged` line per desired command plus a closing"
-    " summary line in the shape `X ok, Y conflict, Z absent, W pending`.",
-    r'''return f"status summary: {ok} ok, {unmanaged + conflicts} conflict, {absent} absent, {pending} pending"''',
 )
 
 # docs/runbooks/verification.md, section 1 step 6, the "no owned entries" half of the guaranteed
@@ -248,11 +239,6 @@ class VerificationRunbookContractTests(unittest.TestCase):
     def test_opencodex_supervision_tokens(self) -> None:
         self.assert_claim(CLAIM_OPENCODEX_SUPERVISION_TOKENS, OPENCODEX_CLAUDE_SH)
 
-    def test_operator_tools_status_summary_format(self) -> None:
-        self.assert_claim(
-            CLAIM_OPERATOR_TOOLS_STATUS_SUMMARY_FORMAT, INSTALL_OPERATOR_TOOLS_PY
-        )
-
     def test_bundle_status_no_owned_entries_line(self) -> None:
         self.assert_claim(CLAIM_BUNDLE_STATUS_NO_OWNED_ENTRIES, INSTALL_SKILL_BUNDLE_PY)
 
@@ -267,7 +253,7 @@ class VerificationRunbookContractTests(unittest.TestCase):
         # deliberate rather than an accident this suite stayed silent about.
         self.assertEqual(
             len(_CLAIM_NAMES),
-            7,
+            6,
             "a CLAIM_* constant was added or removed without updating this pinned count "
             f"(current constants: {list(_CLAIM_NAMES)!r})",
         )

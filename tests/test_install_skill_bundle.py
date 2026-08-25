@@ -2,9 +2,10 @@
 
 The physical-identity witness, the settlement ledger, the per-entry transaction journal, the
 ~25-tuple recovery classifier, and the v1/v2/v3 state migrations are GONE (demolition rank 4, seed
-`agentic-sdlc-0c38`). What replaces them is the shape `scripts/install_operator_tools.py` already
-ships: a closed seven-field ownership record, one `pending` slot armed before the bytes move, and
-`entry_matches_record` as mode + link target + content digest.
+`agentic-sdlc-0c38`). What replaces them is the shape adapted from the now-deleted
+`scripts/install_operator_tools.py` (its PATH plane was removed at gh #10 phase 4, so this module
+is now the only copy): a closed seven-field ownership record, one `pending` slot armed before the
+bytes move, and `entry_matches_record` as mode + link target + content digest.
 
 `ByteIdentityDoctrineTests` is the pair of tests that pins the doctrine change in BOTH directions:
 a destination the operator modified is still refused, and a destination the operator replaced with a
@@ -1765,7 +1766,7 @@ class ByteIdentityDoctrineTests(LifecycleTestCase):
 
 
 class PendingTransitionTests(LifecycleTestCase):
-    """The single `pending` slot, mirrored from `install_operator_tools`, and what it converges."""
+    """The single `pending` slot, adapted from the deleted `install_operator_tools`, and what it converges."""
 
     def prepared(self, root: Path, mode: str = "copy") -> tuple[installer.Config, installer.Entry, Path]:
         self.make_repo(root)
