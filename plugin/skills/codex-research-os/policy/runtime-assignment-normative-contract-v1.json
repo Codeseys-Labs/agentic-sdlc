@@ -1,0 +1,521 @@
+{
+  "allowed_context_forms": [
+    "base",
+    "[1m]"
+  ],
+  "allowed_efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "allowed_evidence": {
+    "model_mapping": {
+      "schemas": [
+        "runtime-assignment-policy-v1"
+      ],
+      "source_kinds": [
+        "policy_exact_id_mapping"
+      ],
+      "statuses": [
+        "unavailable"
+      ]
+    },
+    "request_injection": {
+      "schemas": [
+        "launcher-request-evidence/v1"
+      ],
+      "source_kinds": [
+        "immutable_request_receipt"
+      ],
+      "statuses": [
+        "verified"
+      ]
+    },
+    "transport_readback": {
+      "schemas": [
+        "runtime-assignment-readback/v1"
+      ],
+      "source_kinds": [
+        "transport_readback"
+      ],
+      "statuses": [
+        "verified",
+        "unavailable"
+      ]
+    }
+  },
+  "canonical_receipt_fields": [
+    "schema_version",
+    "requested_model_id",
+    "requested_effort",
+    "requested_context_form",
+    "request_injection_status",
+    "request_injection_evidence",
+    "resolution_state",
+    "resolved_provider",
+    "resolved_model_id",
+    "model_identity_basis",
+    "model_readback_status",
+    "model_readback_evidence",
+    "effort_readback_status",
+    "effort_readback_evidence",
+    "effort_effective_divergence",
+    "context_readback_status",
+    "context_readback_evidence",
+    "context_effective_divergence"
+  ],
+  "canonical_receipt_policy_sha256": "f7c65e7495b15ce5b6831fbd629ca76aab20c101a4569e3f86d487c4a82ef8dd",
+  "canonical_runtime_contract_sha256": "9399a0d9ebed19cefd020ac190ac772641e804e9f8a1632fb2b01059c94ba420",
+  "certified_context_forms_by_model": {
+    "claude-fable-5": [
+      "base"
+    ],
+    "claude-opus-4-8": [
+      "base"
+    ],
+    "claude-sonnet-5": [
+      "base"
+    ],
+    "gpt-5.6-luna": [
+      "base",
+      "[1m]"
+    ],
+    "gpt-5.6-sol": [
+      "base",
+      "[1m]"
+    ],
+    "gpt-5.6-terra": [
+      "base",
+      "[1m]"
+    ]
+  },
+  "certified_request_tuples": [
+    [
+      "gpt-5.6-sol",
+      "low",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "medium",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "high",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "xhigh",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "max",
+      "base"
+    ],
+    [
+      "gpt-5.6-sol",
+      "low",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "medium",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "high",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "xhigh",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-sol",
+      "max",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "low",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "medium",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "high",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "xhigh",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "max",
+      "base"
+    ],
+    [
+      "gpt-5.6-terra",
+      "low",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "medium",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "high",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "xhigh",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-terra",
+      "max",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "low",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "medium",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "high",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "xhigh",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "max",
+      "base"
+    ],
+    [
+      "gpt-5.6-luna",
+      "low",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "medium",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "high",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "xhigh",
+      "[1m]"
+    ],
+    [
+      "gpt-5.6-luna",
+      "max",
+      "[1m]"
+    ],
+    [
+      "claude-fable-5",
+      "low",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "medium",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "high",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "xhigh",
+      "base"
+    ],
+    [
+      "claude-fable-5",
+      "max",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "low",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "medium",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "high",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "xhigh",
+      "base"
+    ],
+    [
+      "claude-opus-4-8",
+      "max",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "low",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "medium",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "high",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "xhigh",
+      "base"
+    ],
+    [
+      "claude-sonnet-5",
+      "max",
+      "base"
+    ]
+  ],
+  "exact_model_pairs": {
+    "frontier": [
+      "gpt-5.6-sol",
+      "claude-fable-5"
+    ],
+    "judgment": [
+      "gpt-5.6-terra",
+      "claude-opus-4-8"
+    ],
+    "volume": [
+      "gpt-5.6-luna",
+      "claude-sonnet-5"
+    ]
+  },
+  "exact_model_provider_map": {
+    "claude-fable-5": "anthropic",
+    "claude-opus-4-8": "anthropic",
+    "claude-sonnet-5": "anthropic",
+    "gpt-5.6-luna": "openai",
+    "gpt-5.6-sol": "openai",
+    "gpt-5.6-terra": "openai"
+  },
+  "managed_roles": {
+    "global": {
+      "count": 16,
+      "manifest_sha256": {
+        "agents/claude/sdlc-cartographer.md": "dc8c9b922e0468e9fb53941579aaeeef022da6c621cb8cb4b5d96c15e64f566a",
+        "agents/claude/sdlc-critic.md": "3a8fddc0f4a0e23320bce4948cc8e87b1b874f1392aff1f3f8469bb1494c3911",
+        "agents/claude/sdlc-documentarian.md": "18260d628e8f6e210ab6ea5271b4a24a21cba24e5f4f46e514cbfec8578ddd80",
+        "agents/claude/sdlc-implementer.md": "87b722261b0e22a36e9de2b13d28e4ed1cd469855fe92fe7134cb04b86bc7d81",
+        "agents/claude/sdlc-integrator.md": "f27f1ee7257657c0483a9d63b00de03321b9370219a098216c7e10a97576aed0",
+        "agents/claude/sdlc-planner.md": "dbe7338b64369e75df270131ed6f9cee37854addc1d2ed846aab5f71bd230073",
+        "agents/claude/sdlc-researcher.md": "a0d148e7cda0a5d127c09493e3741ce4871409d17804324da48b1d209d9abbba",
+        "agents/claude/sdlc-reviewer.md": "fe2297470d4c0cc8fce37fbc8f2b4b24c117ba808cf5ddd199f5a2c7c699f860",
+        "agents/codex/sdlc-cartographer.toml": "72d3a3c148511f3504ba5c4602dee0761d77298b95f19d1a03091bf5f0089c9d",
+        "agents/codex/sdlc-critic.toml": "85cb8c86810ab75434f0631843ed8a1d2b2970543543d5443b79243933580c20",
+        "agents/codex/sdlc-documentarian.toml": "47ce7fc4152b30c8a5a67155bf6722694cc68af4f7e8cde5b7fac7eb9a8bb1ef",
+        "agents/codex/sdlc-implementer.toml": "887df07455d1bd8001d36ca7fed433fb95f318f6c6e9bdfc10db0d0f676e29a9",
+        "agents/codex/sdlc-integrator.toml": "fa7027592b9b75853f731c99683bc80ae3e3045e729eac94971f8fd459e7e099",
+        "agents/codex/sdlc-planner.toml": "5d1a3a7edad6a6ed35d0cd1a4c8f4568df04b6db08ae31a6ef82a04b8e536bf7",
+        "agents/codex/sdlc-researcher.toml": "0b5063e08c86b07eff4ad4a7d3f88673000389acb1f459ae9ef0a985e930fc69",
+        "agents/codex/sdlc-reviewer.toml": "816f52d896821f4d5964e0d9fc8dd412b01e27800733613ace496eeec61dd003"
+      }
+    },
+    "research": {
+      "count": 17,
+      "roles": {
+        "ablationist": {
+          "description_sha256": "1c6f988a9a4830d3e891b50e7cab214eb54fcc1f18177d2b81d87f404b2d21be",
+          "developer_instructions_sha256": "1a8e082a93f39ade12040876e0c24a3b72b77152a21f4f2b58b7535f61a9352a",
+          "manifest_sha256": "b9bf6ec379aec50bcd15d0ba78f2869f71e147eb243fe85856fd86605a5477f9",
+          "path": "agents/codex/research/ablationist.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "adversarial_reviewer": {
+          "description_sha256": "da7ac01b46be9e5df550f0fbc9de5fdb6ab77c8f47044d74eaf842665a2a9b88",
+          "developer_instructions_sha256": "72c99c20fb4c96df000a0bd4cf3e06a665fba444fd2d3bd292e542805cd111fe",
+          "manifest_sha256": "f452a51a61cd043181443722077af7e41bfef8b558630c76b5003e52db43c0df",
+          "path": "agents/codex/research/adversarial_reviewer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "benchmark_engineer": {
+          "description_sha256": "977faad599f5de5fb6b87c30102b6beb64030b75d101598b3abf22cfff442171",
+          "developer_instructions_sha256": "e1cb6e74d777323a12659b6afb2490ae51fa0145f533ad196daa3dc67a1402f8",
+          "manifest_sha256": "e6e553e7a83e02106bb89fff1f6c25f336d7763f953b254ae080df589b2ac550",
+          "path": "agents/codex/research/benchmark_engineer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "counterexample_hunter": {
+          "description_sha256": "0dc6f39916751b35da28ce2fd1454f8580c5be3c56dbc76826bc4ebd5ba18b54",
+          "developer_instructions_sha256": "033145a4c02d21d42e0cea812e455d8998d94bfd323106e2176752eee4521d48",
+          "manifest_sha256": "3d5d636de76844a1549349ac7f3349f63a8da85dbb4718e3e269776730bb460b",
+          "path": "agents/codex/research/counterexample_hunter.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "data_engineer": {
+          "description_sha256": "e870a94b7c96dcac477d8b357df954dbc7df095bbe9362e0589647f7bdf38621",
+          "developer_instructions_sha256": "5ec7c63d157c91de4ad6d08a56a7e8e80d024ef72b6c17bbac3ea3b0db2d14b2",
+          "manifest_sha256": "25e9df3e509fa82b266fa4084d141b71d05db58326bf6549b3e3715deafc8ceb",
+          "path": "agents/codex/research/data_engineer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "experimentalist": {
+          "description_sha256": "9d5665725907b7ea44fcf4187156e34fcfca753f1d61b67863d0661215ed63ae",
+          "developer_instructions_sha256": "ca12a76b3291468bbf1e68808889bc2ed348f25c937e81aa1575a2649c4039f3",
+          "manifest_sha256": "eb0ff04c7154d1e1dfa811ba0baeaba213ef79dd13968c1c3c9930fb29266654",
+          "path": "agents/codex/research/experimentalist.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "formalizer": {
+          "description_sha256": "fd8ab5b67cca00f751a001c7cd594ef5af288c6cc55208ddb5d455bcd9954759",
+          "developer_instructions_sha256": "63f01c837aab08a9b19aa35140ad12a671d729401276ce35ba31b106c0792be6",
+          "manifest_sha256": "1625f49f4c0b1dc5a1e27a47dddd5dd627a77bc5a8e91d5ee01f20100402fee3",
+          "path": "agents/codex/research/formalizer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "knowledge_librarian": {
+          "description_sha256": "7778a567930d64a283e10faff29b4d53bce313cd11f6618c28e6a0c3caa64374",
+          "developer_instructions_sha256": "4e3f6a03a8dc7146c756bb5488f668b2604302cfede78a4e99a6921aa08a79ad",
+          "manifest_sha256": "fc00d34e268daa50fb99011596a18a26724ac6aaca10076a4263ca7b9e6e6e3b",
+          "path": "agents/codex/research/knowledge_librarian.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "literature_scout": {
+          "description_sha256": "7397c91d092c4a586b97e5a110e30af86c7280859fa459e800a06a7d77d1d28f",
+          "developer_instructions_sha256": "8eb4ddf13a17702735c4a91d916cd2132ab41b45b53dd24261b73cf632eaac05",
+          "manifest_sha256": "5720b9bd70b2b0eccaecd0c7979d68f7d2a516e494d872d0644a9b9cb5e461ae",
+          "path": "agents/codex/research/literature_scout.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "novelty_auditor": {
+          "description_sha256": "94ea1d5c3cd4c2f55fff6567009b671accd97506073c78927c4de4983531c8e7",
+          "developer_instructions_sha256": "d41a1cfeeb6be491e145c637d5d1aa21d51e30e244c71fc4b021704af1d513be",
+          "manifest_sha256": "38ed2aab9f5b3c24d3ef23e60cc67aeaedf164bfc34a5045557a7851d93183d1",
+          "path": "agents/codex/research/novelty_auditor.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "replication_reviewer": {
+          "description_sha256": "62c646b344ade47ccd2f45e621b1222571dfcf9cf289ec89f9c082ae75cd5017",
+          "developer_instructions_sha256": "81e0c077a3a88e6ba21f74cee539120266a323f2f5362b7783a3089e272335de",
+          "manifest_sha256": "81d4038144782721c2df34d604df9af86d1a7e00628c9cb8f94c19610bf695c9",
+          "path": "agents/codex/research/replication_reviewer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "repo_cartographer": {
+          "description_sha256": "e2fc7ca631150c9bf677d9a4c8a7df84cc7018d912aac22e8dfc9271a2ba2fde",
+          "developer_instructions_sha256": "b19693a1ea5d048846dc1d7a7a9f8fef727afee8c69771764c4adecdc2d88570",
+          "manifest_sha256": "9b25f0ef272a95beb0462b4e6d96e276fc328f2d493a803d9ee1701c41edfeaf",
+          "path": "agents/codex/research/repo_cartographer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "research_director": {
+          "description_sha256": "28a363fe86b3382cf5c059d135b75059174cc356a9c32bd55a33490bc0839f8b",
+          "developer_instructions_sha256": "22c165551389b844fc46b8fcae2e7cd750254181ad2096b6884b0ee8f25b801c",
+          "manifest_sha256": "4a8f73a231d50c7e5d66ec7db6caf65fc10d3e94f9581877d7f4b292e168b40b",
+          "path": "agents/codex/research/research_director.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "safety_reviewer": {
+          "description_sha256": "a7be78bb76558b911d72906401ba28d9922d166a1b1b870034ea6690e0f93bd8",
+          "developer_instructions_sha256": "dedc346315dd9cac63ed9d85576e6db6c6e4a85f0de9a53b7465c8452d962b5d",
+          "manifest_sha256": "afe1a80ec71ebb03d62b438d188e8ebbd0670c6460e824dd418048a11165c5a3",
+          "path": "agents/codex/research/safety_reviewer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "synthesis_writer": {
+          "description_sha256": "0fe2fb623ce21333a407f3361fdafeaf63ca377b480ad585c1a3746ed33cfcbf",
+          "developer_instructions_sha256": "431734e2b0fde9049456a6b11b9377a6da3b0bd414bcb380028878442e263e93",
+          "manifest_sha256": "7ccb408a893b67b1b2feb1fc7eff8e6b0e3dfa6dd359f87eebd9579f07b7a667",
+          "path": "agents/codex/research/synthesis_writer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "systems_engineer": {
+          "description_sha256": "c6468d80f2967d248359308963e910515b0f6eea1d76fc193559594b9c5c1f04",
+          "developer_instructions_sha256": "d45eb92628e57439883e65f7051a6c56f5bf3144db44db216c2f05938d25db2b",
+          "manifest_sha256": "32cfd1a9aa9a645293bc008ea87d59e1022c9cc80ef017203b65b47c3f629bc9",
+          "path": "agents/codex/research/systems_engineer.toml",
+          "sandbox_mode": "workspace-write"
+        },
+        "theorist": {
+          "description_sha256": "58ce58a34adc03e081a765cf2e46b81ec347f10f6ed8f1c3ec6885ed164fbdc8",
+          "developer_instructions_sha256": "75b7cf51201288524a3e49ab04b08afb8517988511ad0e3233aa135807301aab",
+          "manifest_sha256": "0d985195c830acc6341114364f644da8916fe8ad0cf4fd24ab6db8ef00df2fa4",
+          "path": "agents/codex/research/theorist.toml",
+          "sandbox_mode": "workspace-write"
+        }
+      }
+    }
+  },
+  "one_million_context_semantics": "A `[1m]` request or base-ID readback proves neither intelligence, upstream context capacity, compaction, nor effort compliance.",
+  "production_efforts_by_model": {
+    "claude-fable-5": [
+      "xhigh",
+      "max"
+    ],
+    "claude-opus-4-8": [
+      "high",
+      "xhigh"
+    ],
+    "claude-sonnet-5": [
+      "high",
+      "xhigh"
+    ],
+    "gpt-5.6-luna": [
+      "high",
+      "xhigh"
+    ],
+    "gpt-5.6-sol": [
+      "high",
+      "xhigh"
+    ],
+    "gpt-5.6-terra": [
+      "xhigh",
+      "max"
+    ]
+  },
+  "research_director_seeds_contract_sha256": "675c8799587b9b7151fd7f98f3424e5e9783986d2db9dc5488bb2a1a704b7794",
+  "schema_version": "runtime-assignment-normative-contract/v1",
+  "seeds_read_only_semantics": "Every managed role is Seeds-read-only. No runtime, authority, or other protected block is excluded: managed roles must not create, claim, update, close, sync, disposition, label, delete, archive, or otherwise mutate Seeds. They may inspect through the accepted launcher and return advisory SeedProposal values to the conductor.",
+  "validation_only_semantics": "The receipt is validated only for canonical internal consistency. It does not authenticate an issuer or prove external request injection, readback, spawn identity, or admission. The external authenticated harness is the sole spawn and admission authority."
+}

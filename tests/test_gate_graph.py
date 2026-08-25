@@ -29,9 +29,12 @@ def retype_directory_symlinks(root: Path) -> None:
     """Restore the source tree's symlink types after a copytree on Windows.
 
     `shutil.copytree(symlinks=True)` recreates every symlink without `target_is_directory`, so
-    on Windows a copied directory link (the `plugin/*` entries) lands as a FILE-type link, and
-    every later stat through it answers WinError 5 instead of a kind. POSIX symlinks carry no
-    type, so this is a no-op everywhere else.
+    on Windows a copied directory link lands as a FILE-type link, and every later stat through it
+    answers WinError 5 instead of a kind. POSIX symlinks carry no type, so this is a no-op
+    everywhere else. The tracked `plugin/*` links this was written for are gone — `plugin/`
+    publishes files now (agentic-sdlc-d0ab) — so it currently retypes nothing in a clean
+    checkout; it stays because an untracked link in a copied working tree hits the same
+    Windows-only class.
     """
     if os.name != "nt":
         return
@@ -292,6 +295,23 @@ class GateGraphTests(unittest.TestCase):
             check=False,
         )
 
+    def republish_plugin_tree(self, repo: Path) -> None:
+        """Republish `plugin/` after a fixture edits a source file that `plugin/` publishes.
+
+        `plugin/` holds copies of `skills/`, `commands/`, `agents/claude/`, `output-styles/`, and
+        `workflows/`, and the validator refuses any disagreement between the two. Without this,
+        editing a published source would make the validator exit nonzero for a reason the test is
+        not about — which would pass a returncode assertion while proving nothing about the rule
+        under test.
+        """
+        subprocess.run(
+            [sys.executable, str(repo / "scripts" / "sync_plugin_tree.py"), "--write", "--root", str(repo)],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
     def isolated_mise_env(self, temp: str, *, unlock: bool = False) -> dict[str, str]:
         env = {
             key: value
@@ -518,6 +538,7 @@ class GateGraphTests(unittest.TestCase):
                 text = skill.read_text(encoding="utf-8")
                 original = next(line for line in text.splitlines() if line.startswith("description:"))
                 skill.write_text(text.replace(original, replacement, 1), encoding="utf-8")
+                self.republish_plugin_tree(repo)
                 result = self.run_validator(repo)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"stacked-prs: {diagnostic}", result.stderr)
@@ -538,6 +559,7 @@ class GateGraphTests(unittest.TestCase):
                 end = next(index for index in range(start + 1, len(lines)) if not lines[index].startswith(" "))
                 planted = lines[:start] + ["description: >-", "  " + "x" * length] + lines[end:]
                 skill.write_text("\n".join(planted) + "\n", encoding="utf-8")
+                self.republish_plugin_tree(repo)
                 result = self.run_validator(repo)
                 self.assertEqual(result.returncode, returncode, result.stdout + result.stderr)
                 if diagnostic:

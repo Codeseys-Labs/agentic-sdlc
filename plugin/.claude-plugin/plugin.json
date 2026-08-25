@@ -16,5 +16,7 @@
     "seeds",
     "worktrees",
     "cmux"
-  ]
+  ],
+  "outputStyles": "./output-styles",
+  "workflows": "./workflows"
 }

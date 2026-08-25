@@ -1,0 +1,117 @@
+{
+  "admission_verdicts": [
+    "admit-dispatch",
+    "refuse-dispatch"
+  ],
+  "authority_boundary": "A qualified cell is evidence that this exact route/class measured above the floor inside its freshness horizon. It is not authorization to dispatch: request injection, runtime-receipt admission, and host identity readback are separate layers that this admission neither performs nor implies.",
+  "canonical_generation_fields": [
+    "schema_version",
+    "generation_id",
+    "route",
+    "route_id",
+    "task_class",
+    "verdict",
+    "evidence_provenance",
+    "evidence_digest_sha256",
+    "evidence_captured_at",
+    "evidence_evaluation_policy_sha256",
+    "evaluator_version",
+    "floor_policy_sha256",
+    "issued_at",
+    "expires_at",
+    "measured",
+    "unmet_requirements",
+    "authority_boundary"
+  ],
+  "canonical_quarantine_fields": [
+    "schema_version",
+    "route_id",
+    "task_class",
+    "cause",
+    "quarantined_at",
+    "observed_provider",
+    "observed_model_id",
+    "detail"
+  ],
+  "canonical_recovery_fields": [
+    "schema_version",
+    "route_id",
+    "task_class",
+    "resolves_quarantined_at",
+    "acknowledged_cause",
+    "recovery_generation_id",
+    "recovered_at"
+  ],
+  "canonical_route_fields": [
+    "transport_surface",
+    "route_kind",
+    "provider",
+    "auth_basis",
+    "billing_basis",
+    "requested_model_id",
+    "requested_effort",
+    "requested_context_form"
+  ],
+  "canonical_store_fields": [
+    "schema_version",
+    "generations",
+    "quarantines",
+    "recoveries"
+  ],
+  "clock_trust_boundary": "Both `--issued-at` and `--at` are supplied by the caller, and this surface reads no clock of its own. Freshness is therefore checked arithmetic over declared instants, not an observed elapsed time: a caller who supplies a past `--at` can make an expired generation compare as current, and one who backdates `--issued-at` can widen its own horizon. Detecting that requires host, boot, and monotonic binding on the issuing receipt, which this generation does not carry. The check is mechanical against the values it is given and no stronger.",
+  "evidence_provenance_admissible_for_issue": [
+    "observed"
+  ],
+  "floor_policy_reference": "rightsize-evaluation-v1.json#/qualification",
+  "floor_single_implementation": "This contract states no threshold of its own. Product-spec Decision 49 makes qualification delegate to the ONE rightsizing evaluator, so the distinct-task, attempts-per-task, accepted-rate, Wilson-lower-bound, route/identity-failure, and critical-task requirements are read from the referenced evaluation policy and computed by `rightsize.qualification_floor`. A second copy of any threshold here could disagree with the evaluator, and a route qualified by a divergent floor is not qualified.",
+  "freshness": {
+    "mined_evidence_max_age_days": 90,
+    "route_class_qualification_max_age_days": 30
+  },
+  "freshness_semantics": "Product-spec Decision 41. A generation is current for at most 30 days from `issued_at`; `expires_at` is derived, never supplied. Mined benchmark evidence carries the separate 90-day horizon and can never issue a qualification at all, so that limit bounds nomination rather than promotion.",
+  "generation_immutability": "Generations, quarantines, and recoveries are append-only. `generation_id` is the SHA-256 of the generation's canonical JSON with `generation_id` itself removed, so an edited generation no longer names itself. Recovery does not rewrite the quarantine it resolves and quarantine does not remove the last-good generation: both are recorded beside it, which is what keeps a failed or quarantined cell visible and non-dispatchable rather than absent (Decision 40).",
+  "layer_independence": "Product-spec Decision 50. Configuration refresh, credential refresh or revocation, probe refresh, qualification refresh, disable, and removal are different lifecycle operations, and none renews or implies another. This surface owns the qualification layer alone: it cannot probe a route, read a catalog, observe a credential, or dispatch, and a fresh probe never renews an expired qualification.",
+  "policy_schema_version": "route-qualification-policy/v1",
+  "quarantine_causes": [
+    "identity-mismatch",
+    "default-provider-fallthrough"
+  ],
+  "quarantine_scope": "exact-route-class-cell",
+  "quarantine_scope_semantics": "Product-spec story 67. A quarantine names one exact route_id and one task_class. The same route in another class, and another route in the same class, stay admissible: one failure must not poison unrelated cells.",
+  "recovery_semantics": "A quarantine is cleared only by a recovery that names the quarantine it resolves, acknowledges that quarantine's own cause, and cites a qualified generation for the same cell issued strictly after the quarantine. Re-qualification is therefore the only exit, and no probe, configuration change, or credential refresh can substitute for it.",
+  "refusal_reasons": [
+    "ambiguous-current-generation",
+    "cell-quarantined",
+    "default-provider-fallthrough",
+    "floor-policy-drift",
+    "generation-unqualified",
+    "identity-evidence-missing",
+    "no-generation-for-cell",
+    "qualification-expired",
+    "route-identity-uncorrelated"
+  ],
+  "schema_version": "route-qualification-policy/v1",
+  "store_default_relative_path": ".agentic-sdlc/rightsize/route-qualification.json",
+  "task_classes": [
+    "mechanical_redo",
+    "deterministic_gated_change",
+    "evidence_extraction",
+    "repository_discovery",
+    "semantic_implementation",
+    "semantic_review",
+    "integration_reconcile",
+    "authority_or_frontier"
+  ],
+  "timestamp_format": "%Y-%m-%dT%H:%M:%SZ",
+  "verdicts": [
+    "qualified",
+    "unqualified"
+  ],
+  "verdict_schema_versions": {
+    "admission": "route-qualification-admission/v1",
+    "generation": "route-qualification/v1",
+    "quarantine": "route-qualification-quarantine/v1",
+    "recovery": "route-qualification-recovery/v1",
+    "store": "route-qualification-store/v1"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": "rightsize-task-pack-policy/v1",
+  "task_pack_schema_version": "rightsize-task-pack/v1",
+  "required_top_level_fields": [
+    "schema_version",
+    "id",
+    "kind",
+    "harness_profile",
+    "runtime_profile",
+    "target_representative",
+    "expected_results_hidden_or_immutable",
+    "data_classification",
+    "tasks"
+  ],
+  "kinds": ["harness-smoke", "target-representative"],
+  "harness_profiles": ["claude-code-print-v1"],
+  "runtime_profiles": ["no-tools", "copied-fixture"],
+  "data_classifications": ["synthetic", "target-content"],
+  "task_required_fields": [
+    "id",
+    "task_class",
+    "critical",
+    "prompt",
+    "expected_peak_input_tokens",
+    "output_reserve_tokens",
+    "tools",
+    "verifier"
+  ],
+  "task_optional_fields": ["fixture"]
+}

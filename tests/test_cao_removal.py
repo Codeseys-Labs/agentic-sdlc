@@ -16,8 +16,10 @@ def retype_directory_symlinks(root: Path) -> None:
     """Restore symlink types after a copytree on Windows (same helper as test_gate_graph).
 
     `shutil.copytree(symlinks=True)` recreates every symlink without `target_is_directory`, so
-    on Windows a copied directory link (the `plugin/*` entries) lands as a FILE-type link and
-    every later stat through it answers WinError 5. POSIX symlinks carry no type: no-op there.
+    on Windows a copied directory link lands as a FILE-type link and every later stat through it
+    answers WinError 5. POSIX symlinks carry no type: no-op there. The tracked `plugin/*` links
+    this was written for are gone (agentic-sdlc-d0ab), so it retypes nothing in a clean checkout
+    and stays only for an untracked link in a copied working tree.
     """
     if os.name != "nt":
         return

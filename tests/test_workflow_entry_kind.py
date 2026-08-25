@@ -9,6 +9,7 @@ installing one is a byte-ownership effect only.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -797,13 +798,21 @@ class WorkflowPayloadTests(unittest.TestCase):
             self.assertIn(missing_roots, stripped.errors)
 
     def test_the_plugin_tree_exposes_the_workflows_collection(self) -> None:
-        link = ROOT / "plugin" / "workflows"
-        self.assertTrue(link.is_symlink(), "the plugin tree links its component collections")
-        # The checked-in blob's target is `../workflows`; Windows renders the reparse-point
-        # target with backslashes (`..\\workflows`), the same relative payload, so compare the
-        # normalized form rather than one platform's rendering.
-        self.assertEqual(Path(os.readlink(link)).as_posix(), "../workflows")
-        self.assertTrue(link.is_dir())
+        """Exposure is the claim; the mechanism changed and is now stronger than a link.
+
+        `plugin/workflows` was a committed symlink to `../workflows`, which the host reads as an
+        empty component directory and which dangles entirely in a plugin-subtree materialisation
+        (agentic-sdlc-d0ab). It holds copies now, so this asserts the bytes are present, and adds
+        the manifest declaration — without it the host never walks this collection at all, so a
+        directory full of workflows would still be exposed to nobody.
+        """
+        published = ROOT / "plugin" / "workflows"
+        self.assertFalse(published.is_symlink(), "a component directory is read without being followed")
+        self.assertTrue(published.is_dir())
+        authored = {path.name: path.read_bytes() for path in sorted((ROOT / "workflows").iterdir())}
+        self.assertEqual({path.name: path.read_bytes() for path in sorted(published.iterdir())}, authored)
+        manifest = json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["workflows"], "./workflows")
 
     def test_the_shipped_workflow_refuses_before_dispatch_without_an_assignment(self) -> None:
         node = shutil.which("node")

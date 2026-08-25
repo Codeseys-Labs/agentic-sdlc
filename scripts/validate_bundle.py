@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -2343,6 +2344,42 @@ def validate_manifests(root: Path, result: Validation) -> None:
             result.error(f"invalid JSON: {name}: {exc}")
 
 
+def validate_plugin_tree(root: Path, result: Validation) -> None:
+    """`plugin/` is the delivered Claude-plane payload, so its copies must equal their sources.
+
+    This is a payload guard that no runtime consumer duplicates, which is the scope rule at the
+    top of this file: a `plugin/` holding a stale or symlinked component tree installs at exit 0
+    and simply reports the missing components as absent — measured `Skills (0)  Agents (0)` on
+    Claude Code 2.1.245 (agentic-sdlc-d0ab) — so neither the host's exit code nor its inventory
+    line is a check a contributor would see fail.  `scripts/sync_plugin_tree.py` owns the
+    predicate and the remedy; it is imported rather than restated so "what plugin/ publishes" has
+    exactly one definition.
+    """
+    module_path = root / "scripts" / "sync_plugin_tree.py"
+    if not module_path.is_file():
+        result.error("scripts/sync_plugin_tree.py is required")
+        return
+    specification = importlib.util.spec_from_file_location("sync_plugin_tree_gate", module_path)
+    if specification is None or specification.loader is None:
+        result.error("scripts/sync_plugin_tree.py is not loadable as a module")
+        return
+    module = importlib.util.module_from_spec(specification)
+    try:
+        specification.loader.exec_module(module)
+    except (OSError, SyntaxError, ValueError) as exc:
+        result.error(f"scripts/sync_plugin_tree.py failed to load: {exc}")
+        return
+    try:
+        drift = module.differences(root)
+    except (module.PluginTreeError, OSError) as exc:
+        result.error(f"plugin tree: {exc}")
+        return
+    for line in drift:
+        result.error(f"plugin tree: {line}")
+    if drift:
+        result.error(f"plugin tree: refresh it with `{module.REMEDY}`")
+
+
 def validate_policy(root: Path, result: Validation) -> None:
     # os.walk rather than rglob so provisioned trees are pruned instead of visited: a
     # provisioned node_modules is tens of thousands of unreviewed files, and scanning it would
@@ -2376,6 +2413,7 @@ def validate(root: Path) -> Validation:
     validate_scripts(root, result)
     validate_operator_tools(root, result)
     validate_manifests(root, result)
+    validate_plugin_tree(root, result)
     validate_versions(root, result)
     # Trust boundaries over shipped bytes and the gate's own shape.
     validate_source_pinned_protected_role_authority(root, result)

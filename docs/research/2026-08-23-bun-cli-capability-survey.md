@@ -29,6 +29,26 @@ is cheap). Nothing was run on macOS or native Windows. Every claim keeps its cit
 fetchers conflicted, the conflict is stated and the primary source preferred. Every unresolved
 fact is marked **UNKNOWN**.
 
+**Amendment 2026-08-25.** ADR-0031 keeps this document as "a capability reference maintained as a
+dated snapshot, not a living promise", and a snapshot carrying stale facts is worse than no
+snapshot. The 2026-08-24 re-evaluation of the Bun-rewrite proposal (issue #13, from
+`03-bun-facts.md`) found four things this survey owed, and all four are applied **in place** as
+well as listed here, so a reader landing on the original claim does not read the stale version:
+
+1. **`BUN_OPTIONS` no longer injects argv** — corrected in §2.1, §5's gaps table, and §6's harvest
+   checklist. It sets Bun **runtime** flags (`process.execArgv`); the argv-splicing behavior was
+   fixed in Bun 1.2.23. `BUN_BE_BUN=1` takeover remains open and was already described accurately.
+2. **The PE Authenticode note gained its root cause** (§2.6), and with it the hard requirement:
+   compile first, sign last.
+3. **Cross-compile host restrictions: none** (§3.1) — available from any host since Bun v1.1.5; the
+   one asymmetry is target-side.
+4. **Two subjects the survey did not cover at all** are now sections: self-update (§4.10) and
+   subprocess reliability from a compiled binary (§4.11).
+
+Confirmed unchanged and re-dated in place where cited: PR #36173 open and unmerged, and the macOS
+signing regression fixed on `main` but in no release. The four corrections change no decision:
+ADR-0031 stands, and nothing here recommends a migration.
+
 ---
 
 ## 1. Executive summary
@@ -118,14 +138,19 @@ Primary source for documented behavior: https://bun.com/docs/bundler/executables
   whatever directory it runs in — a direct environment-allowlist violation unless built with
   `--no-compile-autoload-dotenv --no-compile-autoload-bunfig` (§6 harvest checklist). All: docs +
   `bun build --help`.
-- **Ambient runtime controls over any compiled binary:** `BUN_OPTIONS` is read at runtime and
-  **injected into argv** (https://github.com/oven-sh/bun/issues/21496), and `BUN_BE_BUN=1` makes
-  the binary act as the full `bun` CLI (v1.2.16+, docs). For a digest-pinned helper this means
-  one env var can repurpose the pinned bytes into an arbitrary runtime, and another can splice
-  attacker-controlled argv from the environment. **Whether a compiled binary can disable
+- **Ambient runtime controls over any compiled binary:** `BUN_OPTIONS` is read at runtime, and
+  **[corrected 2026-08-25]** its content is parsed as Bun **runtime** flags (`process.execArgv`),
+  **not** spliced into the app's `argv`. The argv-injection behavior this survey originally
+  recorded was **fixed in Bun 1.2.23** (PR https://github.com/oven-sh/bun/pull/26346; issue
+  https://github.com/oven-sh/bun/issues/21496 closed `COMPLETED` 2026-01-23). The residual risk is
+  ambient **runtime-flag** control, not arbitrary argv injection. `BUN_BE_BUN=1` makes the binary
+  act as the full `bun` CLI (v1.2.16+, docs) and that takeover **remains open**. For a
+  digest-pinned helper, one env var still repurposes the pinned bytes into an arbitrary runtime and
+  the other still lets the environment set runtime flags. **Whether a compiled binary can disable
   `BUN_OPTIONS`/`BUN_BE_BUN` processing: UNKNOWN** (no flag or doc found; resolvable by testing
   both vars against a compiled binary on the pinned version, and by searching
-  `src/runtime/cli` at the tag). Mapped to the §6 harvest checklist.
+  `src/runtime/cli` at the tag). ADR-0031:90-91's mandatory scrub stays either way. Mapped to the
+  §6 harvest checklist.
 - **`--sourcemap`** embeds a zstd-compressed sourcemap, decompressed automatically on error
   (executables.mdx L309). **Open defect:** `--compile --sourcemap=inline` leaks **native** memory
   on every thrown error — RSS 19,304 KB → 149,120 KB over ~2.26M requests in 20 s, never
@@ -215,7 +240,13 @@ Primary source for documented behavior: https://bun.com/docs/bundler/executables
 - Mach-O: `__BUN` segment / `__BUN,__bun` section with a **16 KiB placeholder**
   (https://github.com/oven-sh/bun/issues/40107).
 - PE: `.bun` section; **Authenticode is stripped before injection**
-  (https://github.com/oven-sh/bun/blob/main/src/exe_format/pe.rs).
+  (https://github.com/oven-sh/bun/blob/main/src/exe_format/pe.rs). **[amended 2026-08-25 — root
+  cause, and the requirement it implies]** An earlier Bun did NOT strip it, and signing a compiled
+  binary afterwards with `signtool` **corrupted the binary**
+  (https://github.com/oven-sh/bun/issues/20109): the appended signature block broke Bun's own
+  `[u64 length][payload]` trailer offset math. Fixed by PR
+  https://github.com/oven-sh/bun/pull/22960 in **Bun v1.2.23**. **Compile first, sign last** is
+  therefore a hard requirement, not a style choice.
 - Payload: `[u64 LE length][payload]` with a 21-byte trailer at `base + 8 + length - 21`
   (https://github.com/oven-sh/bun/pull/31787 — which is itself an open PR about startup segfaults
   on corrupted embedded graphs, ~6,300 Sentry events, 1.3.5→1.3.14, Windows-dominant).
@@ -354,6 +385,11 @@ manifest-re-hashing contracts.
 - Download flow: single `AsyncHTTP` GET, follow redirects, accept only HTTP 200 → gunzip →
   libarchive extract to a random tmpdir → `move_file_z` into the cache
   (https://github.com/oven-sh/bun/blob/bun-v1.4.0/src/standalone_graph/StandaloneModuleGraph.rs).
+- **Host restrictions on cross-compiling: none [added 2026-08-25 — the original survey did not
+  cover this].** None are documented, and none were found in the source history:
+  cross-compilation **from any host** has been available since **Bun v1.1.5** (2024-04-26, PR
+  https://github.com/oven-sh/bun/pull/10477). The one asymmetry is **target-side** — Windows
+  metadata flags other than `--windows-hide-console` (§2.10).
 
 ### 3.2 Checksum verification: NONE in 1.4.0
 
@@ -773,6 +809,32 @@ CLI-contract subprocess tests the revisit triggers require — once the `--paral
 cluster clears (`@types/bun@1.4.0` exists, measured above). The pm commands touch none of
 ccodex's contracts.
 
+### 4.10 Self-update
+
+**[added 2026-08-25 — the original survey did not cover this at all.]** Sourced from
+`03-bun-facts.md` §(e) (2026-08-24 install-UX research corpus), not re-measured here.
+
+- The pattern for a binary replacing itself is `self-replace`: **POSIX rename** over the running
+  executable, and on **Windows a rename-aside** of the live file first, because the running image
+  cannot be unlinked.
+- `opencode`'s verified choice is to **delegate to the original install channel** rather than swap
+  itself in place.
+- Bearing on this repository: ADR-0021 already decides the first release has no self-updater, and
+  ADR-0020 item 4 forbids a command that silently updates a dependency, so this section is
+  capability reference — not a route that becomes available by being documented.
+
+### 4.11 Subprocess reliability from a compiled binary
+
+**[added 2026-08-25 — the original survey did not cover this at all.]** Sourced from
+`03-bun-facts.md` §(g) (2026-08-24 install-UX research corpus), not re-measured here. Directly on
+point for this CLI, whose dependency profile includes the Rust-compiled `uv`.
+
+- https://github.com/oven-sh/bun/issues/32011 — **open**: spawning a **Rust-compiled `.exe`** via
+  `execFileSync`/`spawnSync` on Windows hangs, then throws `ETIMEDOUT`. On point for `uv.exe`.
+- https://github.com/oven-sh/bun/issues/26580 — lost-wakeup hang while capturing `git` output via
+  `Bun.$`; **fixed on `main` 2026-08-07**.
+- gstack#931 — a **bare-name `$PATH` lookup** fails only when the caller is a compiled binary.
+
 ---
 
 ## 5. Honest gaps table
@@ -787,7 +849,7 @@ ccodex's contracts.
 | `-baseline` npm packages vs docs "same binary" | **RESOLVED [measured]:** contained binaries byte-identical (sha256 `ca8a18d0…`); sha512 delta is packaging-level; docs claim confirmed | §2.1; local compile cache |
 | Compile-output determinism | **Non-deterministic [measured]:** identical inputs → identical size, pairwise-distinct sha256; pin shipped bytes only, rebuild-and-compare impossible | §2.5; `/tmp/bun-cli-spike/dist/repro-{1,2,3}` |
 | Compiled-binary `.env`/`bunfig` autoload | **Default ON [measured]** (`bun build --help`: "default: true") — ambient env ingestion unless built with `--no-compile-autoload-{dotenv,bunfig}` | §2.1; §6 harvest checklist |
-| `BUN_BE_BUN` / `BUN_OPTIONS` vs a pinned helper | One env var repurposes the binary into the full bun CLI; another splices argv from the environment; whether a compiled binary can disable either: UNKNOWN | §2.1; https://github.com/oven-sh/bun/issues/21496 |
+| `BUN_BE_BUN` / `BUN_OPTIONS` vs a pinned helper | `BUN_BE_BUN=1` repurposes the binary into the full bun CLI (open). `BUN_OPTIONS` sets Bun **runtime** flags (`process.execArgv`) — **[corrected 2026-08-25]** it does NOT splice argv, fixed in 1.2.23 (PR #26346, issue #21496 closed `COMPLETED` 2026-01-23). Whether a compiled binary can disable either: UNKNOWN | §2.1; https://github.com/oven-sh/bun/pull/26346; https://github.com/oven-sh/bun/issues/21496 |
 | Error-output credential hygiene | UNKNOWN: `ShellError` command-line echo, crash-banner argv/env dump, fs error path contents — none measured; resolvable by sentinel-secret tests | §2.9, §4.1 |
 | POSIX symlink lifecycle primitives | readlink/lstat/realpath/rename-over-link correct [measured]; `fs.symlink` EEXIST refusal and atomic symlink-then-rename UNKNOWN | §4.2 |
 | Directory modes (`mkdirSync {mode}`, umask, explicit open mode at syscall) | UNKNOWN — live given `Bun.write` ignores `{mode}`; receipt dirs need 0700 | §4.2 |
@@ -888,9 +950,10 @@ ADR-0031 names three triggers plus one approved harvest. Exact facts to re-verif
   **default ON [measured]**, and a default-built helper ingests a cwd `.env`/`bunfig.toml`,
   violating the environment-allowlist contract (§2.1).
 - [ ] Threat-model the ambient env controls: `BUN_BE_BUN=1` turns the pinned helper into the
-  full `bun` CLI and `BUN_OPTIONS` splices argv from the environment (§2.1). The launcher must
-  scrub/deny both in the helper's child environment; whether the binary itself can disable them
-  is UNKNOWN — re-test on the pinned version.
+  full `bun` CLI (open), and `BUN_OPTIONS` sets Bun **runtime** flags from the environment —
+  **[corrected 2026-08-25]** it does not splice the app's argv, which was fixed in 1.2.23
+  (§2.1). The launcher must scrub/deny both in the helper's child environment; whether the binary
+  itself can disable them is UNKNOWN — re-test on the pinned version.
 - [ ] Resolve redistribution/licensing obligations before shipping: every compiled helper embeds
   Bun's runtime including JavaScriptCore (LGPL) and ICU data (§2.5 composition; PR #32262 states
   "JSC 22.9 MB + ICU data 23.7 MB"). Verify the exact licence set from the Bun source tree at

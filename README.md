@@ -203,16 +203,31 @@ no-vendoring rule it refines), plus `skills/external-skill-libraries/`.
   `claude plugin install agentic-sdlc@agentic-sdlc` is an alternative to
   symlinks. The marketplace source may be this repository's public Git URL, so no clone
   is required first; see [Install as a Claude Code plugin](#install-as-a-claude-code-plugin).
-  `plugin/` is the marketplace entry's `source`: a directory holding only the plugin
-  manifest plus symlinks to `skills/`, `agents/claude/`, `commands/`, and
-  `output-styles/`. It exists because Claude Code discovers agents only in a plugin
+  `plugin/` is the marketplace entry's `source`: a directory holding the plugin manifest
+  plus real copies of `skills/`, `agents/claude/`, `commands/`, `output-styles/`, and
+  `workflows/`. It exists because Claude Code discovers agents only in a plugin
   root's own `agents/`, and this repo nests the Claude roster one level down under
   `agents/claude/`; installing from the repo root therefore finds the skills but zero
-  agents. Claude Code dereferences within-marketplace symlinks when it copies a plugin
-  into its cache, so the installed copy is real files. The marketplace manifest and
-  `plugin/` both pass `claude plugin validate --strict`; validating the repo root as a
-  plugin passes non-strict only (strict flags two deliberate repo files — the root
-  `CLAUDE.md` and the Codex roster README — as plugin warnings).
+  agents. Copies, not symlinks, and both shapes were measured on Claude Code 2.1.245
+  (agentic-sdlc-d0ab): a component directory that IS a symlink is read without being
+  followed, so `claude plugin validate ./plugin --strict` exited 1 with one warning per
+  link, and a materialisation carrying only the plugin subtree — what a `github` or
+  `archive` source fetches, reproducible offline with `git archive HEAD plugin` — left
+  every link dangling and installed at exit 0 while reporting `Skills (0)  Agents (0)`.
+  With copies, that same subtree install reports `Skills (18)  Agents (8)`, and
+  `claude plugin validate ./plugin --strict` passes with zero warnings. The argument form
+  decides what is validated: a directory dispatches on the manifest it finds, so
+  `claude plugin validate .` validates the marketplace catalog and passes, while
+  `claude plugin validate .claude-plugin/plugin.json` walks the repo root AS a plugin and
+  passes non-strict only — strict flags two deliberate repo files, the root `CLAUDE.md`
+  and the Codex roster README. Pointing a manifest field at the shared tree instead is not
+  available: `"skills": "../skills"` is refused as a path-traversal attempt. `mise run
+  validate` re-derives every copy from its source and fails on any drift, so a stale
+  `plugin/` is repaired with
+  `uv run --python 3.12.11 --script scripts/sync_plugin_tree.py --write` rather than by
+  hand. The manifest also declares `outputStyles` and `workflows` — the two kinds no
+  component walk discovers — and deliberately declares no `hooks`, because a plugin's
+  hooks surface auto-enables with the plugin.
 - `scripts/check-agentic-sdlc-prereqs.sh`: native-baseline preflight plus informational
   checks for optional adapters. Missing cmux or tmux never fails it.
 - `scripts/install-skill-bundle.sh`: **one-shot global install for every native agent CLI
@@ -845,8 +860,10 @@ as a bare skill and again under the plugin namespace.
 
 ### Install as a Claude Code plugin
 
-This is the alternative Claude plane described above, and it needs no clone, no mise, and no
-toolchain trust step, because a marketplace source may be a Git URL. Two commands, from any
+This is the alternative Claude plane described above. It needs no mise, no toolchain trust step,
+and no clone you manage yourself — but `git` is a prerequisite, because `marketplace add` clones
+the catalog for you: its `--sparse` option is documented as `git sparse-checkout`, and on a PATH
+without `git` the add fails with `Failed to clone marketplace repository`. Two commands, from any
 directory:
 
 ```bash
@@ -863,9 +880,11 @@ than its filename. Confirm what a given install actually contributes with
 `claude plugin details agentic-sdlc@agentic-sdlc`, which prints the component inventory and a
 per-session token estimate.
 
-Add `--sparse .claude-plugin plugin skills agents commands output-styles` to the
-`marketplace add` command to limit the catalog clone to the directories the plugin needs. The
-installed plugin is identical either way; only the cached catalog is smaller.
+Add `--sparse .claude-plugin plugin` to the `marketplace add` command to limit the catalog clone
+to the directories the plugin needs. Those two are now sufficient, and the longer recipe this
+sentence used to carry was also a hazard: `plugin/` holds its own copies, so nothing in it points
+outside itself, where the earlier list omitted `workflows` and left a link dangling. The installed
+plugin is identical either way; only the cached catalog is smaller.
 
 This plane installs context and roles. It does not install the repository gate, the pinned
 toolchain, the Seeds launcher, or anything on `PATH`, so it is not a substitute for the bundle
