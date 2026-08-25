@@ -157,6 +157,28 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertEqual(report["runtime"]["state"], "admitted")
             self.assertFalse(query_state.exists())
 
+    def test_every_read_only_verb_reports_exactly_one_bundle_state_path(self) -> None:
+        """`bundle.state_paths` carries ONE path, and the report still validates carrying it.
+
+        The retired home-relative mirror was the only thing that could put a second entry in this
+        list, and `field_vocabularies.bundle` in `policy/ccodex-sdlc-read-report.v1.json` still
+        declares `state_paths`, so the field survives its second value. A report that fails
+        `validate_report` never reaches stdout, which is why exit 0 plus parseable JSON is the
+        validation assertion here.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dispatcher, environment, _query_state = self.make_dispatcher(root)
+            expected = str(self.bundle_state_path(environment))
+            for verb in ("status", "doctor", "inspect"):
+                with self.subTest(verb=verb):
+                    machine = self.run_dispatcher(dispatcher, environment, "sdlc", verb, "--json")
+
+                    self.assertEqual(machine.returncode, 0, machine.stderr)
+                    report = json.loads(machine.stdout)
+                    self.assertEqual(report["bundle"]["state_paths"], [expected])
+                    self.assertEqual(len(report["operator_tools"]["state_paths"]), 1)
+
     def test_all_read_only_verbs_and_renderer_parity_share_one_semantic_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             dispatcher, environment, query_state = self.make_dispatcher(Path(temp))

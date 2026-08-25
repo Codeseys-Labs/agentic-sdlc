@@ -11,11 +11,11 @@ tmux is never a baseline requirement.
 git clone https://github.com/Codeseys-Labs/agentic-sdlc.git && cd agentic-sdlc
 mise trust ./mise.toml          # persistent, per-path, and needs your explicit approval
 mise --locked install           # 12 pinned tools, ~1.3 GB
-mise run bundle:install         # skills, agents, and commands for this host
-mise run operator-tools:install # optional: puts `ccodex` on your PATH
+mise run bundle:install -- --agent claude   # or --agent codex; one plane per run, no default
+mise run operator-tools:install             # optional: puts `ccodex` on your PATH
 ```
 
-Then `mise run bundle:status` should report `N ok, 0 conflict, 0 absent`. Full walkthrough with
+Then `mise run bundle:status -- --agent claude` should report `N ok, 0 conflict, 0 absent`. Full walkthrough with
 the reasoning behind each step: [Quickstart from a clean clone](#quickstart-from-a-clean-clone).
 Every command with what it does: [`ccodex` — the operator dispatcher](#ccodex-the-operator-dispatcher)
 and [the task table](#install-and-run-the-bundle). Verified from nothing on a fresh
@@ -368,13 +368,14 @@ replaces step 1 only.
 
 5. Choose an install plane explicitly. Claude entries go under the configured Claude home
    (`~/.claude` by default); Codex entries go under the configured Codex home (`~/.codex` by
-   default, or `CODEX_HOME`). `--agent` applies to install, status, and uninstall. To use
+   default, or `CODEX_HOME`). `--agent` is REQUIRED on install, status, and uninstall — there is
+   no default and no wildcard, and a selector-free run refuses at exit 2 naming both planes. To use
    non-default roots, pass `--claude-home <path>` and `--codex-home <path>` after `--`.
 
    ```bash
    mise run bundle:install -- --agent claude
    # or: mise run bundle:install -- --agent codex
-   # inspect both configured planes without writing: mise run bundle:status
+   # inspect one plane without writing: mise run bundle:status -- --agent claude
    ```
 
    A detected Claude marketplace install is reported once as a Claude-plane conflict and blocks
@@ -391,7 +392,8 @@ replaces step 1 only.
    mise run operator-tools:install
    ```
 
-Each bundle lifecycle action ends in a terminal summary. `mise run bundle:status` reports only
+Each bundle lifecycle action ends in a terminal summary. `mise run bundle:status -- --agent
+<claude|codex>` reports only
 entries already present in the lifecycle ownership record: either `no owned entries for this host`
 or an `N ok, M conflict, K absent` summary. It does not inventory unowned names in a configured
 collection. Before installation, or when a path may have been installed through another checkout,
@@ -479,7 +481,7 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 
 | Task | Purpose |
 |---|---|
-| `bundle:install` / `bundle:status` / `bundle:uninstall` | Install, inspect, or remove entries for the current host. |
+| `bundle:install` / `bundle:status` / `bundle:uninstall` | Install, inspect, or remove entries for one plane on the current host. Each requires `-- --agent claude` or `-- --agent codex`; a selector-free run refuses at exit 2. |
 | `bundle:install:claude` | Install only the Claude Code plane on the current host. |
 | `bundle:install:codex` | Install only the Codex plane on the current host. |
 | `bundle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
@@ -517,8 +519,8 @@ there is no minimum libc and no filesystem that has to expose `statx` birth time
 `cp -r` works can install. See "Ownership and lifecycle rules" below for what that costs.
 
 ```bash
-mise run bundle:install
-mise run bundle:status
+mise run bundle:install -- --agent claude
+mise run bundle:status -- --agent claude
 mise run check
 ```
 
@@ -599,7 +601,7 @@ gateway attribution. See
 
 | Command | What it does |
 |---|---|
-| `ccodex bundle install\|status\|uninstall` | Install, inspect, or remove this host's bundle entries. `status` always ends in one terminal line: `no owned entries for this host`, or `N ok, M conflict, K absent`. |
+| `ccodex bundle install\|status\|uninstall --agent claude\|codex` | Install, inspect, or remove one plane's bundle entries on this host; the selector is required and a run without it refuses at exit 2. `status` always ends in one terminal line: `no owned entries for this host`, or `N ok, M conflict, K absent`. |
 | `ccodex libraries list\|status` | List installable external skill libraries with their front doors and surface cost, or report which are already in this home. Read-only. |
 | `ccodex libraries install <name> [--yes]` | Install a named external library through **its own** front door. Dry run unless `--yes`; vendors nothing into this tree. |
 | `ccodex libraries migrate <name> [--yes]` | Retire another channel's copies of the same upstream through that channel's own removal path, then install. Dry run unless `--yes`. |
@@ -812,7 +814,7 @@ macOS; native Windows activation fails with a named unsupported verdict.
 Inspect ownership, then act:
 
 ```bash
-mise run bundle:status
+mise run bundle:status -- --agent claude
 mise run bundle:install -- --agent claude --dry-run
 mise run check
 ```

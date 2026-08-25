@@ -76,6 +76,14 @@ DIRECTORY_KINDS = frozenset({"skill"})
 RECORD_FIELDS = frozenset({"agent", "kind", "name", "source", "mode", "digest", "removable"})
 #: The three transitions the `pending` slot can describe.
 PENDING_OPERATIONS = frozenset({"install", "refresh", "uninstall"})
+#: The only two spellings `--agent` accepts. `all` is deliberately absent: a lifecycle verb selects
+#: exactly one plane, with no default and no wildcard, so an operator can never move bytes into a
+#: plane they did not name. `Config.agent` still admits `all` as a LIBRARY value for the read-only
+#: whole-box projection and the isolated self-test, neither of which is an operator's placement.
+AGENT_SELECTORS = ("claude", "codex")
+#: The verbs a selector binds. `self-test` is exempt: it installs into a throwaway home of its own
+#: and is a pinned gate leaf (`mise run self-test`) that names no plane.
+SELECTOR_REQUIRED_COMMANDS = frozenset({"install", "status", "uninstall"})
 
 
 class InstallerError(RuntimeError):
@@ -127,11 +135,6 @@ class Config:
     @property
     def state_path(self) -> Path:
         root = self.state_root or state_directory()
-        return root / "agentic-sdlc-installer" / "state.json"
-
-    @property
-    def legacy_state_path(self) -> Path:
-        root = self.state_root or legacy_state_directory(self.home)
         return root / "agentic-sdlc-installer" / "state.json"
 
 
@@ -227,23 +230,6 @@ def state_directory() -> Path:
     xdg_state = os.environ.get("XDG_STATE_HOME")
     return operational_path(Path(xdg_state)) if xdg_state else operational_path(
         Path.home() / ".local" / "state"
-    )
-
-
-def legacy_state_directory(home: Path) -> Path:
-    """Return the location a configured-home-relative state document would occupy."""
-    if platform_system() == "Windows":
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            try:
-                if home.resolve() == Path.home().resolve():
-                    return operational_path(Path(local_app_data))
-            except OSError:
-                pass
-        return operational_path(home / "AppData" / "Local")
-    xdg_state = os.environ.get("XDG_STATE_HOME")
-    return operational_path(Path(xdg_state)) if xdg_state else operational_path(
-        home / ".local" / "state"
     )
 
 
@@ -1325,16 +1311,14 @@ def save_owned_entry(
 
 
 def load_config_state(config: Config) -> dict[str, Any]:
-    """Read the selected ownership document, refusing a second document in a legacy location."""
-    if config.legacy_state_path != config.state_path and read_state_document(
-        config.legacy_state_path
-    ) is not None:
-        try:
-            same = os.path.samefile(config.legacy_state_path, config.state_path)
-        except OSError:
-            same = False
-        if not same:
-            raise InstallerError(f"unexpected state location {config.legacy_state_path}")
+    """Read THE ownership document this configuration selects.
+
+    There is exactly one state location, so a document anywhere else is another program's file and
+    not this lifecycle's business: a configured-home-relative mirror under the selected home was
+    compatibility state for a generation that never shipped, and reading it turned an unrelated
+    project's `<root>/.local/state/agentic-sdlc-installer/state.json` into a fatal error on every
+    verb the moment a configured root was a repository.
+    """
     return load_state(config.state_path)
 
 
@@ -1525,45 +1509,33 @@ def _readonly_locator(category: str, record: dict[str, Any], ordinal: int) -> st
 
 
 def readonly_projection(config: Config) -> dict[str, object]:
-    """Read the canonical bundle lifecycle evidence without locks, migration, repair, or writes."""
-    paths: list[Path] = []
-    for path in (config.state_path, config.legacy_state_path):
-        if str(path) not in {str(current) for current in paths}:
-            paths.append(path)
+    """Read the canonical bundle lifecycle evidence without locks, migration, repair, or writes.
+
+    One configuration selects exactly one state document, so this reports one state path and can
+    never report an ambiguity between two of its own: the second, configured-home-relative location
+    is gone, and with it the `state-ambiguous` verdict that only that mirror could produce here.
+    """
+    state_path = config.state_path
     findings: list[dict[str, str]] = []
     entries: list[dict[str, str]] = []
     recovery: list[dict[str, str]] = []
-    documents: list[tuple[Path, dict[str, Any]]] = []
+    document: dict[str, Any] | None = None
     projection_state = "absent"
 
-    for path in paths:
-        observed, content, _detail = _readonly_read_file(path)
-        if observed == "absent":
-            continue
-        if observed != "present":
-            findings.append(_readonly_finding(f"state-{observed}", f"bundle state is {observed}", path))
-            projection_state = "unreadable" if observed == "unreadable" else "blocked"
-            continue
+    observed, content, _detail = _readonly_read_file(state_path)
+    if observed == "present":
         assert content is not None
         try:
-            document = _readonly_json_document(content, path)
+            document = _readonly_json_document(content, state_path)
         except InstallerError:
-            findings.append(_readonly_finding("state-malformed", "bundle state is malformed", path))
+            findings.append(_readonly_finding("state-malformed", "bundle state is malformed", state_path))
             projection_state = "unreadable"
-            continue
-        documents.append((path, document))
+    elif observed != "absent":
+        findings.append(_readonly_finding(f"state-{observed}", f"bundle state is {observed}", state_path))
+        projection_state = "unreadable" if observed == "unreadable" else "blocked"
 
-    if len(documents) > 1:
-        findings.append(
-            _readonly_finding(
-                "state-ambiguous",
-                "multiple bundle state documents are present; read-only inspection will not select or migrate one",
-                documents[0][0],
-            )
-        )
-        projection_state = "blocked"
-    elif len(documents) == 1:
-        state_path, state = documents[0]
+    if document is not None:
+        state = document
         if set(state) != {"version", "entries", "pending"}:
             findings.append(_readonly_finding("state-malformed", "bundle state has an unknown field", state_path))
             projection_state = "unreadable"
@@ -1650,7 +1622,7 @@ def readonly_projection(config: Config) -> dict[str, object]:
         "findings": findings,
         "recovery": recovery,
         "state": projection_state,
-        "state_paths": [str(path) for path in paths],
+        "state_paths": [str(state_path)],
     }
 
 
@@ -1758,7 +1730,12 @@ def uninstall(config: Config) -> Result:
 
 
 def self_test(config: Config) -> Result:
-    """Exercise an isolated lifecycle without writing to the caller's homes or state."""
+    """Exercise an isolated lifecycle without writing to the caller's homes or state.
+
+    The isolated configuration selects `all`, which is a LIBRARY value with no CLI spelling: the
+    read-only report and this self-test are the two callers that legitimately describe both planes
+    at once, and neither is an operator choosing where bytes land.
+    """
     with tempfile.TemporaryDirectory(prefix="agentic-sdlc-installer-") as temporary:
         root = Path(temporary)
         isolated = Config(
@@ -1783,7 +1760,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description=__doc__,
         epilog=(
             "Configured roots: Claude entries use --claude-home/.claude; Codex entries use "
-            "--codex-home (or CODEX_HOME). --agent limits every lifecycle operation to one plane. "
+            "--codex-home (or CODEX_HOME). --agent is required on install, status, and uninstall, "
+            "and selects exactly one plane: there is no default and no wildcard. "
             "Status and --dry-run never write state or bundle entries."
         ),
     )
@@ -1796,9 +1774,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--agent",
-        choices=("all", "claude", "codex"),
+        choices=AGENT_SELECTORS,
         action=SingleAgentAction,
-        help="select one configured plane; default: all",
+        help="select one configured plane; required on install, status, and uninstall",
     )
     parser.add_argument(
         "--mode",
@@ -1848,7 +1826,20 @@ def main(argv: list[str] | None = None) -> int:
     if codex_is_repo:
         print("fatal: Codex home must not be the repository root", file=sys.stderr)
         return 2
-    config = Config(config_repo_root, home, codex_home, args.mode, args.dry_run, args.agent or "all")
+    if args.agent is None:
+        if args.command in SELECTOR_REQUIRED_COMMANDS:
+            print(
+                f"fatal: {args.command} requires --agent; select one plane:"
+                f" {' or '.join(f'--agent {name}' for name in AGENT_SELECTORS)}",
+                file=sys.stderr,
+            )
+            return 2
+        # `self-test` is the one command that names no plane: it installs into a throwaway home of
+        # its own, so the library wildcard is correct there and reachable nowhere else.
+        selected_agent = "all"
+    else:
+        selected_agent = args.agent
+    config = Config(config_repo_root, home, codex_home, args.mode, args.dry_run, selected_agent)
     try:
         result = {
             "install": install,

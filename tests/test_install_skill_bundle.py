@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -352,7 +353,73 @@ class InstallSkillBundleTests(LifecycleTestCase):
 
     def test_cli_rejects_empty_codex_home(self) -> None:
         with mock.patch.dict(os.environ, {"CODEX_HOME": ""}), mock.patch("sys.stderr"):
-            self.assertEqual(installer.main(["status"]), 2)
+            self.assertEqual(installer.main(["status", "--agent", "claude"]), 2)
+
+    def test_cli_requires_one_agent_selector_on_every_lifecycle_verb(self) -> None:
+        """No default and no wildcard: a verb that moves or reads a plane must be told which one.
+
+        The message names BOTH planes, because the operator's next command is the remedy, and each
+        verb is asserted separately: `install` is the one gh #11 called out, and a `status` or
+        `uninstall` that quietly meant "both" is the same defect one step removed.
+        """
+        # Isolated homes are supplied even though the refusal fires BEFORE any home is read: this
+        # test's own mutation lever removes the refusal, and a lever that then drove a real
+        # `uninstall` across the operator's `~/.claude` and `~/.codex` would be a test that damages
+        # the machine it is run on. Measured, not hypothetical -- the first run of that mutation did
+        # exactly that.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for command in ("install", "status", "uninstall"):
+                with self.subTest(command=command):
+                    stream = io.StringIO()
+                    with mock.patch("sys.stderr", stream):
+                        self.assertEqual(
+                            installer.main(
+                                [
+                                    command,
+                                    "--home",
+                                    str(root / "home"),
+                                    "--codex-home",
+                                    str(root / "codex"),
+                                ]
+                            ),
+                            2,
+                        )
+                    message = stream.getvalue()
+                    self.assertIn(f"{command} requires --agent", message)
+                    self.assertIn("--agent claude", message)
+                    self.assertIn("--agent codex", message)
+            self.assertEqual(sorted(path.name for path in root.iterdir()), [])
+
+    def test_cli_offers_no_wildcard_agent_selector(self) -> None:
+        """`--agent all` is not a spelling an operator can reach; argparse names the two that are."""
+        stream = io.StringIO()
+        with mock.patch("sys.stderr", stream), self.assertRaises(SystemExit) as raised:
+            installer.parse_args(["install", "--agent", "all"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("invalid choice: 'all'", stream.getvalue())
+        self.assertIn("claude, codex", stream.getvalue())
+
+    def test_self_test_needs_no_selector_because_it_names_no_plane(self) -> None:
+        """Positive control for the requirement: the one exempt verb still runs, in its own home.
+
+        `mise run self-test` is a pinned gate leaf that passes no selector, so this is the boundary
+        of the requirement rather than a hole in it.
+        """
+        parsed = installer.parse_args(["self-test"])
+        self.assertIsNone(parsed.agent)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with mock.patch("builtins.print"):
+                self.assertEqual(
+                    installer.main(
+                        ["self-test", "--home", str(root / "home"), "--codex-home", str(root / "codex")]
+                    ),
+                    0,
+                )
+            # `self_test` builds its own throwaway configuration, so even the homes handed to it
+            # here stay untouched.
+            self.assertEqual(sorted(path.name for path in root.iterdir()), [])
 
     def test_cli_rejects_duplicate_agent_selectors(self) -> None:
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
@@ -367,7 +434,8 @@ class InstallSkillBundleTests(LifecycleTestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--claude-home PATH", completed.stdout)
         self.assertIn("--codex-home PATH", completed.stdout)
-        self.assertIn("--agent {all,claude,codex}", completed.stdout)
+        self.assertIn("--agent {claude,codex}", completed.stdout)
+        self.assertIn("there is no default and no wildcard", completed.stdout)
         self.assertIn("Status and --dry-run never write", completed.stdout)
 
     def test_cli_offers_no_state_migration_flag(self) -> None:
@@ -411,8 +479,16 @@ class InstallSkillBundleTests(LifecycleTestCase):
 
             with mock.patch.object(
                 installer, "state_directory", return_value=state_root
-            ), mock.patch("sys.stderr"):
-                self.assertEqual(installer.main(["status", "--home", str(root / "home")]), 2)
+            ), mock.patch("sys.stderr") as stderr:
+                self.assertEqual(
+                    installer.main(["status", "--agent", "claude", "--home", str(root / "home")]), 2
+                )
+            # The selector is supplied so this stays a STATE failure: without it the missing-selector
+            # refusal would return the same 2 and this test would pass while proving nothing.
+            self.assertIn(
+                "cannot read state",
+                "".join(str(call.args[0]) for call in stderr.write.call_args_list),
+            )
 
     def test_changed_codex_home_preserves_old_records_and_installs_new_home(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1283,28 +1359,55 @@ class StateSchemaTests(LifecycleTestCase):
             with self.assertRaisesRegex(installer.InstallerError, "invalid state"):
                 installer.status(config)
 
-    def test_a_second_document_in_the_legacy_location_is_refused_not_selected(self) -> None:
+    def test_a_document_at_the_retired_home_relative_location_fails_no_verb(self) -> None:
+        """The hazard is GONE, not renamed: a state document under the configured home is ignored.
+
+        This is the exact configuration the deleted refusal fired on -- a configured home that is
+        not the operator's home, with no `XDG_STATE_HOME`, so the retired mirror
+        `<configured-home>/.local/state/agentic-sdlc-installer/state.json` is a different file from
+        the selected one. A repository handed to `--claude-home` legitimately owns that path, and
+        every verb used to die on it. All four now run, the planted bytes are never read, and
+        nothing rewrites or removes them.
+        """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.make_repo(root)
             operator_home = root / "operator-home"
             operator_home.mkdir()
+            configured_home = root / "configured-home"
+            configured_home.mkdir()
             with mock.patch.dict(os.environ, {"HOME": str(operator_home)}, clear=False):
                 os.environ.pop("XDG_STATE_HOME", None)
+                os.environ.pop("LOCALAPPDATA", None)
                 with mock.patch.object(
                     installer, "state_directory", return_value=root / "central"
                 ):
                     config = installer.Config(
-                        root, operator_home, root / "codex", "copy", False, "all"
+                        root, configured_home, root / "codex", "copy", False, "claude"
                     )
-                    self.assertNotEqual(config.legacy_state_path, config.state_path)
-                    config.legacy_state_path.parent.mkdir(parents=True)
-                    installer.write_state(config.legacy_state_path, installer.empty_state(), False)
+                    planted = (
+                        configured_home
+                        / ".local"
+                        / "state"
+                        / "agentic-sdlc-installer"
+                        / "state.json"
+                    )
+                    planted.parent.mkdir(parents=True)
+                    planted.write_text('{"not": "this lifecycle\'s document"}', encoding="utf-8")
+                    before = planted.read_bytes()
 
-                    with self.assertRaisesRegex(
-                        installer.InstallerError, "unexpected state location"
-                    ):
-                        installer.status(config)
+                    self.assertEqual(installer.status(config).exit_code, 0)
+                    self.assertEqual(installer.install(config).exit_code, 0)
+                    self.assertEqual(installer.status(config).exit_code, 0)
+                    self.assertEqual(installer.uninstall(config).exit_code, 0)
+                    self.assertEqual(installer.self_test(config).exit_code, 0)
+
+                    self.assertEqual(planted.read_bytes(), before)
+                    # And the document the lifecycle DID select is the central one, not the plant.
+                    self.assertEqual(
+                        config.state_path,
+                        root / "central" / "agentic-sdlc-installer" / "state.json",
+                    )
 
     def test_atomic_write_succeeds_where_os_fchmod_does_not_exist(self) -> None:
         """Native Windows has no os.fchmod (CI run 32624250660): the unguarded call raised
@@ -1327,6 +1430,45 @@ class StateSchemaTests(LifecycleTestCase):
 
 
 class ReadOnlyProjectionTests(LifecycleTestCase):
+    def test_projection_names_exactly_one_state_path_even_where_two_used_to_differ(self) -> None:
+        """The read report's `bundle.state_paths` is one path, in the configuration that split it.
+
+        With no `XDG_STATE_HOME` and a configured home that is not the operator's, the retired
+        mirror resolved to a SECOND location, and the projection listed both -- so a report reader
+        saw two bundle state paths and, with a document at each, a `state-ambiguous` verdict. There
+        is one selected document now, so there is one path and that verdict is unreachable here.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            operator_home = root / "operator-home"
+            operator_home.mkdir()
+            configured_home = root / "configured-home"
+            configured_home.mkdir()
+            with mock.patch.dict(os.environ, {"HOME": str(operator_home)}, clear=False):
+                os.environ.pop("XDG_STATE_HOME", None)
+                os.environ.pop("LOCALAPPDATA", None)
+                with mock.patch.object(
+                    installer, "state_directory", return_value=root / "central"
+                ):
+                    config = installer.Config(
+                        root, configured_home, root / "codex", "copy", False, "claude"
+                    )
+                    for path in (
+                        config.state_path,
+                        configured_home / ".local" / "state" / "agentic-sdlc-installer" / "state.json",
+                    ):
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        installer.write_state(path, installer.empty_state(), False)
+
+                    selected = config.state_path
+                    projection = installer.readonly_projection(config)
+
+            self.assertEqual(projection["state_paths"], [str(selected)])
+            self.assertNotIn(
+                "state-ambiguous", {finding["code"] for finding in projection["findings"]}
+            )
+
     def test_projection_reports_an_armed_transition_without_a_lock_or_a_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1886,6 +2028,51 @@ class PendingTransitionTests(LifecycleTestCase):
             remove.assert_not_called()
             write.assert_not_called()
             self.assertEqual(config.state_path.read_bytes(), before)
+
+
+class RetiredHomeRelativeStateMirrorTests(unittest.TestCase):
+    """No source under `scripts/` or `tests/` reads the retired home-relative state mirror.
+
+    The mirror had four readers plus a lock-time re-check, and deleting only the ones a reviewer
+    remembered is how a hazard gets renamed instead of removed. The token is spelled from two halves
+    so this file is not itself a match, and the scan is byte-level so a fixture that does not decode
+    as text cannot hide one.
+    """
+
+    TOKEN = ("legacy" + "_state").encode()
+    ROOTS = ("scripts", "tests")
+    SKIPPED_TREES = frozenset({"__pycache__"})
+
+    def occurrences(self, paths: list[Path]) -> list[str]:
+        return sorted(
+            f"{path}:{number}"
+            for path in paths
+            for number, line in enumerate(path.read_bytes().splitlines(), start=1)
+            if self.TOKEN in line
+        )
+
+    def scanned_sources(self) -> list[Path]:
+        root = Path(__file__).parents[1]
+        return [
+            path
+            for name in self.ROOTS
+            for path in sorted((root / name).rglob("*"))
+            if path.is_file() and self.SKIPPED_TREES.isdisjoint(path.parts)
+        ]
+
+    def test_no_scanned_source_reads_the_retired_mirror(self) -> None:
+        sources = self.scanned_sources()
+        self.assertGreater(len(sources), 100, "the scan found almost nothing; re-derive its roots")
+        self.assertEqual([], self.occurrences(sources))
+
+    def test_the_scan_sees_the_token_it_forbids(self) -> None:
+        """Positive control: the assertion above is an absence the scanner can actually detect."""
+        with tempfile.TemporaryDirectory() as temp:
+            regressed = Path(temp) / "regressed.py"
+            regressed.write_bytes(
+                b"    root = self.state_root or " + self.TOKEN + b"_directory(self.home)\n"
+            )
+            self.assertEqual([f"{regressed}:1"], self.occurrences([regressed]))
 
 
 if __name__ == "__main__":

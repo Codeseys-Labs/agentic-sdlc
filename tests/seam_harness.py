@@ -434,7 +434,10 @@ SEAM_CASES: tuple[SeamCase, ...] = (
     ),
     SeamCase(
         identifier="bundle-status-still-reaches-the-shared-uv-runner-and-ends-with-its-terminal-line",
-        argv=("bundle", "status"),
+        # The selector is REQUIRED as of the ledger-hygiene wave: `status` with no `--agent` now
+        # refuses at exit 2 naming both planes, so a selector-free case here would assert a
+        # deleted default instead of the route this case exists to observe.
+        argv=("bundle", "status", "--agent", "claude"),
         expect_exit=0,
         route_sensitive=False,
         insensitivity_reason=(

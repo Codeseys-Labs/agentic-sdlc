@@ -471,27 +471,18 @@ def derive_plan(
         {**observe_journal("operator-tools", "operator-tools/state", operator_config.state_path),
          "path": str(operator_config.state_path)},
     ]
-    bundle_journals = []
-    seen: set[str] = set()
-    for slug, path in (
-        ("bundle/state", bundle_config.state_path),
-        ("bundle/legacy-state", bundle_config.legacy_state_path),
-    ):
-        if str(path) in seen:
-            continue
-        seen.add(str(path))
-        bundle_journals.append({**observe_journal("bundle", slug, path), "path": str(path)})
-    journals.extend(bundle_journals)
+    # ONE bundle journal, because one configuration selects one state document. The retired
+    # configured-home-relative mirror is gone, and with it the ambiguity branch that refused a plan
+    # when both were present.
+    bundle_journal = {
+        **observe_journal("bundle", "bundle/state", bundle_config.state_path),
+        "path": str(bundle_config.state_path),
+    }
+    journals.append(bundle_journal)
 
-    present = [journal for journal in bundle_journals if journal["state"] == JOURNAL_PRESENT]
-    if len(present) > 1:
-        # Two journals is ambiguity, and selecting one would be the migration nobody approved.
-        raise PlanUnavailable(
-            "more than one bundle journal document is present; recovery selects and migrates neither"
-        )
     items = operator_tools_items(operator_tools, operator_config, journals[0])
-    if present:
-        items.extend(bundle_items(bundle, bundle_config, present[0]))
+    if bundle_journal["state"] == JOURNAL_PRESENT:
+        items.extend(bundle_items(bundle, bundle_config, bundle_journal))
     items.sort(key=lambda item: (item["component"], item["path"], item["action"]))
     conflicts = sum(1 for item in items if item["classification"].endswith(CONFLICT_OBSERVATION))
     plan = {
@@ -808,13 +799,9 @@ def resume_bundle(
         if journal["component"] == "bundle" and journal["state"] == JOURNAL_PRESENT
     }
     with bundle.installer_lock(bundle_config):
-        for locator, path in (
-            ("journal://bundle/state", bundle_config.state_path),
-            ("journal://bundle/legacy-state", bundle_config.legacy_state_path),
-        ):
-            if locator not in recorded:
-                continue
-            raw, state = read_bounded_document(path, MAX_JOURNAL_BYTES)
+        locator = "journal://bundle/state"
+        if locator in recorded:
+            raw, state = read_bounded_document(bundle_config.state_path, MAX_JOURNAL_BYTES)
             if raw is None or sha256_bytes(raw) != recorded[locator]:
                 raise Refusal(
                     f"the bundle journal {locator} changed between the approval and the lock (now"

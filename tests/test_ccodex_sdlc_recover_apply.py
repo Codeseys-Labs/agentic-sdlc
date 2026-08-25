@@ -362,6 +362,42 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
 
 @WINDOWS_SKIP
 class RecoverPlanDerivationTests(RecoverApplyHarness):
+    def test_the_plan_journal_carries_exactly_one_locator_per_plane(self) -> None:
+        """The `journal` array is part of the digested bytes, so its membership is a contract.
+
+        The retired `journal://bundle/legacy-state` row is gone. It could only ever appear for a
+        configuration with NO `state_root`, and neither `derive_plan` caller builds one -- both
+        `ccodex_sdlc.recovery_configs` and `ccodex_sdlc_recover.build_configs` resolve a state root
+        and pass it -- so on every host the two paths were the same file and the old derivation
+        de-duplicated them to this same one row. Which is why deleting the row moved no digest:
+        measured on a fixed fixture, `recover --dry-run` rendered
+        c87ce4f4b2427f86ccc2af475ab044c2ff853fa7f468c21930b868cfc8806c55 before and after.
+        A re-added second bundle row would change these bytes and every approved digest with them.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _dispatcher, environment = self.make_dispatcher(root)
+            self.plant_finalizable_transaction(root, environment)
+            with mock.patch.dict(
+                os.environ, {"XDG_STATE_HOME": environment["XDG_STATE_HOME"]}, clear=False
+            ):
+                operator_config, bundle_config, receipts = recover.build_configs(
+                    operator_tools, bundle, home=Path(environment["HOME"])
+                )
+                plan, _digest = recover.derive_plan(
+                    operator_tools=operator_tools,
+                    operator_config=operator_config,
+                    bundle=bundle,
+                    bundle_config=bundle_config,
+                    activation_receipts=receipts,
+                )
+
+            self.assertEqual(
+                [journal["locator"] for journal in plan["journal"]],
+                ["journal://bundle/state", "journal://operator-tools/state"],
+            )
+            self.assertEqual(bundle_config.state_path, self.bundle_state_path(environment))
+
     def test_the_plan_is_canonical_and_refuses_non_finite_values(self) -> None:
         plan = {"b": [2, 1], "a": {"z": None, "y": True}}
         rendered = recover.canonical_document(plan)

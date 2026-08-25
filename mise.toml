@@ -75,18 +75,22 @@ description = "Run the portable bundle validator"
 run = "uv run --python 3.12.11 --script scripts/validate_bundle.py"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/validate_bundle.py"
 
+# The three general lifecycle tasks carry no plane of their own: the installer requires
+# `-- --agent claude` or `-- --agent codex` and refuses a selector-free run at exit 2, so a task
+# that named both planes by omission cannot exist here. `bundle:install:claude` and
+# `bundle:install:codex` below are the fixed-selector shortcuts.
 [tasks."bundle:install"]
-description = "Install bundle entries for Claude and Codex (or select one with -- --agent)"
+description = "Install bundle entries for one plane (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 
 [tasks."bundle:status"]
-description = "Inspect Claude/Codex bundle ownership without writing state or entries"
+description = "Inspect one plane's bundle ownership, writing nothing (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 
 [tasks."bundle:uninstall"]
-description = "Remove unchanged owned bundle entries for the selected host plane"
+description = "Remove unchanged owned entries from one plane (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
 
@@ -101,12 +105,12 @@ run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install 
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent codex"
 
 [tasks."bundle:install:all-hosts"]
-description = "Install on WSL and the paired native Windows host"
+description = "Install on WSL and the paired native Windows host (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py install"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 
 [tasks."bundle:status:all-hosts"]
-description = "Report lifecycle status on WSL and the paired native Windows host"
+description = "Report both hosts' state for one plane (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 

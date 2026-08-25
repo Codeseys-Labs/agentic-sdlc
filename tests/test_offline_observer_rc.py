@@ -314,13 +314,17 @@ class OfflineObserverReleaseCandidateTests(unittest.TestCase):
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
 
-            def lifecycle(command: str) -> subprocess.CompletedProcess[bytes]:
+            # One plane per invocation: the installer requires `--agent` and has no wildcard, so
+            # covering both configured homes means running each verb twice by name.
+            def lifecycle(command: str, agent: str) -> subprocess.CompletedProcess[bytes]:
                 return subprocess.run(
                     [
                         sys.executable,
                         "-B",
                         str(INSTALLER),
                         command,
+                        "--agent",
+                        agent,
                         "--mode",
                         "copy",
                         "--home",
@@ -334,8 +338,11 @@ class OfflineObserverReleaseCandidateTests(unittest.TestCase):
                     check=False,
                 )
 
-            installed = lifecycle("install")
-            self.assertEqual(installed.returncode, 0, installed.stderr.decode("utf-8", "replace"))
+            for agent in ("claude", "codex"):
+                installed = lifecycle("install", agent)
+                self.assertEqual(
+                    installed.returncode, 0, installed.stderr.decode("utf-8", "replace")
+                )
             claude_observer = home / ".claude" / "skills" / "agentic-sdlc" / "tools" / "offline-inspect.py"
             codex_observer = codex_home / "skills" / "agentic-sdlc" / "tools" / "offline-inspect.py"
             self.assertTrue(claude_observer.is_file())
@@ -349,9 +356,10 @@ class OfflineObserverReleaseCandidateTests(unittest.TestCase):
                 if record["removable"]
             ]
             before_status = snapshot_tree(root)
-            checked = lifecycle("status")
+            for agent in ("claude", "codex"):
+                checked = lifecycle("status", agent)
+                self.assertEqual(checked.returncode, 0, checked.stderr.decode("utf-8", "replace"))
             after_status = snapshot_tree(root)
-            self.assertEqual(checked.returncode, 0, checked.stderr.decode("utf-8", "replace"))
             self.assertEqual(after_status, before_status)
 
             greenfield = root / "greenfield"
@@ -482,8 +490,9 @@ class OfflineObserverReleaseCandidateTests(unittest.TestCase):
             self.assertEqual(target_after, target_before)
             self.assertEqual(git_state_after, git_state_before)
 
-            removed = lifecycle("uninstall")
-            self.assertEqual(removed.returncode, 0, removed.stderr.decode("utf-8", "replace"))
+            for agent in ("claude", "codex"):
+                removed = lifecycle("uninstall", agent)
+                self.assertEqual(removed.returncode, 0, removed.stderr.decode("utf-8", "replace"))
             for managed_path in managed_paths:
                 self.assertFalse(path_present(managed_path), str(managed_path))
             for path, content in foreign.items():
