@@ -524,6 +524,22 @@ def _absolute(path: Path) -> Path:
     return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
 
 
+def _state_root_for(home: Path) -> Path:
+    """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
+
+    Re-expressed from ``ccodex_sdlc.state_root_for`` rather than imported from
+    ``install_operator_tools``, whose PATH plane is retiring (gh #10) and must not take a derivation
+    the recovery plane still needs with it.  ``install_skill_bundle.state_directory()`` is not the
+    substitute: it reads ``Path.home()`` itself, which would defeat ``run(..., home=...)`` -- the
+    test-injection seam every fixture host in this suite depends on -- and on Windows it prefers
+    ``LOCALAPPDATA``, so the reader and this module would resolve two different state roots and
+    derive two different digests for one host.  A test pins this against the reader's copy.
+    """
+    value = os.environ.get("XDG_STATE_HOME")
+    root = Path(value) if value else home / ".local" / "state"
+    return _absolute(root)
+
+
 def parse_argv(argv: list[str]) -> str:
     """Admit exactly the vector the dispatcher forwards, and return the approved plan digest.
 
@@ -694,8 +710,8 @@ def build_configs(
     plan derived against one selection and applied against another would compare two different
     hosts.  ``dry_run`` is the only difference, and it participates in no classification.
     """
-    resolved_home = operator_tools.absolute(Path.home() if home is None else home)
-    state_root = operator_tools.state_root_for(resolved_home)
+    resolved_home = bundle.operational_path(Path.home() if home is None else home)
+    state_root = _state_root_for(resolved_home)
     root = _absolute(Path(__file__).parent.parent)
     operator_config = operator_tools.Config(
         root, resolved_home, operator_tools.default_bin_dir(resolved_home), state_root, False, False

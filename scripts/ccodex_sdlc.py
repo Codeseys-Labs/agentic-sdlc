@@ -1417,6 +1417,24 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
     return findings
 
 
+def state_root_for(home: Path) -> Path:
+    """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
+
+    This is the one path derivation the ownership planes share, and it lives here rather than being
+    imported from ``install_operator_tools`` because that module is the retiring PATH plane
+    (gh #10) and a helper the report still needs must not be deleted with it.
+    ``install_skill_bundle.state_directory()`` is deliberately NOT the substitute: it reads
+    ``Path.home()`` itself, so it cannot honour a caller-supplied home, and on Windows it prefers
+    ``LOCALAPPDATA`` -- either difference would make this reader and
+    ``ccodex_sdlc_recover.build_configs`` resolve two different state roots and therefore derive two
+    different plan digests, which is precisely the disagreement the digest exists to detect.
+    ``ccodex_sdlc_recover`` carries the identical derivation, and a test pins the two as equal.
+    """
+    value = os.environ.get("XDG_STATE_HOME")
+    root = Path(value) if value else home / ".local" / "state"
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(root))))
+
+
 def observe_host_readiness(
     contract: dict[str, Any], adapters: tuple[ModuleType, ModuleType, ModuleType]
 ) -> dict[str, Any]:
@@ -1427,8 +1445,8 @@ def observe_host_readiness(
     ``write_acquisition_receipt`` seals into.  Resolution is separated from observation so a test
     can hand ``observe_readiness`` its own directories.
     """
-    guard, operator_tools, _bundle = adapters
-    state_root = operator_tools.state_root_for(operator_tools.absolute(Path.home()))
+    guard, _operator_tools, bundle = adapters
+    state_root = state_root_for(bundle.operational_path(Path.home()))
     plane = state_root / STATE_PLANE_DIRECTORY
     validator, validator_reason = load_activation_validator(Path(__file__), guard)
     return observe_readiness(
@@ -1466,8 +1484,8 @@ def recovery_configs(
     the mutating form could never re-derive.  Only ``dry_run`` differs on the mutating side, and it
     participates in no classification.
     """
-    home = operator_tools.absolute(Path.home())
-    state_root = operator_tools.state_root_for(home)
+    home = bundle.operational_path(Path.home())
+    state_root = state_root_for(home)
     bin_dir = operator_tools.default_bin_dir(home)
     operator_config = operator_tools.Config(root, home, bin_dir, state_root, True, False)
     codex_home_value = os.environ.get("CODEX_HOME")

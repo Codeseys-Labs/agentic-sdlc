@@ -52,6 +52,30 @@ def absolute(path: Path) -> Path:
     return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
 
 
+def state_root_for(home: Path) -> Path:
+    """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
+
+    Owned here rather than imported from ``install_operator_tools``, whose PATH plane is retiring
+    (gh #10): the statusline receipt lives under this root and outlives that plane.
+    ``install_skill_bundle.state_directory()`` is not the substitute, because it reads
+    ``Path.home()`` and would ignore ``--home``.  ``--state-root`` still overrides this entirely;
+    this is only the fallback.
+    """
+    value = os.environ.get("XDG_STATE_HOME")
+    return absolute(Path(value)) if value else absolute(home / ".local" / "state")
+
+
+def default_bin_dir(home: Path) -> Path:
+    """The operator's user-local bin directory: the fallback for an unsupplied ``--bin-dir``.
+
+    Same reason as ``state_root_for``.  This one is scheduled to leave with the PATH plane rather
+    than to survive it -- gh #10 phase 2 re-homes the packaged statusline into the bundle ledger, at
+    which point no bin directory participates in resolving the command.
+    """
+    value = os.environ.get("XDG_BIN_HOME")
+    return absolute(Path(value)) if value else absolute(home / ".local" / "bin")
+
+
 def settings_path(home: Path, claude_config_dir: Path | None) -> Path:
     root = absolute(claude_config_dir) if claude_config_dir else absolute(home / ".claude")
     return root / "settings.json"
@@ -552,8 +576,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     home = absolute(args.home)
-    state_root = absolute(args.state_root) if args.state_root else operator_tools.state_root_for(home)
-    bin_dir = absolute(args.bin_dir) if args.bin_dir else operator_tools.default_bin_dir(home)
+    state_root = absolute(args.state_root) if args.state_root else state_root_for(home)
+    bin_dir = absolute(args.bin_dir) if args.bin_dir else default_bin_dir(home)
     path = settings_path(home, args.claude_config_dir)
     config = operator_tools.Config(Path(__file__).resolve().parents[1], home, bin_dir, state_root, require_path=False)
     try:
