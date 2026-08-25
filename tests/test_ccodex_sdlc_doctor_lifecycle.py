@@ -64,7 +64,9 @@ reader = _load("doctor_lifecycle_reader", READER_SCRIPT)
 guard = _load("doctor_lifecycle_guard", GUARD_SCRIPT)
 receipts = _load("doctor_lifecycle_receipts", VALIDATOR_SCRIPT)
 
-BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@1"
+BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@2"
+#: The read-only historical generation: admitted by `validate`, never sealed again.
+BODY_SCHEMA_V1 = "agentic-sdlc/distribution-activation-body@1"
 ENVELOPE_SCHEMA = "agentic-sdlc/receipt-envelope@1"
 RECEIPT_KIND = "distribution-activation"
 ACQUISITION_SCHEMA = "release-candidate-acquisition-receipt/v1"
@@ -72,7 +74,10 @@ ACQUISITION_SCHEMA = "release-candidate-acquisition-receipt/v1"
 # spelled out here and pinned against the reader's and the family's own constants below, so a rename
 # in either place fails as a named disagreement instead of silently making these fixtures fictional.
 SUPERSEDES_RELATION = "supersedes"
-ACTIVE_POINTER_NAME = "active-receipt.json"
+#: The KEYED pointer this reader resolves for (claude, user), and the pre-keyed name it still reports
+#: as its own state.  Both are spelled out here and pinned against the reader's own constants below.
+ACTIVE_POINTER_SEGMENTS = ("active", "claude", "user.json")
+LEGACY_ACTIVE_POINTER_NAME = "active-receipt.json"
 # The five reader usage lines and the reader forms, pinned as literals: this ticket touches the
 # projection and must leave the f894 grammar surface byte-for-byte alone. The fifth line and the
 # `--apply` form are `recover`'s one mutating spelling (agentic-sdlc-baaa); the four read lines above
@@ -105,7 +110,6 @@ def hexof(seed: str) -> str:
 
 def activation_body(**overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "activation_scope": "user-plane",
         "archive_sha256": hexof("archive"),
         "candidate_id": hexof("candidate"),
         "effect_state": "complete",
@@ -114,10 +118,10 @@ def activation_body(**overrides: Any) -> dict[str, Any]:
                 "content_sha256": hexof("entry"),
                 "disposition": "installed",
                 "entry_name": "skills/agentic-sdlc",
+                "mode": "copy",
                 "prestate": "absent",
             }
         ],
-        "host": "claude",
         "journal_sha256": hexof("journal"),
         "operation": "install",
         "plan_sha256": hexof("plan"),
@@ -127,6 +131,7 @@ def activation_body(**overrides: Any) -> dict[str, Any]:
         "requested_version": "0.7.3",
         "resolved_version": "0.7.3",
         "schema_version": BODY_SCHEMA,
+        "scope": {"agent": "claude", "kind": "user"},
         "terminal_phase": "activated",
         "unknowns": [],
         "version_source": "adapter-readback",
@@ -269,8 +274,13 @@ class ReadinessHarness(unittest.TestCase):
 
     @property
     def pointer(self) -> Path:
-        """The plane's active statement, at the layout position the shipped writers use."""
-        return self.state / "agentic-sdlc" / "activation" / ACTIVE_POINTER_NAME
+        """The plane's active statement, at the KEYED layout position the shipped writers use."""
+        return self.state.joinpath("agentic-sdlc", "activation", *ACTIVE_POINTER_SEGMENTS)
+
+    @property
+    def legacy_pointer(self) -> Path:
+        """The pre-keyed spelling, which a read verb still reports and a mutating verb migrates."""
+        return self.state / "agentic-sdlc" / "activation" / LEGACY_ACTIVE_POINTER_NAME
 
     def write_pointer(self, receipt: dict[str, Any]) -> Path:
         """Write the pointer exactly as ``ccodex sdlc install``/``update`` do: the receipt's own bytes."""
@@ -854,7 +864,7 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         # A sealed receipt whose scope was then edited to carry the injection: the validator refuses
         # the scope BY NAME, which is the path on which an artifact string reaches a rendered line.
         tampered = sealed_activation_receipt()
-        tampered["body"]["activation_scope"] = f"user-plane{forged}"
+        tampered["body"]["scope"] = {"agent": f"claude{forged}", "kind": "user"}
         self.write_raw_activation(
             f"{hexof('activation')}.json", json.dumps(tampered, sort_keys=True).encode("utf-8")
         )
@@ -1064,7 +1074,11 @@ class SupersededActivationHistoryTest(ReadinessHarness):
 
     def test_the_relation_and_pointer_name_this_module_pins_are_the_shipped_ones(self) -> None:
         self.assertEqual(SUPERSEDES_RELATION, reader.SUPERSEDES_RELATION)
-        self.assertEqual(ACTIVE_POINTER_NAME, reader.ACTIVE_POINTER_NAME)
+        self.assertEqual(
+            ACTIVE_POINTER_SEGMENTS,
+            (reader.ACTIVE_DIRECTORY, reader.DEFAULT_POINTER_AGENT, reader.USER_POINTER_NAME),
+        )
+        self.assertEqual(LEGACY_ACTIVE_POINTER_NAME, reader.LEGACY_ACTIVE_POINTER_NAME)
         self.assertIn(SUPERSEDES_RELATION, receipts.FAMILY_RELATIONS)
         # Positive control: the same comparison detects a rename, so the equalities are not vacuous.
         self.assertNotEqual(SUPERSEDES_RELATION, "replaces")
@@ -1367,7 +1381,7 @@ class SupersededActivationHistoryTest(ReadinessHarness):
         found = reader.observe_activation(self.activation, receipts, None)["active_pointer"]
         self.assertEqual("observed", found["state"])
         self.assertEqual("activation-1", found["receipt_id"])
-        self.assertEqual(self.pointer, self.activation.parent / ACTIVE_POINTER_NAME)
+        self.assertEqual(self.pointer, self.activation.parent.joinpath(*ACTIVE_POINTER_SEGMENTS))
 
     def test_an_inadmissible_receipt_id_correlates_with_nothing(self) -> None:
         """A correlated identity is admitted only in the family's bounded token shape."""

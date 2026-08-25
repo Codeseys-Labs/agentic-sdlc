@@ -190,7 +190,11 @@ _UNAPPROVED_DIGEST = "0" * 64
 LIFECYCLE_OWN_REASON = {
     "install": ("no acquired candidate is available", "certified only on"),
     "update": ("no usable active distribution-activation receipt", "certified only on"),
-    "uninstall": ("there is nothing to reconstruct it from", "only and refuses on"),
+    # On a host with neither a pointer NOR an ownership document, the uninstall ladder runs out of
+    # rungs and names both: the receipt it looked for and the ownership rows it looked for. A host with
+    # rows but no receipt is a different state (the announced legacy-unreceipted retirement), so this
+    # fragment is the empty-host one deliberately.
+    "uninstall": ("no installer ownership document", "only and refuses on"),
     "recover-apply": ("found nothing to recover on this host", "resumes an activated"),
 }
 LIFECYCLE_REASON_SOURCES = {

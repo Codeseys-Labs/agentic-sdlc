@@ -1,13 +1,26 @@
-"""Tests for ``scripts/ccodex_sdlc_uninstall.py``: receipt-directed retirement with ownership proof.
+"""Tests for ``scripts/ccodex_sdlc_uninstall.py``: retirement with ownership proof, on two rungs.
 
-Seven kinds of test live here, and they check different things.
+Nine kinds of test live here, and they check different things.
 
 The END-TO-END tests plant a temporary home and state root, seal a real
-``distribution-activation@1`` receipt over the planted entries with the family's own producer, run
+``distribution-activation@2`` receipt over the planted entries with the family's own producer, run
 the retirement, and then assert both halves: the owned entries are gone AND the terminal receipt the
 run wrote validates through that same family checker.  The independent verifier is the point -- this
 module composes a body rather than re-implementing one, so a test that only asked this module whether
 its own output looked right would prove nothing about the receipt it claims to seal.
+
+The KEYED-POINTER tests attack the admission authority itself.  The pointer is admitted by FILENAME,
+so a pointer whose name disagrees with the scope inside the receipt it names must refuse rather than
+redirect a removal, and each of the three axes -- kind, agent, root key -- is exercised with the
+agreeing pointer as its positive control in the same test.  The pre-keyed name is covered on both
+sides: alone it migrates and is announced, and beside the keyed one it is ``legacy-pointer-ambiguity``
+with both paths named and nothing removed.
+
+The LEGACY-UNRECEIPTED tests cover the second admission rung: a plane whose ownership rows exist and
+whose activation was never receipted.  They assert the announcement, the retired rows, the sealed
+``prestate_evidence: "ledger"`` receipt with no ancestor, the link-mode row the substrate's own
+primitive removes, and the two preservation classes -- a row the operator edited and an adopted
+unremovable one -- with the boundary control that another home's rows are left entirely alone.
 
 The OWNERSHIP-PROOF tests plant a modified, a foreign-link, an absent, and an unprovable entry beside
 owned ones and assert each is preserved, named with its own class, and left byte-identical.  Every one
@@ -65,7 +78,9 @@ MODULE = ROOT / "scripts" / "ccodex_sdlc_uninstall.py"
 READER = ROOT / "scripts" / "ccodex_sdlc.py"
 
 RECEIPT_KIND = "distribution-activation"
-BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@1"
+BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@2"
+#: The read-only historical generation, admitted by `validate` and never sealed again.
+BODY_SCHEMA_V1 = "agentic-sdlc/distribution-activation-body@1"
 ENVELOPE_SCHEMA = "agentic-sdlc/receipt-envelope@1"
 
 #: The exit classes, spelled out here rather than imported from the module under test, so a table this
@@ -88,12 +103,10 @@ def hexof(seed: str) -> str:
 def unsealed_body(entries: list[dict[str, Any]], **overrides: Any) -> dict[str, Any]:
     """One unsealed activation body whose defaults seal clean, with every field overridable."""
     value: dict[str, Any] = {
-        "activation_scope": "user-plane",
         "archive_sha256": hexof("archive"),
         "candidate_id": hexof("candidate"),
         "effect_state": "complete",
         "entries": entries,
-        "host": "claude",
         "journal_sha256": hexof("journal"),
         "operation": "install",
         "plan_sha256": hexof("plan"),
@@ -103,6 +116,8 @@ def unsealed_body(entries: list[dict[str, Any]], **overrides: Any) -> dict[str, 
         "requested_version": "0.7.3",
         "resolved_version": "0.7.3",
         "schema_version": BODY_SCHEMA,
+        # The v2 scope union, with the EXACT key set a user scope admits.
+        "scope": {"agent": "claude", "kind": "user"},
         "terminal_phase": "activated",
         "unknowns": [],
         "version_source": "archive-manifest",
@@ -167,13 +182,28 @@ class Plane:
         self.write_active(receipt)
         return receipt
 
+    @property
+    def pointer(self) -> Path:
+        """This plane's ONE pointer, at the KEYED path the filename-as-authority rule fixes.
+
+        Spelled out rather than read from the module under test: the filename IS the admission
+        authority, so a test that asked the module where it looked would agree with any path it chose.
+        """
+        return self.activation_root / "active" / "claude" / "user.json"
+
+    @property
+    def legacy_pointer(self) -> Path:
+        """Where the pre-keyed plane wrote its single pointer, for the migration cases."""
+        return self.activation_root / "active-receipt.json"
+
     def write_active(self, receipt: dict[str, Any]) -> Path:
-        path = self.activation_root / "active-receipt.json"
+        path = self.pointer
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(dar.canonical_bytes(receipt))
         return path
 
     def active_bytes(self) -> bytes:
-        return (self.activation_root / "active-receipt.json").read_bytes()
+        return self.pointer.read_bytes()
 
     # ---- running -------------------------------------------------------------------------------
 
@@ -225,11 +255,20 @@ def run_capture(config: target.Config) -> tuple[int, str]:
     return capture(lambda: target.execute(bundle, dar, config))
 
 
-def entry_record(name: str, digest_value: Any, *, prestate: str = "absent", disposition: str = "installed") -> dict[str, Any]:
+def entry_record(
+    name: str,
+    digest_value: Any,
+    *,
+    prestate: str = "absent",
+    disposition: str = "installed",
+    mode: str | None = "copy",
+) -> dict[str, Any]:
+    """One v2 inventory row.  ``mode`` is required non-null wherever the disposition published bytes."""
     return {
         "content_sha256": digest_value,
         "disposition": disposition,
         "entry_name": name,
+        "mode": mode,
         "prestate": prestate,
     }
 
@@ -471,6 +510,7 @@ class RecordedPrestateProof(Harness):
             "content_sha256": digest_value,
             "disposition": "installed",
             "entry_name": "agents/sdlc-planner.md",
+            "mode": "copy",
             "prestate": "owned",
         }
         # POSITIVE CONTROL FIRST: this exact row, with a prestate that claims owned bytes, IS removable.
@@ -505,6 +545,7 @@ class RecordedPrestateProof(Harness):
             "content_sha256": self.plane.entry_digest("commands/sdlc-frame.md"),
             "disposition": "preserved",
             "entry_name": "commands/sdlc-frame.md",
+            "mode": None,
             "prestate": "foreign",
         }
         classification, destination, current = target.classify_entry(bundle, config, present)
@@ -1129,6 +1170,370 @@ class OwnershipRows(Harness):
         self.assertFalse((self.plane.activation_root / "receipts").exists())
 
 
+# ---- the keyed pointer plane ----------------------------------------------------------------------
+
+
+class KeyedPointerPlane(Harness):
+    """The pointer FILENAME is the admission authority, and the pre-keyed name migrates once."""
+
+    def test_this_module_derives_the_same_pointer_paths_the_family_does(self) -> None:
+        """The re-expression's whole cost is drift, and this is where it is paid."""
+        activation = Path("/state/agentic-sdlc/activation")
+        for kind, root in (("user", None), ("project", "/srv/repo")):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    dar.pointer_path(activation, "claude", kind, root),
+                    target._pointer_path(activation, "claude", kind, root),
+                )
+        self.assertEqual(dar.LEGACY_ACTIVE_POINTER_NAME, target.LEGACY_ACTIVE_POINTER_NAME)
+        self.assertEqual(dar.ACTIVE_DIRECTORY, target.ACTIVE_DIRECTORY)
+        self.assertEqual(dar.USER_POINTER_NAME, target.USER_POINTER_NAME)
+        self.assertEqual(dar.ROOT_KEY_CHARACTERS, target.ROOT_KEY_CHARACTERS)
+        # POSITIVE CONTROL: the comparison detects a divergence, so the equalities are not vacuous.
+        self.assertNotEqual(
+            dar.pointer_path(activation, "claude", "user"),
+            target._pointer_path(activation, "codex", "user"),
+        )
+
+    def test_the_retirement_admits_the_keyed_pointer_and_not_the_legacy_name(self) -> None:
+        entries = self.plant_owned()
+        receipt = self.plane.seal_active(entries)  # writes the KEYED path
+        self.assertTrue(self.plane.pointer.is_file())
+        self.assertFalse(self.plane.legacy_pointer.exists())
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertEqual("uninstall", self.plane.terminal_receipt()["body"]["operation"])
+        self.assertEqual({"agent": "claude", "kind": "user"}, self.plane.terminal_receipt()["body"]["scope"])
+        self.assertEqual(receipt["receipt_id"], "activation-1")
+
+    def test_a_legacy_pointer_alone_is_migrated_announced_and_removed(self) -> None:
+        entries = self.plant_owned()
+        receipt = self.plane.seal_active(entries)
+        # Move it back to the pre-keyed spelling: the state a host activated before the keyed plane.
+        self.plane.legacy_pointer.write_bytes(dar.canonical_bytes(receipt))
+        self.plane.pointer.unlink()
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertIn("migrated the legacy active pointer", report)
+        self.assertIn(str(self.plane.legacy_pointer), report)
+        self.assertIn(str(self.plane.pointer), report)
+        self.assertFalse(self.plane.legacy_pointer.exists(), "the migration removes the old file")
+        self.assertTrue(self.plane.pointer.is_file())
+
+    def test_both_pointers_present_is_refused_naming_both_paths(self) -> None:
+        entries = self.plant_owned()
+        receipt = self.plane.seal_active(entries)
+        self.plane.legacy_pointer.write_bytes(dar.canonical_bytes(receipt))
+        before = snapshot(
+            [self.plane.plane_root / "agents" / "sdlc-implementer.md", self.plane.legacy_pointer, self.plane.pointer]
+        )
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("legacy-pointer-ambiguity", report)
+        self.assertIn(str(self.plane.legacy_pointer), report)
+        self.assertIn(str(self.plane.pointer), report)
+        self.assertIn("remove the one that is not current", report)
+        self.assertEqual(
+            before,
+            snapshot(
+                [
+                    self.plane.plane_root / "agents" / "sdlc-implementer.md",
+                    self.plane.legacy_pointer,
+                    self.plane.pointer,
+                ]
+            ),
+        )
+        # POSITIVE CONTROL: removing either one lets the same plane retire.
+        self.plane.legacy_pointer.unlink()
+        code_two, report_two = self.plane.run()
+        self.assertEqual(code_two, EXIT_RETIRED, report_two)
+
+    def test_a_pointer_whose_receipt_names_another_scope_refuses_on_the_kind_axis(self) -> None:
+        """A hand-edited pointer must not redirect a removal at a plane it does not describe."""
+        entries = self.plant_owned()
+        project = self.plane.seal_active(
+            entries, scope={"agent": "claude", "kind": "project", "root": str(self.plane.home / "repo")}
+        )
+        self.assertEqual("project", project["body"]["scope"]["kind"])
+        before = snapshot([self.plane.plane_root / "agents" / "sdlc-implementer.md"])
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("pointer-receipt-disagreement", report)
+        self.assertIn("is a user-scope pointer while the receipt it names records scope.kind", report)
+        self.assertEqual(before, snapshot([self.plane.plane_root / "agents" / "sdlc-implementer.md"]))
+        # POSITIVE CONTROL: the same receipt at the pointer its own scope names is admitted.
+        project_root = self.plane.home / "repo"
+        keyed = dar.pointer_path(self.plane.activation_root, "claude", "project", str(project_root))
+        keyed.parent.mkdir(parents=True, exist_ok=True)
+        keyed.write_bytes(dar.canonical_bytes(project))
+        self.plane.pointer.unlink()
+        (project_root / ".claude" / "agents").mkdir(parents=True, exist_ok=True)
+        for relative in ("agents/sdlc-implementer.md",):
+            (project_root / ".claude" / relative).write_text("# implementer\n", encoding="utf-8")
+        code_two, report_two = self.plane.run(scope_kind="project", project_root=project_root)
+        self.assertNotIn("pointer-receipt-disagreement", report_two)
+        self.assertIn("project:", report_two)
+        self.assertNotEqual(EXIT_REFUSED, code_two, report_two)
+
+    def test_a_pointer_moved_to_another_root_s_key_refuses_on_the_root_axis(self) -> None:
+        entries = self.plant_owned()
+        project_root = self.plane.home / "repo"
+        receipt = self.plane.seal_active(
+            entries, scope={"agent": "claude", "kind": "project", "root": str(project_root)}
+        )
+        self.plane.pointer.unlink()
+        wrong = dar.pointer_path(self.plane.activation_root, "claude", "project", str(self.plane.home / "other"))
+        wrong.parent.mkdir(parents=True, exist_ok=True)
+        wrong.write_bytes(dar.canonical_bytes(receipt))
+
+        code, report = self.plane.run(scope_kind="project", project_root=self.plane.home / "other")
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("pointer-receipt-disagreement", report)
+
+
+# ---- the legacy-unreceipted retirement ------------------------------------------------------------
+
+
+class LegacyUnreceipted(Harness):
+    """A plane with ownership rows and no receipt: the FINDING-1 defect class, given a verb.
+
+    ``bundle install`` wrote rows for years without sealing anything, and a repository root could be
+    handed to it as a configured home, so those rows would otherwise be selected by NO verb. Every
+    test here asserts the announcement as well as the effect, because the operator's question is which
+    evidence authorised the removal.
+    """
+
+    def payload(self, name: str = "payload") -> Path:
+        root = self.temp / name
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def test_ownership_rows_with_no_receipt_are_retired_and_receipted(self) -> None:
+        payload = self.payload()
+        activate_with_ownership_rows(self.plane, payload)
+        self.assertFalse(self.plane.pointer.exists())
+        implementer = self.plane.plane_root / "agents" / "sdlc-implementer.md"
+        self.assertTrue(implementer.is_file())
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertIn("legacy-unreceipted uninstall (no activation receipt for claude/user)", report)
+        self.assertFalse(implementer.exists(), "the bytes left the plane")
+        self.assertFalse((self.plane.plane_root / "skills" / "agentic-sdlc").exists())
+        # The ownership rows left with the bytes: the very next status must not read a conflict.
+        self.assertEqual([], owned_entry_conflicts(self.plane, payload))
+        state = bundle.load_config_state(installer_read_config(self.plane, payload))
+        self.assertEqual({}, state["entries"])
+        # And the retirement is EVIDENCE: one sealed receipt whose prestate evidence is the ledger.
+        receipts = sorted((self.plane.activation_root / "receipts").glob("*.json"))
+        self.assertEqual(1, len(receipts), receipts)
+        document = json.loads(receipts[0].read_text(encoding="utf-8"))
+        self.assertEqual("ledger", document["body"]["prestate_evidence"])
+        self.assertEqual([], document["ancestors"], "ledger evidence names no ancestor")
+        self.assertEqual("uninstall", document["body"]["operation"])
+        self.assertEqual("retired", document["body"]["terminal_phase"])
+        self.assertEqual("complete", document["body"]["effect_state"])
+        self.assertEqual({"agent": "claude", "kind": "user"}, document["body"]["scope"])
+        self.assertIsNone(document["body"]["archive_sha256"])
+        self.assertEqual("checkout-tree", document["body"]["version_source"])
+        self.assertIn("checkout", document["body"])
+        self.assertIs(True, document["body"]["checkout"]["dirty"])
+        self.assertEqual([], document["body"]["unknowns"], "no archive existed, so none is unknown")
+        # The sealed document validates through the family's own checker, not just this module's eye.
+        self.assertEqual("validated", dar.derive("validate", document, "the retirement")["verdict"])
+
+    def test_a_link_published_row_is_retired_too_because_the_substrate_primitive_proves_it(self) -> None:
+        """The shipped ``bundle install`` publishes links on Unix, so a legacy plane's rows are links."""
+        payload = self.payload("link-payload")
+        (payload / "agents").mkdir(parents=True)
+        source = payload / "agents" / "sdlc-implementer.md"
+        source.write_text("# implementer\n", encoding="utf-8")
+        config = bundle.Config(payload, self.plane.home, self.plane.home / ".codex", "link", False, "claude", self.plane.state_root)
+        state = bundle.load_config_state(config)
+        entry = bundle.Entry("claude", "agent", "sdlc-implementer.md", source)
+        destination = bundle.destination_for(entry, config)
+        bundle.ensure_collection(entry, destination, config)
+        mode = bundle.transactional_create(entry, destination, config, state)
+        self.assertEqual("link", mode)
+        self.assertTrue(destination.is_symlink())
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertFalse(destination.exists() or destination.is_symlink())
+        document = json.loads(
+            sorted((self.plane.activation_root / "receipts").glob("*.json"))[0].read_text(encoding="utf-8")
+        )
+        row = document["body"]["entries"][0]
+        self.assertEqual("removed", row["disposition"])
+        # The row's OWN mode is what the receipt records: this is the fact per-row mode exists for.
+        self.assertEqual("link", row["mode"])
+
+    def test_a_modified_row_and_an_adopted_row_are_preserved_and_named(self) -> None:
+        payload = self.payload("preserve-payload")
+        activate_with_ownership_rows(self.plane, payload)
+        implementer = self.plane.plane_root / "agents" / "sdlc-implementer.md"
+        implementer.write_text("# the operator's own edit\n", encoding="utf-8")
+        config = installer_write_config(self.plane, payload)
+        state = bundle.load_config_state(config)
+        skill_key = str(self.plane.plane_root / "skills" / "agentic-sdlc")
+        adopted = dict(state["entries"][skill_key])
+        adopted["removable"] = False
+        candidate = json.loads(json.dumps(state))
+        candidate["entries"][skill_key] = adopted
+        bundle.persist_state(config, state, candidate)
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_PARTIAL, report)
+        self.assertIn("modified-content", report)
+        self.assertIn("kept-adopted", report)
+        self.assertTrue(implementer.is_file(), "an operator's edit is preserved untouched")
+        self.assertEqual(
+            "# the operator's own edit\n", implementer.read_text(encoding="utf-8")
+        )
+        self.assertTrue((self.plane.plane_root / "skills" / "agentic-sdlc").is_dir())
+        document = json.loads(
+            sorted((self.plane.activation_root / "receipts").glob("*.json"))[0].read_text(encoding="utf-8")
+        )
+        self.assertEqual("none", document["body"]["effect_state"])
+        self.assertEqual("not-activated", document["body"]["terminal_phase"])
+        self.assertEqual(
+            {"modified", "foreign"},
+            {row["prestate"] for row in document["body"]["entries"]},
+        )
+        self.assertEqual({"preserved"}, {row["disposition"] for row in document["body"]["entries"]})
+
+    def test_rows_under_another_configured_home_are_left_unselected(self) -> None:
+        payload = self.payload("other-home-payload")
+        other = Plane(self.temp / "other-operator")
+        activate_with_ownership_rows(other, payload)
+        # One shared state document, two homes: this run's boundary is its own home alone.
+        shared = bundle.load_config_state(installer_read_config(other, payload))
+        self.assertTrue(shared["entries"])
+        code, report = self.plane.run(state_root=other.state_root)
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("no ownership rows under", report)
+        after = bundle.load_config_state(installer_read_config(other, payload))
+        self.assertEqual(shared["entries"], after["entries"], "another home's rows are retained")
+        self.assertTrue((other.plane_root / "agents" / "sdlc-implementer.md").is_file())
+
+    def test_a_project_root_s_rows_are_retired_at_project_scope(self) -> None:
+        """The W-f half: ``--claude-home <repo>`` wrote unreceipted rows under a repository root."""
+        payload = self.payload("project-payload")
+        project = Plane(self.temp / "project-checkout")
+        activate_with_ownership_rows(project, payload)
+        # The rows are keyed under the project root, and the state root stays the operator's own.
+        rows = bundle.load_config_state(installer_read_config(project, payload))["entries"]
+        self.assertTrue(rows)
+
+        code, report = self.plane.run(
+            state_root=project.state_root,
+            activation_root=project.state_root / "agentic-sdlc" / "activation",
+            scope_kind="project",
+            project_root=project.home,
+        )
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertIn("legacy-unreceipted uninstall (no activation receipt for claude/project)", report)
+        self.assertIn(f"project:{project.home}", report)
+        self.assertFalse((project.plane_root / "agents" / "sdlc-implementer.md").exists())
+        document = json.loads(
+            sorted((project.state_root / "agentic-sdlc" / "activation" / "receipts").glob("*.json"))[0].read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            {"agent": "claude", "kind": "project", "root": str(project.home)}, document["body"]["scope"]
+        )
+        self.assertEqual("ledger", document["body"]["prestate_evidence"])
+        self.assertEqual("validated", dar.derive("validate", document, "the retirement")["verdict"])
+
+    def test_no_receipt_and_no_ownership_document_refuses_without_creating_anything(self) -> None:
+        untouched = self.temp / "never-created"
+        code, report = self.plane.run(
+            state_root=untouched, activation_root=untouched / "agentic-sdlc" / "activation"
+        )
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("no installer ownership document", report)
+        self.assertFalse(untouched.exists())
+
+    def test_an_ownership_document_with_no_rows_for_this_scope_refuses_by_name(self) -> None:
+        payload = self.payload("empty-rows")
+        config = installer_write_config(self.plane, payload)
+        bundle.persist_state(config, bundle.load_config_state(config), bundle.empty_state())
+        self.assertTrue(config.state_path.is_file())
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("no ownership rows under", report)
+        self.assertIn("is the front door", report)
+
+    def test_a_second_ledger_retirement_of_one_assessment_is_refused_rather_than_repeated(self) -> None:
+        payload = self.payload("second-pass")
+        activate_with_ownership_rows(self.plane, payload)
+        first_code, first_report = self.plane.run()
+        self.assertEqual(first_code, EXIT_RETIRED, first_report)
+
+        second_code, second_report = self.plane.run()
+
+        # The rows are gone with the bytes, so the second pass has nothing to select and says so.
+        self.assertEqual(second_code, EXIT_REFUSED, second_report)
+        self.assertIn("no ownership rows under", second_report)
+
+    def test_the_pointer_directed_path_wins_when_a_receipt_exists(self) -> None:
+        """The ladder is ordered: a receipted plane never takes the announced legacy path."""
+        payload = self.payload("both-paths")
+        entries = activate_with_ownership_rows(self.plane, payload)
+        self.plane.seal_active(entries)
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_RETIRED, report)
+        self.assertNotIn("legacy-unreceipted uninstall", report)
+        self.assertEqual(
+            "activation-receipt", self.plane.terminal_receipt()["body"]["prestate_evidence"]
+        )
+
+    def test_the_distribution_version_is_read_from_one_file_and_a_missing_one_refuses(self) -> None:
+        payload = self.payload("version-driver")
+        activate_with_ownership_rows(self.plane, payload)
+        scripts = self.temp / "no-driver" / "scripts"
+        scripts.mkdir(parents=True)
+        for name in ("distribution_activation_receipt.py", "install_skill_bundle.py"):
+            shutil.copy2(ROOT / "scripts" / name, scripts / name)
+
+        code, report = self.plane.run(scripts_dir=scripts)
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn(target.VERSION_DRIVER_NAME, report)
+        self.assertIn("could not name the version it retired", report)
+        self.assertTrue((self.plane.plane_root / "agents" / "sdlc-implementer.md").is_file())
+        # POSITIVE CONTROL: with the driver in place the same plane retires.
+        driver = scripts.parent / target.VERSION_DRIVER_NAME
+        driver.write_text(json.dumps({"current": "0.7.5"}), encoding="utf-8")
+        code_two, report_two = self.plane.run(scripts_dir=scripts)
+        self.assertEqual(code_two, EXIT_RETIRED, report_two)
+        document = json.loads(
+            sorted((self.plane.activation_root / "receipts").glob("*.json"))[0].read_text(encoding="utf-8")
+        )
+        self.assertEqual("0.7.5", document["body"]["resolved_version"])
+        # No git metadata beside that driver, so the commit is the explicit unknown.
+        self.assertEqual("unknown", document["body"]["checkout"]["commit"])
+
+
 # ---- refusals ------------------------------------------------------------------------------------
 
 
@@ -1140,13 +1545,21 @@ class Refusals(Harness):
         self.assertFalse((self.plane.activation_root / "journals").exists())
 
     def test_an_absent_receipt_refuses_by_name_rather_than_guessing_from_the_directory(self) -> None:
+        """No pointer AND no ownership document: the ladder runs out of rungs and says which ones.
+
+        The refusal names the pointer it looked for, the ownership document it looked for, and the
+        front door -- rather than reconstructing a candidate set from directory contents, which is the
+        guess this verb does not make.  A plane with ownership rows but no receipt is a DIFFERENT
+        state: it takes the announced legacy-unreceipted path, which `LegacyUnreceipted` covers.
+        """
         self.plant_owned()
 
         code, report = self.plane.run()
 
         self.assertEqual(code, EXIT_REFUSED, report)
-        self.assertIn("found no active distribution-activation receipt", report)
-        self.assertIn("nothing to reconstruct it from", report)
+        self.assertIn("found no activation receipt for claude/user", report)
+        self.assertIn("no installer ownership document", report)
+        self.assertIn("is the front door", report)
         self.assert_nothing_removed()
 
     def test_a_refusal_creates_no_directory_at_all_under_the_state_root(self) -> None:
@@ -1186,6 +1599,9 @@ class Refusals(Harness):
         self.plane.seal_active(
             [entry_record(row["entry_name"], None, prestate="owned", disposition="removed") for row in entries],
             operation="uninstall",
+            # A v2 retirement body carries the closed prestate-evidence discriminator; this one names
+            # the receipt it retired, which the fixture's single `derived-from` ancestor supplies.
+            prestate_evidence="activation-receipt",
             terminal_phase="retired",
         )
 
@@ -1242,7 +1658,7 @@ class Refusals(Harness):
         receipt = self.plane.seal_active(self.plant_owned())
         real = self.temp / "elsewhere-receipt.json"
         real.write_bytes(dar.canonical_bytes(receipt))
-        active = self.plane.activation_root / "active-receipt.json"
+        active = self.plane.pointer
         active.unlink()
         active.symlink_to(real)
 
@@ -1254,7 +1670,8 @@ class Refusals(Harness):
 
     def test_a_non_finite_number_in_the_receipt_is_refused_rather_than_overflowed(self) -> None:
         self.plant_owned()
-        active = self.plane.activation_root / "active-receipt.json"
+        active = self.plane.pointer
+        active.parent.mkdir(parents=True, exist_ok=True)
         # `1e400` never reaches `parse_constant`: json overflows it to inf inside the float parser.
         active.write_text('{"body": {"plan_sha256": 1e400}}', encoding="utf-8")
 
@@ -1345,9 +1762,7 @@ class RenderingAndDataLoss(Harness):
             [("archive-digest", "archive_sha256")],
         )
         self.assertEqual(
-            json.loads((self.plane.activation_root / "active-receipt.json").read_text(encoding="utf-8"))["body"][
-                "unknowns"
-            ][0]["detail"],
+            json.loads(self.plane.pointer.read_text(encoding="utf-8"))["body"]["unknowns"][0]["detail"],
             hostile,
         )
         # Control: the family refuses the same characters in an entry NAME, so the line above is the

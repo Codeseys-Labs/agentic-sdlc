@@ -564,6 +564,16 @@ class Plane:
 
     @property
     def pointer(self) -> Path:
+        """This plane's ONE pointer, at the KEYED path (agent, scope, root) names.
+
+        Spelled out rather than read from the writer: the filename IS the admission authority for
+        every later verb, so a fixture that asked the writer where it wrote would agree with any path.
+        """
+        return self.activation_dir / "active" / "claude" / "user.json"
+
+    @property
+    def legacy_pointer(self) -> Path:
+        """The pre-keyed spelling, which a mutating verb migrates and a read verb reports."""
         return self.activation_dir / "active-receipt.json"
 
     @property
@@ -1004,7 +1014,10 @@ class DurableCompleteExitZeroTest(Conformance):
         self.assertEqual("complete", body["effect_state"])
         self.assertEqual(terminal_phase, body["terminal_phase"])
         self.assertEqual([], body["unknowns"])
-        self.assertEqual("claude", body["host"])
+        # The plane is stated ONCE, inside the scope union: there is no body-level `host` in this
+        # generation, so a reader derives every display of it from `scope.agent`.
+        self.assertEqual({"agent": "claude", "kind": "user"}, body["scope"])
+        self.assertNotIn("host", body)
         self.assertIsNone(body["public_channel"])
         self.assertEqual("none", body["release_claim"])
         # The pointer is a COPY of a filed receipt, never a link, and the filed bytes are identical.
@@ -1167,7 +1180,7 @@ class CleanRefusalExitThreeTest(Conformance):
         update = plane.dispatch("sdlc", "update")
         self.assert_clean_refusal(plane, update, before, "no usable active distribution-activation receipt")
         uninstall = plane.dispatch("sdlc", "uninstall")
-        self.assert_clean_refusal(plane, uninstall, before, "no active distribution-activation receipt")
+        self.assert_clean_refusal(plane, uninstall, before, "no installer ownership document")
 
     def test_update_refuses_a_pointer_that_is_a_link_rather_than_following_it(self) -> None:
         plane = self.plane()
@@ -1179,7 +1192,7 @@ class CleanRefusalExitThreeTest(Conformance):
         plane.pointer.symlink_to(real)
         before = tree_hash(*plane.observed_roots())
         completed = plane.dispatch("sdlc", "update")
-        self.assert_clean_refusal(plane, completed, before, "active-receipt.json")
+        self.assert_clean_refusal(plane, completed, before, "user.json")
         self.assertTrue(plane.pointer.is_symlink(), "the link itself is preserved, never resolved away")
         # Positive control: the same bytes at a PHYSICAL pointer are admitted, so the refusal is
         # about the link and not about the document it names.

@@ -8,14 +8,31 @@ this file by absolute non-symlink path and enters ``main([])``; the integer this
 class, and a raise after import reads as exit 4 there because the module was already entered.  So
 every refusal here is a NAMED return, never an exception escaping to the caller.
 
-THE ONE SOURCE OF TRUTH
------------------------
-The ACTIVE ``distribution-activation@1`` receipt is the only statement of what this plane owns.  It
-is validated through the sibling-loaded ``distribution_activation_receipt.py`` before a single path
-is stat'ed, and its entry inventory is the ONLY candidate set for removal.  There is no wildcard, no
-``--all``, no purge, and no directory listing: a file this plane never recorded is not a candidate,
-and an absent or unsealed receipt is a named refusal rather than a guess reconstructed from
-directory contents.
+AN ORDERED ADMISSION LADDER, WITH EVERY RUNG NAMED
+--------------------------------------------------
+1. THE KEYED POINTER FOR THIS (AGENT, SCOPE, ROOT).  ``activation/active/<agent>/user.json`` -- or
+   ``.../project-<root-key>.json`` -- is this plane's one statement of what it owns, and THE FILENAME
+   IS THE ADMISSION AUTHORITY: it is compared against the pointed receipt's own ``scope`` on the kind,
+   agent, and root-key axes before a single path is stat'ed, so a hand-moved pointer refuses instead of
+   redirecting this removal at another agent's or another root's bytes.  The receipt is validated
+   through the sibling-loaded ``distribution_activation_receipt.py``, and its entry inventory is the
+   ONLY candidate set on this rung.  Both generations are readable: a ``@1`` receipt is admitted once,
+   as the outgoing document this retirement consumes, and the receipt this run seals is always ``@2``.
+   A pre-keyed ``activation/active-receipt.json`` is re-filed at the keyed path before the ladder reads
+   anything; both present is ``legacy-pointer-ambiguity``, refused by name.
+2. THIS SCOPE'S OWNERSHIP ROWS, ANNOUNCED AS A LEGACY-UNRECEIPTED RETIREMENT.  When no pointer exists
+   but the ownership document holds rows this scope's root selects, the candidate set is those rows,
+   the removal is the substrate's own ``transactional_delete`` (which proves and removes all three
+   publication modes, because a legacy plane's rows are honestly links on Unix), and the sealed
+   evidence carries ``prestate_evidence: "ledger"`` with NO ancestor -- there is no receipt to derive
+   from, and a fabricated one would forge the evidence this rung exists to admit the absence of.  The
+   rung exists because ``bundle install`` wrote rows for years without sealing anything, and a
+   repository root could be handed to it as a configured home, so those rows would otherwise be
+   selected by no verb at all.
+
+There is no wildcard, no ``--all``, no purge, and no directory listing on either rung: a file this
+plane never recorded is not a candidate, and with neither a pointer nor a row the run refuses by name
+rather than reconstructing a candidate set from directory contents.
 
 OWNERSHIP IS PROVED BEFORE EVERY DELETION
 -----------------------------------------
@@ -84,11 +101,21 @@ the retired receipt as the single required ``derived-from`` ancestor with
 ``expected_kind: distribution-activation``, which is literally true -- every payload fact in the
 terminal receipt is drawn from the receipt it retires -- and the test suite proves the emitted
 document validates through the family's own checker.
+
+On the ledger-directed rung there is no receipt to name at all, and the family's own
+``prestate_evidence: "ledger"`` variant makes that shape representable: ZERO ancestors, with the
+payload facts answered from what this run can read rather than inherited.  What it can read is the
+distribution's bump driver -- ``.version-bump.json``'s ``current`` field, recorded as
+``version_source: "checkout-tree"`` beside a ``checkout`` object -- so there is no archive to digest
+and ``archive_sha256`` is null as NOT-SUPPLIED rather than as an unknown.  ``checkout.dirty`` is
+always ``true`` there, and that is honesty rather than caution: the field means "this receipt does not
+assert the payload tree equals the commit it names", and nothing here compares a worktree to a commit.
 """
 from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import platform
 import re
@@ -126,12 +153,55 @@ HOST = "claude"
 #: Claude's configured root is the selected home plus ``.claude``.
 HOST_COLLECTION = ".claude"
 
+#: The two scope kinds of the receipt family's own union.  The scope decides three things and nothing
+#: else: which pointer filename admits this run, which root bounds the removal, and which scope the
+#: sealed retirement states.  Everything downstream -- classification, the removal walk, the journal
+#: -- is scope-agnostic, which is what makes the project arm a parameter rather than a second verb.
+SCOPE_USER = "user"
+SCOPE_PROJECT = "project"
+
 SUPPORTED_PLATFORM = "Linux"
+
+# ---- the pointer plane, re-expressed ---------------------------------------------------------------
+#
+# Re-expressed from ``distribution_activation_receipt`` rather than imported, because the sibling is
+# loaded by absolute path at RUN time and a Config property cannot wait for it.  A test pins this
+# helper against that module's own ``pointer_path`` for both scope kinds.
+ACTIVE_DIRECTORY = "active"
+USER_POINTER_NAME = "user.json"
+PROJECT_POINTER_PREFIX = "project-"
+POINTER_SUFFIX = ".json"
+#: The pre-keyed plane's single pointer name.  Only (claude, user) can ever have written it.
+LEGACY_ACTIVE_POINTER_NAME = "active-receipt.json"
+ROOT_KEY_CHARACTERS = 16
+
+#: The one authoritative file a ``checkout-tree`` version is read from: the bump driver's own current
+#: value.  A mid-bump tree whose sibling manifests disagree is a legitimate state here; that drift is
+#: the repository gate's business.
+VERSION_DRIVER_NAME = ".version-bump.json"
+VERSION_SOURCE_CHECKOUT = "checkout-tree"
+CHECKOUT_COMMIT_UNKNOWN = "unknown"
+_MAX_DRIVER_BYTES = 65536
+_MAX_GIT_FILE_BYTES = 4096
+
+
+def _pointer_path(activation_root: Path, agent: str, kind: str, root: str | None = None) -> Path:
+    """The ONE pointer path for one (agent, scope kind, resolved root)."""
+    if kind == SCOPE_USER:
+        return activation_root / ACTIVE_DIRECTORY / agent / USER_POINTER_NAME
+    if kind == SCOPE_PROJECT:
+        if not isinstance(root, str) or not root:
+            raise Refusal("a project-scope pointer is named by its resolved root, and none was supplied")
+        key = hashlib.sha256(root.encode("utf-8")).hexdigest()[:ROOT_KEY_CHARACTERS]
+        return activation_root / ACTIVE_DIRECTORY / agent / f"{PROJECT_POINTER_PREFIX}{key}{POINTER_SUFFIX}"
+    raise Refusal(f"{kind!r} is not one of this plane's scope kinds")
 
 #: Every character class is written out.  ``\\d`` and ``\\w`` admit Unicode, so an identity spelled
 #: with the Arabic-Indic ``٩`` would read as the same token while comparing unequal to it.
 _TOKEN = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+_VERSION = re.compile(r"[0-9A-Za-z]([0-9A-Za-z.+-]*[0-9A-Za-z])?\Z")
 _INSTANT = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
 
 #: The operations whose receipt describes a LIVE activation this verb can retire.  A receipt whose
@@ -257,14 +327,48 @@ class Config:
     stated_at: str | None = None
     emitting_plane: str = "ccodex-sdlc-uninstall"
     checkpoint: Callable[[str, dict[str, Any]], None] | None = None
+    #: Which scope this run retires.  The default is the operator's user plane, which is the only
+    #: scope today's grammar can select; the project arm is wired to a resolved root by its own wave,
+    #: and everything here already reads the boundary from ``boundary_home``.
+    scope_kind: str = SCOPE_USER
+    #: The resolved project root at project scope, and ``None`` at user scope.  It is the removal
+    #: boundary AND the value the pointer filename's key is derived from.
+    project_root: Path | None = None
+
+    @property
+    def boundary_home(self) -> Path:
+        """The ROOT this run's removal is bounded by: the configured home, or the project root.
+
+        One property, read by the plane root and by the installer configuration this module borrows,
+        because a removal bounded by one root while its ownership rows are selected against another
+        would be a boundary in name only.
+        """
+        if self.scope_kind == SCOPE_PROJECT:
+            if self.project_root is None:
+                raise Refusal("a project-scope retirement is bounded by its resolved root, and none was supplied")
+            return self.project_root
+        return self.home
 
     @property
     def plane_root(self) -> Path:
-        return self.home / HOST_COLLECTION
+        return self.boundary_home / HOST_COLLECTION
 
     @property
     def active_receipt_path(self) -> Path:
-        return self.activation_root / "active-receipt.json"
+        """This plane's ONE pointer, at the keyed path (agent, scope kind, root) names."""
+        root = str(self.project_root) if self.scope_kind == SCOPE_PROJECT and self.project_root else None
+        return _pointer_path(self.activation_root, self.host, self.scope_kind, root)
+
+    @property
+    def legacy_active_receipt_path(self) -> Path:
+        """Where the pre-keyed plane wrote its single pointer.  Only (claude, user) could have."""
+        return self.activation_root / LEGACY_ACTIVE_POINTER_NAME
+
+    def scope_object(self) -> dict[str, Any]:
+        """The receipt body's closed scope union for this run: EXACT key set per kind."""
+        if self.scope_kind == SCOPE_PROJECT:
+            return {"agent": self.host, "kind": SCOPE_PROJECT, "root": str(self.boundary_home)}
+        return {"agent": self.host, "kind": SCOPE_USER}
 
     @property
     def receipts_dir(self) -> Path:
@@ -394,6 +498,119 @@ def admit_active_receipt(dar: ModuleType, document: dict[str, Any], path: Path) 
     return receipt
 
 
+def migrate_legacy_pointer(bundle: ModuleType, config: Config) -> str | None:
+    """Re-file the pre-keyed pointer at its keyed path, BEFORE this run's own admission logic.
+
+    Only (claude, user) can ever have written ``activation/active-receipt.json``, because every writer
+    of it spelled the scope ``claude-home``.  At project scope there is nothing to migrate: that
+    pointer is a statement about the user plane, and this run does not touch it.
+
+    BOTH POINTERS PRESENT IS A REFUSAL, not a preference.  Choosing one would be this module deciding
+    which of two statements about one plane is current -- the guess a pointer exists to remove -- and
+    the refusal names both paths and the remedy.  It is also how the migration's own crash window
+    resolves: the keyed pointer is written durably before the legacy one is unlinked, so an
+    interruption leaves both present and the next verb refuses by name instead of acting.
+    """
+    if config.scope_kind != SCOPE_USER:
+        return None
+    legacy = config.legacy_active_receipt_path
+    keyed = config.active_receipt_path
+    try:
+        item = legacy.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise Refusal(
+            f"the legacy active pointer {str(legacy)!r} cannot be inspected, so whether this plane "
+            f"already states an activation is unknown: {exc}"
+        ) from exc
+    if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
+        raise Refusal(
+            f"the legacy active pointer {str(legacy)!r} is a link or not a regular file; a lifecycle "
+            "plane resolves a fixed path, and a redirection there is state nobody recorded"
+        )
+    if bundle.path_present(keyed):
+        raise Refusal(
+            f"legacy-pointer-ambiguity: this plane carries both the legacy pointer {str(legacy)!r} and "
+            f"the keyed pointer {str(keyed)!r}. Two statements of what one plane owns is an ambiguity "
+            "this verb refuses rather than resolves; remove the one that is not current and run this "
+            "verb again. Nothing was removed"
+        )
+    raw = legacy.read_bytes()
+    bundle.durable_mkdir(keyed.parent)
+    descriptor = os.open(keyed, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(descriptor, raw)
+        bundle.flush_descriptor(descriptor, full=True)
+    finally:
+        os.close(descriptor)
+    bundle.fsync_directory(keyed.parent)
+    try:
+        legacy.unlink()
+        bundle.fsync_directory(legacy.parent)
+    except OSError as exc:
+        raise Refusal(
+            f"the legacy active pointer {str(legacy)!r} was copied to {str(keyed)!r} but could not be "
+            f"removed, so this plane now states its activation twice: {exc}. Remove the legacy path by "
+            "hand; nothing was removed"
+        ) from exc
+    return (
+        f"migrated the legacy active pointer {dar_escape(str(legacy))} to the keyed path "
+        f"{dar_escape(str(keyed))} (one pointer per agent, scope, and root)"
+    )
+
+
+def admit_pointer_agreement(dar: ModuleType, body: dict[str, Any], path: Path) -> None:
+    """Refuse a pointer whose FILENAME disagrees with the receipt it points at.
+
+    The filename is the admission authority, so the agreement is checked before a single destination is
+    classified: a hand-moved pointer must not redirect this removal at another agent's or another
+    root's bytes.  A v1 receipt carries no scope union to compare against, and the one pointer name it
+    could have been filed under fixes its key already.
+    """
+    if not isinstance(body.get("scope"), dict):
+        return
+    disagreements = dar.pointer_disagreements(path, body)
+    if disagreements:
+        raise Refusal(
+            "pointer-receipt-disagreement: "
+            + "; ".join(dar_escape(str(reason)) for reason in disagreements)
+            + ". Nothing was removed"
+        )
+
+
+def admit_retired_scope(dar: ModuleType, body: dict[str, Any], config: Config, path: Path) -> None:
+    """Admit the retired receipt's scope, in whichever generation's spelling it carries.
+
+    A v2 receipt states the closed union and must name exactly this run's (agent, kind, root).  A v1
+    receipt states the token ``claude-home``, which only (claude, user) could have written, and it is
+    admitted at user scope as the outgoing document this retirement consumes -- once.  The receipt
+    this run seals is v2 either way.
+    """
+    scope = body.get("scope")
+    if isinstance(scope, dict):
+        expected = config.scope_object()
+        if scope != expected:
+            raise Refusal(
+                f"the active receipt {str(path)!r} records scope {scope!r}, not {expected!r}; a "
+                "receipt about another scope, agent, or root describes a plane this run never bounded"
+            )
+        return
+    legacy = body.get("activation_scope")
+    if (
+        config.scope_kind == SCOPE_USER
+        and legacy == "claude-home"
+        and body.get("schema_version") == dar.BODY_SCHEMA_V1
+    ):
+        return
+    raise Refusal(
+        f"the active receipt {str(path)!r} states neither this run's scope union "
+        f"({config.scope_object()!r}) nor the historical 'claude-home' scope of a "
+        f"{dar.BODY_SCHEMA_V1!r} document; a receipt about another scope describes a plane this run "
+        "never bounded"
+    )
+
+
 def admit_retirable(dar: ModuleType, receipt: dict[str, Any], config: Config, path: Path) -> dict[str, Any]:
     """Admit only a validated receipt that describes a LIVE activation of THIS host plane."""
     body = receipt["body"]
@@ -404,10 +621,14 @@ def admit_retirable(dar: ModuleType, receipt: dict[str, Any], config: Config, pa
             f"{list(RETIRABLE_OPERATIONS)} describe a live activation, and retiring a retirement "
             "would delete a second time on the strength of a record that says the entries are gone"
         )
-    if body["host"] != config.host:
+    # WHICH PLANE, ONCE. A v2 receipt states it as `scope.agent`, and `admit_retired_scope` compares
+    # the whole union -- agent included -- against this run's own. A v1 receipt states it as a
+    # separate `host` token, which is the only generation that has one to check.
+    if body.get("schema_version") == dar.BODY_SCHEMA_V1 and body.get("host") != config.host:
         raise Refusal(
-            f"the active receipt {str(path)!r} records host {dar.escape_display(str(body['host']))!r}, "
-            f"not {config.host!r}; a receipt names the one host plane it observed"
+            f"the active receipt {str(path)!r} records host "
+            f"{dar.escape_display(str(body.get('host')))!r}, not {config.host!r}; a receipt names the "
+            "one host plane it observed"
         )
     phase = body["terminal_phase"]
     if phase not in RETIRABLE_PHASES:
@@ -421,6 +642,7 @@ def admit_retirable(dar: ModuleType, receipt: dict[str, Any], config: Config, pa
             f"the active receipt {str(path)!r} carries no entry inventory, and the inventory is the "
             "only candidate set a removal may draw from"
         )
+    admit_retired_scope(dar, body, config, path)
     return body
 
 
@@ -565,15 +787,20 @@ def build_plan(config: Config, body: dict[str, Any], observations: list[dict[str
     remove.sort(key=lambda row: (row["entry_name"], row["destination"]))
     preserve.sort(key=lambda row: (row["entry_name"], row["reason_code"]))
     plan = {
-        "activation_scope": body["activation_scope"],
         "candidate_id": body["candidate_id"],
-        "host": body["host"],
+        # This run's own selector, not a field read back out of the retired body: the receipt states
+        # the plane once, in its scope union, and `admit_retired_scope` has already proved the two
+        # agree before this plan is built.
+        "host": config.host,
         "plane_root": str(config.plane_root),
         "preserve": preserve,
         "remove": remove,
         "resolved_version": body["resolved_version"],
         "retired_receipt_id": None,
         "schema_version": PLAN_SCHEMA,
+        # The plan states the scope the way the receipt does, so the intent and the evidence say it
+        # identically; the plan is what the sealed receipt's ``plan_sha256`` binds.
+        "scope": config.scope_object(),
     }
     return plan
 
@@ -945,27 +1172,23 @@ def resolved_instant(config: Config) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def build_receipt(
-    dar: ModuleType,
-    config: Config,
-    body: dict[str, Any],
-    retired_id: str,
-    observations: list[dict[str, Any]],
-    removed: set[str],
-    plan_sha256: str,
-    journal_sha256: str | None,
-    effect_state: str,
-    terminal_phase: str,
-) -> dict[str, Any]:
-    """Assemble the one unsealed terminal observation. Every list is built ABOVE the literal.
+def retirement_inventory(
+    dar: ModuleType, observations: list[dict[str, Any]], removed: set[str]
+) -> list[dict[str, Any]]:
+    """The retirement's own inventory rows, built ABOVE any literal that reports them.
 
     A dict literal that read ``entries`` before the loop that fills it would seal a receipt whose
     inventory is empty and whose own checks would then pass, because the check reads the list that
     lost the records.
+
+    ``mode`` records what was PUBLISHED at each destination when this run can name it -- the ledger
+    row's own mode on the ledger-directed path -- and null where it cannot.  A removal publishes
+    nothing, so a null there is not-supplied rather than supplied-but-missing.
     """
     entries: list[dict[str, Any]] = []
     for item in observations:
         name = item["entry_name"]
+        mode = item.get("mode")
         if name in removed:
             # ``removed`` leaves nothing to digest, and the family refuses a digest beside it.
             entries.append(
@@ -973,59 +1196,108 @@ def build_receipt(
                     "content_sha256": None,
                     "disposition": "removed",
                     "entry_name": name,
+                    "mode": mode,
                     "prestate": "owned",
                 }
             )
             continue
-        prestate = CLASS_PRESTATE[item["class"]]
+        prestate = item.get("prestate") or CLASS_PRESTATE[item["class"]]
         content = item["current_sha256"] if dar.content_bearing(prestate, "preserved") else None
         entries.append(
             {
                 "content_sha256": content,
                 "disposition": "preserved",
                 "entry_name": name,
+                "mode": mode,
                 "prestate": prestate,
             }
         )
     entries.sort(key=lambda row: str(row["entry_name"]))
+    return entries
+
+
+def build_receipt(
+    dar: ModuleType,
+    config: Config,
+    payload: dict[str, Any],
+    retired_id: str | None,
+    observations: list[dict[str, Any]],
+    removed: set[str],
+    plan_sha256: str,
+    journal_sha256: str | None,
+    effect_state: str,
+    terminal_phase: str,
+    *,
+    prestate_evidence: str,
+    receipt_id: str,
+) -> dict[str, Any]:
+    """Assemble the one unsealed terminal observation, for EITHER prestate evidence.
+
+    ``payload`` carries the facts about what was retired -- candidate identity, archive digest,
+    resolved version and its source, and an optional checkout object.  On the receipt-directed path
+    those are the retired receipt's own; on the ledger-directed path they are what this run could
+    observe about the distribution it is retiring from, because no activation receipt exists to
+    inherit them from.
+
+    ``prestate_evidence`` selects the ancestor shape, and the two are checked against each other by
+    the receipt family: receipt evidence NAMES the receipt it retires, and ledger evidence names none.
+    """
+    entries = retirement_inventory(dar, observations, removed)
     observation = {
-        "activation_scope": body["activation_scope"],
-        "archive_sha256": body["archive_sha256"],
-        "candidate_id": body["candidate_id"],
+        "archive_sha256": payload["archive_sha256"],
+        "candidate_id": payload["candidate_id"],
         "effect_state": effect_state,
         "entries": entries,
-        "host": body["host"],
         "journal_sha256": journal_sha256,
         "operation": "uninstall",
         "plan_sha256": plan_sha256,
+        "prestate_evidence": prestate_evidence,
         "public_channel": None,
         "record_sha256": dar.UNSEALED,
         "release_claim": "none",
         # An uninstall requests no version. Null is the statement "no version was requested", which is
         # not the "unknown" a null digest means.
         "requested_version": None,
-        "resolved_version": body["resolved_version"],
+        "resolved_version": payload["resolved_version"],
         "schema_version": dar.BODY_SCHEMA,
+        "scope": config.scope_object(),
         "terminal_phase": terminal_phase,
         "unknowns": [],
-        "version_source": body["version_source"],
+        "version_source": payload["version_source"],
     }
-    return {
-        "ancestors": [
+    if payload.get("checkout") is not None:
+        observation["checkout"] = payload["checkout"]
+    ancestors: list[dict[str, Any]] = []
+    if retired_id is not None:
+        ancestors.append(
             {
                 "expected_kind": dar.RECEIPT_KIND,
                 "receipt_id": retired_id,
                 "relation": "derived-from",
             }
-        ],
+        )
+    return {
+        "ancestors": ancestors,
         "body": observation,
         "content_digest": dar.UNSEALED,
         "emitting_plane": config.emitting_plane,
-        "receipt_id": terminal_receipt_id(retired_id),
+        "receipt_id": receipt_id,
         "receipt_kind": dar.RECEIPT_KIND,
         "schema": dar.ENVELOPE_SCHEMA,
         "stated_at": resolved_instant(config),
     }
+
+
+def retired_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """The payload facts a receipt-directed retirement inherits from the receipt it retires."""
+    payload = {
+        "archive_sha256": body["archive_sha256"],
+        "candidate_id": body["candidate_id"],
+        "resolved_version": body["resolved_version"],
+        "version_source": body["version_source"],
+        "checkout": body.get("checkout"),
+    }
+    return payload
 
 
 def seal_receipt(dar: ModuleType, unsealed: dict[str, Any]) -> dict[str, Any]:
@@ -1057,8 +1329,8 @@ def write_terminal_receipt(bundle: ModuleType, dar: ModuleType, path: Path, rece
 
 def render_report(
     state: str,
-    retired_id: str,
-    body: dict[str, Any],
+    retired_label: str,
+    facts: dict[str, Any],
     observations: list[dict[str, Any]],
     removed: set[str],
     outstanding: set[str],
@@ -1068,12 +1340,20 @@ def render_report(
     terminal_phase: str,
     attention: list[str],
 ) -> list[str]:
-    """One offline report: removed, preserved, attention. Every artifact-derived value is escaped."""
-    lines = [
-        f"ccodex sdlc uninstall: {state}",
-        f"retired activation: {dar_escape(retired_id)} (host {dar_escape(body['host'])},"
-        f" scope {dar_escape(body['activation_scope'])}, resolved {dar_escape(body['resolved_version'])})",
-    ]
+    """One offline report: removed, preserved, attention. Every artifact-derived value is escaped.
+
+    ``facts`` is what this run can SAY about the plane it retired -- host, scope, resolved version, the
+    unknowns it inherited, and the announcement a legacy-unreceipted retirement owes.  It is passed
+    explicitly rather than read out of a retired receipt body, because the ledger-directed path has no
+    such body: its prestate evidence is the ownership rows themselves.
+    """
+    lines = [f"ccodex sdlc uninstall: {state}"]
+    for announcement in facts.get("announcements", []):
+        lines.append(str(announcement))
+    lines.append(
+        f"retired activation: {dar_escape(retired_label)} (host {dar_escape(facts['host'])},"
+        f" scope {dar_escape(facts['scope'])}, resolved {dar_escape(facts['resolved_version'])})"
+    )
     for item in sorted(observations, key=lambda row: str(row["entry_name"])):
         name = dar_escape(item["entry_name"])
         if item["entry_name"] in outstanding:
@@ -1086,10 +1366,13 @@ def render_report(
         elif item["class"] == "absent":
             lines.append(f"absent: {name} ({CLASS_REASON['absent']})")
         else:
-            lines.append(f"preserved: {name} ({item['class']}: {CLASS_REASON[item['class']]})")
+            reason = {**CLASS_REASON, **LEDGER_CLASS_REASON}.get(
+                item["class"], "this class carries no recorded reason"
+            )
+            lines.append(f"preserved: {name} ({item['class']}: {reason})")
     for note in attention:
         lines.append(f"attention: {note}")
-    for record in body.get("unknowns", []):
+    for record in facts.get("unknowns", []):
         if isinstance(record, dict):
             # `detail` is free text observed in the field, so it reaches this line ESCAPED: a bare
             # newline would forge a second line of this command's own output, a carriage return would
@@ -1134,6 +1417,17 @@ def classify_all(bundle: ModuleType, config: Config, body: dict[str, Any]) -> li
 def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, bool]) -> tuple[int, list[str]]:
     """Admit, plan, remove, then record. Returns the exit class and the report lines.
 
+    ADMISSION IS AN ORDERED LADDER, and every rung is named.  The pointer for THIS (agent, scope, root)
+    is preferred: its receipt's inventory is the candidate set, and the pointer filename is checked
+    against that receipt's own scope before anything is classified.  When no pointer exists but this
+    scope's ownership rows do, the run takes the LEDGER-DIRECTED path instead, announced as a
+    legacy-unreceipted retirement and sealing a ``prestate_evidence: "ledger"`` receipt.  That second
+    rung exists because "a receipted plane is the only plane" is factually false: ``bundle install``
+    wrote ownership rows for years without sealing anything, and a repository root could be handed to
+    it as a configured home, so those rows would otherwise be selected by NO verb -- the write-only
+    record this program exists to stop leaving behind.  Neither rung guesses: with no pointer and no
+    rows, the run refuses by name and points at ``install``.
+
     ``ledger['moved']`` is set the instant the first destination leaves the plane, so a caller that
     catches an interrupt escaping this function can classify it honestly instead of guessing.
     """
@@ -1143,8 +1437,30 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
             f"{dar_escape(config.platform_system)}; the candidate plane it retires is Linux x64 only"
         )
 
+    # The legacy pointer is re-filed at its keyed path BEFORE the ladder below reads anything, so the
+    # admission sees one plane with one pointer.  A refusal here removed nothing.
+    announcement = migrate_legacy_pointer(bundle, config)
+    announcements = [announcement] if announcement is not None else []
+
+    if not bundle.path_present(config.active_receipt_path):
+        return run_ledger_directed(bundle, dar, config, ledger, announcements)
+    return run_receipt_directed(bundle, dar, config, ledger, announcements)
+
+
+def run_receipt_directed(
+    bundle: ModuleType,
+    dar: ModuleType,
+    config: Config,
+    ledger: dict[str, bool],
+    announcements: list[str],
+) -> tuple[int, list[str]]:
+    """The pointer's own receipt is the candidate set: today's proven path, sealing a v2 receipt."""
     receipt_document = read_receipt_document(dar, config.active_receipt_path, "distribution-activation receipt")
     validated = admit_active_receipt(dar, receipt_document, config.active_receipt_path)
+    # THE FILENAME IS THE ADMISSION AUTHORITY, so its agreement with the receipt it points at is the
+    # first thing checked: a pointer that does not describe this plane is refused as a pointer
+    # disagreement, before the scope admission below asks whether the receipt matches THIS run.
+    admit_pointer_agreement(dar, validated["body"], config.active_receipt_path)
     body = admit_retirable(dar, validated, config, config.active_receipt_path)
     retired_id = validated["receipt_id"]
     if not isinstance(retired_id, str) or not _TOKEN.match(retired_id):
@@ -1285,7 +1601,7 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
         unsealed = build_receipt(
             dar,
             config,
-            body,
+            retired_payload(body),
             retired_id,
             observations,
             removed,
@@ -1293,6 +1609,11 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
             journal_sha256,
             effect_state,
             terminal_phase,
+            # The retired receipt IS this retirement's prestate evidence, so the family requires
+            # exactly one `derived-from` ancestor naming it -- which `build_receipt` writes from
+            # `retired_id`.
+            prestate_evidence="activation-receipt",
+            receipt_id=receipt_id,
         )
         write_terminal_receipt(bundle, dar, receipt_path, seal_receipt(dar, unsealed))
         written = receipt_path
@@ -1304,7 +1625,13 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
     return exit_class, render_report(
         state,
         retired_id,
-        body,
+        {
+            "announcements": announcements,
+            "host": config.host,
+            "resolved_version": body["resolved_version"],
+            "scope": scope_display(config),
+            "unknowns": body.get("unknowns", []),
+        },
         observations,
         removed,
         outstanding,
@@ -1314,6 +1641,478 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
         terminal_phase,
         attention,
     )
+
+
+def scope_display(config: Config) -> str:
+    """One display string for this run's scope, DERIVED from the union and never stored beside it."""
+    if config.scope_kind == SCOPE_PROJECT:
+        return f"{SCOPE_PROJECT}:{config.boundary_home}"
+    return SCOPE_USER
+
+
+# ---- the ledger-directed path: a legacy-unreceipted plane, retired and then receipted --------------
+
+#: The one line every ledger-directed run prints. It is an ANNOUNCEMENT, not a warning: the removal is
+#: bounded by the same four controls the shipped ``bundle uninstall`` has always used, and the
+#: difference an operator must know is which evidence authorised it.
+LEDGER_ANNOUNCEMENT = "legacy-unreceipted uninstall (no activation receipt for {agent}/{scope})"
+
+#: The classes a ledger row can take. Each maps onto the receipt inventory's own prestates through
+#: ``CLASS_PRESTATE`` above, so the sealed evidence uses one vocabulary for both paths.
+#: Which receipt prestate each ledger class maps onto. Separate from ``CLASS_PRESTATE`` because these
+#: are a DIFFERENT classification -- the ownership row's own facts rather than a receipt inventory's --
+#: and collapsing the two tables would let a class from one path be read through the other's rules.
+LEDGER_CLASS_PRESTATE = {
+    "owned-exact": "owned",
+    "absent": "absent",
+    "modified-content": "modified",
+    "kept-adopted": "foreign",
+    "unsafe-collection": "foreign",
+}
+LEDGER_CLASS_REASON = {
+    "owned-exact": "the ownership row's recorded bytes are still the bytes on disk",
+    "absent": "the ownership row records this destination and nothing is there",
+    "modified-content": (
+        "the bytes at this destination are no longer the bytes the ownership row records, so this "
+        "lifecycle cannot prove it still owns them"
+    ),
+    "kept-adopted": (
+        "the ownership row was adopted from a pre-existing entry and is marked unremovable, so the "
+        "bytes are preserved exactly as the shipped uninstall preserves them"
+    ),
+    "unsafe-collection": (
+        "the collection directory between the plane root and this destination is not one this "
+        "lifecycle can prove it stays inside, so nothing here is touched"
+    ),
+}
+
+
+def ledger_rows(bundle: ModuleType, config: Config, installer_config: Any, state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Select the ownership rows THIS scope's retirement may consider, and classify each one.
+
+    THE FOUR CONTROLS ARE THE SHIPPED ONES, borrowed rather than restated: the row names this agent,
+    its destination is the one THIS configured root would hold (``destination_is_configured``, which is
+    what makes the scope's root the removal boundary), the live bytes still match the row
+    (``entry_matches_record``, the whole ownership test), and an adopted unremovable row is kept. A row
+    for another home or another agent is retained and left unselected, never reinterpreted.
+    """
+    rows: list[dict[str, Any]] = []
+    for key in sorted(state["entries"]):
+        record = state["entries"].get(key)
+        if not isinstance(record, dict) or record.get("agent") != config.host:
+            continue
+        if not bundle.destination_is_configured(key, record, installer_config):
+            continue
+        destination = Path(key)
+        name = ledger_entry_name(config, destination)
+        if name is None:
+            continue
+        try:
+            bundle.assert_safe_collection(bundle.record_entry(record, key), destination, installer_config)
+        except Exception:  # noqa: BLE001 - an unprovable collection is preserved and named, never read
+            rows.append(_ledger_row(name, destination, record, "unsafe-collection", None))
+            continue
+        if not bundle.path_present(destination):
+            rows.append(_ledger_row(name, destination, record, "absent", None))
+            continue
+        if not bundle.entry_matches_record(destination, record):
+            rows.append(_ledger_row(name, destination, record, "modified-content", safe_digest(bundle, destination)))
+            continue
+        if record.get("removable") is False:
+            rows.append(_ledger_row(name, destination, record, "kept-adopted", safe_digest(bundle, destination)))
+            continue
+        rows.append(_ledger_row(name, destination, record, "owned-exact", safe_digest(bundle, destination)))
+    return rows
+
+
+def _ledger_row(
+    name: str, destination: Path, record: dict[str, Any], classification: str, current: str | None
+) -> dict[str, Any]:
+    """One classified ledger row, in the same observation shape the receipt-directed path produces."""
+    return {
+        "class": classification,
+        "current_sha256": current,
+        "destination": destination,
+        "entry_name": name,
+        # The prestate this class maps onto, carried explicitly: this path's classification is its own,
+        # and reading it through the receipt-directed table would apply another path's rules.
+        "prestate": LEDGER_CLASS_PRESTATE[classification],
+        # The row's OWN mode, which is the fact the receipt's per-row mode exists to carry: the shipped
+        # `bundle install` publishes links on Unix, so a legacy plane's rows are honestly not copies.
+        "mode": record.get("mode") if record.get("mode") in ("copy", "junction", "link") else None,
+        "record": record,
+    }
+
+
+def ledger_entry_name(config: Config, destination: Path) -> str | None:
+    """The receipt inventory's ``entry_name`` for one ledger destination, or None if it is not inside.
+
+    A destination the plane root does not contain is not this scope's to name, and a name the receipt
+    family would refuse is not one this run can record -- either way the row is left unselected rather
+    than renamed into something the inventory will accept.
+    """
+    try:
+        relative = destination.relative_to(config.plane_root).as_posix()
+    except ValueError:
+        return None
+    if not relative or ".." in relative.split("/") or len(relative) > 256:
+        return None
+    if not all(character.isalnum() or character in "._/-" for character in relative):
+        return None
+    return relative
+
+
+def observe_distribution(config: Config) -> tuple[str, dict[str, Any]]:
+    """What this run can honestly say about the distribution a ledger retirement is running from.
+
+    A ledger-directed retirement has NO acquisition receipt and no activation receipt to inherit a
+    payload identity from, so the receipt it seals must answer those fields from what it can read here.
+    Exactly one file answers the version -- ``.version-bump.json``'s own ``current``, the bump driver --
+    and the checkout object answers the commit when git METADATA is readable, never by spawning git.
+
+    ``dirty`` IS ALWAYS TRUE ON THIS PATH, and the reason is honesty rather than caution: the field
+    means "this receipt does not assert the payload tree equals the commit it names", and nothing in
+    this module compares a worktree against a commit, so it may not claim the tree was clean. A run
+    that does prove it may record False.
+    """
+    root = config.scripts_dir.parent
+    driver = root / VERSION_DRIVER_NAME
+    try:
+        raw = driver.read_bytes()[: _MAX_DRIVER_BYTES + 1]
+    except OSError as exc:
+        raise Refusal(
+            f"the distribution root {str(root)!r} carries no readable {VERSION_DRIVER_NAME}, so a "
+            f"retirement receipt could not name the version it retired: {exc}. Nothing was removed"
+        ) from exc
+    if len(raw) > _MAX_DRIVER_BYTES:
+        raise Refusal(
+            f"the version driver {str(driver)!r} is larger than {_MAX_DRIVER_BYTES} bytes, so it is "
+            "not the document this plane reads. Nothing was removed"
+        )
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise Refusal(
+            f"the version driver {str(driver)!r} is not one readable JSON object: {exc}. Nothing was "
+            "removed"
+        ) from exc
+    current = document.get("current") if isinstance(document, dict) else None
+    if not isinstance(current, str) or not current or len(current) > 64 or not _VERSION.match(current):
+        raise Refusal(
+            f"the version driver {str(driver)!r} states no admissible current version, so a retirement "
+            "receipt could not name the version it retired. Nothing was removed"
+        )
+    return current, {"commit": observe_commit(root), "dirty": True}
+
+
+def observe_commit(root: Path) -> str:
+    """The distribution's own commit, read from git METADATA, or the explicit ``unknown``.
+
+    No ``git`` process is spawned, ever: this is a lifecycle verb, and shelling out to resolve a commit
+    would make an ambient executable part of what a receipt asserts. One level of loose-ref
+    indirection is followed; a packed ref, an unreadable file, or any other shape answers ``unknown``,
+    which is a statement the family admits rather than a plausible-looking value.
+    """
+    metadata = root / ".git"
+    try:
+        if metadata.is_file():
+            line = metadata.read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
+            if not line.startswith("gitdir:"):
+                return CHECKOUT_COMMIT_UNKNOWN
+            target = Path(line.split(":", 1)[1].strip())
+            metadata = target if target.is_absolute() else (root / target)
+        if not metadata.is_dir():
+            return CHECKOUT_COMMIT_UNKNOWN
+        head = (metadata / "HEAD").read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
+        if _COMMIT.match(head):
+            return head
+        if not head.startswith("ref:"):
+            return CHECKOUT_COMMIT_UNKNOWN
+        reference = head.split(":", 1)[1].strip()
+        if not reference or ".." in reference.split("/"):
+            return CHECKOUT_COMMIT_UNKNOWN
+        resolved = (metadata / reference).read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
+        return resolved if _COMMIT.match(resolved) else CHECKOUT_COMMIT_UNKNOWN
+    except (OSError, ValueError):
+        return CHECKOUT_COMMIT_UNKNOWN
+
+
+def run_ledger_directed(
+    bundle: ModuleType,
+    dar: ModuleType,
+    config: Config,
+    ledger: dict[str, bool],
+    announcements: list[str],
+) -> tuple[int, list[str]]:
+    """Retire a plane whose ownership rows exist and whose activation was never receipted.
+
+    The candidate set is the ownership rows this scope's boundary selects, and the removal itself is
+    the shipped ``transactional_delete`` -- not this module's copy-plane quarantine walk -- because a
+    legacy plane's rows are honestly links on Unix and only the substrate's own primitive proves and
+    removes all three publication modes. Every removal therefore retires its row in the same armed
+    transition that moves the bytes, which is what keeps the ledger from outliving the plane.
+
+    What this path does NOT do: it never adopts, repairs, or reinterprets a row, it removes nothing
+    outside the selected root, and it seals its evidence as ``prestate_evidence: "ledger"`` with no
+    ancestor -- because there is no receipt to derive from, and naming one would forge the very
+    evidence this path exists to admit the absence of.
+    """
+    installer_config = bundle_config(bundle, config)
+    # AN ABSENT OWNERSHIP DOCUMENT REFUSES BEFORE ANYTHING IS CREATED. Taking the lock would durably
+    # create the state directory, and a run with no receipt and no rows must leave the state root
+    # exactly as it found it -- the same "a refusal creates no directory" property the receipt-directed
+    # path has. With no document there are no rows to select, so the check costs nothing and the
+    # refusal is the honest one.
+    if not bundle.path_present(installer_config.state_path):
+        raise Refusal(
+            f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
+            f" at {str(config.active_receipt_path)!r} and no installer ownership document at"
+            f" {str(installer_config.state_path)!r}; there is nothing to retire, and"
+            " `ccodex sdlc install --host claude` is the front door for a first activation"
+        )
+    resolved_version, checkout = observe_distribution(config)
+    announcement = LEDGER_ANNOUNCEMENT.format(agent=config.host, scope=config.scope_kind)
+
+    removed: set[str] = set()
+    outstanding: set[str] = set()
+    attention: list[str] = []
+    unknown: str | None = None
+
+    with bundle.installer_lock(installer_config):
+        state = admit_ownership_state(bundle, installer_config)
+        rows = ledger_rows(bundle, config, installer_config, state)
+        if not rows:
+            raise Refusal(
+                f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
+                f" at {str(config.active_receipt_path)!r} and no ownership rows under"
+                f" {str(config.plane_root)!r}; there is nothing to retire, and"
+                " `ccodex sdlc install --host claude` is the front door for a first activation"
+            )
+        removable = [row for row in rows if row["class"] == "owned-exact"]
+        plan = ledger_plan(config, rows, resolved_version)
+        plan_sha256 = digest_bytes(dar.canonical_bytes(plan))
+        receipt_id = ledger_receipt_id(config, plan_sha256)
+        receipt_path = config.receipts_dir / f"{receipt_id}.json"
+        journal_path = config.journals_dir / f"{receipt_id}.json"
+        if bundle.path_present(receipt_path):
+            raise Refusal(
+                f"this legacy-unreceipted retirement already carries the terminal receipt"
+                f" {str(receipt_path)!r}; a second retirement of one assessed plane is refused rather"
+                " than repeated"
+            )
+        journal = Journal(
+            bundle,
+            journal_path,
+            {
+                "attention": [],
+                "completed": [],
+                "host": config.host,
+                "pending": None,
+                "phase": "planned",
+                "plan": plan,
+                "plan_sha256": plan_sha256,
+                "plane_root": str(config.plane_root),
+                "receipt_id": receipt_id,
+                "retired_receipt_id": None,
+                "schema_version": JOURNAL_SCHEMA,
+            },
+        )
+        journal.write("planned", before_any_effect=True)
+        for row in rows:
+            if row["class"] == "absent":
+                # The shipped uninstall drops an ownership row whose destination is already gone, and
+                # leaving it would make the very next status report an owned-entry conflict.
+                try:
+                    bundle.persist_state(
+                        installer_config, state, bundle.state_without_entry(state, str(row["destination"]))
+                    )
+                except Exception as exc:  # noqa: BLE001 - a row this run could not retire is named
+                    attention.append(
+                        f"the ownership row for {dar_escape(row['entry_name'])} names an absent "
+                        f"destination and could not be retired: {exc!r}"
+                    )
+                continue
+            if row["class"] != "owned-exact":
+                # Named by the report's own preserved line, from the same reason table; appending it
+                # here too would report one preservation twice.
+                continue
+            journal.document["pending"] = {
+                "container": "",
+                "destination": str(row["destination"]),
+                "entry_name": row["entry_name"],
+                "expected_sha256": row["current_sha256"],
+                "payload": "",
+            }
+            journal.write("armed", before_any_effect=not ledger["moved"])
+            try:
+                bundle.transactional_delete(row["destination"], installer_config, state, row["record"])
+            except BaseException as exc:  # noqa: BLE001 - the ONE fact that classifies is what moved
+                gone = not bundle.path_present(row["destination"])
+                journal.document["attention"].append(
+                    {"entry_name": row["entry_name"], "reason": f"{exc!r}", "destination_absent": gone}
+                )
+                if gone:
+                    # The destination LEFT the plane and this run cannot prove where it ended up. The
+                    # installer's own armed slot is the recovery evidence; the doubt belongs in the
+                    # effect state, never in a claim that the entry was preserved.
+                    ledger["moved"] = True
+                    removed.add(row["entry_name"])
+                    outstanding.add(row["entry_name"])
+                    unknown = (
+                        f"the removal of {dar_escape(row['entry_name'])} left the plane before it "
+                        f"settled, so its effect is unknown: {exc!r}"
+                    )
+                    journal.write("unknown")
+                    break
+                attention.append(
+                    f"the entry {dar_escape(row['entry_name'])} could not be removed, so it was "
+                    f"preserved untouched: {exc!r}"
+                )
+                journal.document["pending"] = None
+                journal.write("planned", before_any_effect=not ledger["moved"])
+                if not isinstance(exc, Exception):
+                    raise
+                continue
+            ledger["moved"] = True
+            removed.add(row["entry_name"])
+            journal.document["pending"] = None
+            journal.document["completed"].append(
+                {
+                    "destination": str(row["destination"]),
+                    "entry_name": row["entry_name"],
+                    "expected_sha256": row["current_sha256"],
+                }
+            )
+            journal.write("settled")
+        if unknown is None:
+            journal.write("settled", before_any_effect=not ledger["moved"])
+
+    journal_sha256 = journal.digest()
+    inventory_rows = [row for row in rows if row["class"] != "absent"]
+    if unknown is not None:
+        effect_state, terminal_phase, exit_class, state_label = "unknown", "unknown", EXIT_UNKNOWN, "unknown"
+        attention.append(unknown)
+    elif removable and len(removed) == len(removable) and len(removed) == len(inventory_rows):
+        effect_state, terminal_phase, exit_class, state_label = "complete", "retired", EXIT_RETIRED, "retired"
+    elif not removed:
+        effect_state, terminal_phase, exit_class, state_label = "none", "not-activated", EXIT_PARTIAL, "not-retired"
+    else:
+        effect_state, terminal_phase, exit_class, state_label = "partial", "unknown", EXIT_PARTIAL, "partly-retired"
+    if effect_state == "complete" and journal_sha256 is None:
+        effect_state, terminal_phase, exit_class, state_label = "partial", "unknown", EXIT_PARTIAL, "partly-retired"
+        attention.append(
+            "every selected ownership row was retired, but this retirement records journal-digest as "
+            "unknown, so its effect is partial rather than complete"
+        )
+
+    observations = [
+        {
+            "class": row["class"],
+            "current_sha256": row["current_sha256"],
+            "destination": row["destination"],
+            "entry_name": row["entry_name"],
+            "mode": row["mode"],
+            # Carried through, not re-derived: this path's classes are its own, and looking them up
+            # in the receipt-directed table would read one path's classification by another's rules.
+            "prestate": row["prestate"],
+        }
+        for row in inventory_rows
+    ]
+    written: Path | None = None
+    try:
+        unsealed = build_receipt(
+            dar,
+            config,
+            {
+                # A ledger retirement drew from no archive, so the digest is null and NOT-SUPPLIED:
+                # the family names no unknown for it beside a checkout object, which is what lets a
+                # clean retirement still record `complete`.
+                "archive_sha256": None,
+                "candidate_id": dar.checkout_candidate_id(retirement_inventory(dar, observations, removed)),
+                "checkout": checkout,
+                "resolved_version": resolved_version,
+                "version_source": VERSION_SOURCE_CHECKOUT,
+            },
+            None,
+            observations,
+            removed,
+            plan_sha256,
+            journal_sha256,
+            effect_state,
+            terminal_phase,
+            prestate_evidence="ledger",
+            receipt_id=receipt_id,
+        )
+        write_terminal_receipt(bundle, dar, receipt_path, seal_receipt(dar, unsealed))
+        written = receipt_path
+    except (UnknownEffect, Refusal, OSError) as exc:
+        attention.append(f"the terminal receipt could not be recorded: {dar_escape(str(exc))}")
+        if removed or unknown is not None:
+            exit_class, state_label = EXIT_UNKNOWN, "unknown"
+
+    return exit_class, render_report(
+        state_label,
+        "none (the ownership rows are this retirement's prestate evidence)",
+        {
+            "announcements": [*announcements, announcement],
+            "host": config.host,
+            "resolved_version": resolved_version,
+            "scope": scope_display(config),
+            "unknowns": [],
+        },
+        observations,
+        removed,
+        outstanding,
+        written,
+        journal_path,
+        effect_state,
+        terminal_phase,
+        attention,
+    )
+
+
+def ledger_plan(config: Config, rows: list[dict[str, Any]], resolved_version: str) -> dict[str, Any]:
+    """The ledger-directed run's pre-effect intent, in the same closed plan shape."""
+    remove: list[dict[str, Any]] = []
+    preserve: list[dict[str, Any]] = []
+    for row in rows:
+        if row["class"] == "owned-exact":
+            remove.append(
+                {
+                    "destination": str(row["destination"]),
+                    "entry_name": row["entry_name"],
+                    "expected_sha256": row["current_sha256"],
+                }
+            )
+        else:
+            preserve.append({"entry_name": row["entry_name"], "reason_code": row["class"]})
+    remove.sort(key=lambda item: (item["entry_name"], item["destination"]))
+    preserve.sort(key=lambda item: (item["entry_name"], item["reason_code"]))
+    return {
+        "candidate_id": None,
+        "host": config.host,
+        "plane_root": str(config.plane_root),
+        "preserve": preserve,
+        "prestate_evidence": "ledger",
+        "remove": remove,
+        "resolved_version": resolved_version,
+        "retired_receipt_id": None,
+        "schema_version": PLAN_SCHEMA,
+        "scope": config.scope_object(),
+    }
+
+
+def ledger_receipt_id(config: Config, plan_sha256: str) -> str:
+    """One lowercase token naming this retirement, derived from the plan it is about.
+
+    There is no retired receipt id to compose from, so the identity comes from the assessment's own
+    digest: two different assessed planes name two different receipts, and re-running the SAME
+    assessment is refused by the create-only receipt rather than repeated.
+    """
+    candidate = f"uninstall-ledger-{config.host}-{config.scope_kind}-{plan_sha256[:16]}"
+    if not _TOKEN.match(candidate):
+        raise Refusal(f"the derived receipt identity {dar_escape(candidate)!r} is not a lowercase token")
+    return candidate
 
 
 def bundle_config(bundle: ModuleType, config: Config) -> Any:
@@ -1326,7 +2125,11 @@ def bundle_config(bundle: ModuleType, config: Config) -> Any:
     """
     return bundle.Config(
         config.scripts_dir.parent,
-        config.home,
+        # THE SCOPE'S ROOT IS THE BOUNDARY, and it is the installer configuration that enforces it:
+        # `destination_is_configured` compares each ownership row's destination against the root this
+        # home implies, so a project-scope run selects exactly the rows under that project and a
+        # user-scope run selects exactly the rows under the operator's home.
+        config.boundary_home,
         config.home / ".codex",
         "auto",
         False,

@@ -266,15 +266,21 @@ guards are replaced by shapes that cannot express the disagreement.
 
 ```jsonc
 // scope: a closed discriminated union. Key sets are EXACT per kind.
+// `agent` is the body's ONLY statement of which plane was touched: there is no sibling `host`
+// field in v2 (conductor ruling 2026-08-25, §10).
 "scope": { "kind": "user",    "agent": "claude" }
 "scope": { "kind": "project", "agent": "claude", "root": "/abs/path/to/repo" }
 ```
 
-1. **`activation_scope` is deleted, not extended.** Issue #11 sketched keeping `"claude-home"` and
-   adding project spellings beside the new `scope` object. That is two spellings of one fact, and a
-   receipt where they disagree is a representable illegal state guarded only by a validator clause.
-   v2 carries `scope` alone; readers derive any display string. (The v1 validator's one-lowercase-
-   token rule at `distribution_activation_receipt.py` stays for v1 documents; v2 has no such field.)
+1. **`activation_scope` AND `host` are deleted, not extended.** Issue #11 sketched keeping
+   `"claude-home"` and adding project spellings beside the new `scope` object. That is two spellings
+   of one fact, and a receipt where they disagree is a representable illegal state guarded only by a
+   validator clause. The same argument reaches `host`: it and `scope.agent` name one plane, so v2
+   carries `scope` alone and readers derive every display string from it — including a
+   host-application spelling like `claude-code`, which is a rendering rather than a stored field.
+   (The v1 validator's one-lowercase-token `activation_scope` rule and its closed `host` vocabulary
+   both stay for v1 documents; v2 has neither field, so a v2 body carrying either is refused by the
+   exact key set and there is no agreement check between them to get wrong.)
 2. **Key sets closed per kind; the root key is derived, never stored.** A user-scope `scope`
    carrying `root` is refused by exact-key-set comparison, as is a project-scope one missing it.
    `root` must be absolute. `pointer-receipt-disagreement` fires when the pointer's path disagrees
@@ -332,9 +338,10 @@ guards are replaced by shapes that cannot express the disagreement.
    (`distribution_activation_receipt.py:1419-1424`) — and deleting the legacy path instead would
    force an install before a removal. Ancestor-count-per-evidence is enforced by shape:
    receipt-evidence with zero ancestors and ledger-evidence with one are both refused.
-7. Everything else — `operation`, `host`, per-entry inventory with
+7. Everything else — `operation`, per-entry inventory with
    `prestate`/`disposition`/`content_sha256`, `effect_state`/`terminal_phase` from the closed
-   matrices, `supersedes` for update — carries over from v1 unchanged. The acquisition receipt
+   matrices, `supersedes` for update — carries over from v1 unchanged. (`host` was in this list in
+   the ratified text and is NOT: item 1 deletes it. The implementation ruling in §10 records why.) The acquisition receipt
    schema (v1, `scripts/write_acquisition_receipt.py:65`) is untouched, including
    `selection: "absent"` — #10 already excluded that field, and this design inherits the exclusion.
 8. **Named cost** (audit N6): "v1 receipts admitted read-only forever" (§3.4) means
@@ -786,3 +793,16 @@ Re-review residuals (verdict RATIFY, absorbed 2026-08-25, third commit):
 
 Sequencing ruling: §6's W3a→WX edge holds; §9's stalled-WX fallback fires only on an explicit
 conductor re-sequencing decision, never by default (recorded in §9).
+
+Implementation ruling (conductor, 2026-08-25), on W2's finding 1: **delete `host` from the v2 body.**
+The ratified §3.2 showed `agent` inside the `scope` union while item 7 listed `host` among the fields
+carrying over from v1 — one fact in two spellings joined by a cross-field agreement check, which is
+exactly the shape item 1 deletes `activation_scope` for and audit W-a deletes `root_key` for. The
+ratified text carrying both was an oversight, and the exact-key-set machinery makes the correction
+cheap before the schema lands and expensive after. `BODY_KEYS` (v2) therefore excludes `host`,
+`BODY_KEYS_V1` keeps it frozen, the agreement refusal is deleted rather than kept, and every reader
+that consumed `body.host` derives the plane from `scope.agent`. §3.2's JSONC and item 7 are corrected
+above in the same change. W2's four other implementation resolutions — the not-supplied archive digest
+on a checkout body, per-row `mode` nullability, `checkout.dirty` recorded `true` wherever no run
+proves the tree clean, and no re-derivation of a checkout `candidate_id` at validation time — are
+accepted as landed, each following this section's own logic and each recorded in the module.

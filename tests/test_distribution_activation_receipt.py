@@ -1,6 +1,6 @@
-"""Tests for the `distribution-activation@1` receipt body: the first producer body of the family.
+"""Tests for the `distribution-activation@2` receipt body, and for `@1` as read-only history.
 
-Nine kinds of test live here, and they check different things.
+Thirteen kinds of test live here, and they check different things.
 
 The ROUND-TRIP tests seal an observation, validate the result, and then hand the SAME bytes to the
 skills-plane `receipt-envelope.py` checker as an INDEPENDENT verifier. That last step is the point:
@@ -40,6 +40,26 @@ overflow and not from the surrounding document.
 The GRAPH-INTEROP tests build a two-receipt set and let the skills-plane `check-graph` resolve it, then
 show the shape-versus-graph split directly: a self-naming ancestor reference is admitted by this
 module (a graph FINDING is not a shape defect) and reported as `cyclic` by the checker that owns it.
+
+The CHECKOUT tests exercise the one place @2 ADDS vocabulary, in every direction its invariant can be
+violated: the ancestor is forbidden exactly where the checkout object is present (the audit's non-vacuous
+direction -- release-without-ancestor was already refused unconditionally), the archive digest is null
+as NOT-SUPPLIED rather than as an unknown, and the version source is paired with the object both ways.
+
+The PRESTATE-EVIDENCE tests do the same for the uninstall discriminator: receipt evidence names exactly
+one ancestor and ledger evidence names none, and the field is refused outright on the other operations.
+
+The PER-ROW-MODE tests pin where copy-only binds -- per row, against bytes -- and assert there is no
+body-level `mode_policy` field in either generation. The project refusal carries the control that the
+same link row at USER scope is admitted, so it is the project rule rather than a global ban.
+
+The POINTER-PLANE tests treat the FILENAME as the admission authority it is: the two names are derived
+from the scope they admit, they parse back to it, and a pointer that disagrees on the kind, agent, or
+root-key axis names that axis -- with the agreeing pointer as the positive control in the same test.
+
+The TWO-GENERATION tests use this repository's OWN committed evidence receipts as the positive control
+for "v1 admitted read-only forever": sealed by the v1 producer against a real plane, they must still
+validate, they must never re-seal, and neither generation may carry the other's fields.
 """
 
 from __future__ import annotations
@@ -63,7 +83,9 @@ from scripts import distribution_activation_receipt as dar  # noqa: E402
 MODULE = ROOT / "scripts" / "distribution_activation_receipt.py"
 ENVELOPE_TOOL = ROOT / "skills" / "agentic-sdlc" / "tools" / "receipt-envelope.py"
 
-BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@1"
+BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@2"
+#: The first generation, admitted read-only forever and never sealed again.
+BODY_SCHEMA_V1 = "agentic-sdlc/distribution-activation-body@1"
 ENVELOPE_SCHEMA = "agentic-sdlc/receipt-envelope@1"
 RESULT_SCHEMA = "agentic-sdlc/distribution-activation-result@1"
 RECEIPT_KIND = "distribution-activation"
@@ -109,6 +131,8 @@ def entry(**overrides: Any) -> dict[str, Any]:
         "content_sha256": hexof("entry"),
         "disposition": "installed",
         "entry_name": "skills/agentic-sdlc",
+        # v2's per-row mode: required non-null wherever the disposition says bytes were published.
+        "mode": "copy",
         "prestate": "absent",
     }
     record.update(overrides)
@@ -119,6 +143,9 @@ FOREIGN_ENTRY = entry(
     content_sha256=hexof("foreign"),
     disposition="preserved",
     entry_name="skills/foreign-thing",
+    # This lifecycle published nothing at a foreign collision, so the mode is null rather than a
+    # publication mode it never used.
+    mode=None,
     prestate="foreign",
 )
 
@@ -126,12 +153,10 @@ FOREIGN_ENTRY = entry(
 def body(**overrides: Any) -> dict[str, Any]:
     """A body that seals clean, with every field overridable and any field deletable via DROP."""
     value: dict[str, Any] = {
-        "activation_scope": "user-plane",
         "archive_sha256": hexof("archive"),
         "candidate_id": hexof("candidate"),
         "effect_state": "complete",
         "entries": [entry(), FOREIGN_ENTRY],
-        "host": "claude",
         "journal_sha256": hexof("journal"),
         "operation": "install",
         "plan_sha256": hexof("plan"),
@@ -141,6 +166,7 @@ def body(**overrides: Any) -> dict[str, Any]:
         "requested_version": "0.6.3",
         "resolved_version": "0.6.3",
         "schema_version": BODY_SCHEMA,
+        "scope": {"agent": "claude", "kind": "user"},
         "terminal_phase": "activated",
         "unknowns": [],
         "version_source": "adapter-readback",
@@ -404,12 +430,16 @@ class ClosedBodySet(SealsClean):
             with self.subTest(key=key):
                 result = seal(document(body(**{key: DROP})))
                 self.assertEqual(result["verdict"], REFUSED)
-                self.assertIn(f"carries no {key}", reasons_text(result))
+                expected = (
+                    "declares schema_version" if key == "schema_version" else f"carries no {key}"
+                )
+                self.assertIn(expected, reasons_text(result))
 
-    def test_a_wrong_body_schema_version_is_refused(self) -> None:
-        result = seal(document(body(schema_version="agentic-sdlc/distribution-activation-body@2")))
+    def test_a_body_schema_version_from_no_known_generation_is_refused(self) -> None:
+        result = seal(document(body(schema_version="agentic-sdlc/distribution-activation-body@3")))
         self.assertEqual(result["verdict"], REFUSED)
         self.assertIn("declares schema_version", reasons_text(result))
+        self.assertIn("read-only historical", reasons_text(result))
 
     def test_an_unknown_envelope_field_is_refused(self) -> None:
         result = seal(document(note="hello"))
@@ -424,7 +454,7 @@ class ClosedBodySet(SealsClean):
     def test_a_non_object_body_is_refused_without_a_traceback(self) -> None:
         result = seal(document("not-a-body"))
         self.assertEqual(result["verdict"], REFUSED)
-        self.assertIn("not a agentic-sdlc/distribution-activation-body@1 object", reasons_text(result))
+        self.assertIn(f"not a {BODY_SCHEMA} object", reasons_text(result))
 
 
 class ClosedVocabularies(SealsClean):
@@ -497,31 +527,69 @@ class PayloadIdentity(SealsClean):
 
 
 class HostAndScope(SealsClean):
-    def test_the_host_is_claude_and_a_wildcard_is_refused_by_name(self) -> None:
-        self.assertEqual(seal(document(body(host="claude")))["verdict"], SEALED)
+    """v2 states the plane ONCE, as `scope.agent`. There is no `host` field beside it to disagree.
+
+    The conductor's 2026-08-25 ruling deleted `host` from this generation rather than keeping it under
+    an agreement check: one fact in two spellings joined by a guard is the shape `activation_scope` and
+    `root_key` were deleted for. So every rule the old `host` token carried -- closed vocabulary, no
+    wildcard -- is asserted here against the union's `agent`, and the field itself is refused.
+    """
+
+    def test_a_body_level_host_is_refused_as_an_unknown_field(self) -> None:
+        self.assertNotIn("host", dar.BODY_KEYS)
+        self.assertIn("host", dar.BODY_KEYS_V1)
+        result = seal(document(body(host="claude")))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("unknown field 'host'", reasons_text(result))
+        # POSITIVE CONTROL: the identical body without it seals, so the refusal is the field.
+        self.assertEqual(seal(document(body()))["verdict"], SEALED)
+
+    def test_the_agent_is_claude_and_a_wildcard_is_refused_by_name(self) -> None:
+        self.assertEqual(seal(document(body(scope={"agent": "claude", "kind": "user"})))["verdict"], SEALED)
         for hostile in ("all", "*", "claude-*"):
-            with self.subTest(host=hostile):
-                result = seal(document(body(host=hostile)))
+            with self.subTest(agent=hostile):
+                result = seal(document(body(scope={"agent": hostile, "kind": "user"})))
                 self.assertEqual(result["verdict"], REFUSED)
                 self.assertIn("wildcard", reasons_text(result))
 
-    def test_an_unobserved_host_is_refused_as_a_closed_vocabulary(self) -> None:
-        result = seal(document(body(host="codex")))
+    def test_an_unobserved_agent_is_refused_as_a_closed_vocabulary(self) -> None:
+        result = seal(document(body(scope={"agent": "codex", "kind": "user"})))
         self.assertEqual(result["verdict"], REFUSED)
         self.assertIn("closed vocabulary", reasons_text(result))
 
-    def test_a_wildcard_scope_is_refused_even_when_it_is_a_well_formed_token(self) -> None:
-        self.assertEqual(seal(document(body(activation_scope="user-plane")))["verdict"], SEALED)
-        result = seal(document(body(activation_scope="all")))
+    def test_a_wildcard_agent_is_refused_even_though_it_is_a_well_formed_token(self) -> None:
+        self.assertEqual(seal(document(body()))["verdict"], SEALED)
+        result = seal(document(body(scope={"agent": "all", "kind": "user"})))
         self.assertEqual(result["verdict"], REFUSED)
         self.assertIn("wildcard", reasons_text(result))
         # POSITIVE CONTROL for "well-formed token": the token shape alone WOULD have admitted it.
         self.assertTrue(dar._TOKEN.match("all"))
 
-    def test_an_uppercase_scope_is_refused_because_correlation_compares_literally(self) -> None:
-        result = seal(document(body(activation_scope="User-Plane")))
-        self.assertEqual(result["verdict"], REFUSED)
-        self.assertIn("lowercase ASCII token", reasons_text(result))
+    def test_the_rendered_plane_is_derived_from_the_union_in_both_generations(self) -> None:
+        """A display string is DERIVED, which is what lets the stored fact live in one place."""
+        self.assertEqual("claude", dar.plane_display(body()))
+        v1_body = {key: value for key, value in body().items() if key != "scope"}
+        v1_body["host"] = "claude"
+        v1_body["activation_scope"] = "claude-home"
+        self.assertEqual("claude", dar.plane_display(v1_body))
+        self.assertEqual("unknown", dar.plane_display({}))
+
+    def test_the_scope_key_set_is_exact_per_kind(self) -> None:
+        self.assertEqual(seal(document(body()))["verdict"], SEALED)
+        project = {"agent": "claude", "kind": "project", "root": "/srv/repo"}
+        self.assertEqual(seal(document(body(scope=project)))["verdict"], SEALED)
+        for hostile, needle in (
+            ({"agent": "claude", "kind": "user", "root": "/srv/repo"}, "does not admit"),
+            ({"agent": "claude", "kind": "user", "root_key": "0" * 16}, "does not admit"),
+            ({"agent": "claude", "kind": "project"}, "carries no root"),
+            ({"agent": "claude", "kind": "project", "root": "relative/repo"}, "not an absolute POSIX path"),
+            ({"agent": "claude", "kind": "all", "root": "/srv/repo"}, "closed vocabulary"),
+            ("user", "not a closed scope object"),
+        ):
+            with self.subTest(scope=hostile):
+                result = seal(document(body(scope=hostile)))
+                self.assertEqual(result["verdict"], REFUSED)
+                self.assertIn(needle, reasons_text(result))
 
 
 class EntryInventory(SealsClean):
@@ -553,12 +621,14 @@ class EntryInventory(SealsClean):
     def test_a_removed_entry_carries_no_content_digest(self) -> None:
         uninstall = body(
             operation="uninstall",
+            prestate_evidence="activation-receipt",
             terminal_phase="retired",
             entries=[entry(prestate="owned", disposition="removed", content_sha256=None)],
         )
         self.assertEqual(seal(document(uninstall))["verdict"], SEALED)
         hostile = body(
             operation="uninstall",
+            prestate_evidence="activation-receipt",
             terminal_phase="retired",
             entries=[entry(prestate="owned", disposition="removed", content_sha256=hexof("gone"))],
         )
@@ -1077,7 +1147,7 @@ class SourceHygiene(unittest.TestCase):
         for slug, doc in (
             ("closed-key-set", document(note="x")),
             ("payload-identity", document(body(version_source="request"))),
-            ("host-and-scope", document(body(host="all"))),
+            ("host-and-scope", document(body(scope={"agent": "all", "kind": "user"}))),
             ("entry-inventory", document(body(entries=[entry(), entry()]))),
             ("effect-and-journal", document(body(terminal_phase="retired"))),
             ("channel-honesty", document(body(release_claim="published"))),
@@ -1117,6 +1187,430 @@ def acquisition_document(receipt_id: str = "acquisition-1") -> dict[str, Any]:
         "schema": ENVELOPE_SCHEMA,
         "stated_at": "2026-08-19T09:00:00Z",
     }
+
+
+def checkout_body(**overrides: Any) -> dict[str, Any]:
+    """One CHECKOUT-payload body: no archive, no acquisition ancestor, version read from the tree.
+
+    ``candidate_id`` comes from the family's own exported derivation, because a checkout has no
+    manifest to read an identity out of and the field is non-null in every generation.
+    """
+    entries = overrides.pop("entries", [entry()])
+    value = body(
+        archive_sha256=None,
+        checkout={"commit": "a" * 40, "dirty": False},
+        entries=entries,
+        version_source="checkout-tree",
+    )
+    value["candidate_id"] = dar.checkout_candidate_id(entries)
+    value.update(overrides)
+    return {key: item for key, item in value.items() if item is not DROP}
+
+
+def uninstall_body(**overrides: Any) -> dict[str, Any]:
+    """One RETIREMENT body, defaulting to the receipt-evidence variant a pointer-directed run seals."""
+    value = body(
+        entries=[entry(prestate="owned", disposition="removed", content_sha256=None)],
+        operation="uninstall",
+        prestate_evidence="activation-receipt",
+        terminal_phase="retired",
+    )
+    value.update(overrides)
+    return {key: item for key, item in value.items() if item is not DROP}
+
+
+class CheckoutPayload(SealsClean):
+    """The one place v2 ADDS vocabulary, and every direction its invariant can be violated in.
+
+    The two facts a checkout object fixes -- the version source and the absent archive -- are checked
+    in BOTH directions, and the ancestor half is the direction the audit called out as the non-vacuous
+    one: a release body with no ancestor was already refused unconditionally in v1, so only
+    checkout-WITH-ancestor could ever have gone red.
+    """
+
+    def test_a_checkout_body_seals_with_no_acquisition_ancestor(self) -> None:
+        result = seal(document(checkout_body(), ancestors=[]))
+        self.assertEqual(result["verdict"], SEALED, result["reasons"])
+        sealed_body = result["receipt"]["body"]
+        self.assertEqual({"commit": "a" * 40, "dirty": False}, sealed_body["checkout"])
+        self.assertIsNone(sealed_body["archive_sha256"])
+        # A clean checkout activation still records `complete`: the null archive digest is
+        # NOT-SUPPLIED, so no unknown is named for it and the family's complete-beside-an-unknown
+        # refusal never fires.
+        self.assertEqual("complete", sealed_body["effect_state"])
+        self.assertEqual([], sealed_body["unknowns"])
+
+    def test_a_checkout_body_with_a_derived_from_ancestor_is_refused(self) -> None:
+        """The audit's W-g direction: the vacuous one was release-without-ancestor."""
+        result = seal(document(checkout_body()))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("the ancestor is forbidden exactly where the checkout object is present", reasons_text(result))
+        # POSITIVE CONTROL that the ancestor itself is admissible: the same ancestor on a RELEASE body
+        # is required, so the refusal is about the pairing and not about the reference.
+        self.assertEqual(seal(document(body()))["verdict"], SEALED)
+
+    def test_a_release_body_without_its_ancestor_is_refused_as_it_always_was(self) -> None:
+        result = seal(document(body(), ancestors=[]))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("exactly one names the acquisition receipt", reasons_text(result))
+
+    def test_a_checkout_body_may_not_also_name_an_archive(self) -> None:
+        hostile = checkout_body(archive_sha256=hexof("archive"))
+        result = seal(document(hostile, ancestors=[]))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("beside a non-null archive_sha256", reasons_text(result))
+
+    def test_the_checkout_object_and_the_checkout_version_source_are_paired_both_ways(self) -> None:
+        without_object = body(version_source="checkout-tree")
+        result = seal(document(without_object))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("with no checkout object", reasons_text(result))
+        without_source = checkout_body(version_source="adapter-readback")
+        other = seal(document(without_source, ancestors=[]))
+        self.assertEqual(other["verdict"], REFUSED)
+        self.assertIn("a checkout payload's version is read from the checkout tree", reasons_text(other))
+
+    def test_the_checkout_object_key_set_and_field_shapes_are_closed(self) -> None:
+        self.assertEqual(seal(document(checkout_body(), ancestors=[]))["verdict"], SEALED)
+        for hostile, needle in (
+            ({"commit": "a" * 40}, "carries no dirty"),
+            ({"dirty": True}, "carries no commit"),
+            ({"commit": "a" * 40, "dirty": True, "branch": "main"}, "unknown field 'branch'"),
+            ({"commit": "A" * 40, "dirty": True}, "neither 40 lowercase hexadecimal"),
+            ({"commit": "a" * 39, "dirty": True}, "neither 40 lowercase hexadecimal"),
+            ({"commit": "a" * 40, "dirty": 1}, "not a boolean"),
+            ({"commit": "a" * 40, "dirty": "false"}, "not a boolean"),
+        ):
+            with self.subTest(checkout=hostile):
+                result = seal(document(checkout_body(checkout=hostile), ancestors=[]))
+                self.assertEqual(result["verdict"], REFUSED)
+                self.assertIn(needle, reasons_text(result))
+        # `unknown` is the sanctioned commit value, not a plausible-looking digest.
+        admitted = seal(document(checkout_body(checkout={"commit": "unknown", "dirty": True}), ancestors=[]))
+        self.assertEqual(admitted["verdict"], SEALED, admitted["reasons"])
+
+    def test_a_null_archive_digest_still_needs_its_unknown_when_there_was_an_archive(self) -> None:
+        """The control for the checkout exemption: without a checkout object the rule is unchanged."""
+        result = seal(document(partial_body(archive_sha256=None, unknowns=[])))
+        self.assertEqual(result["verdict"], SEALED)  # the producer DERIVES the unknown it needs
+        self.assertEqual(
+            [("archive-digest", "archive_sha256")],
+            [(row["observation"], row["subject"]) for row in result["receipt"]["body"]["unknowns"]],
+        )
+        # And a body that recorded the null WITHOUT the unknown is refused on validate, where no
+        # producer step can fill it in.
+        hostile = resealed(body(archive_sha256=None, effect_state="partial", terminal_phase="activated-partial"))
+        refused = validate(hostile)
+        self.assertEqual(refused["verdict"], REFUSED)
+        self.assertIn("declared as an unknown", reasons_text(refused))
+
+    def test_a_checkout_body_may_not_name_an_archive_digest_unknown(self) -> None:
+        hostile = checkout_body(
+            effect_state="partial", terminal_phase="activated-partial", unknowns=[dict(ARCHIVE_UNKNOWN)]
+        )
+        result = seal(document(hostile, ancestors=[]))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("naming it unknown states an observation this run never attempted", reasons_text(result))
+
+    def test_the_checkout_candidate_identity_separates_two_different_trees(self) -> None:
+        """Two dirty trees must not collide onto one identity, which is why the commit is not in it."""
+        one = [entry(content_sha256=hexof("tree-one"))]
+        two = [entry(content_sha256=hexof("tree-two"))]
+        self.assertNotEqual(dar.checkout_candidate_id(one), dar.checkout_candidate_id(two))
+        # Same rows, same identity, whatever order they arrive in: the derivation sorts.
+        rows = [entry(), FOREIGN_ENTRY]
+        self.assertEqual(dar.checkout_candidate_id(rows), dar.checkout_candidate_id(list(reversed(rows))))
+        self.assertTrue(dar._HEX64.match(dar.checkout_candidate_id(rows)))
+
+
+class PrestateEvidence(SealsClean):
+    """The uninstall discriminator, in both directions, plus its exact-key-set boundary."""
+
+    def test_receipt_evidence_names_exactly_one_ancestor(self) -> None:
+        self.assertEqual(seal(document(uninstall_body()))["verdict"], SEALED)
+        result = seal(document(uninstall_body(), ancestors=[]))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("that evidence admits exactly 1", reasons_text(result))
+
+    def test_ledger_evidence_names_no_ancestor(self) -> None:
+        ledger = uninstall_body(
+            archive_sha256=None,
+            checkout={"commit": "unknown", "dirty": True},
+            prestate_evidence="ledger",
+            version_source="checkout-tree",
+        )
+        ledger["candidate_id"] = dar.checkout_candidate_id(ledger["entries"])
+        self.assertEqual(seal(document(ledger, ancestors=[]))["verdict"], SEALED)
+        result = seal(document(ledger))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("that evidence admits exactly 0", reasons_text(result))
+
+    def test_the_discriminator_is_an_uninstall_only_field(self) -> None:
+        for operation, phase in (("install", "activated"), ("update", "activated")):
+            with self.subTest(operation=operation):
+                hostile = body(operation=operation, terminal_phase=phase, prestate_evidence="ledger")
+                ancestors = [dict(ACQUISITION_REFERENCE)]
+                if operation == "update":
+                    ancestors.append(
+                        {"expected_kind": RECEIPT_KIND, "receipt_id": "activation-0", "relation": "supersedes"}
+                    )
+                result = seal(document(hostile, ancestors=ancestors))
+                self.assertEqual(result["verdict"], REFUSED)
+                self.assertIn("unknown field 'prestate_evidence'", reasons_text(result))
+        missing = {key: value for key, value in uninstall_body().items() if key != "prestate_evidence"}
+        refused = seal(document(missing))
+        self.assertEqual(refused["verdict"], REFUSED)
+        self.assertIn("carries no prestate_evidence", reasons_text(refused))
+
+    def test_the_discriminator_vocabulary_is_closed(self) -> None:
+        result = seal(document(uninstall_body(prestate_evidence="ownership-rows")))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("closed vocabulary", reasons_text(result))
+
+
+class PerRowMode(SealsClean):
+    """Where copy-only binds: per inventory row, with no body-level policy field anywhere."""
+
+    def test_a_published_row_records_the_mode_it_published(self) -> None:
+        for mode in dar.MODES:
+            with self.subTest(mode=mode):
+                self.assertEqual(seal(document(body(entries=[entry(mode=mode)])))["verdict"], SEALED)
+        result = seal(document(body(entries=[entry(mode=None)])))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("published these bytes, so the mode it used is a fact it holds", reasons_text(result))
+
+    def test_a_row_this_operation_did_not_publish_records_a_null_mode(self) -> None:
+        preserved = seal(document(body(entries=[entry(), FOREIGN_ENTRY])))
+        self.assertEqual(preserved["verdict"], SEALED, preserved["reasons"])
+        removed = seal(document(uninstall_body(
+            entries=[entry(prestate="owned", disposition="removed", content_sha256=None, mode=None)]
+        )))
+        self.assertEqual(removed["verdict"], SEALED, removed["reasons"])
+
+    def test_the_mode_vocabulary_is_closed_and_an_empty_string_is_its_own_defect(self) -> None:
+        for hostile, needle in (
+            ("symlink", "not one of the closed publication modes"),
+            ("COPY", "not one of the closed publication modes"),
+            ("", "supplied and lost"),
+            (0, "not one of the closed publication modes"),
+        ):
+            with self.subTest(mode=hostile):
+                result = seal(document(body(entries=[entry(mode=hostile)])))
+                self.assertEqual(result["verdict"], REFUSED)
+                self.assertIn(needle, reasons_text(result))
+
+    def test_project_scope_refuses_a_published_row_that_is_not_a_copy(self) -> None:
+        project = {"agent": "claude", "kind": "project", "root": "/srv/repo"}
+        self.assertEqual(seal(document(body(scope=project, entries=[entry(mode="copy")])))["verdict"], SEALED)
+        for hostile in ("link", "junction"):
+            with self.subTest(mode=hostile):
+                result = seal(document(body(scope=project, entries=[entry(mode=hostile)])))
+                self.assertEqual(result["verdict"], REFUSED)
+                self.assertIn("project scope is copy-only", reasons_text(result))
+        # POSITIVE CONTROL: the same link row at USER scope is admitted -- the contributor live-edit
+        # loop -- so the refusal is the project rule and not a global ban.
+        self.assertEqual(seal(document(body(entries=[entry(mode="link")])))["verdict"], SEALED)
+
+    def test_no_body_level_mode_policy_field_exists_in_either_generation(self) -> None:
+        self.assertNotIn("mode_policy", dar.BODY_KEYS)
+        self.assertNotIn("mode_policy", dar.BODY_KEYS_V1)
+        self.assertNotIn("mode_policy", dar.BODY_KEYS_OPTIONAL)
+        result = seal(document(body(mode_policy="copy")))
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("unknown field 'mode_policy'", reasons_text(result))
+
+
+class PointerPlane(unittest.TestCase):
+    """The keyed pointer plane: the FILENAME is the admission authority, and it is compared, not trusted."""
+
+    def test_the_two_pointer_names_are_derived_from_the_scope_they_admit(self) -> None:
+        activation = Path("/state/agentic-sdlc/activation")
+        user = dar.pointer_path(activation, "claude", "user")
+        self.assertEqual(activation / "active" / "claude" / "user.json", user)
+        project = dar.pointer_path(activation, "claude", "project", "/srv/repo")
+        self.assertEqual(
+            activation / "active" / "claude" / f"project-{dar.root_key('/srv/repo')}.json", project
+        )
+        self.assertEqual(16, len(dar.root_key("/srv/repo")))
+        self.assertNotEqual(dar.root_key("/srv/repo"), dar.root_key("/srv/other"))
+        # Two agents, two files; two roots, two files. That is the whole point of the key.
+        self.assertNotEqual(user, dar.pointer_path(activation, "codex", "user"))
+        self.assertNotEqual(project, dar.pointer_path(activation, "claude", "project", "/srv/other"))
+
+    def test_an_unnameable_scope_or_agent_raises_rather_than_guessing_a_path(self) -> None:
+        activation = Path("/state/activation")
+        for kind, root in (("project", None), ("project", ""), ("all", None), ("", None)):
+            with self.subTest(kind=kind, root=root):
+                with self.assertRaises(dar.InputError):
+                    dar.pointer_path(activation, "claude", kind, root)
+        for agent in ("all", "*", "Claude", ""):
+            with self.subTest(agent=agent):
+                with self.assertRaises(dar.InputError):
+                    dar.pointer_path(activation, agent, "user")
+
+    def test_a_keyed_pointer_path_parses_back_to_the_scope_it_names(self) -> None:
+        activation = Path("/state/activation")
+        self.assertEqual(
+            {"agent": "claude", "kind": "user", "root_key": None},
+            dar.parse_pointer_path(dar.pointer_path(activation, "claude", "user")),
+        )
+        key = dar.root_key("/srv/repo")
+        self.assertEqual(
+            {"agent": "claude", "kind": "project", "root_key": key},
+            dar.parse_pointer_path(dar.pointer_path(activation, "claude", "project", "/srv/repo")),
+        )
+        for hostile in (
+            activation / "active" / "claude" / "project-.json",
+            activation / "active" / "claude" / "project-notahexkey00.json",
+            activation / "active" / "claude" / "user.txt",
+            activation / "active" / "claude" / "active-receipt.json",
+            activation / "active-receipt.json",
+            activation / "elsewhere" / "claude" / "user.json",
+        ):
+            with self.subTest(path=str(hostile)):
+                self.assertIsNone(dar.parse_pointer_path(hostile))
+
+    def test_a_pointer_agrees_with_its_receipt_or_names_the_axis_it_disagrees_on(self) -> None:
+        activation = Path("/state/activation")
+        project_root = "/srv/repo"
+        project = body(scope={"agent": "claude", "kind": "project", "root": project_root})
+        user = body()
+        # POSITIVE CONTROL FIRST: the pointer each body belongs under agrees on every axis.
+        self.assertEqual([], dar.pointer_disagreements(dar.pointer_path(activation, "claude", "project", project_root), project))
+        self.assertEqual([], dar.pointer_disagreements(dar.pointer_path(activation, "claude", "user"), user))
+        # THE KIND AXIS FIRST (audit N3): a user.json aimed at a project-scope receipt has no root
+        # segment to compare, so reporting a root mismatch would name the wrong defect.
+        kind_axis = dar.pointer_disagreements(dar.pointer_path(activation, "claude", "user"), project)
+        self.assertEqual(1, len(kind_axis))
+        self.assertIn("is a user-scope pointer while the receipt it names records scope.kind", kind_axis[0])
+        self.assertNotIn("root key", kind_axis[0])
+        other_way = dar.pointer_disagreements(
+            dar.pointer_path(activation, "claude", "project", project_root), user
+        )
+        self.assertEqual(1, len(other_way))
+        self.assertIn("is a project-scope pointer", other_way[0])
+        # THE ROOT AXIS: a project pointer hand-moved to another root's key.
+        root_axis = dar.pointer_disagreements(
+            dar.pointer_path(activation, "claude", "project", "/srv/other"), project
+        )
+        self.assertEqual(1, len(root_axis))
+        self.assertIn("a hand-moved pointer does not redirect a removal", root_axis[0])
+        # THE AGENT AXIS: the segment a codex activation would be filed under.
+        agent_axis = dar.pointer_disagreements(dar.pointer_path(activation, "codex", "user"), user)
+        self.assertEqual(1, len(agent_axis))
+        self.assertIn("one pointer per agent", agent_axis[0])
+
+    def test_a_pointer_at_an_unreadable_shape_or_a_scopeless_body_refuses_rather_than_agreeing(self) -> None:
+        activation = Path("/state/activation")
+        stray = dar.pointer_disagreements(activation / "active-receipt.json", body())
+        self.assertEqual(1, len(stray))
+        self.assertIn("is not one of this plane's two keyed names", stray[0])
+        legacy_body = {key: value for key, value in body().items() if key != "scope"}
+        legacy_body["activation_scope"] = "claude-home"
+        scopeless = dar.pointer_disagreements(dar.pointer_path(activation, "claude", "user"), legacy_body)
+        self.assertEqual(1, len(scopeless))
+        self.assertIn("carries no scope object", scopeless[0])
+
+
+class TwoGenerations(unittest.TestCase):
+    """v1 is history: admitted read-only forever, never sealed again, and never retrofitted.
+
+    The positive controls here are the repository's OWN committed evidence receipts, which were sealed
+    by the v1 producer against a real plane. If the v1 generation were dropped, those two documents --
+    which no migration could faithfully convert, because the fields v2 requires were never observed --
+    would stop validating.
+    """
+
+    V1_EVIDENCE = (
+        ROOT / "docs" / "evidence" / "waves" / "f194-w1" / "activation-receipt-install.json",
+        ROOT / "docs" / "evidence" / "waves" / "f194-w1" / "activation-receipt-uninstall.json",
+    )
+
+    def test_the_committed_v1_evidence_receipts_still_validate(self) -> None:
+        for path in self.V1_EVIDENCE:
+            with self.subTest(receipt=path.name):
+                document_value = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(BODY_SCHEMA_V1, document_value["body"]["schema_version"])
+                result = validate(document_value)
+                self.assertEqual(result["verdict"], VALIDATED, result["reasons"])
+
+    def test_a_v1_body_is_never_sealed_again(self) -> None:
+        document_value = json.loads(self.V1_EVIDENCE[0].read_text(encoding="utf-8"))
+        unsealed = dict(document_value["body"])
+        unsealed["record_sha256"] = ""
+        result = seal({**document_value, "body": unsealed, "content_digest": ""})
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("admitted read-only as history", reasons_text(result))
+        # POSITIVE CONTROL: the same document validates, so the refusal is about authoring and not
+        # about the document being unreadable.
+        self.assertEqual(validate(document_value)["verdict"], VALIDATED)
+
+    def test_neither_generation_may_carry_the_other_s_fields(self) -> None:
+        v1_document = json.loads(self.V1_EVIDENCE[0].read_text(encoding="utf-8"))
+        v1_body = dict(v1_document["body"])
+        v1_body["scope"] = {"agent": "claude", "kind": "user"}
+        refused = validate(
+            {
+                **v1_document,
+                "body": dar.seal_body({**v1_body, "record_sha256": ""}),
+                "content_digest": dar.envelope_content_digest(
+                    dar.seal_body({**v1_body, "record_sha256": ""}), "receipt"
+                ),
+            }
+        )
+        self.assertEqual(refused["verdict"], REFUSED)
+        self.assertIn("unknown field 'scope'", reasons_text(refused))
+        legacy_on_v2 = seal(document(body(activation_scope="claude-home")))
+        self.assertEqual(legacy_on_v2["verdict"], REFUSED)
+        self.assertIn("unknown field 'activation_scope'", reasons_text(legacy_on_v2))
+
+    def test_a_v1_entry_record_carries_no_mode_and_a_v2_one_requires_it(self) -> None:
+        self.assertEqual(("content_sha256", "disposition", "entry_name", "prestate"), dar.ENTRY_KEYS_V1)
+        self.assertEqual(("content_sha256", "disposition", "entry_name", "mode", "prestate"), dar.ENTRY_KEYS)
+        v1_document = json.loads(self.V1_EVIDENCE[0].read_text(encoding="utf-8"))
+        rows = [dict(row) for row in v1_document["body"]["entries"]]
+        rows[0]["mode"] = "copy"
+        mutated = dar.seal_body({**v1_document["body"], "entries": rows, "record_sha256": ""})
+        refused = validate(
+            {
+                **v1_document,
+                "body": mutated,
+                "content_digest": dar.envelope_content_digest(mutated, "receipt"),
+            }
+        )
+        self.assertEqual(refused["verdict"], REFUSED)
+        self.assertIn("unknown field 'mode'", reasons_text(refused))
+
+    def test_a_tampered_sealed_receipt_is_refused_on_the_seal_that_no_longer_re_derives(self) -> None:
+        """The N5 replacement direction: a receipt is only reusable while its bytes still seal."""
+        receipt = sealed()
+        self.assertEqual(validate(receipt)["verdict"], VALIDATED)
+        tampered = json.loads(json.dumps(receipt))
+        tampered["body"]["resolved_version"] = "9.9.9"
+        result = validate(tampered)
+        self.assertEqual(result["verdict"], REFUSED)
+        self.assertIn("mismatched pair", reasons_text(result))
+        # And a v1 document tampered the same way is refused too, so history is not a soft channel.
+        v1_document = json.loads(self.V1_EVIDENCE[0].read_text(encoding="utf-8"))
+        v1_tampered = json.loads(json.dumps(v1_document))
+        v1_tampered["body"]["resolved_version"] = "9.9.9"
+        v1_result = validate(v1_tampered)
+        self.assertEqual(v1_result["verdict"], REFUSED)
+        self.assertIn("mismatched pair", reasons_text(v1_result))
+
+    def test_the_generation_shapes_are_data_rather_than_branches(self) -> None:
+        self.assertEqual(BODY_SCHEMA, dar.GENERATION_V2.schema)
+        self.assertEqual(BODY_SCHEMA_V1, dar.GENERATION_V1.schema)
+        self.assertTrue(dar.GENERATION_V2.sealable)
+        self.assertFalse(dar.GENERATION_V1.sealable)
+        self.assertEqual({BODY_SCHEMA, BODY_SCHEMA_V1}, set(dar.GENERATIONS))
+        # The uninstall variant's key set is the base plus exactly the discriminator.
+        required, optional = dar.GENERATION_V2.body_keys("uninstall")
+        self.assertEqual(set(dar.BODY_KEYS) | {"prestate_evidence"}, set(required))
+        self.assertEqual(set(dar.BODY_KEYS_OPTIONAL), set(optional))
+        install_required, install_optional = dar.GENERATION_V2.body_keys("install")
+        self.assertEqual(set(dar.BODY_KEYS), set(install_required))
+        self.assertEqual(set(dar.BODY_KEYS_OPTIONAL), set(install_optional))
 
 
 def check_graph(*receipts: dict[str, Any]) -> dict[str, Any]:

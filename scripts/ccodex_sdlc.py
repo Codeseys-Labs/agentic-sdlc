@@ -86,7 +86,9 @@ EXPECTED_RECEIPT_VOCABULARIES = {
     "EFFECT_STATES": ("complete", "none", "partial", "unknown"),
     "OPERATIONS": ("install", "uninstall", "update"),
     "TERMINAL_PHASES": ("activated", "activated-partial", "not-activated", "retired", "unknown"),
-    "VERSION_SOURCES": ("adapter-readback", "archive-manifest", "request"),
+    # `checkout-tree` arrived with the body's second generation: a version READ from the checkout's own
+    # bump driver, which is a readback and never a request.
+    "VERSION_SOURCES": ("adapter-readback", "archive-manifest", "checkout-tree", "request"),
 }
 # A transition that stopped between its phases. `unknown` is included on purpose: a receipt that
 # cannot state its own effect is exactly the case an operator must be told about.
@@ -95,7 +97,11 @@ INTERRUPTED_TERMINAL_PHASES = ("activated-partial", "unknown")
 ACTIVE_TERMINAL_PHASES = ("activated", "activated-partial")
 # `request` is the refused member of that closed set: a requested version is what the caller asked
 # for, never what an adapter read back, so it never becomes an activated version here.
-PROVEN_VERSION_SOURCES = ("adapter-readback", "archive-manifest")
+# `checkout-tree` IS a readback: the version was read out of the checkout's own bump driver, which is a
+# file this host holds, so a checkout activation states an activated version like any other. Leaving it
+# out would have made every contributor plane report "states no version from a source that read it
+# back" -- a defect finding about a payload class the design admits.
+PROVEN_VERSION_SOURCES = ("adapter-readback", "archive-manifest", "checkout-tree")
 # THE PLANE'S ONE ACTIVE STATEMENT, and the two facts that keep a healthy history from reading as a
 # defect. `ccodex sdlc install` writes this pointer and `ccodex sdlc update` replaces it, while the
 # receipt the update replaced is RETAINED under its own id -- deliberately, so a kill mid-update
@@ -103,11 +109,28 @@ PROVEN_VERSION_SOURCES = ("adapter-readback", "archive-manifest")
 # reader that counted every filed receipt as a current activation would report the retention as an
 # ambiguity. Two independent facts resolve it, and neither one is invented here: the pointer names
 # the current receipt, and an update's own `supersedes` ancestor names the receipt it replaced.
-ACTIVE_POINTER_NAME = "active-receipt.json"
+# THE POINTER PLANE IS KEYED, and the filename is the admission authority every mutating verb reads:
+# `activation/active/<agent>/user.json` for a user scope and `.../project-<root-key>.json` for a
+# project scope, one file per (agent, scope, root). This reader resolves the (claude, user) key, which
+# is the only one a pre-project host can have, and reports the PRE-KEYED name as its own state rather
+# than treating it as absent: a plane activated before the keyed plane existed still has an active
+# statement, and it migrates on the next mutating verb.
+ACTIVE_DIRECTORY = "active"
+DEFAULT_POINTER_AGENT = "claude"
+USER_POINTER_NAME = "user.json"
+LEGACY_ACTIVE_POINTER_NAME = "active-receipt.json"
 SUPERSEDES_RELATION = "supersedes"
 # The pointer's own opaque locator. It is a fixed name this reader already knows, so it carries no
 # operator content and is spelled out rather than digested.
 ACTIVE_POINTER_LOCATOR = "activation-plane://active-receipt"
+# What a reader says about a pre-keyed pointer, and about two pointers claiming one plane. The second
+# is a state an operator resolves by hand: choosing one would be this reader deciding which statement
+# about a plane is current, which is the guess the pointer exists to remove.
+LEGACY_POINTER_REASON = "legacy pointer (migrates on the next lifecycle verb)"
+POINTER_AMBIGUITY_REASON = (
+    "both the legacy pointer and this plane's keyed pointer are present, so which one states the "
+    "current activation is ambiguous; remove the one that is not current"
+)
 # A receipt id is CORRELATED here, so it is admitted only in a bounded closed shape, exactly as
 # `safe_version` bounds a version. The family's own token rule is lowercase letters, ASCII digits,
 # and interior hyphens; the charset is written out because `\w` and `\d` admit Unicode, and a
@@ -967,10 +990,17 @@ def observe_active_pointer(
 ) -> dict[str, Any]:
     """Observe the plane's ONE active statement, or NAME why it states nothing this reader can use.
 
-    ``activation/active-receipt.json`` sits beside the receipts directory, so an unsupplied location
-    is derived from that layout rather than from an environment this reader would have to re-resolve.
+    THE KEYED PATH IS THE DEFAULT and the pre-keyed one is a reported state. An unsupplied location
+    resolves ``activation/active/claude/user.json`` beside the receipts directory -- the only key a
+    host without project scopes can hold -- and falls back to the legacy
+    ``activation/active-receipt.json`` when that is the plane's only statement, saying so in the
+    reason. BOTH present is neither: it is ``ambiguous``, reported and never resolved here, because
+    picking one would be this reader deciding which of two statements about one plane is current.
+
     A caller that names ``None`` has said "treat this plane as having no pointer", which is a
-    different input from naming nothing at all, and the two are recorded as different states.
+    different input from naming nothing at all, and the two are recorded as different states. A caller
+    that names a PATH gets exactly that path, with no fallback: an injected location is the whole
+    statement of where to look.
 
     Absent is a STATE, not a failure: a plane activated before the pointer existed, and a plane that
     was never activated, both have no pointer, and neither is a defect this reader invented.  Every
@@ -987,12 +1017,28 @@ def observe_active_pointer(
         # Whether a caller named this location at all. `UNSUPPLIED` means the layout's own convention
         # was used, and that is a different input from a caller that named one.
         "location_supplied": not isinstance(location, _Unsupplied),
+        # Which of the plane's two pointer spellings this observation is ABOUT: the keyed path, the
+        # pre-keyed one that migrates on the next mutating verb, or a caller-supplied location.
+        "pointer_kind": "supplied" if not isinstance(location, _Unsupplied) else "keyed",
     }
     if location is None:
         observation["state"] = "unnamed"
         observation["reason"] = "no active-receipt pointer location was supplied"
         return observation
-    path = directory.parent / ACTIVE_POINTER_NAME if isinstance(location, _Unsupplied) else location
+    if isinstance(location, _Unsupplied):
+        keyed = directory.parent / ACTIVE_DIRECTORY / DEFAULT_POINTER_AGENT / USER_POINTER_NAME
+        legacy = directory.parent / LEGACY_ACTIVE_POINTER_NAME
+        keyed_present = plane_node_present(keyed)
+        legacy_present = plane_node_present(legacy)
+        if keyed_present and legacy_present:
+            observation["state"] = "ambiguous"
+            observation["reason"] = POINTER_AMBIGUITY_REASON
+            return observation
+        if legacy_present and not keyed_present:
+            observation["pointer_kind"] = "legacy"
+        path = legacy if observation["pointer_kind"] == "legacy" else keyed
+    else:
+        path = location
     try:
         item = path.lstat()
     except FileNotFoundError:
@@ -1024,7 +1070,25 @@ def observe_active_pointer(
     observation["receipt_id"] = assessed["receipt_id"]
     if assessed["receipt_id"] is None:
         observation["reason"] = "states no admissible receipt id, so it correlates with no receipt"
+    elif observation["pointer_kind"] == "legacy":
+        # A readable pre-keyed pointer still states this plane's activation, so it is correlated
+        # normally; what the reason adds is the transition an operator should expect.
+        observation["reason"] = LEGACY_POINTER_REASON
     return observation
+
+
+def plane_node_present(path: Path) -> bool:
+    """Whether a plane path exists at all, links included, without reading or following it.
+
+    ``lstat`` rather than ``exists``: a dangling or symlinked pointer is PRESENT for the purpose of
+    deciding which spelling this plane carries, and reporting it as absent would let a link at one
+    spelling hide the ambiguity with the other.
+    """
+    try:
+        path.lstat()
+    except OSError:
+        return False
+    return True
 
 
 def observe_activation(
@@ -1344,6 +1408,16 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
             readiness_finding(
                 "state-malformed",
                 f"the activation plane's active-receipt pointer did not validate: {pointer['reason']}",
+                ACTIVE_POINTER_LOCATOR,
+            )
+        )
+    elif pointer["state"] == "ambiguous":
+        # Two pointers claiming one plane. The mutating verbs refuse this state by name
+        # (`legacy-pointer-ambiguity`); a reader's job is to say so, with the same remedy.
+        findings.append(
+            readiness_finding(
+                "state-ambiguous",
+                f"the activation plane's pointer is ambiguous: {pointer['reason']}",
                 ACTIVE_POINTER_LOCATOR,
             )
         )

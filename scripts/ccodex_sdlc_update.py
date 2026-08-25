@@ -17,11 +17,18 @@ escaping to the caller, and ``SystemExit`` is never raised for a verdict.
 
 THE TWO ADMISSIONS, BOTH REQUIRED, BOTH BEFORE ANY EFFECT.
 
-  1. THE ACTIVE DISTRIBUTION-ACTIVATION RECEIPT.  ``activation/active-receipt.json`` is the only
-     statement of what this plane owns.  It is validated through the sibling-loaded
-     ``distribution_activation_receipt`` producer, and only a receipt that describes a LIVE
-     activation of THIS host plane is updatable.  No active receipt is a named refusal: there is
-     nothing to update over, and ``ccodex sdlc install --host claude`` is the front door.
+  1. THE ACTIVE DISTRIBUTION-ACTIVATION RECEIPT, AT THIS PLANE'S KEYED POINTER.
+     ``activation/active/<agent>/user.json`` is the only statement of what this (agent, scope, root)
+     plane owns, and THE FILENAME IS THE ADMISSION AUTHORITY: it is compared against the pointed
+     receipt's own ``scope`` on the kind, agent, and root-key axes before anything is classified, so a
+     hand-moved pointer refuses rather than redirecting this refresh at another plane.  The document is
+     validated through the sibling-loaded ``distribution_activation_receipt`` producer, and only a
+     receipt that describes a LIVE activation of THIS host plane and scope is updatable.  A pre-keyed
+     ``activation/active-receipt.json`` is re-filed at the keyed path before this run admits anything
+     and announced in the report; both present is a named refusal.  A ``@1`` receipt is admitted here
+     exactly once, as the outgoing document this refresh supersedes -- the receipt this run seals is
+     always ``@2``.  No active receipt is a named refusal: there is nothing to update over, and
+     ``ccodex sdlc install --host claude`` is the front door.
   2. ONE EXACTLY ACQUIRED CANDIDATE PAYLOAD WHOSE IDENTITY DIFFERS.  Same admission posture as
      ``install``, re-expressed rather than imported: a sealed
      ``release-candidate-acquisition-receipt/v1`` under the acquisition layout, terminal phase
@@ -140,9 +147,14 @@ HOST = "claude"
 OPERATION = "update"
 #: Claude's configured root is the selected home plus ``.claude``.
 HOST_COLLECTION = ".claude"
-#: The scope the shipped install receipt names for this plane. A receipt about another scope
-#: describes a plane this module never observed, so it is refused rather than reinterpreted.
-ACTIVATION_SCOPE = "claude-home"
+#: Which part of the host plane this verb refreshes, as the receipt body's own closed union: the
+#: operator's user plane of one agent. A receipt about another scope describes a plane this module
+#: never observed, so it is refused rather than reinterpreted.
+SCOPE_KIND = "user"
+ACTIVATION_AGENT = HOST
+#: The v1 spelling of the same fact, admitted only on the OUTGOING receipt: a plane activated before
+#: the scope union existed is refreshed exactly once, and the receipt this run seals is v2.
+LEGACY_ACTIVATION_SCOPE = "claude-home"
 ACTIVATION_MODE = "copy"
 ENTRY_AGENT = "claude"
 EMITTING_PLANE = "acquired-candidate"
@@ -194,7 +206,31 @@ ACQUISITION_RECEIPT_SEGMENTS = ("agentic-sdlc", "acquisition", "receipts")
 ACQUISITION_CANDIDATE_SEGMENTS = ("agentic-sdlc", "acquisition", "candidates")
 ACQUISITION_CANDIDATE_LEAF = "root"
 ACTIVATION_SEGMENTS = ("agentic-sdlc", "activation")
-ACTIVE_RECEIPT_NAME = "active-receipt.json"
+
+# ---- the pointer plane, re-expressed ---------------------------------------------------------------
+#
+# Re-expressed from ``distribution_activation_receipt`` for the same reason every other contract here
+# is: the sibling is loaded by absolute path at RUN time, and a Config property cannot wait for it.
+# A test pins this helper against that module's own ``pointer_path`` for both scope kinds.
+ACTIVE_DIRECTORY = "active"
+USER_POINTER_NAME = "user.json"
+PROJECT_POINTER_PREFIX = "project-"
+POINTER_SUFFIX = ".json"
+#: The pre-keyed plane's single pointer name. Only (claude, user) can ever have written it.
+LEGACY_ACTIVE_POINTER_NAME = "active-receipt.json"
+ROOT_KEY_CHARACTERS = 16
+
+
+def _pointer_path(activation_dir: Path, agent: str, kind: str, root: str | None = None) -> Path:
+    """The ONE pointer path for one (agent, scope kind, resolved root)."""
+    if kind == "user":
+        return activation_dir / ACTIVE_DIRECTORY / agent / USER_POINTER_NAME
+    if kind == "project":
+        if not isinstance(root, str) or not root:
+            raise Refusal("a project-scope pointer is named by its resolved root, and none was supplied")
+        key = hashlib.sha256(root.encode("utf-8")).hexdigest()[:ROOT_KEY_CHARACTERS]
+        return activation_dir / ACTIVE_DIRECTORY / agent / f"{PROJECT_POINTER_PREFIX}{key}{POINTER_SUFFIX}"
+    raise Refusal(f"{kind!r} is not one of this plane's scope kinds")
 
 CANDIDATE_MANIFEST_NAME = "manifest.json"
 CANDIDATE_MANIFEST_SCHEMA = "release-candidate/v1"
@@ -462,7 +498,13 @@ class Config:
 
     @property
     def active_receipt_path(self) -> Path:
-        return self.activation_dir / ACTIVE_RECEIPT_NAME
+        """This plane's ONE pointer, at the keyed path (agent, scope kind, root) names."""
+        return _pointer_path(self.activation_dir, ACTIVATION_AGENT, SCOPE_KIND)
+
+    @property
+    def legacy_active_receipt_path(self) -> Path:
+        """Where the pre-keyed plane wrote its single pointer. Only (claude, user) could have."""
+        return self.activation_dir / LEGACY_ACTIVE_POINTER_NAME
 
     @property
     def plans_dir(self) -> Path:
@@ -732,7 +774,20 @@ def admit_active_receipt(dar: ModuleType, config: Config) -> ActiveActivation:
             f"the active receipt {show(str(path))} carries the receipt_id {show(receipt_id)}, which is"
             " not a lowercase token this update could name as the record it supersedes"
         )
-    admit_updatable(body, config, path)
+    # THE POINTER FILENAME IS THE ADMISSION AUTHORITY, so its agreement with the receipt it points at
+    # is checked FIRST: it is compared on the kind, agent, and root-key axes before the scope admission
+    # below asks whether that receipt describes THIS verb's plane, so a hand-moved pointer refuses as a
+    # pointer disagreement rather than as a scope mismatch. A v1 receipt carries no scope union to
+    # compare, and the one pointer name it could have been filed under fixes its key already.
+    if isinstance(body.get("scope"), dict):
+        disagreements = dar.pointer_disagreements(path, body)
+        if disagreements:
+            raise Refusal(
+                "pointer-receipt-disagreement: "
+                + "; ".join(escape_display(str(reason)) for reason in disagreements)
+                + ". Nothing was written"
+            )
+    admit_updatable(body, config, path, dar)
     inventory = active_inventory(body, path)
     return ActiveActivation(
         path=path,
@@ -744,7 +799,7 @@ def admit_active_receipt(dar: ModuleType, config: Config) -> ActiveActivation:
     )
 
 
-def admit_updatable(body: dict[str, Any], config: Config, path: Path) -> None:
+def admit_updatable(body: dict[str, Any], config: Config, path: Path, dar: ModuleType) -> None:
     """Admit only a validated receipt that describes a LIVE activation of THIS host plane and scope."""
     operation = body["operation"]
     if operation not in UPDATABLE_OPERATIONS:
@@ -753,17 +808,15 @@ def admit_updatable(body: dict[str, Any], config: Config, path: Path) -> None:
             f" {list(UPDATABLE_OPERATIONS)} describe a live activation, and refreshing over a"
             " retirement would write into a plane its own record says is gone"
         )
-    if body["host"] != HOST:
+    # WHICH PLANE, ONCE. A v2 receipt states it as `scope.agent` and `admit_active_scope` compares the
+    # whole union -- agent included -- against this verb's own. A v1 receipt states it as a separate
+    # `host` token, which is the only generation that has one to check.
+    if body.get("schema_version") == dar.BODY_SCHEMA_V1 and body.get("host") != HOST:
         raise Refusal(
-            f"the active receipt {show(str(path))} records host {show(body['host'])}, not"
+            f"the active receipt {show(str(path))} records host {show(body.get('host'))}, not"
             f" {show(HOST)}; a receipt names the one host plane it observed"
         )
-    if body["activation_scope"] != ACTIVATION_SCOPE:
-        raise Refusal(
-            f"the active receipt {show(str(path))} records activation_scope"
-            f" {show(body['activation_scope'])}, not {show(ACTIVATION_SCOPE)}; this update refreshes"
-            " the Claude home plane it can observe and reinterprets no other scope"
-        )
+    admit_active_scope(body, path, dar)
     phase = body["terminal_phase"]
     if phase not in UPDATABLE_PHASES:
         raise Refusal(
@@ -792,6 +845,35 @@ def admit_updatable(body: dict[str, Any], config: Config, path: Path) -> None:
             f"the active receipt {show(str(path))} carries no unknowns list, so what it could not"
             " observe cannot be consulted"
         )
+
+
+def admit_active_scope(body: dict[str, Any], path: Path, dar: ModuleType) -> None:
+    """Admit the OUTGOING receipt's scope, in whichever generation's spelling it carries.
+
+    A v2 receipt states the closed union and must name exactly this verb's (agent, kind); a v1 receipt
+    states the single token `claude-home`, and only (claude, user) could ever have written it, so it
+    is admitted as the outgoing document this refresh supersedes -- ONCE. The receipt this run seals is
+    v2 either way, which is what makes the admission a migration rather than a second writable schema.
+    """
+    scope = body.get("scope")
+    if isinstance(scope, dict):
+        expected = {"agent": ACTIVATION_AGENT, "kind": SCOPE_KIND}
+        if scope != expected:
+            raise Refusal(
+                f"the active receipt {show(str(path))} records scope {show(scope)}, not"
+                f" {show(expected)}; this update refreshes the plane it can observe and reinterprets"
+                " no other scope or agent"
+            )
+        return
+    legacy = body.get("activation_scope")
+    if legacy == LEGACY_ACTIVATION_SCOPE and body.get("schema_version") == dar.BODY_SCHEMA_V1:
+        return
+    raise Refusal(
+        f"the active receipt {show(str(path))} states neither this verb's scope union"
+        f" ({show({'agent': ACTIVATION_AGENT, 'kind': SCOPE_KIND})}) nor the historical"
+        f" {show(LEGACY_ACTIVATION_SCOPE)} scope of a {show(dar.BODY_SCHEMA_V1)} document; a receipt"
+        " about another scope describes a plane this module never observed"
+    )
 
 
 def active_inventory(body: dict[str, Any], path: Path) -> dict[str, dict[str, Any]]:
@@ -1350,6 +1432,9 @@ class Run:
     completed_effects: int = 0
     failures: list[str] = dataclass_field(default_factory=list)
     pointer_replaced: bool = False
+    #: The one line a legacy-pointer migration owes the report, or None when there was nothing to
+    #: migrate.  Held here rather than printed where it happens, so the report stays one write.
+    pointer_migration: str | None = None
 
 
 def safe_digest(bundle: ModuleType, path: Path) -> str | None:
@@ -1826,7 +1911,6 @@ def build_plan_document(
     refresh.sort(key=lambda row: str(row["entry_name"]))
     preserve.sort(key=lambda row: str(row["entry_name"]))
     return {
-        "activation_scope": ACTIVATION_SCOPE,
         "archive_sha256": payload.archive_sha256,
         "candidate_id": payload.candidate_id,
         "candidate_root": str(payload.candidate_root),
@@ -1896,7 +1980,12 @@ def build_journal_document(
 
 @dataclass(frozen=True)
 class Outcome:
-    """One entry's observed outcome, with the content digest that lands in the receipt inventory."""
+    """One entry's observed outcome, with the content digest that lands in the receipt inventory.
+
+    ``mode`` is the mode this run PUBLISHED at that destination, or ``None`` for a row it published
+    nothing at.  The receipt's per-row mode is where copy-only binds, so it records the mode the
+    substrate REPORTED rather than the mode this run asked for.
+    """
 
     name: str
     prestate: str
@@ -1904,6 +1993,7 @@ class Outcome:
     detail: str
     content_sha256: str | None
     unknown_detail: str | None
+    mode: str | None = None
 
 
 def observe_content(bundle: ModuleType, path: Path | None) -> tuple[str | None, str | None]:
@@ -2028,6 +2118,9 @@ def refresh(
                 detail=item.detail,
                 content_sha256=content,
                 unknown_detail=unknown,
+                # The mode the substrate REPORTED publishing, already checked against this plane's
+                # copy-only rule above: a readback rather than a restatement of the request.
+                mode=mode,
             )
         )
     return outcomes
@@ -2055,6 +2148,9 @@ def build_inventory(
                 "content_sha256": outcome.content_sha256,
                 "disposition": outcome.disposition,
                 "entry_name": outcome.name,
+                # Null for a row this run published nothing at.  The receipt family requires a mode
+                # exactly where the disposition says bytes were published.
+                "mode": outcome.mode,
                 "prestate": outcome.prestate,
             }
         )
@@ -2122,18 +2218,16 @@ def build_receipt_body(
     effect_state: str,
     terminal_phase: str,
 ) -> dict[str, Any]:
-    """Write the closed ``distribution-activation-body@1`` observation from already-built locals.
+    """Write the closed ``distribution-activation-body@2`` observation from already-built locals.
 
     Both lists arrive complete, which is the whole point: nothing is discovered while this literal is
     evaluated, so nothing can be dropped by the order in which Python evaluates it.
     """
     return {
-        "activation_scope": ACTIVATION_SCOPE,
         "archive_sha256": payload.archive_sha256,
         "candidate_id": payload.candidate_id,
         "effect_state": effect_state,
         "entries": entries,
-        "host": HOST,
         "journal_sha256": journal_sha256,
         "operation": OPERATION,
         "plan_sha256": plan_sha256,
@@ -2147,10 +2241,19 @@ def build_receipt_body(
         "requested_version": None,
         "resolved_version": payload.resolved_version,
         "schema_version": dar.BODY_SCHEMA,
+        # The closed union, not a display token.  An update of a v1-activated plane seals v2 here:
+        # the outgoing document keeps its own bytes, and this one states the scope the way the pointer
+        # that admits it is keyed.
+        "scope": scope_object(),
         "terminal_phase": terminal_phase,
         "unknowns": unknowns,
         "version_source": VERSION_SOURCE,
     }
+
+
+def scope_object() -> dict[str, Any]:
+    """The receipt body's closed scope union for this verb: the user plane of one agent."""
+    return {"agent": ACTIVATION_AGENT, "kind": SCOPE_KIND}
 
 
 def receipt_identity(payload: AdmittedPayload, instant: str) -> str:
@@ -2242,6 +2345,58 @@ def retain_prior_receipt(bundle: ModuleType, dar: ModuleType, config: Config, ac
     return path
 
 
+def migrate_legacy_pointer(bundle: ModuleType, config: Config) -> str | None:
+    """Re-file the pre-keyed pointer at its keyed path, BEFORE this run's own admission logic.
+
+    Only (claude, user) can ever have written ``activation/active-receipt.json``, because every writer
+    of it spelled the scope ``claude-home``.  So the migration is exactly that one move, it runs once,
+    and it is announced in the report rather than performed silently.
+
+    BOTH POINTERS PRESENT IS A REFUSAL: choosing one would be this module deciding which of two
+    statements about one plane is current, which is the guess a pointer exists to remove.  That is also
+    how the migration's own crash window resolves -- the keyed pointer is written durably before the
+    legacy one is unlinked, so an interruption leaves both present and the next verb refuses by name.
+    """
+    legacy = config.legacy_active_receipt_path
+    keyed = config.active_receipt_path
+    try:
+        item = legacy.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise Refusal(
+            f"the legacy active pointer {show(str(legacy))} cannot be inspected, so whether this plane"
+            f" already states an activation is unknown: {show(exc)}"
+        ) from exc
+    if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
+        raise Refusal(
+            f"the legacy active pointer {show(str(legacy))} is a link or not a regular file; a"
+            " lifecycle plane resolves a fixed path, and a redirection there is state nobody recorded"
+        )
+    if bundle.path_present(keyed):
+        raise Refusal(
+            f"legacy-pointer-ambiguity: this plane carries both the legacy pointer"
+            f" {show(str(legacy))} and the keyed pointer {show(str(keyed))}. Two statements of what one"
+            " plane owns is an ambiguity this verb refuses rather than resolves; remove the one that is"
+            " not current and run this verb again. Nothing was written"
+        )
+    raw = read_exact_file(legacy, _MAX_RECEIPT_BYTES, "the legacy active pointer")
+    write_replaceable_document(bundle, keyed, raw, "the migrated active receipt pointer")
+    try:
+        legacy.unlink()
+        bundle.fsync_directory(legacy.parent)
+    except (OSError, bundle.DurabilityError) as exc:
+        raise Refusal(
+            f"the legacy active pointer {show(str(legacy))} was copied to {show(str(keyed))} but could"
+            f" not be removed, so this plane now states its activation twice: {show(exc)}. Remove the"
+            " legacy path by hand; nothing else was written"
+        ) from exc
+    return (
+        f"migrated the legacy active pointer {escape_display(str(legacy))} to the keyed path"
+        f" {escape_display(str(keyed))} (one pointer per agent, scope, and root)"
+    )
+
+
 def replace_active_pointer(bundle: ModuleType, config: Config, raw: bytes) -> None:
     """Point the plane at the NEW receipt, atomically, only after it is durably filed.
 
@@ -2287,6 +2442,8 @@ def report(
         " (requested: no version was requested)",
         f"claude root: {escape_display(str(config.plane_root))} (copies, never links)",
     ]
+    if run.pointer_migration is not None:
+        lines.append(run.pointer_migration)
     for outcome in outcomes:
         suffix = " [not carried by the new payload]" if outcome.name in dropped else ""
         lines.append(
@@ -2368,6 +2525,10 @@ def run_update(config: Config, run: Run) -> int:
     instant = observe_instant(config)
     dar = load_sibling("distribution_activation_receipt")
     bundle = load_sibling("install_skill_bundle")
+
+    # The legacy pointer is re-filed at its keyed path BEFORE this run admits anything, so the
+    # admission below reads one plane with one pointer.  A refusal here leaves the plane as it was.
+    run.pointer_migration = migrate_legacy_pointer(bundle, config)
 
     active = admit_active_receipt(dar, config)
     selection = admit_new_payload(config, active)

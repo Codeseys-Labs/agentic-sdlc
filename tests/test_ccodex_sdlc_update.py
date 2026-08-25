@@ -289,17 +289,16 @@ def sealed_prior_receipt(
                 "content_sha256": digest,
                 "disposition": "installed",
                 "entry_name": name,
+                "mode": "copy",
                 "prestate": "absent",
             }
         )
     rows.sort(key=lambda row: str(row["entry_name"]))
     body = {
-        "activation_scope": "claude-home",
         "archive_sha256": archive,
         "candidate_id": candidate_id,
         "effect_state": "complete",
         "entries": rows,
-        "host": "claude",
         "journal_sha256": hashlib.sha256(b"prior-journal").hexdigest(),
         "operation": "install",
         "plan_sha256": hashlib.sha256(b"prior-plan").hexdigest(),
@@ -309,6 +308,7 @@ def sealed_prior_receipt(
         "requested_version": None,
         "resolved_version": version,
         "schema_version": receipts.BODY_SCHEMA,
+        "scope": {"agent": "claude", "kind": "user"},
         "terminal_phase": "activated",
         "unknowns": [],
         "version_source": "archive-manifest",
@@ -364,6 +364,16 @@ class Fixture:
 
     @property
     def pointer(self) -> Path:
+        """This plane's ONE pointer, at the KEYED path the filename-as-authority rule fixes.
+
+        Spelled out rather than read from the module under test: the filename IS the admission
+        authority, so a test that asked the writer where it wrote would agree with any path it chose.
+        """
+        return self.activation_dir / "active" / "claude" / "user.json"
+
+    @property
+    def legacy_pointer(self) -> Path:
+        """Where the pre-keyed plane wrote its single pointer, for the migration cases."""
         return self.activation_dir / "active-receipt.json"
 
     def destination(self, relative: str) -> Path:
@@ -469,7 +479,9 @@ def build_fixture(
     activation_dir = state_home / "agentic-sdlc" / "activation"
     (activation_dir / "receipts").mkdir(parents=True, exist_ok=True)
     if write_pointer:
-        (activation_dir / "active-receipt.json").write_bytes(receipts.canonical_bytes(prior))
+        keyed = activation_dir / "active" / "claude" / "user.json"
+        keyed.parent.mkdir(parents=True, exist_ok=True)
+        keyed.write_bytes(receipts.canonical_bytes(prior))
     if retain_prior:
         (activation_dir / "receipts" / f"{prior['receipt_id']}.json").write_bytes(
             receipts.canonical_bytes(prior)
@@ -998,6 +1010,150 @@ class EndToEndUpdateTest(TemporaryRoot):
 
 
 @WINDOWS_SKIP
+def sealed_v1_prior_receipt(entries: list[tuple[str, Path]]) -> dict[str, Any]:
+    """One PRE-KEYED active receipt, in the read-only v1 generation, sealed WITHOUT the producer.
+
+    ``seal`` refuses a v1 body by name -- history is never authored -- so this fixture derives the two
+    digests directly, which is exactly what the v1 producer did. That is the only way to build the
+    prestate a host activated before the scope union existed, and it is the prestate this update must
+    admit exactly once as the outgoing document a v2 seal supersedes.
+    """
+    rows = [
+        {
+            "content_sha256": bundle.digest(destination),
+            "disposition": "installed",
+            "entry_name": name,
+            "prestate": "absent",
+        }
+        for name, destination in entries
+    ]
+    rows.sort(key=lambda row: str(row["entry_name"]))
+    body = {
+        "activation_scope": "claude-home",
+        "archive_sha256": ARCHIVE_A,
+        "candidate_id": CANDIDATE_A,
+        "effect_state": "complete",
+        "entries": rows,
+        "host": "claude",
+        "journal_sha256": hashlib.sha256(b"v1-journal").hexdigest(),
+        "operation": "install",
+        "plan_sha256": hashlib.sha256(b"v1-plan").hexdigest(),
+        "public_channel": None,
+        "record_sha256": "",
+        "release_claim": "none",
+        "requested_version": None,
+        "resolved_version": VERSION_A,
+        "schema_version": receipts.BODY_SCHEMA_V1,
+        "terminal_phase": "activated",
+        "unknowns": [],
+        "version_source": "archive-manifest",
+    }
+    sealed_body = receipts.seal_body(body)
+    return {
+        "ancestors": [
+            {
+                "expected_kind": receipts.RECEIPT_KIND,
+                "receipt_id": OPERATION_A,
+                "relation": "derived-from",
+            }
+        ],
+        "body": sealed_body,
+        "content_digest": receipts.envelope_content_digest(sealed_body, "the v1 prior activation"),
+        "emitting_plane": "acquired-candidate",
+        "receipt_id": "install-v1-activation",
+        "receipt_kind": receipts.RECEIPT_KIND,
+        "schema": receipts.ENVELOPE_SCHEMA,
+        "stated_at": PRIOR_INSTANT,
+    }
+
+
+class GenerationMigrationTest(TemporaryRoot):
+    """A v1-activated plane is updated ONCE, and the receipt this run seals is v2."""
+
+    def test_a_v1_active_receipt_is_admitted_as_the_outgoing_document(self) -> None:
+        fixture = self.fixture()
+        prior = sealed_v1_prior_receipt(fixture.activated)
+        self.assertEqual("validated", receipts.derive("validate", prior, "the v1 prior")["verdict"])
+        fixture.pointer.write_bytes(receipts.canonical_bytes(prior))
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        sealed = json.loads(fixture.pointer.read_text(encoding="utf-8"))
+        self.assertEqual(receipts.BODY_SCHEMA, sealed["body"]["schema_version"])
+        self.assertEqual({"agent": "claude", "kind": "user"}, sealed["body"]["scope"])
+        self.assertNotIn("activation_scope", sealed["body"])
+        self.assertEqual(
+            [prior["receipt_id"]],
+            [row["receipt_id"] for row in sealed["ancestors"] if row["relation"] == "supersedes"],
+        )
+        # The v1 document is RETAINED under its own id: history is kept, never rewritten.
+        retained = fixture.activation_dir / "receipts" / f"{prior['receipt_id']}.json"
+        self.assertEqual(receipts.canonical_bytes(prior), retained.read_bytes())
+
+    def test_a_v1_receipt_about_another_scope_is_refused_rather_than_reinterpreted(self) -> None:
+        fixture = self.fixture()
+        prior = sealed_v1_prior_receipt(fixture.activated)
+        body = dict(prior["body"])
+        body["activation_scope"] = "some-other-plane"
+        body["record_sha256"] = ""
+        sealed_body = receipts.seal_body(body)
+        fixture.pointer.write_bytes(
+            receipts.canonical_bytes(
+                {
+                    **prior,
+                    "body": sealed_body,
+                    "content_digest": receipts.envelope_content_digest(sealed_body, "the v1 prior"),
+                }
+            )
+        )
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("states neither this verb's scope union", outcome.stderr)
+
+    def test_a_legacy_pointer_alone_is_migrated_and_announced(self) -> None:
+        fixture = self.fixture(write_pointer=False)
+        fixture.legacy_pointer.write_bytes(receipts.canonical_bytes(fixture.prior_receipt))
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertIn("migrated the legacy active pointer", outcome.stdout)
+        self.assertFalse(fixture.legacy_pointer.exists())
+        self.assertTrue(fixture.pointer.is_file())
+
+    def test_both_pointers_present_refuses_naming_both_paths(self) -> None:
+        fixture = self.fixture()
+        fixture.legacy_pointer.write_bytes(fixture.pointer.read_bytes())
+        before = {path: path.read_bytes() for path in (fixture.pointer, fixture.legacy_pointer)}
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("legacy-pointer-ambiguity", outcome.stderr)
+        self.assertIn(str(fixture.legacy_pointer), outcome.stderr)
+        self.assertIn(str(fixture.pointer), outcome.stderr)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        # Positive control: with the ambiguity resolved the identical plane refreshes.
+        fixture.legacy_pointer.unlink()
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_a_pointer_whose_receipt_names_another_scope_refuses_on_the_pointer_axis(self) -> None:
+        fixture = self.fixture()
+        self.repoint(
+            fixture,
+            body_overrides={"scope": {"agent": "claude", "kind": "project", "root": str(fixture.root / "repo")}},
+        )
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("pointer-receipt-disagreement", outcome.stderr)
+        self.assertIn("is a user-scope pointer while the receipt it names records scope.kind", outcome.stderr)
+
+
 class AdmissionRefusalTest(TemporaryRoot):
     """Both admissions refuse BY NAME before any effect, and each refusal has a positive control."""
 
@@ -1023,6 +1179,7 @@ class AdmissionRefusalTest(TemporaryRoot):
         )
         self.assertEqual(before, plane_inventory(fixture.claude_root))
         # Positive control: the identical fixture with the pointer written completes.
+        fixture.pointer.parent.mkdir(parents=True, exist_ok=True)
         fixture.pointer.write_bytes(receipts.canonical_bytes(fixture.prior_receipt))
         self.assertEqual(0, call_main(fixture).code)
 
@@ -1053,7 +1210,13 @@ class AdmissionRefusalTest(TemporaryRoot):
     def test_a_retired_active_receipt_refuses_because_there_is_nothing_to_update_over(self) -> None:
         fixture = self.fixture()
         retired_rows = [
-            {"content_sha256": None, "disposition": "removed", "entry_name": name, "prestate": "owned"}
+            {
+                "content_sha256": None,
+                "disposition": "removed",
+                "entry_name": name,
+                "mode": "copy",
+                "prestate": "owned",
+            }
             for name, _ in fixture.activated
         ]
         self.repoint(
@@ -1061,6 +1224,10 @@ class AdmissionRefusalTest(TemporaryRoot):
             body_overrides={
                 "entries": sorted(retired_rows, key=lambda row: str(row["entry_name"])),
                 "operation": "uninstall",
+                # A v2 retirement body carries the closed prestate-evidence discriminator, and this
+                # one derives from the receipt it retires -- so exactly one `derived-from` ancestor,
+                # which the fixture already writes.
+                "prestate_evidence": "activation-receipt",
                 "terminal_phase": "retired",
             },
         )

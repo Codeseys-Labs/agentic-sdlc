@@ -3,7 +3,66 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Seal and validate the `distribution-activation@1` receipt body: the family's first payload.
+"""Seal and validate the `distribution-activation@2` receipt body: the family's first payload.
+
+TWO GENERATIONS, ONE WRITABLE. `validate` admits both `distribution-activation-body@1` and `@2`;
+`seal` writes `@2` only. That asymmetry is the whole shape of this module's history handling, and it
+inverts the ownership ledger's one-schema-no-migration doctrine ON PURPOSE: the installer refuses a
+foreign ownership document because its physical witnesses no longer exist and nothing could faithfully
+convert it, while a SEALED RECEIPT is immutable evidence whose bytes prove what one run observed.
+Rewriting one to @2 would destroy exactly that, and filling @2's new fields (`scope`, per-row `mode`)
+would make this module the author of facts no run ever saw. So v1 documents stay readable forever and
+are never re-sealed, and the named cost is that every rule added here must be reasoned about twice.
+`Generation` holds the per-generation shapes as DATA rather than as branches, so a check reads one key
+set instead of asking which generation it is in three places and disagreeing with itself in a fourth.
+
+WHAT @2 CHANGED, AND WHY EACH CHANGE IS A SHAPE RATHER THAN A GUARD. The discipline throughout is one
+fact, one spelling, closed key sets per variant: a cross-field prose guard is replaced by a shape that
+cannot express the disagreement.
+
+  scope              REPLACES `activation_scope`, as a closed discriminated union whose key set is
+                     EXACT per kind: `{kind: user, agent}` or `{kind: project, agent, root}`. A user
+                     scope carrying a root and a project scope missing one are both refused by
+                     comparison. Keeping v1's display token beside a project spelling would have been
+                     two spellings of one fact, and a receipt whose two spellings disagree is a
+                     representable illegal state guarded only by a validator clause.
+  NO root_key        anywhere in the body. The pointer FILENAME derives `sha256(scope.root)`
+                     truncated, and `pointer_disagreements` compares the two at admission. A stored
+                     field whose only function is to be checked against a derivation of a sibling
+                     field is the same defect `activation_scope` was deleted for.
+  NO mode_policy     anywhere in the body. Mode is enforced where it is real -- per inventory row,
+                     against bytes -- so `entries[].mode` carries it and project scope refuses any
+                     published row that is not a copy. A body-level policy field would be
+                     single-valued on the one variant that has a policy, and `scope.kind` already
+                     identifies it.
+  checkout           the ONE optional object, and the one place this generation ADDS vocabulary:
+                     `{commit: <40hex>|"unknown", dirty: bool}`. Present means the payload was a tree
+                     rather than an archive, and that single statement fixes two others in both
+                     directions: `version_source` is `checkout-tree`, and `archive_sha256` is null --
+                     NOT-SUPPLIED, because no archive exists, so no unknown is named for it and a
+                     clean checkout activation can still be `complete`. The paired ancestor rule is
+                     that the `derived-from` ancestor is FORBIDDEN exactly where `checkout` is
+                     present, and required exactly where an archive digest is.
+  version_source     gains `checkout-tree`: the version read from exactly ONE authoritative file,
+                     `.version-bump.json`'s own `current` field. A mid-bump tree with drifted sibling
+                     manifests is a legitimate checkout-install state; that drift is the repository
+                     gate's business, and this receipt records the driver value alone.
+  prestate_evidence  an UNINSTALL-only closed discriminator: `activation-receipt` (one `derived-from`,
+                     naming the receipt retired) or `ledger` (ZERO ancestors, inventory drawn from the
+                     ownership rows the run retired). Without the variant the legacy-unreceipted
+                     retirement is unrepresentable, because the family requires exactly one ancestor;
+                     and deleting that removal path instead would force an INSTALL before a removal on
+                     exactly the hosts whose rows no verb would otherwise select.
+  candidate_id       stays exact and non-null on every path. A checkout has no manifest to read an
+                     identity from, so its producer derives one over the inventory rows and their
+                     content digests (`checkout_candidate_id`, exported so there is one definition).
+                     This module does NOT re-derive it while validating: a retirement legitimately
+                     carries the candidate_id of the payload it retired, whose inventory is not the
+                     retirement's own.
+
+Everything else -- `operation`, `host`, the inventory's prestate/disposition matrices, `effect_state`
+and `terminal_phase`, `supersedes` for update, the two seals, the unknown-consistency rules -- carries
+over unchanged.
 
 `skills/agentic-sdlc/tools/receipt-envelope.py` owns the common envelope and states, in its
 "WHAT THIS ENVELOPE DOES NOT OWN YET" paragraph, that producer and schema versions, physical subject
@@ -36,7 +95,8 @@ valid on the strength of its own re-expression alone.
 
 THE BODY, FIELD BY FIELD, EACH WITH THE REASON IT EXISTS.
 
-  schema_version      `agentic-sdlc/distribution-activation-body@1`. The family payload versions
+  schema_version      `agentic-sdlc/distribution-activation-body@2`, or `@1` on a historical
+                      document this module reads and never re-seals. The family payload versions
                       itself, which is the whole reason the envelope's `schema` is not asked to.
   operation           `install`, `update`, or `uninstall`, closed. The receipt KIND names the
                       lifecycle FAMILY, not one step of it, so acquisition and activation and
@@ -47,8 +107,11 @@ THE BODY, FIELD BY FIELD, EACH WITH THE REASON IT EXISTS.
                       nothing: `all` would read as evidence about a plane this operation never
                       touched. `codex` is not admitted here because no activation of it has been
                       observed by this producer; it arrives when its first receipt does.
-  activation_scope    the named scope within the host, one lowercase token, wildcards refused by
-                      name. `host` says which plane, `scope` says which part of it.
+  scope               which part of the host plane this activation touched, as the closed union above:
+                      `host` says which plane, `scope` says which part of it, and `scope.agent` must
+                      agree with `host` because they name the same plane. (v1 spelled this as the
+                      single lowercase token `activation_scope`, which @2 deletes rather than extends;
+                      a v1 document keeps that field and is read with v1's rules.)
   requested_version   the version the CALLER asked for, or `null` for "no version was requested".
                       Null and absent are different facts and are refused differently: an absent key
                       is a body that never spoke about the request, a null is a body that says there
@@ -56,8 +119,8 @@ THE BODY, FIELD BY FIELD, EACH WITH THE REASON IT EXISTS.
   resolved_version    the EXACT version that was actually resolved. Required, never null, never
                       derived from `requested_version` (Seed agentic-sdlc-0faa: a requested identity
                       never becomes a readback).
-  version_source      `adapter-readback` or `archive-manifest` -- where the resolved version was
-                      READ. `request` is a member of the closed vocabulary and is REFUSED, because
+  version_source      `adapter-readback`, `archive-manifest`, or `checkout-tree` -- where the resolved
+                      version was READ. `request` is a member of the closed vocabulary and is REFUSED, because
                       the honest failure it names ("we only ever had the request") must be
                       expressible in order to be rejected by name rather than silently spelled as a
                       readback.
@@ -159,7 +222,10 @@ from pathlib import Path
 from typing import Any
 
 #: This family's payload version. The envelope's `schema` versions the envelope, never the payload.
-BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@1"
+BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@2"
+#: The FIRST generation, admitted read-only forever as history. See the docstring's DUAL GENERATION
+#: paragraph for the cost this carries and why it is paid rather than migrated away.
+BODY_SCHEMA_V1 = "agentic-sdlc/distribution-activation-body@1"
 #: Re-expressed from the skills plane, never imported; the test module proves the two agree.
 ENVELOPE_SCHEMA = "agentic-sdlc/receipt-envelope@1"
 RESULT_SCHEMA = "agentic-sdlc/distribution-activation-result@1"
@@ -199,13 +265,13 @@ VERDICT_REFUSED = "refused"
 
 CONSEQUENCE = {
     VERDICT_SEALED: (
-        "the supplied observation was admitted as a distribution-activation@1 body, its record seal "
+        "the supplied observation was admitted as a distribution-activation@2 body, its record seal "
         "and the envelope's content digest were derived over the canonical bytes, and the complete "
         "receipt is reported; a receipt is evidence and grants no approval, admission, completion, "
         "or outward authority"
     ),
     VERDICT_VALIDATED: (
-        "the supplied receipt carries the closed distribution-activation@1 body, every closed "
+        "the supplied receipt carries a closed distribution-activation body of an admitted generation, every closed "
         "vocabulary and cross-field rule holds, every recorded unknown is consistent with the "
         "recorded facts, and both the record seal and the envelope content digest re-derive; a "
         "validated receipt is evidence and authorizes nothing"
@@ -222,9 +288,35 @@ EXIT_OK = 0
 EXIT_INTERNAL = 1
 EXIT_INPUT = 2
 
-#: The closed body key set. Every key is REQUIRED, so an absence is always a named refusal and an
-#: unrecognised key is refused rather than ignored.
+#: The closed v2 body key set: every key here is REQUIRED of every operation, so an absence is
+#: always a named refusal and an unrecognised key is refused rather than ignored. `scope` replaces
+#: v1's `activation_scope` AND v1's `host`; none of the three coexist, because two spellings of one
+#: fact are exactly the representable illegal state this generation exists to delete. `scope.agent`
+#: is the ONE statement of which plane this activation touched, and a reader derives every display
+#: string -- including a host-application spelling like `claude-code` -- from it.
 BODY_KEYS = (
+    "archive_sha256",
+    "candidate_id",
+    "effect_state",
+    "entries",
+    "journal_sha256",
+    "operation",
+    "plan_sha256",
+    "public_channel",
+    "record_sha256",
+    "release_claim",
+    "requested_version",
+    "resolved_version",
+    "schema_version",
+    "scope",
+    "terminal_phase",
+    "unknowns",
+    "version_source",
+)
+
+#: The v1 body key set, frozen. A v1 document is history: its bytes are never rewritten, so this
+#: tuple is never edited again either.
+BODY_KEYS_V1 = (
     "activation_scope",
     "archive_sha256",
     "candidate_id",
@@ -245,6 +337,17 @@ BODY_KEYS = (
     "version_source",
 )
 
+#: The one key an UNINSTALL body carries and no other operation may: which prestate evidence the
+#: retirement drew its inventory from. Required there, refused everywhere else, by exact key set --
+#: so the ancestor count each evidence kind admits is a shape rather than a prose rule.
+BODY_KEYS_UNINSTALL = ("prestate_evidence",)
+
+#: The one OPTIONAL key of this generation, and the only vocabulary v2 adds rather than deletes.
+#: Present means "this activation drew from a checkout, not from an archive"; absent means the
+#: opposite. There is no `payload_source` spelling beside it, and no body-level `mode_policy`
+#: anywhere: mode binds bytes per inventory row, and `scope.kind` already identifies the policy.
+BODY_KEYS_OPTIONAL = ("checkout",)
+
 #: The closed envelope key set, re-expressed.
 ENVELOPE_KEYS = (
     "ancestors",
@@ -258,10 +361,51 @@ ENVELOPE_KEYS = (
 )
 
 REFERENCE_KEYS = ("expected_kind", "receipt_id", "relation")
-ENTRY_KEYS = ("content_sha256", "disposition", "entry_name", "prestate")
+#: The v2 entry record. `mode` is the addition: the publication mode is enforced where it is real --
+#: per row, against the bytes -- and never as a body-level policy field.
+ENTRY_KEYS = ("content_sha256", "disposition", "entry_name", "mode", "prestate")
+#: The v1 entry record, frozen with its generation.
+ENTRY_KEYS_V1 = ("content_sha256", "disposition", "entry_name", "prestate")
 UNKNOWN_KEYS = ("detail", "observation", "subject")
 
 OPERATIONS = ("install", "uninstall", "update")
+
+#: The closed scope union, keyed by `kind`, with EXACT key sets per kind. A user scope carrying a
+#: `root` and a project scope missing one are both refused by comparison rather than by a prose
+#: guard, and neither kind carries a `root_key`: the pointer FILENAME derives that key, and a stored
+#: copy of a derivation of a sibling field is the same two-spellings defect as v1's `activation_scope`
+#: beside a project spelling.
+SCOPE_KINDS = ("project", "user")
+SCOPE_KEYS = {
+    "user": ("agent", "kind"),
+    "project": ("agent", "kind", "root"),
+}
+#: One statement of which part of the host this activation touched, so `scope.kind` is the whole
+#: policy identifier and no second field restates it.
+SCOPE_USER = "user"
+SCOPE_PROJECT = "project"
+
+#: The optional checkout object: exactly two fields, and `commit` is either a 40-character git object
+#: name or the explicit `unknown`. `dirty` is a real boolean, because `0`/`1`/`"false"` would each
+#: read as a state this receipt cannot honestly claim to have observed.
+CHECKOUT_KEYS = ("commit", "dirty")
+CHECKOUT_COMMIT_UNKNOWN = "unknown"
+
+#: Where an uninstall's inventory came from. `activation-receipt` names the receipt being retired as
+#: this document's single `derived-from` ancestor; `ledger` names NO ancestor, because a legacy
+#: unreceipted plane has no activation receipt to derive from and inventing one would forge evidence.
+PRESTATE_EVIDENCE = ("activation-receipt", "ledger")
+PRESTATE_EVIDENCE_ANCESTORS = {"activation-receipt": 1, "ledger": 0}
+
+#: The publication modes the ownership substrate itself records (`install_skill_bundle`'s own
+#: `record["mode"]` vocabulary, re-expressed). One spelling of one fact in both documents.
+MODES = ("copy", "junction", "link")
+#: Project scope is copy-only, and this is where that binds: a row this operation PUBLISHED at
+#: project scope records `copy` or the body is refused.
+PROJECT_MODE = "copy"
+#: The dispositions under which this operation published bytes, so the mode it used is a fact it
+#: holds and a null there is supplied-but-missing rather than not-supplied.
+PUBLISHED_DISPOSITIONS = ("installed", "refreshed")
 
 #: Closed and single-valued on purpose: a wildcard host binds nothing, and a host whose activation
 #: this producer has never observed arrives with its first receipt, not in advance.
@@ -281,9 +425,17 @@ TERMINAL_PHASES = (
     "retired",
     "unknown",
 )
-VERSION_SOURCES = ("adapter-readback", "archive-manifest", "request")
+#: v2 adds exactly ONE member: `checkout-tree`, the version read from exactly one authoritative file
+#: -- `.version-bump.json`'s own `current` field, the bump driver. A mid-bump tree whose sibling
+#: manifests disagree is a legitimate checkout-install state; that drift is the repository gate's
+#: business (`bump-version.sh --check`), and this receipt records the driver value alone.
+VERSION_SOURCES = ("adapter-readback", "archive-manifest", "checkout-tree", "request")
+#: The v1 vocabulary, frozen with its generation.
+VERSION_SOURCES_V1 = ("adapter-readback", "archive-manifest", "request")
 #: The refused member of that closed set, kept expressible so it can be rejected by name.
 VERSION_SOURCE_REQUEST = "request"
+#: The one source a checkout payload may state, paired with the `checkout` object in both directions.
+VERSION_SOURCE_CHECKOUT = "checkout-tree"
 
 OBSERVATIONS = ("archive-digest", "entry-content", "journal-digest", "plan-digest")
 
@@ -298,6 +450,26 @@ OBSERVATION_SUBJECT = {
 RECORD_DIGEST_KEY = "record_sha256"
 CONTENT_DIGEST_KEY = "content_digest"
 BODY_KEY = "body"
+
+# ---- the pointer plane: the FILENAME is the admission authority ------------------------------------
+#
+# One pointer per (agent, scope kind, resolved root), because `--agent` is required and carries no
+# wildcard: a per-scope-only pointer would let a codex activation overwrite a claude one, and the
+# next claude uninstall would then remove codex bytes on the strength of it. Two agents, two files;
+# N roots, N files. The root key lives ONLY here, derived from the pointed receipt's own
+# `scope.root`, so a hand-moved pointer disagrees with its receipt instead of redirecting a removal.
+#: The directory that holds the keyed pointers, beside `receipts/` under the activation plane.
+ACTIVE_DIRECTORY = "active"
+#: The ONE pointer name the pre-keyed plane could write. Only (claude, user) can have written it,
+#: because every writer spelled `activation_scope: claude-home`.
+LEGACY_ACTIVE_POINTER_NAME = "active-receipt.json"
+USER_POINTER_NAME = "user.json"
+PROJECT_POINTER_PREFIX = "project-"
+POINTER_SUFFIX = ".json"
+#: `sha256(resolved_root)` truncated, generalising the key `manage_claude_workflows.py` already works
+#: out for one entry kind. Truncation is a filename-length bound, never a security boundary: the
+#: authority is the AGREEMENT between this key and the pointed receipt's own `scope.root`.
+ROOT_KEY_CHARACTERS = 16
 
 #: `public_channel` is null and `release_claim` is `none` in every document this module admits.
 REQUIRED_PUBLIC_CHANNEL = None
@@ -333,12 +505,25 @@ RESIDUALS = (
     "another artifact cannot tell from these fields alone that the two describe one tree",
     "a sealed or validated receipt is evidence: it grants no approval, admission, completion, or "
     "outward authority, and it authorizes no push, publication, merge, or deployment",
+    "this module carries TWO body-validator generations: v1 documents are admitted read-only as "
+    "history and no v1 body is ever sealed again. That inverts the ownership ledger's "
+    "one-schema-no-migration doctrine on purpose, because a sealed receipt cannot be rewritten to a "
+    "later schema without destroying what it proves, and the cost is that a v2 rule added here must "
+    "be reasoned about twice",
+    "the pointer plane's admission authority is a FILENAME, checked against the pointed receipt's "
+    "own scope on the agent, kind, and root-key axes; the truncated root key is a filename bound, "
+    "not a boundary, and the agreement check is what makes a hand-moved pointer refuse",
+    "a checkout body's candidate_id is derived by its PRODUCER from the inventory rows and their "
+    "content digests, and this module does not re-derive it: a retirement legitimately carries the "
+    "candidate_id of the payload it retired, whose inventory is not the retirement's own",
 )
 
 #: Every character class is written out. `\\d` and `\\w` admit Unicode -- `\\d` matches the
 #: Arabic-Indic `٩` -- so a digest or an identity spelled in them would read as the same value
 #: while comparing unequal to it everywhere else.
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+_HEX40 = re.compile(r"[0-9a-f]{40}\Z")
+_ROOT_KEY = re.compile(r"[0-9a-f]{16}\Z")
 _TOKEN = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z")
 _ENTRY_NAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?\Z")
 _VERSION = re.compile(r"[0-9A-Za-z]([0-9A-Za-z.+-]*[0-9A-Za-z])?\Z")
@@ -347,6 +532,9 @@ _TIME = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][
 _MAX_DETAIL = 512
 _MAX_VERSION = 64
 _MAX_ENTRY_NAME = 256
+#: A resolved project root is a filesystem path this document records verbatim. The bound keeps an
+#: unbounded string out of a rendered line and out of a digest input.
+_MAX_ROOT = 4096
 
 _INFINITY = float("inf")
 
@@ -629,9 +817,27 @@ class Observed:
         "effect_state",
         "terminal_phase",
         "unknown_records",
+        "generation",
+        "checkout_present",
+        "scope_kind",
+        "scope_agent",
+        "scope_root",
+        "prestate_evidence",
     )
 
     def __init__(self) -> None:
+        #: Which body generation this document declares, resolved once before any check reads a
+        #: key set. `None` means the declaration itself is unusable, and every rule that reads it
+        #: then falls back to the v1 shape, which is the fail-closed direction: a document that
+        #: cannot say which generation it is gets the older, stricter ancestor rule.
+        self.generation: Generation | None = None
+        #: Whether the body carries a `checkout` OBJECT. Observed as shape, before the checks, so the
+        #: archive-digest rules can ask "was there an archive at all" without depending on the value.
+        self.checkout_present: bool = False
+        self.scope_kind: str | None = None
+        self.scope_agent: str | None = None
+        self.scope_root: str | None = None
+        self.prestate_evidence: str | None = None
         self.dispositions: list[str] = []
         self.entry_names: list[str] = []
         #: Entries whose content digest is null AND whose disposition means content should exist.
@@ -644,6 +850,216 @@ class Observed:
         self.operation: str | None = None
         self.effect_state: str | None = None
         self.terminal_phase: str | None = None
+
+
+# ---- the two generations --------------------------------------------------------------------------
+
+
+class Generation:
+    """One body generation's closed shapes, resolved ONCE per document and then read everywhere.
+
+    Two generations exist and only one of them is writable. `seal` admits v2 alone: a v1 document is
+    immutable evidence, so re-sealing one would destroy exactly what it proves, and there is no
+    migration that could faithfully convert it -- the fields v2 needs (`scope`, per-row `mode`) were
+    never observed by the run that wrote it, and filling them here would make this module the author
+    of facts it did not see.
+
+    The shapes are DATA rather than branches so a check reads one key set instead of asking which
+    generation it is in three places and disagreeing with itself in the fourth.
+    """
+
+    __slots__ = ("schema", "base_keys", "entry_keys", "version_sources", "sealable", "label")
+
+    def __init__(
+        self,
+        schema: str,
+        base_keys: tuple[str, ...],
+        entry_keys: tuple[str, ...],
+        version_sources: tuple[str, ...],
+        sealable: bool,
+        label: str,
+    ) -> None:
+        self.schema = schema
+        self.base_keys = base_keys
+        self.entry_keys = entry_keys
+        self.version_sources = version_sources
+        self.sealable = sealable
+        self.label = label
+
+    @property
+    def is_v2(self) -> bool:
+        return self.schema == BODY_SCHEMA
+
+    def body_keys(self, operation: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Return `(required, optional)` for one operation. v1 has no per-operation variance.
+
+        An operation this module cannot read yields the widest admissible pair, so the key-set walk
+        does not report a second reason about a document the closed-vocabulary check already refuses
+        by name. Two reasons for one defect read as two defects.
+        """
+        if not self.is_v2:
+            return self.base_keys, ()
+        if operation == "uninstall":
+            return tuple(sorted(self.base_keys + BODY_KEYS_UNINSTALL)), BODY_KEYS_OPTIONAL
+        if operation in OPERATIONS:
+            return self.base_keys, BODY_KEYS_OPTIONAL
+        return self.base_keys, tuple(sorted(BODY_KEYS_OPTIONAL + BODY_KEYS_UNINSTALL))
+
+
+GENERATION_V1 = Generation(
+    BODY_SCHEMA_V1, BODY_KEYS_V1, ENTRY_KEYS_V1, VERSION_SOURCES_V1, False, "v1"
+)
+GENERATION_V2 = Generation(BODY_SCHEMA, BODY_KEYS, ENTRY_KEYS, VERSION_SOURCES, True, "v2")
+GENERATIONS = {GENERATION_V1.schema: GENERATION_V1, GENERATION_V2.schema: GENERATION_V2}
+
+
+def generation_of(body: dict[str, Any]) -> Generation | None:
+    """Resolve the declared generation, or `None` when the declaration itself is unusable."""
+    declared = field(body, "schema_version")
+    if isinstance(declared, str):
+        return GENERATIONS.get(declared)
+    return None
+
+
+# ---- the pointer plane ----------------------------------------------------------------------------
+
+
+def root_key(root: str) -> str:
+    """The pointer filename's root segment: `sha256(resolved_root)` truncated.
+
+    ONE derivation, exported, because the writer that names a pointer file and the reader that
+    admits one must agree exactly; two spellings would disagree on the first path whose bytes differ
+    outside the first 16 hexadecimal characters, which is to say never in testing and once in the
+    field.
+    """
+    return sha256_hex(root.encode("utf-8"))[:ROOT_KEY_CHARACTERS]
+
+
+def pointer_name(kind: str, root: str | None = None) -> str:
+    """The pointer filename for one scope. A project scope with no root cannot be named."""
+    if kind == SCOPE_USER:
+        return USER_POINTER_NAME
+    if kind == SCOPE_PROJECT:
+        if not isinstance(root, str) or not root:
+            raise InputError("a project-scope pointer is named by its resolved root, and none was supplied")
+        return f"{PROJECT_POINTER_PREFIX}{root_key(root)}{POINTER_SUFFIX}"
+    raise InputError(f"{kind!r} is not one of the closed scope kinds {list(SCOPE_KINDS)}")
+
+
+def pointer_path(activation_root: Path, agent: str, kind: str, root: str | None = None) -> Path:
+    """The ONE pointer path for one (agent, scope kind, resolved root)."""
+    if not isinstance(agent, str) or not _TOKEN.match(agent) or agent in WILDCARDS or "*" in agent:
+        raise InputError(f"{agent!r} is not one agent segment a pointer path may carry")
+    return activation_root / ACTIVE_DIRECTORY / agent / pointer_name(kind, root)
+
+
+def legacy_pointer_path(activation_root: Path) -> Path:
+    """The pre-keyed plane's single pointer. Only (claude, user) can have written it."""
+    return activation_root / LEGACY_ACTIVE_POINTER_NAME
+
+
+def parse_pointer_path(path: Path) -> dict[str, Any] | None:
+    """Read `(agent, kind, root_key)` out of a keyed pointer path, or `None` if it is not one.
+
+    The filename is the admission authority, so it is PARSED rather than trusted: a name outside the
+    two shapes names no scope this plane can act on, and answering `None` is what makes the caller
+    refuse instead of guessing which scope an unrecognised file meant.
+    """
+    name = path.name
+    parent = path.parent
+    agent = parent.name
+    if parent.parent.name != ACTIVE_DIRECTORY:
+        return None
+    if not agent or not _TOKEN.match(agent) or agent in WILDCARDS:
+        return None
+    if name == USER_POINTER_NAME:
+        return {"agent": agent, "kind": SCOPE_USER, "root_key": None}
+    if not name.startswith(PROJECT_POINTER_PREFIX) or not name.endswith(POINTER_SUFFIX):
+        return None
+    key = name[len(PROJECT_POINTER_PREFIX) : -len(POINTER_SUFFIX)]
+    if not _ROOT_KEY.match(key):
+        return None
+    return {"agent": agent, "kind": SCOPE_PROJECT, "root_key": key}
+
+
+def pointer_disagreements(path: Path, body: dict[str, Any]) -> list[str]:
+    """Every axis on which a pointer FILENAME disagrees with the receipt it points at.
+
+    Three axes, checked in this order because the later ones have nothing to compare when an earlier
+    one already failed: the pointer's KIND against `scope.kind` (a `user.json` aimed at a
+    project-scope receipt has no root segment to compare at all), the agent segment against
+    `scope.agent`, and -- for a project pointer -- the filename's root key against
+    `sha256(scope.root)` recomputed here from the receipt's own recorded root.
+
+    Empty means agreement. A caller that finds a non-empty list refuses; this function decides
+    nothing and moves nothing.
+    """
+    parsed = parse_pointer_path(path)
+    if parsed is None:
+        return [
+            f"the pointer {str(path)!r} is not one of this plane's two keyed names "
+            f"({USER_POINTER_NAME} or {PROJECT_POINTER_PREFIX}<root-key>{POINTER_SUFFIX} under "
+            f"{ACTIVE_DIRECTORY}/<agent>/), so which activation it states cannot be read"
+        ]
+    scope = field(body, "scope")
+    if not isinstance(scope, dict):
+        return [
+            f"the pointer {str(path)!r} names a receipt whose body carries no scope object, so the "
+            "pointer's own key cannot be compared against what the receipt says it activated"
+        ]
+    disagreements: list[str] = []
+    kind = scope.get("kind")
+    if kind != parsed["kind"]:
+        # The KIND axis first (audit N3): with the kinds disagreeing there is no matching segment to
+        # compare on the root axis, and reporting a root mismatch there would name the wrong defect.
+        return [
+            f"the pointer {str(path)!r} is a {parsed['kind']}-scope pointer while the receipt it "
+            f"names records scope.kind {escape_display(str(kind))!r}; a pointer states the scope it "
+            "is filed under, and a receipt about another scope is not that statement"
+        ]
+    agent = scope.get("agent")
+    if agent != parsed["agent"]:
+        disagreements.append(
+            f"the pointer {str(path)!r} is filed under agent {parsed['agent']!r} while the receipt "
+            f"it names records scope.agent {escape_display(str(agent))!r}; one pointer per agent is "
+            "what keeps one agent's uninstall from removing another's bytes"
+        )
+    if parsed["kind"] == SCOPE_PROJECT:
+        recorded = scope.get("root")
+        derived = root_key(recorded) if isinstance(recorded, str) and recorded else None
+        if derived != parsed["root_key"]:
+            disagreements.append(
+                f"the pointer {str(path)!r} carries the root key {parsed['root_key']!r} while the "
+                f"receipt it names records a scope.root whose key is "
+                f"{escape_display(str(derived))!r}; a hand-moved pointer does not redirect a removal"
+            )
+    return disagreements
+
+
+def checkout_candidate_id(entries: Any) -> str:
+    """The ONE candidate-identity derivation for a manifest-less checkout payload.
+
+    A checkout has no archive to digest and no manifest to read an identity out of, and
+    `candidate_id` is non-null in every generation of this body -- a receipt that cannot name what it
+    activated binds nothing. So the identity is a digest over the DISCOVERED INVENTORY ROWS AND THEIR
+    CONTENT DIGESTS: two different dirty trees publish different bytes, so their rows differ, so this
+    value differs.
+
+    It is deliberately NOT `build_release.py`'s derivation, which digests the source commit and tree
+    -- both undefined for a dirty checkout, and substituting `unknown` there would collide every
+    dirty tree onto one identity.
+
+    This module does not RE-DERIVE the value while validating: a retirement receipt legitimately
+    carries the candidate_id of the payload it retired, whose inventory is not the retirement's own.
+    Exported so the producer that does derive it has exactly one definition to call.
+    """
+    rows: list[dict[str, Any]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        rows.append({"content_sha256": entry.get("content_sha256"), "entry_name": entry.get("entry_name")})
+    rows.sort(key=lambda row: (str(row["entry_name"]), str(row["content_sha256"])))
+    return sha256_hex(canonical_bytes({"rows": rows, "schema": BODY_SCHEMA}))
 
 
 # ---- field readers: absent, null, and empty are three different facts -----------------------------
@@ -765,27 +1181,39 @@ def _token(assessment: Assessment, slug: str, value: Any, key: str, subject: str
 # ---- body checks ---------------------------------------------------------------------------------
 
 
-def check_body_key_set(assessment: Assessment, body: dict[str, Any], subject: str) -> None:
-    """The closed body: exactly these keys, no more and no fewer."""
-    present = set(body)
-    for key in sorted(set(BODY_KEYS) - present):
-        assessment.note(
-            "closed-key-set",
-            f"{subject} carries no {key}, which the closed {BODY_SCHEMA} field set requires",
-        )
-    for key in sorted(present - set(BODY_KEYS)):
-        assessment.note(
-            "closed-key-set",
-            f"{subject} carries the unknown field {key!r}; {BODY_SCHEMA} is closed, so a field this "
-            "version cannot honour is refused rather than ignored, and a new meaning arrives as a "
-            "version bump",
-        )
+def check_body_key_set(
+    assessment: Assessment, body: dict[str, Any], subject: str, observed: Observed
+) -> None:
+    """The closed body: exactly the keys this generation's variant admits, no more and no fewer.
+
+    The key set is per (generation, operation): v2's uninstall variant requires `prestate_evidence`
+    and every other operation refuses it, and `checkout` is optional on all three. That is what makes
+    "a ledger-evidence install" and "a receipt-evidence body with no evidence field" unrepresentable
+    rather than guarded in prose.
+    """
+    generation = observed.generation
     declared = field(body, "schema_version")
-    if declared is not ABSENT and declared != BODY_SCHEMA:
+    if generation is None:
         assessment.note(
             "closed-key-set",
-            f"{subject} declares schema_version {declared!r}, not {BODY_SCHEMA}, so which field set "
-            "and which seal derivation it is about is not established",
+            f"{subject} declares schema_version {declared!r}, which is neither {BODY_SCHEMA} nor the "
+            f"read-only historical {BODY_SCHEMA_V1}, so which field set and which seal derivation it "
+            "is about is not established",
+        )
+        return
+    required, optional = generation.body_keys(field(body, "operation"))
+    present = set(body)
+    for key in sorted(set(required) - present):
+        assessment.note(
+            "closed-key-set",
+            f"{subject} carries no {key}, which the closed {generation.schema} field set requires",
+        )
+    for key in sorted(present - set(required) - set(optional)):
+        assessment.note(
+            "closed-key-set",
+            f"{subject} carries the unknown field {key!r}; {generation.schema} is closed, so a field "
+            "this version cannot honour is refused rather than ignored, and a new meaning arrives as "
+            "a version bump",
         )
 
 
@@ -841,7 +1269,10 @@ def check_payload_identity(assessment: Assessment, body: dict[str, Any], subject
             f"{_MAX_VERSION} characters",
         )
 
-    source = _closed(assessment, slug, field(body, "version_source"), "version_source", VERSION_SOURCES, subject)
+    generation = observed.generation if observed.generation is not None else GENERATION_V1
+    source = _closed(
+        assessment, slug, field(body, "version_source"), "version_source", generation.version_sources, subject
+    )
     if source == VERSION_SOURCE_REQUEST:
         assessment.note(
             slug,
@@ -851,11 +1282,132 @@ def check_payload_identity(assessment: Assessment, body: dict[str, Any], subject
             "value is expressible only so that it can be refused by name instead of being spelled as "
             "an adapter readback",
         )
+    if generation.is_v2:
+        check_checkout(assessment, body, subject, observed, source)
 
 
-def check_host_and_scope(assessment: Assessment, body: dict[str, Any], subject: str) -> None:
-    """Host and scope are explicit and wildcard-free: a wildcard receipt binds nothing."""
+def check_checkout(
+    assessment: Assessment, body: dict[str, Any], subject: str, observed: Observed, source: str | None
+) -> None:
+    """The optional checkout object, and the two facts it is paired with in BOTH directions.
+
+    `checkout` present means the payload was a tree rather than an archive, and that one statement
+    fixes two others: the version was read from the checkout tree, and there is no archive digest to
+    record. Writing those as three independent fields is what would let a body say "release payload"
+    and "checkout payload" at once; pairing them makes the disagreement unrepresentable instead of
+    guarded.
+
+    The `derived-from` ancestor half of the same invariant lives in `check_ancestors`, because that is
+    where the ancestor counts are.
+    """
+    slug = "payload-identity"
+    value = field(body, "checkout")
+    if value is not ABSENT:
+        if not isinstance(value, dict):
+            assessment.note(
+                slug,
+                f"{subject}'s checkout is {type(value).__name__}, not a {list(CHECKOUT_KEYS)} object; "
+                "a checkout payload is recorded as that object or the key is absent, and null is "
+                "neither",
+            )
+        else:
+            for key in sorted(set(CHECKOUT_KEYS) - set(value)):
+                assessment.note(slug, f"{subject}'s checkout carries no {key}, which the object requires")
+            for key in sorted(set(value) - set(CHECKOUT_KEYS)):
+                assessment.note(
+                    slug,
+                    f"{subject}'s checkout carries the unknown field {key!r}; the object is closed at "
+                    f"{list(CHECKOUT_KEYS)}",
+                )
+            commit = field(value, "commit")
+            if commit is ABSENT:
+                pass  # already reported by the closed-key walk above
+            elif commit == CHECKOUT_COMMIT_UNKNOWN:
+                pass  # the honest negative: no readable git metadata, stated rather than inferred
+            elif not isinstance(commit, str) or not _HEX40.match(commit):
+                assessment.note(
+                    slug,
+                    f"{subject}'s checkout commit is {commit!r}, which is neither 40 lowercase "
+                    f"hexadecimal characters nor the explicit {CHECKOUT_COMMIT_UNKNOWN!r}; a commit "
+                    "this run could not read is named, never left as a plausible-looking value",
+                )
+            dirty = field(value, "dirty")
+            if dirty is ABSENT:
+                pass  # already reported by the closed-key walk above
+            elif not isinstance(dirty, bool):
+                assessment.note(
+                    slug,
+                    f"{subject}'s checkout dirty is {dirty!r}, not a boolean; 0, 1, and \"false\" each "
+                    "read as a cleanliness this receipt cannot claim to have observed",
+                )
+    if observed.checkout_present and source is not None and source != VERSION_SOURCE_CHECKOUT:
+        assessment.note(
+            slug,
+            f"{subject} carries a checkout object while recording version_source {source!r}; a "
+            f"checkout payload's version is read from the checkout tree, so the pair is "
+            f"{VERSION_SOURCE_CHECKOUT!r} or there is no checkout object",
+        )
+    if not observed.checkout_present and source == VERSION_SOURCE_CHECKOUT:
+        assessment.note(
+            slug,
+            f"{subject} records version_source {VERSION_SOURCE_CHECKOUT!r} with no checkout object; "
+            "the tree the version was read from is recorded, or the source is not that tree",
+        )
+    if observed.checkout_present and field(body, "archive_sha256") not in (None, ABSENT):
+        assessment.note(
+            slug,
+            f"{subject} carries a checkout object beside a non-null archive_sha256; a checkout payload "
+            "has no archive, so a digest here would name a file this activation never drew from, and "
+            "the body would state both payload classes at once",
+        )
+
+
+def check_prestate_evidence(
+    assessment: Assessment, body: dict[str, Any], subject: str, observed: Observed
+) -> None:
+    """Which prestate evidence a v2 retirement drew its inventory from, as a closed discriminator.
+
+    The variant exists because the legacy-unreceipted retirement is otherwise UNREPRESENTABLE: the
+    family requires exactly one `derived-from` ancestor, and a plane whose rows were written by a
+    pre-receipt install has no activation receipt to name. The alternative -- deleting that removal
+    path -- would force an INSTALL before a removal on exactly the hosts this program exists to stop
+    stranding.
+    """
+    if observed.generation is None or not observed.generation.is_v2:
+        return
+    if field(body, "operation") != "uninstall":
+        return
+    observed.prestate_evidence = _closed(
+        assessment,
+        "payload-identity",
+        field(body, "prestate_evidence"),
+        "prestate_evidence",
+        PRESTATE_EVIDENCE,
+        subject,
+    )
+
+
+def check_host_and_scope(
+    assessment: Assessment, body: dict[str, Any], subject: str, observed: Observed
+) -> None:
+    """Which plane this receipt observed, in whichever generation's spelling -- never in both.
+
+    v1 spelled it TWICE: a `host` token for the plane and an `activation_scope` token for the part of
+    it. v2 spells it ONCE, as the closed `scope` union, whose `agent` IS the plane; `host` is deleted
+    rather than kept beside it, because one fact in two spellings joined by an agreement check is the
+    same representable illegal state `activation_scope` and `root_key` were deleted for (conductor
+    ruling, 2026-08-25). A reader derives every display string from `scope.agent`, including a
+    host-application spelling like `claude-code`, which is a rendering and not a stored field.
+
+    So the host checks below are v1-only, and they are not a fallback: a v2 body carrying `host` is
+    refused by the closed key set before this check runs, and a v1 body missing it is refused there
+    too. Neither generation can express the other's shape.
+    """
     slug = "host-and-scope"
+    if observed.generation is not None and observed.generation.is_v2:
+        check_scope(assessment, body, subject, observed)
+        return
+
     host = field(body, "host")
     if isinstance(host, str) and (host in WILDCARDS or "*" in host):
         assessment.note(
@@ -877,6 +1429,97 @@ def check_host_and_scope(assessment: Assessment, body: dict[str, Any], subject: 
         )
     else:
         _token(assessment, slug, scope, "activation_scope", subject)
+
+
+def check_scope(
+    assessment: Assessment, body: dict[str, Any], subject: str, observed: Observed
+) -> None:
+    """The v2 scope union: closed kinds, EXACT key sets per kind, and an absolute project root.
+
+    What the exactness buys, in the two directions a prose guard would have had to catch: a
+    user-scope object carrying a `root` is refused because a user activation has no project root to
+    name, and a project-scope object missing one is refused because the pointer that admits it is
+    keyed by exactly that value. Neither kind may carry a `root_key`: the pointer filename derives
+    that key, and a stored copy of a derivation of a sibling field is the same disagreement-by-
+    construction v1's `activation_scope` was deleted for.
+
+    `agent` is the ONE statement of which plane this receipt observed -- there is no body-level `host`
+    beside it in this generation, and therefore no agreement check between them to get wrong.
+    """
+    slug = "host-and-scope"
+    scope = field(body, "scope")
+    if scope is ABSENT:
+        return  # already reported by the closed body key set
+    if not isinstance(scope, dict):
+        assessment.note(
+            slug,
+            f"{subject}'s scope is {type(scope).__name__}, not a closed scope object; the union's kind "
+            "is what selects every later rule, and a value with no kind selects none of them",
+        )
+        return
+    kind = _closed(assessment, slug, field(scope, "kind"), "scope.kind", SCOPE_KINDS, subject)
+    observed.scope_kind = kind
+    expected = SCOPE_KEYS.get(kind) if kind is not None else None
+    if expected is not None:
+        present = set(scope)
+        for key in sorted(set(expected) - present):
+            assessment.note(
+                slug,
+                f"{subject}'s {kind}-scope scope carries no {key}, which that kind's exact key set "
+                f"{list(expected)} requires",
+            )
+        for key in sorted(present - set(expected)):
+            assessment.note(
+                slug,
+                f"{subject}'s {kind}-scope scope carries the field {key!r}, which that kind's exact "
+                f"key set {list(expected)} does not admit; a root key in the body would be a second "
+                "spelling of what the pointer filename derives, and a root on a user scope names a "
+                "project this activation never touched",
+            )
+    agent = field(scope, "agent")
+    if isinstance(agent, str) and (agent in WILDCARDS or "*" in agent):
+        assessment.note(
+            slug,
+            f"{subject}'s scope.agent is the wildcard {agent!r}; the pointer plane is keyed by one "
+            "agent per file, and a wildcard there would let one agent's removal reach another's bytes",
+        )
+    else:
+        observed.scope_agent = _closed(assessment, slug, agent, "scope.agent", HOSTS, subject)
+    if kind != SCOPE_PROJECT:
+        return
+    root = field(scope, "root")
+    if root is ABSENT:
+        return  # already reported by the exact key set above
+    if not isinstance(root, str) or not root:
+        assessment.note(
+            slug,
+            f"{subject}'s project scope records root {root!r}, which is not a path; the resolved root "
+            "is what the pointer key is derived from and what a removal is bounded by",
+        )
+        return
+    if len(root) > _MAX_ROOT:
+        assessment.note(
+            slug,
+            f"{subject}'s project scope records a root of {len(root)} characters, over the "
+            f"{_MAX_ROOT}-character bound",
+        )
+        return
+    if not root.startswith("/"):
+        assessment.note(
+            slug,
+            f"{subject}'s project scope records the root {escape_display(root)!r}, which is not an "
+            "absolute POSIX path; a relative root resolves against whatever directory a later reader "
+            "happens to be in, and the project-scope plane is certified on Linux only",
+        )
+        return
+    if "\x00" in root or root != root.strip() or any(ord(character) < 0x20 for character in root):
+        assessment.note(
+            slug,
+            f"{subject}'s project scope records a root carrying a control character or surrounding "
+            "whitespace, so the path this receipt is about is not the path it appears to name",
+        )
+        return
+    observed.scope_root = root
 
 
 #: Which dispositions each prestate admits. A `foreign` or `modified` entry may only be PRESERVED:
@@ -914,15 +1557,17 @@ def check_entry_inventory(assessment: Assessment, body: dict[str, Any], subject:
         assessment.note(slug, f"{subject}'s entries is {type(entries).__name__}, not a list of entry records")
         return
 
+    generation = observed.generation if observed.generation is not None else GENERATION_V1
+    entry_keys = generation.entry_keys
     seen: set[str] = set()
     for index, entry in enumerate(entries):
         where = f"{subject}'s entry {index}"
         if not isinstance(entry, dict):
             assessment.note(slug, f"{where} is {type(entry).__name__}, not an entry record object")
             continue
-        for key in sorted(set(ENTRY_KEYS) - set(entry)):
+        for key in sorted(set(entry_keys) - set(entry)):
             assessment.note(slug, f"{where} carries no {key}, which every entry record requires")
-        for key in sorted(set(entry) - set(ENTRY_KEYS)):
+        for key in sorted(set(entry) - set(entry_keys)):
             assessment.note(
                 slug,
                 f"{where} carries the unknown field {key!r}; the entry record is closed, so a field "
@@ -971,6 +1616,9 @@ def check_entry_inventory(assessment: Assessment, body: dict[str, Any], subject:
                     "it, because a receipt that omitted it would read as a clean activation of a "
                     "collided plane",
                 )
+
+        if generation.is_v2:
+            check_entry_mode(assessment, entry, where, observed, disposition)
 
         content = field(entry, "content_sha256")
         content_is_null = content is None
@@ -1022,6 +1670,67 @@ def check_entry_inventory(assessment: Assessment, body: dict[str, Any], subject:
                 f"terminal_phase is {phase!r}; an empty inventory is honest only for a refusal that "
                 "moved nothing, and otherwise it reads as an activation of no entries",
             )
+
+
+def check_entry_mode(
+    assessment: Assessment,
+    entry: dict[str, Any],
+    where: str,
+    observed: Observed,
+    disposition: str | None,
+) -> None:
+    """One row's publication mode: required where this run published bytes, and copy-only at project
+    scope.
+
+    THIS IS WHERE COPY-ONLY BINDS. There is no body-level `mode_policy`, deliberately: a policy field
+    would be single-valued on the one variant that has a policy, `scope.kind` already identifies it,
+    and the row is what actually names bytes on disk. If a second project mode is ever designed, a
+    policy field returns then, with more than one admissible value.
+
+    Null is the honest value for a row this run did not publish -- a preserved foreign collision, or
+    a removed destination whose mode the retirement need not restate -- and it is REQUIRED to be
+    non-null for `installed` and `refreshed`, where the run holds the mode it used and a null would
+    be supplied-but-missing.
+    """
+    slug = "entry-inventory"
+    mode = field(entry, "mode")
+    if mode is ABSENT:
+        return  # already reported by the closed entry key walk
+    resolved: str | None = None
+    if mode is None:
+        if disposition in PUBLISHED_DISPOSITIONS:
+            assessment.note(
+                slug,
+                f"{where} records disposition {disposition!r} with a null mode; this operation "
+                f"published these bytes, so the mode it used is a fact it holds, and one of "
+                f"{list(MODES)} is recorded rather than a hole",
+            )
+    elif isinstance(mode, str) and not mode:
+        assessment.note(
+            slug,
+            f"{where} supplies mode as an empty string, which is a value supplied and lost; a row this "
+            "operation did not publish records null",
+        )
+    elif not isinstance(mode, str) or mode not in MODES:
+        assessment.note(
+            slug,
+            f"{where}'s mode is {mode!r}, which is not one of the closed publication modes "
+            f"{list(MODES)} and not null",
+        )
+    else:
+        resolved = mode
+    if (
+        observed.scope_kind == SCOPE_PROJECT
+        and resolved is not None
+        and resolved != PROJECT_MODE
+        and disposition in PUBLISHED_DISPOSITIONS
+    ):
+        assessment.note(
+            slug,
+            f"{where} records mode {resolved!r} under a project scope; project scope is copy-only, "
+            "because a committed entry must be self-contained, a link embeds a user-specific absolute "
+            "path, and a later refresh must not silently change what a target's sessions execute",
+        )
 
 
 def check_unknowns(assessment: Assessment, body: dict[str, Any], subject: str, observed: Observed) -> None:
@@ -1101,6 +1810,17 @@ def check_unknowns(assessment: Assessment, body: dict[str, Any], subject: str, o
                     f"{where} records a {observation} unknown whose subject is {subject_value!r}, not "
                     f"the field it is about ({expected!r})",
                 )
+            elif expected == "archive_sha256" and observed.checkout_present:
+                # The other direction of the checkout rule: an unknown says "this run tried to observe
+                # and could not", and there was no archive to try. The body would be claiming a failed
+                # observation of a file its own checkout object says never existed.
+                resolved_subject = expected
+                assessment.note(
+                    slug,
+                    f"{where} records archive_sha256 as unknown while this body carries a checkout "
+                    "object; a checkout payload has no archive, so the null there is not-supplied and "
+                    "naming it unknown states an observation this run never attempted",
+                )
             else:
                 resolved_subject = expected
                 if expected not in observed.digest_null:
@@ -1141,6 +1861,10 @@ def check_unknown_coverage(assessment: Assessment, subject: str, observed: Obser
     slug = "unknown-consistency"
     if null_digest_requires_unknown(observed.effect_state):
         for key in sorted(observed.digest_null - {"journal_sha256", "plan_sha256"}):
+            if key == "archive_sha256" and not archive_digest_requires_unknown(
+                observed.effect_state, observed.checkout_present
+            ):
+                continue  # a checkout payload has no archive: that null is not-supplied
             if (_digest_observation(key), key) not in observed.unknown_index:
                 assessment.note(
                     slug,
@@ -1295,6 +2019,26 @@ def null_digest_requires_unknown(effect_state: Any) -> bool:
     return effect_state != "none"
 
 
+def archive_digest_requires_unknown(effect_state: Any, checkout_present: Any) -> bool:
+    """Must a null `archive_sha256` be NAMED as an unknown?
+
+    The general rule is `null_digest_requires_unknown`, and this adds the ONE case v2 introduces: a
+    checkout payload has NO ARCHIVE. That null is not-supplied in exactly the sense the general rule
+    already exempts under `effect_state: none` -- there was nothing to digest -- and it is a different
+    fact from supplied-but-missing, which is what an unknown records. Naming an archive-digest unknown
+    on a checkout body would state that this run tried to digest an archive and failed, which is
+    false; and because the family refuses `complete` beside ANY named unknown, requiring one here
+    would make every clean checkout activation permanently partial and leave the pointer unmoved.
+
+    ONE definition, read by the producer and by both checks, for the reason the general rule states:
+    a producer that named an unknown the checker did not require -- or omitted one it did -- would
+    make sealing and validating the same observation disagree.
+    """
+    if checkout_present:
+        return False
+    return null_digest_requires_unknown(effect_state)
+
+
 def content_bearing(prestate: Any, disposition: Any) -> bool:
     """Does this entry have content a digest could be OF?
 
@@ -1416,13 +2160,7 @@ def check_ancestors(assessment: Assessment, document: dict[str, Any], subject: s
                 f"{RECEIPT_KIND!r} documents, because the kind names the lifecycle family",
             )
 
-    if counts["derived-from"] != 1:
-        assessment.note(
-            slug,
-            f"{subject} holds {counts['derived-from']} derived-from references; exactly one names the "
-            "acquisition receipt this activation drew its payload from, and without it the activation "
-            "binds a candidate no receipt in the graph accounts for",
-        )
+    check_derived_from_count(assessment, subject, observed, counts["derived-from"])
     if observed.operation == "update":
         if counts["supersedes"] != 1:
             assessment.note(
@@ -1440,11 +2178,91 @@ def check_ancestors(assessment: Assessment, document: dict[str, Any], subject: s
         )
 
 
+def check_derived_from_count(
+    assessment: Assessment, subject: str, observed: Observed, count: int
+) -> None:
+    """How many `derived-from` ancestors this body's own shape admits -- exactly, per variant.
+
+    v1 admitted exactly one, unconditionally. v2 makes the count a CONSEQUENCE of what the body says
+    it drew from, in both directions, so no combination needs a prose guard:
+
+      * install / update with an archive: exactly one, naming the acquisition receipt.
+      * install / update from a checkout: ZERO, because no acquisition receipt exists and inventing one
+        would name a document no plane holds. The paired `archive_sha256` rule lives in
+        `check_checkout`.
+      * uninstall with `prestate_evidence: activation-receipt`: exactly one, the receipt being retired.
+      * uninstall with `prestate_evidence: ledger`: ZERO, the legacy-unreceipted retirement.
+
+    A generation this module could not resolve falls back to v1's rule, which is the stricter of the
+    two and therefore the fail-closed direction.
+    """
+    slug = "typed-ancestors"
+    generation = observed.generation
+    if generation is None or not generation.is_v2:
+        if count != 1:
+            assessment.note(
+                slug,
+                f"{subject} holds {count} derived-from references; exactly one names the acquisition "
+                "receipt this activation drew its payload from, and without it the activation binds a "
+                "candidate no receipt in the graph accounts for",
+            )
+        return
+    if observed.operation == "uninstall":
+        if observed.prestate_evidence is None:
+            return  # the closed-vocabulary check already refused the discriminator by name
+        expected = PRESTATE_EVIDENCE_ANCESTORS[observed.prestate_evidence]
+        if count != expected:
+            assessment.note(
+                slug,
+                f"{subject} records prestate_evidence {observed.prestate_evidence!r} with {count} "
+                f"derived-from references; that evidence admits exactly {expected}. Receipt evidence "
+                "NAMES the receipt it retires, and ledger evidence names none, because a legacy "
+                "unreceipted plane has no activation receipt and a fabricated ancestor would point at "
+                "a document no plane holds",
+            )
+        return
+    if observed.checkout_present:
+        if count != 0:
+            assessment.note(
+                slug,
+                f"{subject} carries a checkout object with {count} derived-from references; a checkout "
+                "payload has no acquisition receipt to derive from, so the ancestor is forbidden "
+                "exactly where the checkout object is present",
+            )
+        return
+    if count != 1:
+        assessment.note(
+            slug,
+            f"{subject} holds {count} derived-from references; exactly one names the acquisition "
+            "receipt this activation drew its payload from, and without it the activation binds a "
+            "candidate no receipt in the graph accounts for",
+        )
+
+
 # ---- the two seals -------------------------------------------------------------------------------
 
 #: The explicit unsealed placeholder. Absent means the body never spoke about its seal, which the
 #: closed key set already refuses; an empty string means "this document is unsealed, seal it".
 UNSEALED = ""
+
+
+def check_seal_generation(assessment: Assessment, body: dict[str, Any], subject: str) -> None:
+    """`seal` writes THIS generation and no other. A v1 body is history, and history is not authored.
+
+    v1 documents stay admissible under `validate` forever, which is the whole point of carrying two
+    generations: a sealed receipt is immutable evidence, and rewriting one to a later schema would
+    destroy what it proves. Sealing a NEW v1 body is a different act -- authoring history -- and it is
+    refused by name, because the fields v2 requires (`scope`, per-row `mode`) were never observed by
+    any run that would ask for a v1 seal.
+    """
+    declared = field(body, "schema_version")
+    if declared == BODY_SCHEMA_V1:
+        assessment.note(
+            "closed-key-set",
+            f"{subject} asks to seal a {BODY_SCHEMA_V1} body; that generation is admitted read-only as "
+            f"history and every new seal is {BODY_SCHEMA}. A v1 receipt is never rewritten, and one is "
+            "never authored either",
+        )
 
 
 def check_seal_placeholders(assessment: Assessment, document: dict[str, Any], body: dict[str, Any], subject: str) -> None:
@@ -1571,11 +2389,16 @@ def build_body(observation: dict[str, Any]) -> dict[str, Any]:
         derived.append({"detail": _DERIVED_ENTRY_DETAIL, "observation": "entry-content", "subject": name})
         index.add(("entry-content", name))
 
+    checkout_present = isinstance(field(observation, "checkout"), dict)
     for observation_name, key in sorted(OBSERVATION_SUBJECT.items()):
         if field(observation, key) is not None:
             continue
         if not null_digest_requires_unknown(field(observation, "effect_state")):
             continue  # nothing was activated, so there was no archive, journal, or plan to digest
+        if key == "archive_sha256" and not archive_digest_requires_unknown(
+            field(observation, "effect_state"), checkout_present
+        ):
+            continue  # a checkout payload has no archive: the null is not-supplied, not unknown
         if (observation_name, key) in index:
             continue
         derived.append({"detail": _DERIVED_DIGEST_DETAIL, "observation": observation_name, "subject": key})
@@ -1597,6 +2420,41 @@ def _short(value: Any) -> str:
     return escape_display(str(value))
 
 
+def plane_display(body: dict[str, Any]) -> str:
+    """Which plane this body observed, DERIVED: `scope.agent` in v2, the `host` token in v1.
+
+    v2 stores that fact once, in the union, so every rendering of it is derived here rather than read
+    from a second field that could disagree with the first.
+    """
+    scope = field(body, "scope")
+    if isinstance(scope, dict):
+        return _short(field(scope, "agent"))
+    legacy = field(body, "host")
+    if legacy is not ABSENT:
+        return _short(legacy)
+    return "unknown"
+
+
+def scope_display(body: dict[str, Any]) -> str:
+    """One display string for either generation's scope, DERIVED and never stored.
+
+    v1 stored a display token; v2 stores the union and readers derive from it. That is the point of
+    deleting `activation_scope`: a stored display string beside a structured scope is a second
+    spelling that can disagree with the first.
+    """
+    scope = field(body, "scope")
+    if isinstance(scope, dict):
+        kind = field(scope, "kind")
+        if kind == SCOPE_PROJECT:
+            root = field(scope, "root")
+            return f"{_short(kind)}:{_short(root)}"
+        return _short(kind)
+    legacy = field(body, "activation_scope")
+    if legacy is not ABSENT:
+        return _short(legacy)
+    return "unknown"
+
+
 def render_lines(body: dict[str, Any]) -> list[str]:
     """One human-readable line per fact, with every artifact-derived string ESCAPED.
 
@@ -1606,7 +2464,7 @@ def render_lines(body: dict[str, Any]) -> list[str]:
     """
     lines: list[str] = [
         f"{RECEIPT_KIND} {_short(field(body, 'operation'))} on "
-        f"{_short(field(body, 'host'))}/{_short(field(body, 'activation_scope'))}"
+        f"{plane_display(body)}/{scope_display(body)}"
         f" resolved {_short(field(body, 'resolved_version'))}"
         f" via {_short(field(body, 'version_source'))}"
         f" candidate {_short(field(body, 'candidate_id'))}"
@@ -1621,16 +2479,34 @@ def render_lines(body: dict[str, Any]) -> list[str]:
         f" journal {_short(field(body, 'journal_sha256'))}"
         f" plan {_short(field(body, 'plan_sha256'))}",
     ]
+    checkout = field(body, "checkout")
+    if isinstance(checkout, dict):
+        # A null archive digest beside this line is NOT-SUPPLIED: there is no archive. The line says so
+        # rather than leaving a reader to infer it from the "archive unknown" above.
+        lines.append(
+            f"checkout payload commit={_short(field(checkout, 'commit'))}"
+            f" dirty={_short(field(checkout, 'dirty'))}"
+            " (no archive exists, so archive_sha256 is null and not an unknown)"
+        )
+    evidence = field(body, "prestate_evidence")
+    if evidence is not ABSENT:
+        lines.append(f"prestate evidence {_short(evidence)}")
     entries = field(body, "entries")
     if isinstance(entries, list):
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
+            mode = field(entry, "mode")
             lines.append(
                 f"entry {_short(field(entry, 'entry_name'))}"
                 f" prestate={_short(field(entry, 'prestate'))}"
                 f" disposition={_short(field(entry, 'disposition'))}"
                 f" content={_short(field(entry, 'content_sha256'))}"
+                + (
+                    ""
+                    if mode is ABSENT
+                    else f" mode={'not-published' if mode is None else _short(mode)}"
+                )
             )
     unknowns = field(body, "unknowns")
     if isinstance(unknowns, list):
@@ -1671,6 +2547,14 @@ def observe_before_checks(body: dict[str, Any], observed: Observed) -> None:
             observed.digest_null.add(key)
     state = field(body, "effect_state")
     observed.effect_state = state if isinstance(state, str) and state in EFFECT_STATES else None
+    # Which generation, and whether a checkout object is PRESENT, are both pure shape questions, and
+    # both are read by rules that run before the checks that validate them. Hoisting them here is the
+    # same discipline the rest of this pass applies: an observation a later reader depends on is made
+    # before the reader, never during it. `checkout_present` is deliberately presence-of-a-dict rather
+    # than validity: a malformed checkout object still says "this body claims a checkout payload", and
+    # the archive rules must fail closed on that claim rather than on its wellformedness.
+    observed.generation = generation_of(body)
+    observed.checkout_present = isinstance(field(body, "checkout"), dict)
 
 
 def run_body_checks(assessment: Assessment, body: dict[str, Any], subject: str, observed: Observed) -> None:
@@ -1684,9 +2568,10 @@ def run_body_checks(assessment: Assessment, body: dict[str, Any], subject: str, 
     each recorded.
     """
     observe_before_checks(body, observed)
-    check_body_key_set(assessment, body, subject)
+    check_body_key_set(assessment, body, subject, observed)
     check_payload_identity(assessment, body, subject, observed)
-    check_host_and_scope(assessment, body, subject)
+    check_prestate_evidence(assessment, body, subject, observed)
+    check_host_and_scope(assessment, body, subject, observed)
     check_entry_inventory(assessment, body, subject, observed)
     check_unknowns(assessment, body, subject, observed)
     check_unknown_coverage(assessment, subject, observed)
@@ -1703,6 +2588,7 @@ def derive(command: str, document: dict[str, Any], subject: str) -> dict[str, An
     content: str | None = None
 
     if body is not None and command == "seal":
+        check_seal_generation(assessment, body, subject)
         check_seal_placeholders(assessment, document, body, subject)
         sealed = build_body(body)
         run_body_checks(assessment, sealed, subject, observed)

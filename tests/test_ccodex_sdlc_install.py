@@ -201,7 +201,24 @@ class Fixture:
 
     @property
     def pointer(self) -> Path:
-        """The plane's ONE active statement -- the only document ``update`` and ``uninstall`` admit."""
+        """This plane's ONE active statement, at the KEYED path.
+
+        Spelled out here rather than read from the module under test: the pointer filename is the
+        admission authority for ``update`` and ``uninstall``, so a test that asked the writer where it
+        wrote would agree with any path it chose.
+        """
+        return (
+            self.state_home
+            / "agentic-sdlc"
+            / "activation"
+            / "active"
+            / "claude"
+            / "user.json"
+        )
+
+    @property
+    def legacy_pointer(self) -> Path:
+        """Where the pre-keyed plane wrote its single pointer, for the migration cases."""
         return self.state_home / "agentic-sdlc" / "activation" / "active-receipt.json"
 
 
@@ -465,6 +482,29 @@ class ReExpressedContractsTest(TemporaryRoot):
             shim.RECEIPT_CONSTANTS, {**shim.RECEIPT_CONSTANTS, "selection": "chosen"}
         )
 
+    def test_the_pointer_layout_this_module_derives_is_the_family_s_own(self) -> None:
+        """The re-expression's whole cost is drift, and this is where it is paid.
+
+        The pointer FILENAME is the admission authority for every later verb, so the writer here and
+        the admitters there must derive the same path from the same (agent, scope, root).
+        """
+        activation = Path("/state/agentic-sdlc/activation")
+        for kind, root in (("user", None), ("project", "/srv/repo")):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    receipts.pointer_path(activation, "claude", kind, root),
+                    install._pointer_path(activation, "claude", kind, root),
+                )
+        self.assertEqual(receipts.LEGACY_ACTIVE_POINTER_NAME, install.LEGACY_ACTIVE_POINTER_NAME)
+        self.assertEqual(receipts.ACTIVE_DIRECTORY, install.ACTIVE_DIRECTORY)
+        self.assertEqual(receipts.USER_POINTER_NAME, install.USER_POINTER_NAME)
+        self.assertEqual(receipts.ROOT_KEY_CHARACTERS, install.ROOT_KEY_CHARACTERS)
+        # Positive control: the same comparison detects a divergence.
+        self.assertNotEqual(
+            receipts.pointer_path(activation, "claude", "user"),
+            install._pointer_path(activation, "codex", "user"),
+        )
+
     def test_escape_display_agrees_with_the_receipt_producer(self) -> None:
         samples = ("plain", "a\nb", "a\rb", "a\tb", "a\\b", "\x1b[2J", "\x7f", "٩")
         for sample in samples:
@@ -514,8 +554,14 @@ class EndToEndInstallTest(TemporaryRoot):
         document = sealed_receipt(fixture)
         body = document["body"]
         self.assertEqual("install", body["operation"])
-        self.assertEqual("claude", body["host"])
-        self.assertEqual("claude-home", body["activation_scope"])
+        # The v2 scope union, with its EXACT key set, is the ONE statement of which plane this
+        # activation touched: no `host` token beside it, no `activation_scope` display token, no
+        # `root` on a user scope, and no `root_key` anywhere -- the pointer filename derives that.
+        self.assertEqual({"agent": "claude", "kind": "user"}, body["scope"])
+        self.assertNotIn("host", body)
+        self.assertNotIn("activation_scope", body)
+        self.assertNotIn("mode_policy", body)
+        self.assertNotIn("checkout", body)
         self.assertEqual("complete", body["effect_state"])
         self.assertEqual("activated", body["terminal_phase"])
         self.assertIsNone(body["public_channel"])
@@ -1265,10 +1311,81 @@ def acquire_second_candidate(fixture: Fixture) -> Path:
 
 
 @WINDOWS_SKIP
+class KeyedPointerTest(TemporaryRoot):
+    """The install lands its pointer at the KEYED path, and migrates the pre-keyed one exactly once."""
+
+    def test_the_install_writes_the_keyed_pointer_and_never_the_legacy_name(self) -> None:
+        fixture = self.fixture()
+        outcome = call_main(fixture)
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertTrue(fixture.pointer.is_file(), outcome.stdout)
+        self.assertFalse(
+            fixture.legacy_pointer.exists(), "the pre-keyed name is history, never freshly written"
+        )
+        self.assertIn(str(fixture.pointer), outcome.stdout)
+        # The pointer's bytes ARE the receipt's, and its filename agrees with the scope inside it.
+        document = json.loads(fixture.pointer.read_text(encoding="utf-8"))
+        self.assertEqual([], receipts.pointer_disagreements(fixture.pointer, document["body"]))
+        self.assertEqual({"agent": "claude", "kind": "user"}, document["body"]["scope"])
+
+    def test_a_legacy_pointer_alone_is_migrated_before_this_run_admits_anything(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        receipt_bytes = fixture.pointer.read_bytes()
+        # Put the plane back into the pre-keyed shape a host activated before the keyed plane existed.
+        fixture.legacy_pointer.write_bytes(receipt_bytes)
+        fixture.pointer.unlink()
+
+        outcome = call_main(fixture, config=self.later_config(fixture))
+
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertIn("migrated the legacy active pointer", outcome.stdout)
+        self.assertIn(str(fixture.legacy_pointer), outcome.stdout)
+        self.assertIn(str(fixture.pointer), outcome.stdout)
+        self.assertFalse(fixture.legacy_pointer.exists())
+        self.assertTrue(fixture.pointer.is_file())
+
+    def test_both_pointers_present_refuses_before_any_effect_naming_both(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        fixture.legacy_pointer.write_bytes(fixture.pointer.read_bytes())
+        before = {
+            path: path.read_bytes()
+            for path in (fixture.pointer, fixture.legacy_pointer)
+        }
+
+        outcome = call_main(fixture, config=self.later_config(fixture))
+
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("legacy-pointer-ambiguity", outcome.stderr)
+        self.assertIn(str(fixture.legacy_pointer), outcome.stderr)
+        self.assertIn(str(fixture.pointer), outcome.stderr)
+        self.assertIn("remove the one that is not current", outcome.stderr)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        # Positive control: removing the legacy copy lets the identical run complete.
+        fixture.legacy_pointer.unlink()
+        self.assertEqual(0, call_main(fixture, config=self.later_config(fixture)).code)
+
+    def test_a_legacy_pointer_that_is_a_link_refuses_rather_than_being_followed(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        elsewhere = fixture.root / "elsewhere-receipt.json"
+        elsewhere.write_bytes(fixture.pointer.read_bytes())
+        fixture.pointer.unlink()
+        fixture.legacy_pointer.symlink_to(elsewhere)
+
+        outcome = call_main(fixture, config=self.later_config(fixture))
+
+        self.assertEqual(3, outcome.code, outcome.stdout)
+        self.assertIn("is a link or not a regular file", outcome.stderr)
+        self.assertTrue(fixture.legacy_pointer.is_symlink(), "the link is preserved, never resolved")
+
+
+@WINDOWS_SKIP
 class InstallThenUpdateTest(TemporaryRoot):
     """The two verbs meet at ONE document, and this test drives both of them for real.
 
-    ``ccodex sdlc update`` admits ``activation/active-receipt.json`` and nothing else.  Before
+    ``ccodex sdlc update`` admits this plane's keyed pointer and nothing else.  Before
     agentic-sdlc-7b2e this module never wrote it, so a real install at exit 0 followed by a real
     update refused at exit 3 with no usable active receipt: the front door of the plane the install
     had just built did not exist.  Nothing here is a fixture receipt -- the install writes the
