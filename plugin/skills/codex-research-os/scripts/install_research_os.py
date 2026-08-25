@@ -1800,7 +1800,9 @@ def _open_root(root: Path) -> int | None:
         except OSError as exc:
             raise TargetRootError(f"cannot open target root {root}: {exc}") from exc
         if not stat.S_ISDIR(metadata.st_mode) or metadata.st_file_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
-            raise TargetRootError("target root is not a safe directory")
+            # Every other refusal on this path names the root it rejected, and the operator
+            # cannot act on one that does not: `--target` is theirs to correct.
+            raise TargetRootError(f"target root is not a safe directory: {root}")
         return None
     required = ("O_DIRECTORY", "O_NOFOLLOW")
     if any(not hasattr(os, name) for name in required):
@@ -1811,7 +1813,7 @@ def _open_root(root: Path) -> int | None:
         raise TargetRootError(f"cannot open target root {root}: {exc}") from exc
     try:
         if not stat.S_ISDIR(os.fstat(fd).st_mode):
-            raise TargetRootError("target root is not a directory")
+            raise TargetRootError(f"target root is not a directory: {root}")
         return fd
     except BaseException:
         os.close(fd)
