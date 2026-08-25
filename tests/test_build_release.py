@@ -70,6 +70,13 @@ class BuilderFixture(unittest.TestCase):
 
     ``git archive`` refuses a pathspec that matches nothing, so the fixture is generated FROM the
     shipped allowlist rather than from a hand-written list that would silently drift from it.
+
+    Every write here passes ``newline="\\n"`` on purpose. These constants are what the digest and
+    archived-bytes assertions compare against, so a fixture whose on-disk bytes differ from its own
+    constant is comparing two different documents: ``write_text`` defaults to the platform's line
+    separator, which put CRLF on disk on windows-2025 and failed the manifest digest and the
+    head-anchor claim with ``b'licence\\r\\n' != b'licence\\n'`` (agentic-sdlc-5ce7). A release
+    archive's bytes are the subject here, so the fixture states its own.
     """
 
     PAYLOAD = {
@@ -105,7 +112,7 @@ class BuilderFixture(unittest.TestCase):
         for relative, text in {**generated, **self.PAYLOAD, **self.OUTSIDE}.items():
             path = self.repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
+            path.write_text(text, encoding="utf-8", newline="\n")
         os.symlink("../skills", self.repo / "plugin" / "skills")
         (self.repo / "policy" / "release-candidate.v1.json").write_bytes(builder.canonical(POLICY))
         self.git("add", "--all")
@@ -231,14 +238,14 @@ class AllowlistTest(BuilderFixture):
 
 class RefusalTest(BuilderFixture):
     def test_a_modified_tracked_file_is_refused_by_name(self) -> None:
-        (self.repo / "LICENSE").write_text("edited\n", encoding="utf-8")
+        (self.repo / "LICENSE").write_text("edited\n", encoding="utf-8", newline="\n")
         with self.assertRaises(builder.Refusal) as raised:
             self.build(Path(self.temporary.name) / "dist")
         self.assertIn("is dirty", str(raised.exception))
         self.assertIn("LICENSE", str(raised.exception))
 
     def test_an_untracked_file_is_refused(self) -> None:
-        (self.repo / "scripts" / "scratch.py").write_text("scratch\n", encoding="utf-8")
+        (self.repo / "scripts" / "scratch.py").write_text("scratch\n", encoding="utf-8", newline="\n")
         with self.assertRaises(builder.Refusal):
             self.build(Path(self.temporary.name) / "dist")
 
@@ -253,7 +260,7 @@ class RefusalTest(BuilderFixture):
         self.assertIn("max_entries", str(raised.exception))
 
     def test_the_cli_reports_a_refusal_as_exit_three(self) -> None:
-        (self.repo / "LICENSE").write_text("edited\n", encoding="utf-8")
+        (self.repo / "LICENSE").write_text("edited\n", encoding="utf-8", newline="\n")
         completed = subprocess.run(
             [
                 sys.executable,
@@ -285,7 +292,7 @@ class HeadAnchorTest(BuilderFixture):
 
     def _move_the_head(self) -> str:
         """Land a commit whose tree really differs from the fixture's, and return it."""
-        (self.repo / "LICENSE").write_text("relicensed\n", encoding="utf-8")
+        (self.repo / "LICENSE").write_text("relicensed\n", encoding="utf-8", newline="\n")
         self.git("add", "LICENSE")
         self.git("commit", "--quiet", "--no-verify", "-m", "moved")
         moved = self.git("rev-parse", "HEAD").strip()

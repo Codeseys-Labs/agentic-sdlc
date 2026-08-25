@@ -15,6 +15,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -155,6 +156,25 @@ def lane_by_name(record: dict, name: str) -> dict:
     lanes = {lane["lane"]: lane for lane in record["stores"]["gateway"]["lanes"]}
     assert name in lanes, sorted(lanes)
     return lanes[name]
+
+
+def normalize_fixture_paths(output: str, base: Path) -> str:
+    """Redact the fixture prefix in both spellings a path takes across these two views.
+
+    The reporter emits ``str(path)``, so on Windows every reported path carries backslashes: the
+    text view holds them literally while ``json.dumps`` renders each one escaped. Replacing only
+    ``str(base)`` therefore never matches in the JSON view, and the separator direction of the
+    surviving tail still differs from the POSIX-shaped golden. A fixture-derived path is location,
+    not report content, so both spellings and the tail's separators are normalized here and the
+    golden comparison stays byte-exact for everything else.
+    """
+    prefixes = sorted({str(base), json.dumps(str(base))[1:-1]}, key=len, reverse=True)
+
+    def redact(match: re.Match[str]) -> str:
+        return "<fixture>" + match.group("tail").replace("\\\\", "/").replace("\\", "/")
+
+    pattern = "|".join(re.escape(prefix) for prefix in prefixes)
+    return re.sub(rf"(?:{pattern})(?P<tail>[^\s\"]*)", redact, output)
 
 
 def all_keys(value: object) -> set[str]:
@@ -587,8 +607,8 @@ class GoldenViewTests(unittest.TestCase):
             self.assertEqual(code, 0)
             code, text_output = run_report(ocx, claude, "--billing", "muse=api-key")
             self.assertEqual(code, 0)
-            normalized_json = json_output.replace(str(base), "<fixture>")
-            normalized_text = text_output.replace(str(base), "<fixture>")
+            normalized_json = normalize_fixture_paths(json_output, base)
+            normalized_text = normalize_fixture_paths(text_output, base)
             self.assertEqual(
                 normalized_json, (GOLDEN_DIR / "report.json").read_text(encoding="utf-8")
             )

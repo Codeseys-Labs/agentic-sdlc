@@ -59,6 +59,13 @@ REVISED_TEXT = (
 )
 FOREIGN_TEXT = "// workflow: wave\n// someone else's overlay\n"
 
+# Every fixture write here passes `newline="\n"` on purpose. The manager records the DIGEST of the
+# bytes it copied, and these constants are what the digest assertions encode, so a fixture whose
+# on-disk bytes differ from its own constant is comparing two different documents: `write_text`
+# defaults to the platform's line separator, which put CRLF on disk on windows-2025 and failed
+# both receipt-digest claims while every `read_text` assertion passed, because reading translates
+# back (agentic-sdlc-5ce7). Workflow bytes are LF by construction wherever they are enabled.
+
 
 class ManageClaudeWorkflowsTests(unittest.TestCase):
     maxDiff = None
@@ -67,7 +74,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
         """Build a fake repo shipping one workflow, install it, and return the manager's inputs."""
         repo = root / "repo"
         (repo / "workflows").mkdir(parents=True)
-        (repo / "workflows" / "wave.js").write_text(WORKFLOW_TEXT, encoding="utf-8")
+        (repo / "workflows" / "wave.js").write_text(WORKFLOW_TEXT, encoding="utf-8", newline="\n")
         state = root / "state"
         config = installer.Config(repo, root / "home", root / "codex", "copy", False, "claude", state)
         if install:
@@ -87,7 +94,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             destination = self.destination(target)
             neighbour = destination.parent / "someone-elses.js"
             destination.parent.mkdir(parents=True)
-            neighbour.write_text("// workflow: someone-elses\n", encoding="utf-8")
+            neighbour.write_text("// workflow: someone-elses\n", encoding="utf-8", newline="\n")
 
             code, messages = manage.activate("wave", target, workflows_dir, state, False)
 
@@ -139,7 +146,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             target, workflows_dir, state, _ = self.setup_environment(root)
             destination = self.destination(target)
             destination.parent.mkdir(parents=True)
-            destination.write_text(WORKFLOW_TEXT, encoding="utf-8")
+            destination.write_text(WORKFLOW_TEXT, encoding="utf-8", newline="\n")
 
             code, messages = manage.activate("wave", target, workflows_dir, state, False)
 
@@ -160,7 +167,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             destination = self.destination(target)
             neighbour = destination.parent / "someone-elses.js"
             destination.parent.mkdir(parents=True)
-            neighbour.write_text("// workflow: someone-elses\n", encoding="utf-8")
+            neighbour.write_text("// workflow: someone-elses\n", encoding="utf-8", newline="\n")
             self.assertEqual(manage.activate("wave", target, workflows_dir, state, False)[0], 0)
 
             code, messages = manage.deactivate("wave", target, state, False)
@@ -198,7 +205,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             target, workflows_dir, state, _ = self.setup_environment(root)
             destination = self.destination(target)
             destination.parent.mkdir(parents=True)
-            destination.write_text(FOREIGN_TEXT, encoding="utf-8")
+            destination.write_text(FOREIGN_TEXT, encoding="utf-8", newline="\n")
 
             with self.assertRaisesRegex(manage.WorkflowsError, "occupied by a foreign workflow file"):
                 manage.activate("wave", target, workflows_dir, state, False)
@@ -216,7 +223,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             target, workflows_dir, state, _ = self.setup_environment(root)
             destination = self.destination(target)
             self.assertEqual(manage.activate("wave", target, workflows_dir, state, False)[0], 0)
-            destination.write_text(WORKFLOW_TEXT + "// operator edit\n", encoding="utf-8")
+            destination.write_text(WORKFLOW_TEXT + "// operator edit\n", encoding="utf-8", newline="\n")
 
             # Re-activating over the operator's edit must refuse rather than clobber.
             with self.assertRaisesRegex(manage.WorkflowsError, "modified after activation"):
@@ -238,7 +245,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             destination = self.destination(target)
 
             # Drifted: the installed copy no longer matches its ownership record's digest.
-            source.write_text(WORKFLOW_TEXT + "// drift\n", encoding="utf-8")
+            source.write_text(WORKFLOW_TEXT + "// drift\n", encoding="utf-8", newline="\n")
             with self.assertRaisesRegex(manage.WorkflowsError, "drifted from its ownership record"):
                 manage.activate("wave", target, workflows_dir, state, False)
 
@@ -248,7 +255,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
                 manage.activate("wave", target, workflows_dir, state, False)
 
             # Unowned: bytes exist at the source but no lifecycle record covers them.
-            source.write_text(WORKFLOW_TEXT, encoding="utf-8")
+            source.write_text(WORKFLOW_TEXT, encoding="utf-8", newline="\n")
             with self.assertRaisesRegex(manage.WorkflowsError, "not owned by the bundle lifecycle"):
                 manage.activate("wave", target, workflows_dir, root / "other-state", False)
 
@@ -267,7 +274,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
 
             # The bundle moves on: the authored source changes and the lifecycle refreshes its
             # owned home-plane copy, so the record's digest now names the revised bytes.
-            (config.repo_root / "workflows" / "wave.js").write_text(REVISED_TEXT, encoding="utf-8")
+            (config.repo_root / "workflows" / "wave.js").write_text(REVISED_TEXT, encoding="utf-8", newline="\n")
             self.assertEqual(installer.install(config).exit_code, 0)
 
             code, messages = manage.activate("wave", target, workflows_dir, state, False)
@@ -279,7 +286,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             self.assertEqual(receipt["workflow_digest"], manage.settings_io.digest_bytes(REVISED_TEXT.encode()))
 
             # Negative control: the refresh path never overwrites an operator-modified copy.
-            destination.write_text(REVISED_TEXT + "// operator edit\n", encoding="utf-8")
+            destination.write_text(REVISED_TEXT + "// operator edit\n", encoding="utf-8", newline="\n")
             with self.assertRaisesRegex(manage.WorkflowsError, "modified after activation"):
                 manage.activate("wave", target, workflows_dir, state, False)
             self.assertEqual(destination.read_text(encoding="utf-8"), REVISED_TEXT + "// operator edit\n")
@@ -312,7 +319,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             }
             receipt_file = manage.receipt_path(state, "wave", destination)
             receipt_file.parent.mkdir(parents=True)
-            receipt_file.write_text(json.dumps(forged), encoding="utf-8")
+            receipt_file.write_text(json.dumps(forged), encoding="utf-8", newline="\n")
 
             with self.assertRaisesRegex(manage.WorkflowsError, "different destination path"):
                 manage.deactivate("wave", target, state, False)
@@ -390,7 +397,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             def racing_edit(path, content, mode, expected=None):
                 if path == destination:
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_text(FOREIGN_TEXT, encoding="utf-8")
+                    destination.write_text(FOREIGN_TEXT, encoding="utf-8", newline="\n")
                 return real(path, content, mode, expected)
 
             with mock.patch.object(manage.settings_io, "atomic_bytes", side_effect=racing_edit):
@@ -408,7 +415,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             target, workflows_dir, state, _ = self.setup_environment(root)
             destination = self.destination(target)
             destination.parent.mkdir(parents=True)
-            (destination.parent / "someone-elses.js").write_text("// workflow: someone-elses\n", encoding="utf-8")
+            (destination.parent / "someone-elses.js").write_text("// workflow: someone-elses\n", encoding="utf-8", newline="\n")
 
             code, messages = manage.status(target, workflows_dir, state, None)
             self.assertEqual(code, 0)
@@ -430,7 +437,7 @@ class ManageClaudeWorkflowsTests(unittest.TestCase):
             self.assertEqual(messages[-1], "0 active, 0 inactive, 1 conflict")
 
             # A drifted installed source is reported without blocking the read.
-            (workflows_dir / "wave.js").write_text(WORKFLOW_TEXT + "// drift\n", encoding="utf-8")
+            (workflows_dir / "wave.js").write_text(WORKFLOW_TEXT + "// drift\n", encoding="utf-8", newline="\n")
             code, messages = manage.status(target, workflows_dir, state, None)
             self.assertTrue(any("drifted from its ownership record" in message for message in messages), messages)
 

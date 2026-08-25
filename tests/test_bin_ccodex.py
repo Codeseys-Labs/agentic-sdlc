@@ -41,6 +41,25 @@ BUILDER_PATH = ROOT / "scripts" / "build_release.py"
 # toolchain config its trust boundary names, and the launcher its launch family execs.
 REAL_PAYLOAD_FILES = ("bin/ccodex", "mise.toml", "mise.lock", "scripts/opencodex-claude.sh")
 
+# Which of those this repository records as 100755. The fixture has to set the index mode
+# EXPLICITLY: a Windows filesystem carries no executable bit, so `shutil.copy2` cannot bring one
+# across and `git add` then records 100644, which made the archive's own mode assertion read 0o664
+# on windows-2025 (agentic-sdlc-5ce7). Asserting a release property against a mode the host's
+# filesystem happened to supply was the defect; the real repository's mode is the fact.
+EXECUTABLE_PAYLOAD_FILES = ("bin/ccodex", "scripts/opencodex-claude.sh")
+
+# `bin/ccodex` is a bash script, and Windows resolves an interpreter from the PE header rather
+# than a shebang, so `CreateProcess` on it raises `[WinError 193] %1 is not a valid Win32
+# application` -- the 9 errors these three classes contributed on windows-2025 (agentic-sdlc-5ce7).
+# Reaching it through Git Bash would not rescue the claims either: their isolation is a
+# `os.symlink`-built allowlist PATH of POSIX utilities and a `mise trust` remedy string, and
+# native Windows operator-tool activation is uncertified (AGENTS.md). ArchiveShapeTest keeps
+# running here, because the archive's shape is platform-independent and reads no executable bit.
+DISPATCHER_IS_POSIX_SHELL_SKIP_REASON = (
+    "bin/ccodex is a POSIX shell dispatcher that Windows cannot execute directly (WinError 193), "
+    "and its operator-tools plane is uncertified on native Windows (agentic-sdlc-5ce7)"
+)
+
 # The additional real bytes the isolated sdlc exec proof needs: the reader whose runtime
 # admission is the assertion, the siblings it loads by absolute path, and the two policies it
 # reads. Everything on this list is stdlib-only, so the reader runs under `-I -B` with no venv.
@@ -139,6 +158,9 @@ class ExtractedTreeFixture(unittest.TestCase):
             shutil.copy2(source, destination)
         (repo / "policy" / "release-candidate.v1.json").write_bytes(builder.canonical(POLICY))
         git("add", "--all")
+        for relative in EXECUTABLE_PAYLOAD_FILES:
+            if relative in self.real_payload_files:
+                git("update-index", "--chmod=+x", relative)
         git("commit", "--quiet", "--no-verify", "-m", "fixture")
 
         built = builder.build(repo, base / "dist")
@@ -221,6 +243,7 @@ class ArchiveShapeTest(ExtractedTreeFixture):
         self.assertEqual(rows["bin/ccodex"]["mode"], 0o775)
 
 
+@unittest.skipIf(os.name == "nt", DISPATCHER_IS_POSIX_SHELL_SKIP_REASON)
 class ToolFreeVerbsTest(ExtractedTreeFixture):
     def test_version_runs_from_the_extracted_tree_with_no_tools_and_no_trust(self) -> None:
         completed = self.run_ccodex(["version"], self.toolless_environment())
@@ -246,6 +269,7 @@ class ToolFreeVerbsTest(ExtractedTreeFixture):
         self.assertIn("mise is not on PATH", completed.stderr)
 
 
+@unittest.skipIf(os.name == "nt", DISPATCHER_IS_POSIX_SHELL_SKIP_REASON)
 @unittest.skipUnless(shutil.which("mise"), "mise is required for trust-boundary behavior")
 class UntrustedConfigRefusalTest(ExtractedTreeFixture):
     def assert_trust_refusal(self, completed: subprocess.CompletedProcess[str]) -> None:
@@ -269,6 +293,7 @@ class UntrustedConfigRefusalTest(ExtractedTreeFixture):
         self.assert_trust_refusal(self.run_ccodex(["bundle", "status"], self.untrusted_mise_environment()))
 
 
+@unittest.skipIf(os.name == "nt", DISPATCHER_IS_POSIX_SHELL_SKIP_REASON)
 @unittest.skipUnless(
     sys.version_info[:3] == (3, 12, 11),
     "the isolated sdlc exec proof hands the suite's own interpreter to the REAL reader, whose"

@@ -47,6 +47,20 @@ def content_files(root: Path) -> dict[str, str]:
     return tree
 
 
+# Two transaction-safety claims are proven by PLANTING a racer at an interception point on the
+# POSIX path (`_inspect_absolute` reaching a container's `witness`, `_rename_noreplace` reaching
+# the owned leaf) and then asserting the planted bytes survived. On windows-2025 both discovered
+# ZERO planted bytes -- `assertTrue([])`, CI run 32774680436 -- so the swap never fired: the
+# Windows publication path does not pass through the point the fixture intercepts. Asserting on a
+# racer that never ran would prove nothing on that host, and finding the real interception point
+# needs a Windows shell, which is seed agentic-sdlc-f947's work.
+PLANTED_RACE_SKIP_REASON = (
+    "the planted racer never fires on the Windows publication path, so this claim's own "
+    "interception point does not exist here; locating it needs a real Windows shell "
+    "(agentic-sdlc-f947, split from agentic-sdlc-5ce7)"
+)
+
+
 def expected_state_path(state_root: Path, target: Path) -> Path:
     physical = os.path.normcase(str(target.resolve()))
     key = hashlib.sha256(os.fsencode(physical)).hexdigest()
@@ -455,6 +469,7 @@ class TransactionSafetyTests(unittest.TestCase):
             self.assertEqual(read_tree(root), tree_after_first)
             self.assertEqual(state_path.read_bytes(), state_after_first)
 
+    @unittest.skipIf(os.name == "nt", PLANTED_RACE_SKIP_REASON)
     def test_cleanup_namespace_swap_preserves_foreign_replacement(self) -> None:
         rel = "research/status.md"
         with tempfile.TemporaryDirectory() as directory, isolated_state():
@@ -499,11 +514,16 @@ class TransactionSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, isolated_state() as state_root:
             root = Path(directory)
             real_write = installer.os.write
+            payload = files[rel].encode("utf-8")
             failed = False
 
             def partial_then_fail(fd: int, data: bytes) -> int:
+                # The interception has to be the STAGE write, so it selects on the payload rather
+                # than on being first: `_state_lock` writes a byte through this same `os.write` on
+                # Windows, and failing that one made the run refuse with "another Research OS
+                # install is active" before it ever staged anything (agentic-sdlc-5ce7).
                 nonlocal failed
-                if not failed:
+                if not failed and data == payload:
                     failed = True
                     real_write(fd, data[:4])
                     raise OSError("simulated partial stage write")
@@ -527,6 +547,7 @@ class TransactionSafetyTests(unittest.TestCase):
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertIn(rel, state["entries"])
 
+    @unittest.skipIf(os.name == "nt", PLANTED_RACE_SKIP_REASON)
     def test_delete_namespace_swap_never_deletes_foreign_replacement(self) -> None:
         rel = "research/old.md"
         with tempfile.TemporaryDirectory() as directory, isolated_state():
@@ -809,7 +830,12 @@ class PathContainmentTests(unittest.TestCase):
             sentinel = outside / "status.md"
             sentinel.write_text("OUTSIDE SENTINEL\n", encoding="utf-8")
 
-            with self.assertRaises(OSError):
+            # Containment fails closed through whichever primitive the platform gives it: POSIX
+            # gets ELOOP out of `O_NOFOLLOW` (an OSError), while `_windows_parent` reads the
+            # reparse-point attribute itself and raises the installer's own named refusal. The
+            # load-bearing claims are the two below -- the outside sentinel is untouched and no
+            # manifest is written -- so the type here admits both spellings of "refused".
+            with self.assertRaises((OSError, installer.ResearchOSError)):
                 installer.apply_install(root, files=files)
 
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "OUTSIDE SENTINEL\n")
@@ -911,6 +937,17 @@ class BirthWitnessSettlementTests(unittest.TestCase):
     passthrough that inherits this host's real granularity by design."""
 
     maxDiff = None
+
+    def witness_needs_settlement(self, path: Path) -> bool:
+        """Whether an enrolled witness for `path` owes a settlement wait on this host.
+
+        Product-dispatch predicate, mirroring `_settlement_targets`'s own condition on the same
+        object rather than sniffing the platform: a birth TIMESTAMP is reproducible while its
+        quantum is open and must be settled, and a Windows file id is not.
+        """
+        if installer._platform_system() != "Windows":
+            return True
+        return installer._windows_file_identity(path, follow_symlinks=False) is None
 
     @contextmanager
     def simulated_birth_clock(self, quantum_seconds: float | None):
@@ -1506,7 +1543,14 @@ class BirthWitnessSettlementTests(unittest.TestCase):
             journal["transactions"][rel] = {"witness_settled": False, **document["entries"][rel]}
             targets, keys = installer._inherited_settlement_targets(root, journal)
             self.assertEqual(keys, {rel})
-            self.assertTrue(targets)
+            if self.witness_needs_settlement(root / rel):
+                self.assertTrue(targets)
+            else:
+                # A live Windows file id carries a sequence number that already changes when the
+                # record is reused, so `_settlement_targets` deliberately enrols no wait for one
+                # (install_research_os.py, the `windows and _windows_file_identity(...)` branch).
+                # The enrolled KEY above is the platform-neutral half of this control.
+                self.assertEqual(targets, [])
 
     @unittest.skipUnless(STATX_IS_THE_BIRTH_SOURCE, STATX_SKIP_REASON)
     def test_a_failed_run_still_pays_the_settlement_it_deferred(self) -> None:

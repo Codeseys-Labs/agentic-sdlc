@@ -177,10 +177,16 @@ class InstallSkillBundleTests(LifecycleTestCase):
             )
             destination = config.home / ".claude" / "skills" / "example"
             destination.parent.mkdir(parents=True)
-            destination.symlink_to(old / "skills" / "example")
+            # The owned link has to be the kind THIS platform's installer creates: a bare
+            # `symlink_to` of a directory makes a FILE-type symlink on Windows, which is not a
+            # state ownership can hold, and it made this retarget fail as `[WinError 5]`.
+            # ...and the record has to carry the mode it actually produced, which is `junction`
+            # for a directory source on Windows; a record disagreeing with the live object is a
+            # conflict, so the retarget under test would never be reached.
+            mode = installer.link_item(old / "skills" / "example", destination)
             state = installer.load_state(config.state_path)
             state["entries"][str(destination)] = installer.entry_record(
-                installer.Entry("claude", "skill", "example", old / "skills" / "example"), "link"
+                installer.Entry("claude", "skill", "example", old / "skills" / "example"), mode
             )
             installer.write_state(config.state_path, state, False)
 
@@ -987,6 +993,37 @@ class InstallSkillBundleTests(LifecycleTestCase):
             self.assertFalse((destination / "old.txt").exists())
             self.assertEqual(sorted(child.name for child in root.iterdir()), ["destination"])
 
+    def test_publish_uses_a_named_aside_for_a_windows_directory_link_payload(self) -> None:
+        """A junction or directory symlink is a DIRECTORY to Windows' replacing rename.
+
+        Link-mode ownership publishes exactly that payload, and `os.replace` onto an occupied
+        name raises `[WinError 5] Access is denied` for it while succeeding onto an absent one, so
+        choosing the one-call path made a link retarget fail outright on windows-2025. The
+        platform seam is forced here because Linux has no junction and replaces a directory
+        symlink in one call, so only the DECISION is observable from this host: the aside pair is
+        two namespace operations and the fast path is one.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            (source / "new.txt").write_text("new")
+            payload = root / "payload"
+            payload.symlink_to(source, target_is_directory=True)
+            destination = root / "destination"
+            destination.write_text("old")
+
+            with mock.patch.object(installer, "platform_system", return_value="Windows"):
+                with mock.patch.object(
+                    installer.os, "replace", wraps=installer.os.replace
+                ) as replace:
+                    installer.publish(payload, destination)
+
+            self.assertEqual(replace.call_count, 2)
+            self.assertTrue(destination.is_symlink())
+            self.assertEqual((destination / "new.txt").read_text(), "new")
+            self.assertEqual(sorted(child.name for child in root.iterdir()), ["destination", "source"])
+
     def test_publish_restores_the_previous_tree_when_the_swap_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1570,8 +1607,12 @@ class ByteIdentityDoctrineTests(LifecycleTestCase):
             entry = self.only_entry(root)
             self.assertEqual(self.install_only(config, entry).exit_code, 0)
             destination = installer.destination_for(entry, config)
-            destination.unlink()
-            destination.symlink_to(entry.source, target_is_directory=True)
+            # Recreate it the way this platform's installer does, so the doctrine under test is
+            # "the same link, made again" rather than "a different link kind". On Windows the
+            # installer publishes a junction for a directory source and a bare `symlink_to` makes
+            # a symlink instead, which uninstall correctly reads as a mode conflict.
+            installer.remove_path(destination)
+            installer.link_item(entry.source, destination)
 
             removed = self.uninstall_only(config, entry)
 

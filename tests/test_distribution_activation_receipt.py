@@ -1204,6 +1204,11 @@ class CommandLine(unittest.TestCase):
             self.assertEqual(proc.stdout, dar.canonical_bytes(json.loads(proc.stdout.decode("ascii"))))
 
     def test_a_closed_stderr_costs_the_diagnostic_and_not_the_exit_code(self) -> None:
+        if not os.path.exists("/bin/sh"):
+            # Closing fd 2 before exec needs a POSIX shell to do it: this is the same named-skip
+            # shape as the `/dev/full` control below, and windows-2025 reported it as a bare
+            # `[WinError 2]` out of CreateProcess instead (agentic-sdlc-5ce7).
+            self.skipTest("/bin/sh is unavailable, so stderr cannot be closed before exec")
         with tempfile.TemporaryDirectory() as directory:
             missing = os.path.join(directory, "nope.json")
             proc = subprocess.run(

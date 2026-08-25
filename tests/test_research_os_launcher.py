@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 SCRIPT = Path(__file__).parents[1] / "skills" / "codex-research-os" / "scripts" / "install_research_os.py"
@@ -260,7 +263,11 @@ class ResearchOSLauncherTests(unittest.TestCase):
             self.assertEqual(result.returncode, installer.EXIT_INPUT, result.stdout + result.stderr)
             self.assertEqual(result.stdout, "")
             self.assertNotIn("Traceback", result.stderr)
-            self.assertIn(str(missing), result.stderr)
+            # The launcher resolves `--target` before it opens it, so the refusal names the
+            # resolved root. On Windows that is the long form of a path `tempfile` hands out in
+            # 8.3 form (`RUNNER~1` -> `runneradmin`), so the supplied string is not what the
+            # operator is shown; resolving here compares the two through the same normalization.
+            self.assertIn(str(missing.resolve()), result.stderr)
 
     def test_present_but_not_a_directory_target_also_refuses_at_exit_2_without_traceback(self) -> None:
         """Positive control: the same wrap catches a present-but-invalid target (a regular file,
@@ -279,7 +286,25 @@ class ResearchOSLauncherTests(unittest.TestCase):
             self.assertEqual(result.returncode, installer.EXIT_INPUT, result.stdout + result.stderr)
             self.assertEqual(result.stdout, "")
             self.assertNotIn("Traceback", result.stderr)
-            self.assertIn(str(regular_file), result.stderr)
+            self.assertIn(str(regular_file.resolve()), result.stderr)
+
+    def test_the_windows_unsafe_root_refusal_names_the_root(self) -> None:
+        """The `nt` half of `_open_root` reaches the same operator as the POSIX half.
+
+        `os.open(..., O_DIRECTORY)` fails with ENOTDIR and the POSIX refusal quotes that error
+        with the root in it, so the path was always named there. The Windows branch decides the
+        same thing from `lstat` and used to raise a bare sentence, which is why the launcher's
+        present-but-invalid target refusal named no path on windows-2025 (agentic-sdlc-5ce7).
+        Driving the branch under a forced `os.name` is the only way to hold it from here.
+        """
+        root = Path("C:\\Users\\runneradmin\\AppData\\Local\\Temp\\not-a-directory")
+        regular_file = SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_file_attributes=0)
+        with mock.patch.object(installer.os, "name", "nt"), mock.patch.object(
+            installer.os, "lstat", return_value=regular_file
+        ):
+            with self.assertRaises(installer.TargetRootError) as raised:
+                installer._open_root(root)
+        self.assertIn(str(root), str(raised.exception))
 
 
 if __name__ == "__main__":

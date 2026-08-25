@@ -804,6 +804,26 @@ def is_directory_object(path: Path) -> bool:
     return path.is_dir() and not path.is_symlink() and not is_junction(path)
 
 
+def replaces_as_directory(path: Path) -> bool:
+    """Whether the kernel's replacing rename counts this path as a directory.
+
+    Ownership asks whether an entry is a directory or a link; a MOVE asks something narrower,
+    and on Windows the two answers differ. `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING` refuses
+    a directory on either side, and a junction or a directory symlink is a directory-type reparse
+    point to it, so `os.replace` on one raises `Access is denied` where it would have succeeded
+    onto an absent name. Link-mode ownership publishes exactly such a payload, so treating it as
+    a file chose the one-call fast path for a move Windows cannot perform: measured on
+    windows-2025 as a raw `[WinError 5]` out of a link retarget (agentic-sdlc-5ce7, CI run
+    32774680436). The rename-aside pair the docstring already promised for "a directory on either
+    side" handles it, because the second rename then lands on an absent name.
+    """
+    if is_directory_object(path):
+        return True
+    if platform_system() != "Windows":
+        return False
+    return is_junction(path) or (path.is_symlink() and path.is_dir())
+
+
 def remove_path(path: Path) -> None:
     """Remove a path; live destinations are never passed here by lifecycle mutations."""
     if is_junction(path):
@@ -1044,7 +1064,7 @@ def publish(payload: Path, destination: Path) -> None:
     if not path_present(destination):
         rename_absent(payload, destination)
         return
-    if not is_directory_object(payload) and not is_directory_object(destination):
+    if not replaces_as_directory(payload) and not replaces_as_directory(destination):
         os.replace(payload, destination)
         fsync_directory(destination.parent)
         return

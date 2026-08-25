@@ -235,7 +235,11 @@ class ApplyVerbTests(unittest.TestCase):
             self.assertEqual(approved.returncode, gen.EXIT_OK)
             self.assertTrue(target.is_file())
             self.assertIn(MARKER["end"], target.read_text(encoding="utf-8"))
-            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+            # Windows implements no POSIX permission bits: CPython reports 0o666 for any writable
+            # file and `chmod` there only toggles the read-only flag, so the 0o644 the generator
+            # requests is unobservable and the honest claim on that host is "still writable".
+            expected_mode = 0o666 if os.name == "nt" else 0o644
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), expected_mode)
 
     def test_apply_refuses_a_symlinked_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
