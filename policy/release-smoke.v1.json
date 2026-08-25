@@ -109,7 +109,7 @@
       "platforms": ["Darwin", "Linux"],
       "environment": "host",
       "expect_exit": 0,
-      "expect_stdout_matches": ["(?m)^(?:no owned entries for this host|[0-9]+ ok, [0-9]+ conflict, [0-9]+ absent)$"],
+      "expect_stdout_matches": ["(?m)^(?:no owned entries for this host \\(run: mise run bundle:install\\)|[0-9]+ ok, [0-9]+ conflict, [0-9]+ absent)\\s*\\Z"],
       "expect_stdout_absent": ["Traceback", "error:"],
       "expect_stderr_absent": ["Traceback"]
     },

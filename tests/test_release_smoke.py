@@ -192,6 +192,68 @@ class ShippedManifestTest(unittest.TestCase):
                 self.assertEqual([], [name for name in case["platforms"] if name not in ("Darwin", "Linux")])
 
 
+class BundleStatusTerminalLineTest(unittest.TestCase):
+    """The manifest's terminal-line pattern, bound to the PRODUCT that emits it.
+
+    This exists because the first version of that case asserted AGENTS.md's PARAPHRASE
+    (``no owned entries for this host``) instead of what ``status_summary`` actually returns
+    (``... (run: mise run bundle:install)``), and the local run passed anyway: this host HAS owned
+    entries, so only the OTHER alternative was ever exercised. Both CI runners are fresh, took the
+    branch nobody had run, and failed. The pattern is asserted here against
+    ``install_skill_bundle.status_summary`` itself, so the two cannot drift again -- a reworded
+    summary now reddens `mise run check` instead of surfacing as a release-gate failure.
+    """
+
+    CASE_ID = "bundle-status-reads-the-ledger-and-ends-with-its-terminal-line"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.installer = _load(ROOT / "scripts" / "install_skill_bundle.py", "installer_for_release_smoke_test")
+        cases = {case["id"]: case for case in smoke.load_manifest(MANIFEST_PATH)}
+        patterns = cases[cls.CASE_ID]["expect_stdout_matches"]
+        assert len(patterns) == 1, patterns
+        cls.pattern = patterns[0]
+
+    def summaries(self) -> list[str]:
+        """Both branches of the product's own terminal line, from the product itself."""
+        return [
+            self.installer.status_summary({"ok": 0, "conflict": 0, "absent": 0}),
+            self.installer.status_summary({"ok": 44, "conflict": 0, "absent": 0}),
+            self.installer.status_summary({"ok": 3, "conflict": 2, "absent": 1}),
+        ]
+
+    def test_the_product_still_has_exactly_the_two_branches_this_case_covers(self) -> None:
+        empty, populated, mixed = self.summaries()
+        self.assertEqual(empty, "no owned entries for this host (run: mise run bundle:install)")
+        self.assertEqual(populated, "44 ok, 0 conflict, 0 absent")
+        self.assertEqual(mixed, "3 ok, 2 conflict, 1 absent")
+
+    def test_the_pattern_matches_every_terminal_line_the_product_can_emit(self) -> None:
+        """The blind spot closed: the no-entries branch is covered here even on a host that has some."""
+        for summary in self.summaries():
+            with self.subTest(summary=summary):
+                # A lone terminal line, as a fresh host prints it.
+                self.assertRegex(f"{summary}\n", self.pattern)
+                # And after the per-entry lines a populated host prints first.
+                self.assertRegex(f"ok: /somewhere/one\nok: /somewhere/two\n{summary}\n", self.pattern)
+
+    def test_the_documentation_paraphrase_does_not_satisfy_the_pattern(self) -> None:
+        """The exact regression: AGENTS.md and README quote the prefix, the product emits the hint."""
+        self.assertNotRegex("no owned entries for this host\n", self.pattern)
+
+    def test_a_summary_that_is_not_the_last_line_does_not_satisfy_the_pattern(self) -> None:
+        """`\\Z` is load-bearing: `status` ends in ONE terminal line, so position is the contract."""
+        for summary in self.summaries():
+            with self.subTest(summary=summary):
+                self.assertNotRegex(f"{summary}\nok: /somewhere/trailing\n", self.pattern)
+
+    def test_silent_output_does_not_satisfy_the_pattern(self) -> None:
+        """A silent exit 0 is a defect, not a clean host (AGENTS.md)."""
+        for stdout in ("", "\n", "ok: /somewhere/one\n"):
+            with self.subTest(stdout=stdout):
+                self.assertNotRegex(stdout, self.pattern)
+
+
 class ManifestSchemaTest(unittest.TestCase):
     """Each refusal is paired with the positive control that proves it fired for its own reason."""
 
