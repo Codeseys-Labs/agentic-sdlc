@@ -11,8 +11,15 @@ Exit vocabulary (Implementation Decision 9), one derivation point via the EXIT_*
      read-only states -- `active`, `inactive`, `unmanaged`, `conflict`, or a pending
      recovery -- in the returned MESSAGE, never in the exit code.
   2  a real refusal or failure: a malformed argument, an unreadable or foreign-owned
-     settings/receipt file, a settings change detected mid-write, or any other
-     `StatuslineError`/`OperatorToolsError`.
+     settings/receipt file, a settings change detected mid-write, a statusline the bundle
+     lifecycle does not currently own, or any other `StatuslineError`/`InstallerError`.
+
+The command this activates is one BUNDLE LEDGER ROW (gh #10 phase 2): `bundle:install` publishes
+`assets/claude/statusline-command.sh` to `<claude-home>/.claude/statusline/agentic-sdlc-statusline`
+at mode 0o755, and `install_skill_bundle.exact_owned_statusline` is the only place this module gets
+a command path from. Nothing here derives a path of its own, so a statusline that is absent,
+unowned, drifted, or unexecutable is a named refusal instead of a `statusLine.command` pointing at
+bytes no lifecycle owns.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ import sys
 import tempfile
 from typing import Any
 
-import install_operator_tools as operator_tools
+import install_skill_bundle as installer
 
 
 RECEIPT_VERSION = 2
@@ -55,25 +62,13 @@ def absolute(path: Path) -> Path:
 def state_root_for(home: Path) -> Path:
     """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
 
-    Owned here rather than imported from ``install_operator_tools``, whose PATH plane is retiring
-    (gh #10): the statusline receipt lives under this root and outlives that plane.
-    ``install_skill_bundle.state_directory()`` is not the substitute, because it reads
-    ``Path.home()`` and would ignore ``--home``.  ``--state-root`` still overrides this entirely;
-    this is only the fallback.
+    Owned here rather than imported: both the statusline receipt and the bundle ledger this module
+    reads live under this root, and ``install_skill_bundle.state_directory()`` is not the
+    substitute, because it reads ``Path.home()`` and would ignore ``--home``.  ``--state-root``
+    still overrides this entirely; this is only the fallback.
     """
     value = os.environ.get("XDG_STATE_HOME")
     return absolute(Path(value)) if value else absolute(home / ".local" / "state")
-
-
-def default_bin_dir(home: Path) -> Path:
-    """The operator's user-local bin directory: the fallback for an unsupplied ``--bin-dir``.
-
-    Same reason as ``state_root_for``.  This one is scheduled to leave with the PATH plane rather
-    than to survive it -- gh #10 phase 2 re-homes the packaged statusline into the bundle ledger, at
-    which point no bin directory participates in resolving the command.
-    """
-    value = os.environ.get("XDG_BIN_HOME")
-    return absolute(Path(value)) if value else absolute(home / ".local" / "bin")
 
 
 def settings_path(home: Path, claude_config_dir: Path | None) -> Path:
@@ -407,7 +402,7 @@ def recover_pending(receipt_file: Path, receipt: dict[str, Any] | None, *, dry_r
 
 
 def _activate(
-    config: operator_tools.Config,
+    config: installer.Config,
     path: Path,
     state_root: Path,
     dry_run: bool,
@@ -416,7 +411,7 @@ def _activate(
     receipt = recover_pending(receipt_file, load_receipt(receipt_file), dry_run=dry_run)
     if receipt is not None:
         raise StatuslineError("a managed statusline activation receipt already exists")
-    command = operator_tools.exact_owned_statusline(config)
+    command = installer.exact_owned_statusline(config)
     settings, before = load_settings(path)
     statusline = settings.get("statusLine") or {}
     wanted = managed_values(command)
@@ -452,12 +447,12 @@ def _activate(
 
 
 def activate(
-    config: operator_tools.Config,
+    config: installer.Config,
     path: Path,
     state_root: Path,
     dry_run: bool,
 ) -> tuple[int, list[str]]:
-    with operator_tools.lifecycle_lock(config):
+    with installer.installer_lock(config):
         return _activate(config, path, state_root, dry_run)
 
 
@@ -519,12 +514,12 @@ def _deactivate(
 
 
 def deactivate(
-    config: operator_tools.Config,
+    config: installer.Config,
     path: Path,
     state_root: Path,
     dry_run: bool,
 ) -> tuple[int, list[str]]:
-    with operator_tools.lifecycle_lock(config):
+    with installer.installer_lock(config):
         return _deactivate(path, state_root, dry_run)
 
 
@@ -535,9 +530,9 @@ def _status(path: Path, state_root: Path) -> tuple[int, list[str]]:
     # Decision 9: `_status` itself never mutates anything -- it only reads settings and the
     # receipt -- so every branch below is a successfully answered read-only query: EXIT_OK
     # regardless of which of the five states it names. (`status()`, the caller just below,
-    # still takes `operator_tools.lifecycle_lock`, which DOES create the lock file and its
-    # parent directory -- that is the one real effect this read path admits, and it is not
-    # one of the five states named here.) The five states stay distinguished in the returned
+    # still takes `installer.installer_lock`, which DOES create the lock file and its parent
+    # directory -- that is the one real effect this read path admits, and it is not one of the
+    # five states named here.) The five states stay distinguished in the returned
     # MESSAGE, never in the exit code; a real read failure (corrupt settings, unreadable
     # receipt) raises StatuslineError before reaching this function and is reported at
     # EXIT_REFUSED by main() instead.
@@ -554,11 +549,11 @@ def _status(path: Path, state_root: Path) -> tuple[int, list[str]]:
 
 
 def status(
-    config: operator_tools.Config,
+    config: installer.Config,
     path: Path,
     state_root: Path,
 ) -> tuple[int, list[str]]:
-    with operator_tools.lifecycle_lock(config):
+    with installer.installer_lock(config):
         return _status(path, state_root)
 
 
@@ -567,26 +562,51 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("command", choices=("status", "activate", "deactivate"))
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument("--claude-config-dir", type=Path)
-    parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
+
+
+def ledger_config(home: Path, state_root: Path) -> installer.Config:
+    """The installer configuration this module borrows, for the ledger row and the shared lock.
+
+    ``--home`` is the one input that selects the row, exactly as it selects it for
+    ``bundle:install``: the destination is ``<home>/.claude/statusline/agentic-sdlc-statusline``.
+    ``--claude-config-dir`` deliberately does NOT move it -- that option relocates the settings
+    document this module writes, and the installer has no such option, so honouring it here would
+    look for a row at a path no install ever wrote.
+
+    ``dry_run`` is False even under ``--dry-run``: it governs the installer's own writes, none of
+    which this module performs, and passing True would skip the shared lock and let a
+    ``bundle:uninstall`` remove the command between resolving it and reporting it. Taking the lock
+    creates the lock file and its parent directory, which ``_status`` names as the one real effect
+    its read path admits. ``codex_home`` is unused on this path and is the Claude home rather than
+    a second invented root; ``mode`` is unused too, because this module publishes nothing.
+    """
+    return installer.Config(
+        Path(__file__).resolve().parents[1],
+        home,
+        home,
+        "auto",
+        False,
+        "claude",
+        state_root,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     home = absolute(args.home)
     state_root = absolute(args.state_root) if args.state_root else state_root_for(home)
-    bin_dir = absolute(args.bin_dir) if args.bin_dir else default_bin_dir(home)
     path = settings_path(home, args.claude_config_dir)
-    config = operator_tools.Config(Path(__file__).resolve().parents[1], home, bin_dir, state_root, require_path=False)
+    config = ledger_config(home, state_root)
     try:
         code, messages = {
             "status": lambda: status(config, path, state_root),
             "activate": lambda: activate(config, path, state_root, args.dry_run),
             "deactivate": lambda: deactivate(config, path, state_root, args.dry_run),
         }[args.command]()
-    except (StatuslineError, operator_tools.OperatorToolsError) as exc:
+    except (StatuslineError, installer.InstallerError) as exc:
         print(f"fatal: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     for message in messages:

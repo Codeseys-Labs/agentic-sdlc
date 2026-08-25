@@ -5,10 +5,12 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
@@ -19,48 +21,40 @@ assert spec and spec.loader
 manage = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = manage
 spec.loader.exec_module(manage)
-import install_operator_tools as operator_tools
+import install_skill_bundle as installer
+
+SHIPPED_STATUSLINE = ROOT / "assets" / "claude" / "statusline-command.sh"
 
 
 @unittest.skipIf(
     os.name == "nt",
-    "every fixture here installs operator tools through the POSIX-only durable-write plane"
-    " (install_operator_tools.install -> lifecycle_lock -> sync_directory, whose os.open of a"
-    " directory Windows refuses), and native-Windows statusline activation is uncertified and"
-    " fails closed (AGENTS.md)",
+    "native-Windows statusline activation is uncertified and fails closed (AGENTS.md), and the"
+    " command this activates is a ledger row published at mode 0o755 -- a premise no Windows"
+    " filesystem can establish, since chmod there can neither grant nor take the owner-execute"
+    " bit (agentic-sdlc-5ce7)",
 )
 class ManageClaudeStatuslineTests(unittest.TestCase):
     def setup_environment(self, root: Path) -> tuple[object, Path, Path]:
-        home = root / "home"; bin_dir = home / ".local" / "bin"; state = root / "state"
-        # Stub ocx/jq/uv directly rather than resolving them through mise (the pattern
-        # tests/test_operator_tools.py already uses): this test module exercises the
-        # statusline lifecycle, not mise's own tool resolution, and a worktree whose
-        # mise.toml has not itself been explicitly trusted must not silently gate every
-        # test in this file on that unrelated precondition.
-        runtime = root / "runtime"; runtime.mkdir(parents=True, exist_ok=True)
-        for name in ("ocx", "jq", "uv"):
-            path = runtime / name
-            path.write_text("#!/bin/sh\nexit 0\n")
-            path.chmod(0o755)
-        config = operator_tools.Config(
-            ROOT,
-            home,
-            bin_dir,
-            state,
-            require_path=False,
-            ocx_path=runtime / "ocx",
-            jq_path=runtime / "jq",
-            uv_path=runtime / "uv",
-            sdlc_python_path=Path(sys.executable),
-        )
-        self.assertEqual(operator_tools.install(config)[0], 0)
+        """Install ONE bundle ledger row -- the statusline -- into an isolated home.
+
+        The payload tree carries only the statusline asset, so `discover_entries` finds exactly the
+        entry these tests are about and the install stays scoped; the bytes are the shipped ones,
+        copied at their tracked 0644 so the published 0o755 can only have come from the installer.
+        """
+        home = root / "home"; state = root / "state"; repo = root / "repo"
+        (repo / "assets" / "claude").mkdir(parents=True)
+        source = repo / "assets" / "claude" / "statusline-command.sh"
+        shutil.copyfile(SHIPPED_STATUSLINE, source)
+        os.chmod(source, 0o644)
+        config = installer.Config(repo, home, root / "codex", "auto", False, "claude", state)
+        self.assertEqual(installer.install(config).exit_code, 0)
         settings = home / ".claude" / "settings.json"
         return config, settings, state
 
     def test_activate_and_deactivate_preserve_unmanaged_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config, settings, state = self.setup_environment(root)
-            settings.parent.mkdir(parents=True)
+            settings.parent.mkdir(parents=True, exist_ok=True)
             original = {"model": "fable", "enabledPlugins": {"example": True}, "statusLine": {"padding": 1}}
             settings.write_text(json.dumps(original))
 
@@ -79,7 +73,7 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
     def test_foreign_statusline_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config, settings, state = self.setup_environment(root)
-            settings.parent.mkdir(parents=True)
+            settings.parent.mkdir(parents=True, exist_ok=True)
             settings.write_text(json.dumps({"statusLine": {"command": "/foreign"}}))
 
             with self.assertRaisesRegex(manage.StatuslineError, "foreign"):
@@ -113,14 +107,15 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
             manage.activate(config, settings, state, False)
 
             command = json.loads(settings.read_text())["statusLine"]["command"]
-            expected = config.bin_dir / "agentic-sdlc-statusline"
+            expected = config.home / ".claude" / "statusline" / "agentic-sdlc-statusline"
             self.assertEqual(command, shlex.quote(str(expected)))
             self.assertEqual(shlex.split(command), [str(expected)])
+            self.assertEqual(installer.exact_owned_statusline(config), expected)
 
     def test_linked_settings_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config, settings, state = self.setup_environment(root)
-            settings.parent.mkdir(parents=True)
+            settings.parent.mkdir(parents=True, exist_ok=True)
             target = root / "foreign.json"; target.write_text("{}")
             settings.symlink_to(target)
 
@@ -185,7 +180,7 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
     def test_concurrent_settings_edit_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config, settings, state = self.setup_environment(root)
-            settings.parent.mkdir(parents=True)
+            settings.parent.mkdir(parents=True, exist_ok=True)
             settings.write_text(json.dumps({"model": "fable"}))
             original_atomic_bytes = manage.atomic_bytes
 
@@ -207,7 +202,7 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
     def test_status_reports_pending_without_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config, settings, state = self.setup_environment(root)
-            command = operator_tools.exact_owned_statusline(config)
+            command = installer.exact_owned_statusline(config)
             before = {"exists": False}
             wanted = manage.managed_values(command)
             value = {"statusLine": wanted}
@@ -243,7 +238,7 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
     def test_status_unmanaged_is_zero_not_one(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config, settings, state = self.setup_environment(root)
-            settings.parent.mkdir(parents=True)
+            settings.parent.mkdir(parents=True, exist_ok=True)
             settings.write_text(json.dumps({"statusLine": {"command": "/foreign"}}))
 
             code, messages = manage.status(config, settings, state)
@@ -274,14 +269,14 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
 
             code, messages = manage.status(config, settings, state)
             self.assertEqual(code, 0)
-            self.assertEqual(messages, [f"statusline active: {settings} -> {manage.managed_values(operator_tools.exact_owned_statusline(config))['command']}"])
+            self.assertEqual(messages, [f"statusline active: {settings} -> {manage.managed_values(installer.exact_owned_statusline(config))['command']}"])
 
     def test_real_status_failure_still_exits_nonzero(self) -> None:
         # Negative control for the whole fix: a GENUINE read failure (unreadable settings) must
         # not be swept into the same 0 the five observed states now share.
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config, settings, state = self.setup_environment(root)
-            settings.parent.mkdir(parents=True)
+            settings.parent.mkdir(parents=True, exist_ok=True)
             settings.write_text("not json")
 
             with self.assertRaisesRegex(manage.StatuslineError, "cannot read Claude settings"):
@@ -296,8 +291,6 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
                     "status",
                     "--home",
                     str(config.home),
-                    "--bin-dir",
-                    str(config.bin_dir),
                     "--state-root",
                     str(state),
                 ]
@@ -323,14 +316,145 @@ class ManageClaudeStatuslineTests(unittest.TestCase):
                     "status",
                     "--home",
                     str(config.home),
-                    "--bin-dir",
-                    str(config.bin_dir),
                     "--state-root",
                     str(state),
                 ]
             )
             self.assertEqual(code, manage.EXIT_REFUSED)
             self.assertNotEqual(code, manage.EXIT_OK)
+
+
+@unittest.skipIf(
+    os.name == "nt",
+    "native-Windows statusline activation is uncertified and fails closed (AGENTS.md); these cases"
+    " resolve a POSIX state-root fallback and read a ledger row published at mode 0o755",
+)
+class StatuslineCliFallbackTests(unittest.TestCase):
+    """The paths taken when `--state-root` is NOT supplied (W1 finding (c)).
+
+    Every other CLI case in this file passes `--state-root` and used to pass `--bin-dir`, so the
+    fallback derivations ran only in unit tests against the helper, never through `main()` -- and
+    `main()` is where a wrong fallback would send an operator's receipt and ledger read. Two rules
+    are honoured throughout, per agentic-sdlc-8dca: HOME and XDG_STATE_HOME are redirected into a
+    temporary root even when a refusal is expected FIRST, because a refusal is not a blast shield
+    (this wave's own mutations delete refusals), and each case asserts the exact set of files that
+    appeared under that root rather than only the one it came for.
+    """
+
+    def files_under(self, root: Path) -> list[str]:
+        return sorted(
+            str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()
+        )
+
+    def test_an_unsupplied_state_root_resolves_under_the_supplied_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            home.mkdir()
+            with mock.patch.dict(os.environ, {"HOME": str(home)}, clear=False) as patched:
+                patched.pop("XDG_STATE_HOME", None)
+
+                code = manage.main(["status", "--home", str(home)])
+
+            self.assertEqual(code, manage.EXIT_OK)
+            self.assertEqual(manage.state_root_for(home), home / ".local" / "state")
+            # The lock file IS the observable proof of where the fallback pointed: `status` takes
+            # the ledger's lock, which `_status` names as the one real effect its read path admits.
+            self.assertEqual(
+                self.files_under(root),
+                [str(Path("home/.local/state/agentic-sdlc-installer/installer.lock"))],
+            )
+
+    def test_xdg_state_home_overrides_the_home_relative_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            home.mkdir()
+            xdg = root / "xdg-state"
+            with mock.patch.dict(
+                os.environ, {"HOME": str(home), "XDG_STATE_HOME": str(xdg)}, clear=False
+            ):
+                code = manage.main(["status", "--home", str(home)])
+
+            self.assertEqual(code, manage.EXIT_OK)
+            self.assertEqual(
+                self.files_under(root),
+                [str(Path("xdg-state/agentic-sdlc-installer/installer.lock"))],
+            )
+            self.assertFalse((home / ".local").exists())
+
+    def test_an_unsupplied_home_resolves_from_the_environment(self) -> None:
+        """`--home` defaults to `Path.home()`, so the settings path and the state root follow HOME."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            home.mkdir()
+            with mock.patch.dict(os.environ, {"HOME": str(home)}, clear=False) as patched:
+                patched.pop("XDG_STATE_HOME", None)
+
+                code = manage.main(["status"])
+
+            self.assertEqual(code, manage.EXIT_OK)
+            self.assertEqual(
+                self.files_under(root),
+                [str(Path("home/.local/state/agentic-sdlc-installer/installer.lock"))],
+            )
+
+    def test_activate_through_the_fallback_names_the_owned_ledger_row(self) -> None:
+        """The fallback resolves BOTH stores: the receipt's root and the ledger the row lives in."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            home.mkdir()
+            state_root = home / ".local" / "state"
+            # Installed against the REAL payload tree, because `ledger_config` resolves the repo
+            # root from the module's own location: the row an operator activates is the shipped one.
+            config = installer.Config(
+                ROOT, home, root / "codex", "auto", False, "claude", state_root
+            )
+            self.assertEqual(installer.install(config).exit_code, 0)
+            destination = home / ".claude" / "statusline" / "agentic-sdlc-statusline"
+            self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
+
+            with mock.patch.dict(os.environ, {"HOME": str(home)}, clear=False) as patched:
+                patched.pop("XDG_STATE_HOME", None)
+
+                code = manage.main(["activate"])
+
+            self.assertEqual(code, manage.EXIT_OK)
+            settings = json.loads((home / ".claude" / "settings.json").read_text())
+            self.assertEqual(settings["statusLine"]["command"], shlex.quote(str(destination)))
+            self.assertTrue(manage.receipt_path(state_root).is_file())
+
+    def test_a_refusal_under_the_fallback_writes_nothing_into_the_claude_home(self) -> None:
+        """Isolated homes even though the refusal comes first: nothing installed, so nothing named."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            home.mkdir()
+            with mock.patch.dict(os.environ, {"HOME": str(home)}, clear=False) as patched:
+                patched.pop("XDG_STATE_HOME", None)
+
+                code = manage.main(["activate", "--home", str(home)])
+
+            self.assertEqual(code, manage.EXIT_REFUSED)
+            self.assertFalse((home / ".claude").exists())
+            self.assertEqual(
+                self.files_under(root),
+                [str(Path("home/.local/state/agentic-sdlc-installer/installer.lock"))],
+            )
+
+    def test_the_retired_bin_dir_option_is_refused_rather_than_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            home.mkdir()
+            with mock.patch.dict(os.environ, {"HOME": str(home)}, clear=False):
+                with self.assertRaises(SystemExit) as raised:
+                    manage.main(["status", "--home", str(home), "--bin-dir", str(root / "bin")])
+
+            self.assertEqual(raised.exception.code, 2)
+            self.assertEqual(self.files_under(root), [])
 
 
 @unittest.skipIf(

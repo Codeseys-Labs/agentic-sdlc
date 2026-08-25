@@ -13,6 +13,13 @@ rest as scheduled deletions rather than as re-points. The re-point's no-behaviou
 the second suite below: the replacement derivations are asserted EQUAL to the
 `install_operator_tools` originals they replaced, over the same inputs, on the same host. Those
 assertions retire with the plane; by then the equality has already been proven.
+
+Phase 2 (D2) emptied one of the three: `scripts/manage_claude_statusline.py` takes NOTHING from the
+plane any more, because the statusline is a bundle ledger row and its command path, its lock, and
+its error class all come from `install_skill_bundle`. Its declaration below is the empty dict, which
+under this suite's exact-equality rule is a literal import-zero claim rather than an absence of
+interest -- re-introducing any name at all fails here. The plane's `default_bin_dir` equality
+assertion retired with it, because no bin directory participates in resolving the command.
 """
 
 from __future__ import annotations
@@ -26,9 +33,10 @@ from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
-# `manage_claude_statusline` still reaches the plane through a plain top-level import, so its
-# containing directory has to be importable exactly as tests/test_manage_claude_statusline.py makes
-# it. This line retires with that import.
+# `manage_claude_statusline` reaches its SIBLING `install_skill_bundle` through a plain top-level
+# import, so its containing directory has to be importable exactly as
+# tests/test_manage_claude_statusline.py makes it. The import this line serves is no longer the
+# plane's -- D2 replaced it -- so the line now outlives the plane rather than retiring with it.
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
@@ -81,12 +89,10 @@ RETAINED: dict[str, dict[str, str]] = {
         "recover_pending": "D3+D4: the store's own crash-consistency machinery",
         "validate_pending": "D3+D4: the store's own pending-slot validator",
     },
-    "scripts/manage_claude_statusline.py": {
-        "Config": "D2: replaced when the statusline moves into the bundle ledger",
-        "OperatorToolsError": "D2: the store's own error class",
-        "exact_owned_statusline": "D2: the command path comes from the ledger row",
-        "lifecycle_lock": "D2: the ledger's lock replaces the store's",
-    },
+    # D2 (gh #10 phase 2) landed: the statusline is a bundle ledger row, so this keeper takes
+    # nothing. The empty dict is the claim -- `install_skill_bundle` now supplies the Config, the
+    # lock, `exact_owned_statusline`, and the error class.
+    "scripts/manage_claude_statusline.py": {},
 }
 
 
@@ -123,11 +129,14 @@ class ImportFreedomTests(unittest.TestCase):
                     self.assertNotIn(freed, taken)
 
     def test_the_scanner_sees_a_name_that_is_really_there(self) -> None:
-        """Positive control: `taken_names` is not structurally blind."""
+        """Positive control: `taken_names` is not structurally blind.
+
+        Anchored on `ccodex_sdlc_recover.py` since D2 emptied the statusline module: a suite whose
+        every assertion is an absence proves nothing until one presence is read off real source.
+        """
         self.assertEqual(
-            taken_names(ROOT / "scripts" / "manage_claude_statusline.py")
-            & {"exact_owned_statusline"},
-            {"exact_owned_statusline"},
+            taken_names(ROOT / "scripts" / "ccodex_sdlc_recover.py") & {"lifecycle_lock"},
+            {"lifecycle_lock"},
         )
 
     def test_the_scanner_reports_a_reintroduced_helper(self) -> None:
@@ -198,16 +207,17 @@ class ReplacementDerivationTests(unittest.TestCase):
                         with self.subTest(label=label, home=str(home), env=environment):
                             self.assertEqual(replacement(home), expected)
 
-    def test_the_statusline_bin_dir_replacement_equals_the_retiring_original(self) -> None:
-        for environment in ({}, {"XDG_BIN_HOME": "/xdg/bin"}, {"XDG_BIN_HOME": "~/xdg-bin"}):
-            for home in self.HOMES:
-                with mock.patch.dict("os.environ", environment, clear=False) as _patched:
-                    if "XDG_BIN_HOME" not in environment:
-                        _patched.pop("XDG_BIN_HOME", None)
-                    with self.subTest(home=str(home), env=environment):
-                        self.assertEqual(
-                            statusline.default_bin_dir(home), operator_tools.default_bin_dir(home)
-                        )
+    def test_the_statusline_takes_no_bin_directory_at_all(self) -> None:
+        """The retired half of the D1 equality pair, asserted as the absence D2 created.
+
+        `default_bin_dir` was the one replacement scheduled to LEAVE rather than survive, because
+        the command path now comes from the ledger row and no bin directory participates. Both the
+        helper and the `--bin-dir` option are gone, and an operator who passes it gets argparse's
+        own exit-2 refusal rather than a silently ignored value.
+        """
+        self.assertFalse(hasattr(statusline, "default_bin_dir"))
+        self.assertTrue(hasattr(operator_tools, "default_bin_dir"), "positive control")
+        self.assertNotIn("--bin-dir", (ROOT / "scripts" / "manage_claude_statusline.py").read_text(encoding="utf-8"))
 
     def test_the_equality_check_can_fail(self) -> None:
         """Positive control: the comparison above is not comparing a value to itself."""

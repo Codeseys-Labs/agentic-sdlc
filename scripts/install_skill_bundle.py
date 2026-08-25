@@ -57,21 +57,39 @@ from typing import Any, Iterator
 
 STATE_VERSION = 4
 #: Every payload kind this lifecycle owns, mapped to the collection directory it lands in under
-#: the configured agent root. This table IS the entry-kind surface: discovery, staging, refresh,
+#: the configured agent root. This table IS the entry-kind surface for placement: staging, refresh,
 #: retarget, adoption, status, and uninstall are all kind-agnostic and read it rather than branching
-#: per kind, so a kind is added here and nowhere else.
+#: per kind. Two things a kind can still need beyond a row here, both declared in their own table
+#: below rather than in an `if` somewhere: how `discover_entries` finds its payload, and a POSIX
+#: mode the published bytes must carry (`POSIX_MODE_FOR_KIND`).
 COLLECTION_FOR_KIND = {
     "skill": "skills",
     "agent": "agents",
     "command": "commands",
     "workflow": "workflows",
     "hook": "hooks",
+    "statusline": "statusline",
 }
 #: Kinds only Claude Code discovers. A Codex plane owns no record of them.
-CLAUDE_ONLY_KINDS = frozenset({"command", "workflow", "hook"})
+CLAUDE_ONLY_KINDS = frozenset({"command", "workflow", "hook", "statusline"})
 #: The one kind published as a directory tree. Every other kind is a single file, so a record's kind
 #: decides the node type its destination must have and no record field has to carry it.
 DIRECTORY_KINDS = frozenset({"skill"})
+#: The POSIX mode one kind's published payload must carry, keyed by kind. Every other kind inherits
+#: its source file's mode through `copy_item`, which is what `statusline` cannot do: the tracked
+#: source is mode 100644 and the published file IS the `statusLine.command` Claude Code executes
+#: (gh #10 phase 2, critique-b row V6). A mode is only meaningful on bytes this lifecycle owns, so a
+#: kind listed here is published as a COPY whatever `--mode` asks for -- a link would carry the
+#: source's own 0644 and no `chmod` here could change that without editing the tracked tree.
+POSIX_MODE_FOR_KIND = {"statusline": 0o755}
+#: Derived, never a second list: exactly the kinds whose required mode forces copy publication.
+COPY_ONLY_KINDS = frozenset(POSIX_MODE_FOR_KIND)
+#: The `statusline` kind's single payload: one tracked source file, published under the name Claude
+#: Code's `statusLine.command` names. The installed name differs from the source name on purpose --
+#: `statusline-command.sh` describes the bundle's asset, `agentic-sdlc-statusline` is what an
+#: operator sees in their own settings document.
+STATUSLINE_SOURCE_RELATIVE = Path("assets") / "claude" / "statusline-command.sh"
+STATUSLINE_COMMAND_NAME = "agentic-sdlc-statusline"
 #: The closed key set of one ownership record.
 RECORD_FIELDS = frozenset({"agent", "kind", "name", "source", "mode", "digest", "removable"})
 #: The three transitions the `pending` slot can describe.
@@ -304,6 +322,12 @@ def entry_collection(kind: Any) -> str | None:
     refreshing, adopting, or removing one never runs it and never enables it. Wiring one into
     `settings.json` is the separately authorized `claude:hooks:activate` step
     (`scripts/manage_claude_hooks.py`), which this lifecycle never reaches.
+
+    `statusline` is the packaged status-line script, landing in `<claude-home>/.claude/statusline/`.
+    Same boundary again: installing it names nothing in `settings.json` and runs nothing, and
+    pointing `statusLine.command` at it is the separately authorized `claude:statusline:activate`
+    step. It is the one kind whose published bytes carry a mode this lifecycle sets rather than
+    inherits, because that file is executed directly rather than read.
     """
     return COLLECTION_FOR_KIND.get(kind) if isinstance(kind, str) else None
 
@@ -579,6 +603,19 @@ def installer_lock(config: Config) -> Iterator[None]:
             os.close(descriptor)
 
 
+def statusline_entry(repo_root: Path) -> Entry | None:
+    """The one `statusline` payload, or None when this tree does not carry the source.
+
+    Every other kind is discovered by a glob, so an absent source directory yields nothing; this
+    kind names one file, and a tree without it -- an extracted release payload built before the
+    kind existed, or a caller's pruned fixture -- must stay discoverable rather than raise.
+    """
+    source = repo_root / STATUSLINE_SOURCE_RELATIVE
+    if not source.is_file() or source.is_symlink():
+        return None
+    return Entry("claude", "statusline", STATUSLINE_COMMAND_NAME, source)
+
+
 def discover_entries(repo_root: Path) -> list[Entry]:
     """Discover every supported top-level bundle payload in a stable order."""
     entries: list[Entry] = []
@@ -601,6 +638,12 @@ def discover_entries(repo_root: Path) -> list[Entry]:
     # Hook scripts are Claude-only bytes too; installing one never runs or enables it.
     for source in sorted((repo_root / "hooks").glob("*.sh")):
         entries.append(Entry("claude", "hook", source.name, source))
+    # The statusline script is Claude-only bytes as well. Installing it writes no settings document
+    # and starts nothing: pointing `statusLine.command` at it is the separately authorized
+    # `claude:statusline:activate` step (`scripts/manage_claude_statusline.py`).
+    statusline = statusline_entry(repo_root)
+    if statusline is not None:
+        entries.append(statusline)
     return entries
 
 
@@ -860,11 +903,68 @@ def link_item(source: Path, destination: Path) -> str:
     return "link"
 
 
+def apply_posix_mode(path: Path, mode: int) -> None:
+    """Set one staged payload's POSIX mode explicitly, and prove the owner-execute bit took.
+
+    `copy_item` preserves the SOURCE's mode and the tracked statusline source is 100644, so a
+    payload published by copy alone would be a non-executable `statusLine.command`: Claude Code
+    could not run it while a check that only reads `settings.json` still passed. The mode is
+    therefore set here rather than inherited, and read back, because every later reader of this
+    row -- `exact_owned_statusline` and the operator's own settings document -- assumes the file
+    can be executed. On POSIX a mode that did not take is a refused publication rather than a
+    silently broken feature; a Windows filesystem carries no owner-execute bit at all (`chmod`
+    can neither grant nor take it, measured on windows-2025 in agentic-sdlc-5ce7's probe), and
+    native Windows statusline activation is uncertified and fails closed, so there the readback
+    is honestly unavailable rather than failed.
+    """
+    os.chmod(path, mode)
+    if platform_system() == "Windows":
+        return
+    if not stat.S_IMODE(path.stat().st_mode) & stat.S_IXUSR:
+        raise InstallerError(
+            f"staged payload did not keep the owner-execute bit this kind requires: {path}"
+        )
+
+
+def effective_mode(entry: Entry, config: Config) -> str:
+    """The publication mode this entry actually gets, which `--mode` cannot always choose.
+
+    A kind whose payload must carry an explicit POSIX mode can only be published as a copy: a link
+    resolves to the tracked source and would carry that file's own mode.
+    """
+    return "copy" if entry.kind in COPY_ONLY_KINDS else config.mode
+
+
+def posix_mode_satisfied(destination: Path, kind: str) -> bool:
+    """Whether a file this lifecycle did not publish already carries its kind's required mode.
+
+    Only the adoption paths ask: a candidate whose CONTENT matches the payload but which cannot be
+    executed is not the entry this kind promises, so it is preserved and named as a collision
+    instead of adopted into a row whose reader would then refuse it. A kind with no required mode,
+    and any host that carries no owner-execute bit, answers True -- the question does not apply.
+    """
+    required_mode = POSIX_MODE_FOR_KIND.get(kind)
+    if required_mode is None or platform_system() == "Windows":
+        return True
+    try:
+        return bool(stat.S_IMODE(destination.stat().st_mode) & stat.S_IXUSR)
+    except OSError:
+        return False
+
+
+def publish_copy(entry: Entry, destination: Path) -> str:
+    """Copy one payload and apply its kind's required POSIX mode. The only copy publication."""
+    copy_item(entry.source, destination)
+    required_mode = POSIX_MODE_FOR_KIND.get(entry.kind)
+    if required_mode is not None:
+        apply_posix_mode(destination, required_mode)
+    return "copy"
+
+
 def create_destination(entry: Entry, destination: Path, config: Config) -> str:
     """Create a staged entry according to mode; auto alone may fall back to copy."""
-    if config.mode == "copy":
-        copy_item(entry.source, destination)
-        return "copy"
+    if effective_mode(entry, config) == "copy":
+        return publish_copy(entry, destination)
     try:
         return link_item(entry.source, destination)
     except (OSError, subprocess.CalledProcessError):
@@ -872,8 +972,7 @@ def create_destination(entry: Entry, destination: Path, config: Config) -> str:
             raise
         if path_present(destination):
             remove_path(destination)
-        copy_item(entry.source, destination)
-        return "copy"
+        return publish_copy(entry, destination)
 
 
 def entry_record(
@@ -940,6 +1039,56 @@ def entry_matches_record(destination: Path, record: dict[str, Any]) -> bool:
         except OSError:
             return False
     return False
+
+
+def exact_owned_statusline(config: Config) -> Path:
+    """The installed statusline command path, or a refusal naming why there is none.
+
+    The LEDGER ROW is the answer, which is the whole point of the `statusline` kind: the path an
+    operator's `statusLine.command` names must be one this lifecycle currently owns, so
+    `scripts/manage_claude_statusline.py` asks here instead of deriving a path of its own. Four
+    refusals, each fail-closed and each about a document or a file rather than about intent: an
+    interrupted lifecycle transition (the ledger is mid-flight and its rows are not yet the
+    truth), no row of this kind at this destination, bytes that drifted from the row, and a file
+    the host cannot execute. The last one is not redundant with the digest: ownership is byte
+    identity and carries no mode, so a payload someone chmod-ed to 0644 still matches its record
+    while Claude Code can no longer run it. Every later `bundle install` republishes the row and
+    restores the mode, which is why this refusal names that command.
+
+    The destination sits under the configured home rather than in the versioned mise tree, so an
+    activated `statusLine.command` keeps resolving across a `mise prune` of the release directory.
+    """
+    entry = statusline_entry(config.repo_root)
+    if entry is None:
+        raise InstallerError(
+            "this tree carries no statusline payload to install or activate:"
+            f" {config.repo_root / STATUSLINE_SOURCE_RELATIVE} is absent"
+        )
+    destination = destination_for(entry, config)
+    state = load_config_state(config)
+    if state.get("pending") is not None:
+        raise InstallerError(
+            "the bundle lifecycle holds an interrupted pending operation; resolve it"
+            " (mise run bundle:install -- --agent claude) before activating the statusline"
+        )
+    record = state["entries"].get(str(destination))
+    if not isinstance(record, dict) or record.get("kind") != "statusline":
+        raise InstallerError(
+            f"the packaged statusline is not an installed bundle entry: {destination}"
+            " (run: mise run bundle:install -- --agent claude)"
+        )
+    if not entry_matches_record(destination, record):
+        raise InstallerError(
+            f"the installed statusline drifted from its ownership record: {destination};"
+            " refusing to name unowned bytes as statusLine.command"
+        )
+    if not os.access(destination, os.X_OK):
+        raise InstallerError(
+            f"the installed statusline is not executable: {destination}; reinstall it"
+            " (mise run bundle:install -- --agent claude) rather than naming a file Claude Code"
+            " cannot run as statusLine.command"
+        )
+    return destination
 
 
 def marketplace_overlap(home: Path) -> bool:
@@ -1390,7 +1539,7 @@ def _install(config: Config) -> Result:
             legacy_mode = legacy_link_mode(destination, entry.source)
             if legacy_mode is not None:
                 legacy_record = entry_record(entry, legacy_mode)
-                if config.mode == "copy":
+                if effective_mode(entry, config) == "copy":
                     if config.dry_run:
                         messages.append(f"would replace link with copy: {destination}")
                     else:
@@ -1408,8 +1557,11 @@ def _install(config: Config) -> Result:
                         save_owned_entry(config, state, key, legacy_record)
                     messages.append(f"adopted: {destination}")
                 continue
-            if not destination.is_symlink() and destination.exists() and content_equivalent(
-                destination, entry.source
+            if (
+                not destination.is_symlink()
+                and destination.exists()
+                and content_equivalent(destination, entry.source)
+                and posix_mode_satisfied(destination, entry.kind)
             ):
                 adopted_record = entry_record(
                     entry, "copy", removable=False, installed_digest=digest(destination)
