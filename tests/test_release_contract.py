@@ -242,7 +242,7 @@ class ReleaseContractCompatibilityTests(unittest.TestCase):
         compatibility = contract["compatibility"]
         assert isinstance(compatibility, dict)
         compatibility["known_incompatible_host_versions"] = [
-            {"reason": "workflow regression", "version": "2.1.200"}
+            {"host": "claude-code", "reason": "workflow regression", "version": "2.1.200"}
         ]
         rows = compatibility["support_rows"]
         assert isinstance(rows, list) and rows
@@ -254,6 +254,77 @@ class ReleaseContractCompatibilityTests(unittest.TestCase):
 
         rows[0]["tier"] = "unsupported"
         self.assertEqual(validate_contract(contract), [])
+
+    def test_a_declared_incompatibility_names_the_host_it_is_about(self) -> None:
+        """Two hosts' version spaces are unrelated, so an unhosted exclusion is refused.
+
+        Without the host, the SAME `2.1.200` record would be compared against whichever host an
+        activation selected. The positive control is the second half: moving the identical record onto
+        the companion host makes the Core support row at that version clean again, which is only
+        observable because the exclusion is per host.
+        """
+        contract = self._stable_fixture()
+        self._preview(contract)
+        compatibility = contract["compatibility"]
+        assert isinstance(compatibility, dict)
+        rows = compatibility["support_rows"]
+        assert isinstance(rows, list) and rows
+        assert isinstance(rows[0], dict)
+        rows[0]["host_version"] = "2.1.200"
+        rows[0]["tier"] = "capability-qualified"
+
+        compatibility["known_incompatible_host_versions"] = [
+            {"reason": "workflow regression", "version": "2.1.200"}
+        ]
+        errors = validate_contract(contract)
+        self.assertTrue(any("keys must be exactly ['host'" in error for error in errors), errors)
+
+        compatibility["known_incompatible_host_versions"] = [
+            {"host": "claude-code", "reason": "workflow regression", "version": "2.1.200"}
+        ]
+        errors = validate_contract(contract)
+        self.assertTrue(any("known-incompatible" in error for error in errors), errors)
+
+        compatibility["known_incompatible_host_versions"] = [
+            {"host": "codex-cli", "reason": "workflow regression", "version": "2.1.200"}
+        ]
+        self.assertEqual(validate_contract(contract), [])
+
+    def test_an_incompatibility_about_an_undeclared_host_is_refused(self) -> None:
+        contract = self._stable_fixture()
+        self._preview(contract)
+        compatibility = contract["compatibility"]
+        assert isinstance(compatibility, dict)
+        compatibility["known_incompatible_host_versions"] = [
+            {"host": "some-other-host", "reason": "invented", "version": "2.1.200"}
+        ]
+        errors = validate_contract(contract)
+        self.assertTrue(
+            any("is not a host this contract declares" in error for error in errors), errors
+        )
+
+        compatibility["known_incompatible_host_versions"][0]["host"] = "codex-cli"
+        self.assertEqual(validate_contract(contract), [])
+
+    def test_the_same_version_may_be_excluded_once_per_host_and_not_twice_for_one(self) -> None:
+        contract = self._stable_fixture()
+        self._preview(contract)
+        compatibility = contract["compatibility"]
+        assert isinstance(compatibility, dict)
+        compatibility["known_incompatible_host_versions"] = [
+            {"host": "claude-code", "reason": "one", "version": "2.1.200"},
+            {"host": "codex-cli", "reason": "two", "version": "2.1.200"},
+        ]
+        rows = compatibility["support_rows"]
+        assert isinstance(rows, list) and rows
+        assert isinstance(rows[0], dict)
+        rows[0]["host_version"] = "2.1.200"
+        rows[0]["tier"] = "unsupported"
+        self.assertEqual(validate_contract(contract), [])
+
+        compatibility["known_incompatible_host_versions"][1]["host"] = "claude-code"
+        errors = validate_contract(contract)
+        self.assertTrue(any("unique per host" in error for error in errors), errors)
 
     def test_optional_profile_higher_floor_controls_admission(self) -> None:
         contract = self._stable_fixture()
@@ -285,6 +356,129 @@ class ReleaseContractCompatibilityTests(unittest.TestCase):
         rows[0]["host_version"] = "2.1.200"
         self.assertEqual(validate_contract(contract), [])
 
+
+class ReleaseContractCompanionHostTests(unittest.TestCase):
+    """The companion-host rows the receipted lifecycle activates against.
+
+    Every negative assertion below carries the positive control in the same test: the fixture is
+    validated clean first or restored clean after, so a refusal that stopped firing shows up as a test
+    that no longer distinguishes the two states.
+    """
+
+    def _fixture(self) -> dict[str, object]:
+        contract = load_contract_fixture("stable-valid.json")
+        compatibility = contract["compatibility"]
+        assert isinstance(compatibility, dict)
+        self.assertEqual(validate_contract(contract), [])
+        return contract
+
+    def _companions(self, contract: dict[str, object]) -> dict[str, object]:
+        compatibility = contract["compatibility"]
+        assert isinstance(compatibility, dict)
+        companions = compatibility["companion_hosts"]
+        assert isinstance(companions, dict)
+        return companions
+
+    def test_the_codex_row_is_required_and_its_removal_is_refused_by_name(self) -> None:
+        contract = self._fixture()
+        companions = self._companions(contract)
+        companions.pop("codex")
+        errors = validate_contract(contract)
+        self.assertTrue(
+            any("declares no row for the codex plane" in error for error in errors), errors
+        )
+
+    def test_the_codex_row_carries_the_core_key_set_and_its_own_surface(self) -> None:
+        contract = self._fixture()
+        row = self._companions(contract)["codex"]
+        assert isinstance(row, dict)
+        self.assertEqual(set(row), set(bundle_validator.RELEASE_CORE_KEYS))
+        self.assertEqual(row["surface"], "companion-codex")
+        self.assertNotEqual(row["surface"], "core")
+
+        row["surface"] = "core"
+        errors = validate_contract(contract)
+        self.assertTrue(
+            any("surface must be companion-codex" in error for error in errors), errors
+        )
+
+    def test_the_codex_row_must_be_about_the_codex_cli_host(self) -> None:
+        contract = self._fixture()
+        row = self._companions(contract)["codex"]
+        assert isinstance(row, dict)
+        row["host"] = "claude-code"
+        errors = validate_contract(contract)
+        self.assertTrue(any("must be about the host codex-cli" in error for error in errors), errors)
+
+    def test_the_codex_floor_is_the_observed_version_and_is_eligibility_only(self) -> None:
+        contract = self._fixture()
+        row = self._companions(contract)["codex"]
+        assert isinstance(row, dict)
+        self.assertEqual(row["minimum_host_version"], "0.148.0")
+        self.assertIs(row["minimum_is_eligibility_only"], True)
+
+        row["minimum_host_version"] = "0.149.0"
+        errors = validate_contract(contract)
+        self.assertTrue(any("minimum_host_version must be 0.148.0" in error for error in errors), errors)
+
+    def test_the_codex_floor_is_not_compared_against_the_core_minimum(self) -> None:
+        """A companion floor below Core's is legitimate: the two version spaces are unrelated.
+
+        The control is an optional PROFILE floor at the same value, which must be refused for exactly
+        the comparison a companion row is exempt from -- so this test fails if the two arms ever share
+        the profile rule.
+        """
+        contract = self._fixture()
+        compatibility = contract["compatibility"]
+        assert isinstance(compatibility, dict)
+        core = compatibility["core"]
+        assert isinstance(core, dict)
+        self.assertEqual(core["minimum_host_version"], "2.1.154")
+        row = self._companions(contract)["codex"]
+        assert isinstance(row, dict)
+        self.assertEqual(row["minimum_host_version"], "0.148.0")
+        self.assertEqual(validate_contract(contract), [])
+
+        compatibility["optional_profile_floors"] = {
+            "research-os": {
+                "minimum_host_version": "0.148.0",
+                "required_capabilities": ["research-os-capability"],
+            }
+        }
+        errors = validate_contract(contract)
+        self.assertTrue(
+            any("minimum must exceed the Core minimum" in error for error in errors), errors
+        )
+
+    def test_the_codex_row_declares_its_own_unevidenced_capability_and_no_support_tuple(self) -> None:
+        """The row REQUIRES a capability and files no tuple, so nothing here is a passing claim."""
+        contract = self._fixture()
+        compatibility = contract["compatibility"]
+        assert isinstance(compatibility, dict)
+        row = self._companions(contract)["codex"]
+        assert isinstance(row, dict)
+        self.assertEqual(row["required_capabilities"], ["configured-home-skill-and-agent-discovery"])
+        core = compatibility["core"]
+        assert isinstance(core, dict)
+        self.assertNotEqual(row["required_capabilities"], core["required_capabilities"])
+        rows = compatibility["support_rows"]
+        assert isinstance(rows, list)
+        self.assertEqual([entry for entry in rows if entry.get("host") == "codex-cli"], [])
+
+        row["required_capabilities"] = []
+        errors = validate_contract(contract)
+        self.assertTrue(any("required_capabilities must be" in error for error in errors), errors)
+
+    def test_an_unrostered_companion_agent_is_refused_rather_than_admitted_by_data(self) -> None:
+        contract = self._fixture()
+        companions = self._companions(contract)
+        row = companions["codex"]
+        assert isinstance(row, dict)
+        companions["gemini"] = dict(row)
+        errors = validate_contract(contract)
+        self.assertTrue(
+            any("is not one of this lifecycle's companion agents" in error for error in errors), errors
+        )
 
 class ReleaseContractPreviewAndClaimTests(unittest.TestCase):
     forbidden_claims = {

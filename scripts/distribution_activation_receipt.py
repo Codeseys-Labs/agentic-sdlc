@@ -407,9 +407,17 @@ PROJECT_MODE = "copy"
 #: holds and a null there is supplied-but-missing rather than not-supplied.
 PUBLISHED_DISPOSITIONS = ("installed", "refreshed")
 
-#: Closed and single-valued on purpose: a wildcard host binds nothing, and a host whose activation
-#: this producer has never observed arrives with its first receipt, not in advance.
-HOSTS = ("claude",)
+#: Closed on purpose: a wildcard host binds nothing, and a host whose activation this producer has
+#: never observed arrives with its first receipt, not in advance. `codex` arrived with the receipted
+#: Codex arm (agentic-sdlc-7a2b, WX), which is also what widened the pointer plane's keying from
+#: "the one agent" to "one file per agent".
+HOSTS = ("claude", "codex")
+
+#: The v1 `host` vocabulary, FROZEN with its generation exactly as `BODY_KEYS_V1` and
+#: `VERSION_SOURCES_V1` are. Widening `HOSTS` must not retroactively admit a v1 body naming a plane
+#: no v1 writer could have activated: every v1 writer spelled `activation_scope: claude-home`, so a
+#: v1 document naming another host is a forgery or a hand-edit, not history.
+HOSTS_V1 = ("claude",)
 
 #: Values that read as "every scope". Refused by NAME, because `all` is a well-formed token and the
 #: token shape alone would admit it.
@@ -1417,7 +1425,8 @@ def check_host_and_scope(
             "touched",
         )
     else:
-        _closed(assessment, slug, host, "host", HOSTS, subject)
+        # HOSTS_V1, not HOSTS: a v1 body is history and its admissible plane set is frozen with it.
+        _closed(assessment, slug, host, "host", HOSTS_V1, subject)
 
     scope = field(body, "activation_scope")
     if isinstance(scope, str) and (scope in WILDCARDS or "*" in scope):

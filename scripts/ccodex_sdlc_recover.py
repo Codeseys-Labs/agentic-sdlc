@@ -56,7 +56,18 @@ EXIT_PARTIAL = 4
 #: constants stay distinct because the reported lines distinguish them.
 EXIT_UNKNOWN = 4
 
-HOST = "claude"
+#: The primary product host this plan's ``host`` field names, and DELIBERATELY NOT a per-agent
+#: selector. ``recover`` takes no selectors by design -- it resumes the one pending slot each substrate
+#: can carry -- and the ownership ledger is one user-global document, so this module's own bundle
+#: configuration is built with the whole-box ``agent="all"`` projection. A codex transition armed by
+#: ``bundle install --agent codex`` is therefore ALREADY selectable here, and this field has ALREADY
+#: overstated the plan's scope since before the codex plane was receipted: nothing reads it (there is
+#: no consumer of ``plan["host"]`` in this module or in the reader), so it contributes to the digest
+#: and to nothing else. It is left byte-identical on purpose. Correcting or deleting it would reshape
+#: the plan digest and invalidate every rendered ``recover --dry-run`` approval on every host, and WX
+#: has no reshape to announce; the measurement and the handoff are in this wave's report. Do not widen
+#: this into a lookup -- there is no per-agent recovery plane to look one up for.
+PLAN_PRIMARY_HOST = "claude"
 OPERATION = "recover"
 APPLY_FLAG = "--apply"
 
@@ -217,11 +228,18 @@ def is_operation_token(value: str) -> bool:
 def is_lifecycle_receipt_stem(value: str) -> bool:
     """Is this stem a name this plane's OWN lifecycle verbs derive for an activation receipt?
 
-    ``install-<operation-id>-<compact instant>``, ``update-<operation-id>-<compact instant>``, and
-    ``uninstall-`` prefixed onto either of those.  Anchored at BOTH ends on purpose: an unanchored
-    "lowercase token" test would admit any hyphenated neighbour an operator dropped in the plane, and
-    naming such a document would both echo a name that is not ours to echo and read foreign content as
-    this host's evidence.
+    ``install-<agent>-<operation-id>-<compact instant>``, the same for ``update-``, and ``uninstall-``
+    prefixed onto either of those.  Anchored at BOTH ends on purpose: an unanchored "lowercase token"
+    test would admit any hyphenated neighbour an operator dropped in the plane, and naming such a
+    document would both echo a name that is not ours to echo and read foreign content as this host's
+    evidence.
+
+    THE AGENT SEGMENT NEEDS NO SEPARATE ARM, and that is worth stating rather than leaving to be
+    rediscovered: the middle field is validated as one lowercase ASCII token that may contain ``-``, so
+    ``claude-op-<32 hex>`` satisfies it exactly as the pre-WX ``op-<32 hex>`` did.  Receipts filed
+    before the agent was part of the name therefore keep being recognised -- which is the whole point of
+    agentic-sdlc-3bb8's fix, since an unrecognised receipt makes a real plane unverifiable and leaves an
+    interrupted transaction with no executable recovery.
     """
     if value.startswith(RETIREMENT_RECEIPT_PREFIX):
         value = value[len(RETIREMENT_RECEIPT_PREFIX) :]
@@ -491,7 +509,7 @@ def derive_plan(
             "items": len(items),
             "recoverable": len(items) - conflicts,
         },
-        "host": HOST,
+        "host": PLAN_PRIMARY_HOST,
         "items": items,
         # ``path`` is the local read key, never part of the digested plan: an operator's absolute
         # paths are not this plan's to publish, and the opaque locator plus the byte digest already

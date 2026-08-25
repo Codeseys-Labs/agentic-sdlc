@@ -74,9 +74,9 @@ Checkout-development evidence (read-only, no gateway or lifecycle effects):
   sdlc recover --dry-run [--json]
 
 Checkout-development lifecycle (mutating verbs; each is admitted or refused by its own module):
-  sdlc install --host claude   Explicit host, no default and no wildcard.
-  sdlc update
-  sdlc uninstall
+  sdlc install --host <claude|codex>     Explicit host, no default and no wildcard.
+  sdlc update --host <claude|codex>
+  sdlc uninstall --host <claude|codex>
   sdlc recover --apply <plan-sha256>
 
   version                     Report this command's self-located root and how tools resolve.

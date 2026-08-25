@@ -48,8 +48,19 @@ LIFECYCLE_VERBS = {
     "update": "ccodex_sdlc_update",
     "uninstall": "ccodex_sdlc_uninstall",
 }
-# `install` requires an explicit host. There is no default and no wildcard.
-LIFECYCLE_HOSTS = ("claude",)
+# Every mutating lifecycle verb requires an explicit host. There is no default and no wildcard, and a
+# wildcard is deliberately absent rather than refused-if-supplied: with two planes live, a verb that
+# defaulted would let a codex uninstall remove claude bytes on the strength of an argument nobody
+# typed. Re-expressed from `ccodex_sdlc_host_planes.AGENTS` -- and from
+# `distribution_activation_receipt.HOSTS`, which is what a receipt's `scope.agent` is checked against
+# -- rather than imported, because this tuple is read by the parser BEFORE any sibling is loaded and a
+# module-level load here would move a sibling's absence into this file's grammar errors. A test pins
+# all three against each other, which is what makes the re-expression a checked copy and not a second
+# opinion.
+LIFECYCLE_HOSTS = ("claude", "codex")
+#: How the admitted set is NAMED in every grammar refusal and in the help, spelled once so two
+#: messages cannot disagree about what the grammar admits.
+LIFECYCLE_HOST_CHOICE = "|".join(LIFECYCLE_HOSTS)
 # `recover` keeps its reader form AND gains exactly one mutating form (Decision 91: recovery stays
 # inside this closed namespace rather than becoming a fifth verb).  THE APPROVAL IS THE DIGEST:
 # `recover --dry-run` derives a digest-bound plan and renders that digest, and `recover --apply
@@ -355,31 +366,40 @@ def checkout_identity(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_lifecycle_host(verb: str, rest: list[str]) -> str | None:
+def parse_lifecycle_host(verb: str, rest: list[str]) -> str:
     """Resolve the host of one mutating lifecycle verb, or refuse the spelling as a grammar error.
+
+    ALL THREE mutating verbs require it, not only ``install``. Before the receipted plane had a second
+    agent, ``update`` and ``uninstall`` took no arguments and each module named its own single plane;
+    with two planes live that omission is the critique-a cross-agent defect at the grammar layer -- a
+    bare ``uninstall`` would have to pick a plane, and whichever it picked would remove one agent's
+    bytes on the strength of a selector the operator never typed. So the selector is required, with no
+    default and no wildcard, and a bare mutating verb is exit 2 rather than a guess.
 
     Every echoed caller token is rendered with ``!r`` so a control character, an escape sequence,
     or a bidirectional override in an argument cannot forge a line of this command's own output.
     Not-supplied, supplied-without-a-value, and supplied-with-an-unsupported-value are three
     distinct refusals, because collapsing them hides which half of the invocation was wrong.
     """
-    if verb != "install":
-        if rest:
-            raise UsageError(f"ccodex sdlc {verb} accepts no arguments: {rest[0]!r}")
-        return None
+    spelling = f"--host {LIFECYCLE_HOST_CHOICE}"
     if not rest:
-        raise UsageError("ccodex sdlc install requires an explicit --host claude; there is no default host")
+        raise UsageError(
+            f"ccodex sdlc {verb} requires an explicit {spelling}; there is no default host"
+        )
     if rest[0] != "--host":
         if rest[0].startswith("--host="):
-            raise UsageError("ccodex sdlc install spells its host as two arguments: --host claude")
-        raise UsageError(f"unknown ccodex sdlc install argument: {rest[0]!r}")
+            raise UsageError(f"ccodex sdlc {verb} spells its host as two arguments: {spelling}")
+        raise UsageError(f"unknown ccodex sdlc {verb} argument: {rest[0]!r}")
     if len(rest) == 1:
-        raise UsageError("ccodex sdlc install --host was supplied without a host value")
+        raise UsageError(f"ccodex sdlc {verb} --host was supplied without a host value")
     if len(rest) > 2:
-        raise UsageError(f"ccodex sdlc install accepts exactly --host claude: {rest[2]!r}")
+        raise UsageError(f"ccodex sdlc {verb} accepts exactly {spelling}: {rest[2]!r}")
     host = rest[1]
     if host not in LIFECYCLE_HOSTS:
-        raise UsageError(f"unsupported ccodex sdlc install host: {host!r}; the only admitted host is claude")
+        raise UsageError(
+            f"unsupported ccodex sdlc {verb} host: {host!r}; the admitted hosts are"
+            f" {', '.join(LIFECYCLE_HOSTS)}"
+        )
     return host
 
 
@@ -414,7 +434,8 @@ def parse_command(argv: list[str]) -> tuple[str, bool, bool, str | None]:
         raise UsageError("help")
     if not argv:
         raise UsageError(
-            "ccodex sdlc needs inspect, status, doctor, recover --dry-run, install --host claude, update, or uninstall"
+            "ccodex sdlc needs inspect, status, doctor, recover --dry-run, or one of install, update,"
+            f" uninstall with --host {LIFECYCLE_HOST_CHOICE}"
         )
     verb = argv[0]
     rest = argv[1:]
@@ -456,9 +477,9 @@ def usage() -> str:
         "       ccodex sdlc doctor [--json]\n"
         "       ccodex sdlc recover --dry-run [--json]\n"
         "       ccodex sdlc recover --apply <plan-sha256>\n"
-        "       ccodex sdlc install --host claude\n"
-        "       ccodex sdlc update\n"
-        "       ccodex sdlc uninstall\n\n"
+        f"       ccodex sdlc install --host {LIFECYCLE_HOST_CHOICE}\n"
+        f"       ccodex sdlc update --host {LIFECYCLE_HOST_CHOICE}\n"
+        f"       ccodex sdlc uninstall --host {LIFECYCLE_HOST_CHOICE}\n\n"
         "inspect, status, doctor, and recover --dry-run read checkout-development ownership and\n"
         "recovery evidence without installing, updating, uninstalling, following, or changing state.\n"
         "`recover --dry-run` is proposal-only, requires the literal --dry-run safeguard, and renders\n"
@@ -469,8 +490,8 @@ def usage() -> str:
         "install, update, and uninstall are the mutating lifecycle verbs. This reader performs no\n"
         "lifecycle mutation itself: it parses the closed grammar above and hands an admitted vector\n"
         "to one named per-verb module, refusing by name before any effect when that module is not\n"
-        "present in this distribution. install takes an explicit --host claude; there is no default\n"
-        "host and no wildcard.\n"
+        "present in this distribution. Each of the three takes an explicit --host; there is no default\n"
+        "host and no wildcard, so one agent's removal can never reach another agent's bytes.\n"
     )
 
 
@@ -1841,11 +1862,9 @@ def main(argv: list[str] | None = None) -> int:
         # Handed off before any report policy, release contract, or projection is read: a mutating
         # verb neither renders nor depends on the read report, and refusing early keeps the refusal
         # attributable to the missing module rather than to unrelated reader state.
-        return dispatch_lifecycle(
-            command,
-            ["--host", forwarded_value] if forwarded_value is not None else [],
-            label=command,
-        )
+        # Every mutating verb now carries its host, so the vector is unconditional: the earlier
+        # empty-argv branch existed only while `update` and `uninstall` named their own single plane.
+        return dispatch_lifecycle(command, ["--host", str(forwarded_value)], label=command)
     if command == "recover" and forwarded_value is not None:
         # The one mutating recover form, handed off on the same early path and for the same reason.
         # The dry-run form never reaches here, so it still acquires no writer authority.

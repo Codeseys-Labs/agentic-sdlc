@@ -553,9 +553,48 @@ class HostAndScope(SealsClean):
                 self.assertIn("wildcard", reasons_text(result))
 
     def test_an_unobserved_agent_is_refused_as_a_closed_vocabulary(self) -> None:
-        result = seal(document(body(scope={"agent": "codex", "kind": "user"})))
+        """`codex` is now an OBSERVED plane, so the closed-vocabulary refusal needs a real outsider.
+
+        The positive control is the pair: both admitted agents seal, and a third does not, which is
+        what makes this a closed vocabulary rather than a shape test that admits any token.
+        """
+        for agent in dar.HOSTS:
+            with self.subTest(agent=agent):
+                admitted = seal(document(body(scope={"agent": agent, "kind": "user"})))
+                self.assertEqual(admitted["verdict"], SEALED, reasons_text(admitted))
+        result = seal(document(body(scope={"agent": "gemini", "kind": "user"})))
         self.assertEqual(result["verdict"], REFUSED)
         self.assertIn("closed vocabulary", reasons_text(result))
+
+    def test_a_v1_body_admits_only_the_one_host_its_generation_could_have_written(self) -> None:
+        """Widening `HOSTS` must not retroactively admit a v1 document naming a newer plane.
+
+        Every v1 writer spelled `activation_scope: claude-home`, so a v1 body naming another host is a
+        hand-edit or a forgery, not history. A v1 body is never sealed again, so this is exercised on the
+        VALIDATE path against the repository's own committed v1 evidence -- and the control is the first
+        half, where that untouched document still validates.
+        """
+        self.assertEqual(dar.HOSTS_V1, ("claude",))
+        self.assertIn("codex", dar.HOSTS)
+        self.assertNotIn("codex", dar.HOSTS_V1)
+
+        path = (
+            ROOT / "docs" / "evidence" / "waves" / "f194-w1" / "activation-receipt-install.json"
+        )
+        v1_document = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual("claude", v1_document["body"]["host"])
+        self.assertEqual(validate(v1_document)["verdict"], VALIDATED)
+
+        mutated = dar.seal_body({**v1_document["body"], "host": "codex", "record_sha256": ""})
+        refused = validate(
+            {
+                **v1_document,
+                "body": mutated,
+                "content_digest": dar.envelope_content_digest(mutated, "receipt"),
+            }
+        )
+        self.assertEqual(refused["verdict"], REFUSED)
+        self.assertIn("closed vocabulary", reasons_text(refused))
 
     def test_a_wildcard_agent_is_refused_even_though_it_is_a_well_formed_token(self) -> None:
         self.assertEqual(seal(document(body()))["verdict"], SEALED)

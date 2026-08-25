@@ -8,6 +8,18 @@
     "version": "1.0.0"
   },
   "compatibility": {
+    "companion_hosts": {
+      "codex": {
+        "certification_requires_current_capability_evidence": true,
+        "host": "codex-cli",
+        "minimum_host_version": "0.148.0",
+        "minimum_is_eligibility_only": true,
+        "required_capabilities": [
+          "configured-home-skill-and-agent-discovery"
+        ],
+        "surface": "companion-codex"
+      }
+    },
     "core": {
       "certification_requires_current_capability_evidence": true,
       "host": "claude-code",

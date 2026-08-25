@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""``ccodex sdlc uninstall``: receipt-directed retirement of one distribution activation.
+"""``ccodex sdlc uninstall --host <claude|codex>``: receipt-directed retirement of one activation.
 
 WHAT THIS MODULE IS
 -------------------
 ``scripts/ccodex_sdlc.py`` owns the closed grammar of the three mutating lifecycle verbs.  It loads
-this file by absolute non-symlink path and enters ``main([])``; the integer this returns is the exit
+this file by absolute non-symlink path and enters ``main(["--host", <agent>])``; the integer returned is the exit
 class, and a raise after import reads as exit 4 there because the module was already entered.  So
 every refusal here is a NAMED return, never an exception escaping to the caller.
 
@@ -122,7 +122,9 @@ import re
 import stat
 import sys
 import time
+import dataclasses
 from dataclasses import dataclass
+import functools
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -147,11 +149,17 @@ EXIT_UNKNOWN = 4
 JOURNAL_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-journal@1"
 PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-plan@1"
 
-#: The host plane this verb retires.  Closed and single-valued, matching the dispatcher's own
-#: ``LIFECYCLE_HOSTS``: a wildcard host binds nothing.
-HOST = "claude"
-#: Claude's configured root is the selected home plus ``.claude``.
-HOST_COLLECTION = ".claude"
+#: The plane this run retires is a PARAMETER, and the ONLY default is the primary product host, which
+#: ``main`` replaces with the dispatcher's own admitted ``--host`` value before any admission runs.
+#: Every per-agent fact -- the collection beneath the configured root, the version-observation argv, the
+#: contract row -- lives in ONE record per agent in ``ccodex_sdlc_host_planes`` (agentic-sdlc-7a2b, WX).
+HOST_FLAG = "--host"
+DEFAULT_HOST = "claude"
+#: The one ``host`` token and the one ``activation_scope`` token a v1 body could carry, frozen with that
+#: generation.  These are facts about DOCUMENTS a retired writer produced, not about which plane a run
+#: selects, so widening the selector must never widen these.
+LEGACY_HOST = "claude"
+LEGACY_ACTIVATION_SCOPE = "claude-home"
 
 #: The two scope kinds of the receipt family's own union.  The scope decides three things and nothing
 #: else: which pointer filename admits this run, which root bounds the removal, and which scope the
@@ -322,7 +330,11 @@ class Config:
     home: Path
     state_root: Path
     activation_root: Path
-    host: str = HOST
+    #: Codex's configured root, read so the selected plane's boundary can be resolved without this
+    #: module inventing a second location convention: ``CODEX_HOME`` or the operator's ``~/.codex``,
+    #: exactly as the shipped installer's own CLI resolves it.
+    codex_home: Path
+    host: str = DEFAULT_HOST
     platform_system: str = SUPPORTED_PLATFORM
     stated_at: str | None = None
     emitting_plane: str = "ccodex-sdlc-uninstall"
@@ -347,11 +359,32 @@ class Config:
             if self.project_root is None:
                 raise Refusal("a project-scope retirement is bounded by its resolved root, and none was supplied")
             return self.project_root
-        return self.home
+        return self.configured_home
+
+    @property
+    def plane(self) -> Any:
+        """The selected agent's one host-plane record."""
+        return host_plane(self.scripts_dir, self.host)
+
+    @property
+    def configured_home(self) -> Path:
+        """The root the operator SELECTED for this agent at user scope.
+
+        Claude's configured root is the selected home, whose agent root is that home plus ``.claude``;
+        Codex's configured root IS its agent root.  Both are the installer's own model, read from the
+        plane record rather than re-decided here.
+        """
+        return self.home if self.plane.collection is not None else self.codex_home
 
     @property
     def plane_root(self) -> Path:
-        return self.boundary_home / HOST_COLLECTION
+        """The agent root this run's removal is bounded by."""
+        return self.plane.agent_root(self.boundary_home)
+
+    @property
+    def retires_legacy_pointer(self) -> bool:
+        """Whether THIS plane could have written the pre-keyed pointer, or a v1 body at all."""
+        return bool(self.plane.owns_legacy_pointer)
 
     @property
     def active_receipt_path(self) -> Path:
@@ -392,13 +425,27 @@ def default_config(bundle: ModuleType) -> Config:
     bundle validator already pins as ``$XDG_STATE_HOME/agentic-sdlc/acquisition``.
     """
     state_root = bundle.state_directory()
+    home = absolute(Path.home())
     return Config(
         scripts_dir=Path(__file__).resolve().parent,
-        home=absolute(Path.home()),
+        home=home,
         state_root=state_root,
         activation_root=state_root / "agentic-sdlc" / "activation",
+        codex_home=default_codex_home(home),
         platform_system=platform.system(),
     )
+
+
+def default_codex_home(home: Path) -> Path:
+    """``CODEX_HOME`` or the documented default, exactly as the shipped installer's CLI resolves it.
+
+    An empty or whitespace-only value is NOT a location: it is treated as unset rather than as the
+    current directory, which is what the installer's own argument handling does with the same variable.
+    """
+    value = os.environ.get("CODEX_HOME")
+    if value and value.strip():
+        return absolute(Path(value))
+    return home / ".codex"
 
 
 # ---- sibling loading -----------------------------------------------------------------------------
@@ -425,6 +472,22 @@ def load_sibling(scripts_dir: Path, stem: str) -> ModuleType:
     except Exception as exc:  # noqa: BLE001 - an adapter that cannot import is a pre-effect refusal
         raise Refusal(f"ccodex sdlc uninstall adapter {str(candidate)!r} failed to import: {exc!r}") from exc
     return module
+
+
+@functools.lru_cache(maxsize=None)
+def host_plane(scripts_dir: Path, agent: str) -> Any:
+    """Resolve ONE agent's host-plane record from the closed table, or refuse before any effect.
+
+    Cached because the record is read at several points in one run and the table is immutable pure
+    data.  A refusal is not cached: an exception leaves no entry, so a repaired tree is re-read.
+    """
+    planes = load_sibling(scripts_dir, "ccodex_sdlc_host_planes")
+    try:
+        return planes.plane_for(agent)
+    except KeyError as exc:
+        raise Refusal(
+            f"{agent!r} is not one of this lifecycle's host planes ({', '.join(planes.AGENTS)})"
+        ) from exc
 
 
 def refuse_read_only_guard() -> None:
@@ -513,6 +576,8 @@ def migrate_legacy_pointer(bundle: ModuleType, config: Config) -> str | None:
     """
     if config.scope_kind != SCOPE_USER:
         return None
+    if not config.retires_legacy_pointer:
+        return None
     legacy = config.legacy_active_receipt_path
     keyed = config.active_receipt_path
     try:
@@ -599,15 +664,16 @@ def admit_retired_scope(dar: ModuleType, body: dict[str, Any], config: Config, p
     legacy = body.get("activation_scope")
     if (
         config.scope_kind == SCOPE_USER
-        and legacy == "claude-home"
+        and config.retires_legacy_pointer
+        and legacy == LEGACY_ACTIVATION_SCOPE
         and body.get("schema_version") == dar.BODY_SCHEMA_V1
     ):
         return
     raise Refusal(
         f"the active receipt {str(path)!r} states neither this run's scope union "
-        f"({config.scope_object()!r}) nor the historical 'claude-home' scope of a "
-        f"{dar.BODY_SCHEMA_V1!r} document; a receipt about another scope describes a plane this run "
-        "never bounded"
+        f"({config.scope_object()!r}) nor a historical {LEGACY_ACTIVATION_SCOPE!r} scope of a "
+        f"{dar.BODY_SCHEMA_V1!r} document this plane could have written; a receipt about another scope "
+        "describes a plane this run never bounded"
     )
 
 
@@ -624,12 +690,17 @@ def admit_retirable(dar: ModuleType, receipt: dict[str, Any], config: Config, pa
     # WHICH PLANE, ONCE. A v2 receipt states it as `scope.agent`, and `admit_retired_scope` compares
     # the whole union -- agent included -- against this run's own. A v1 receipt states it as a
     # separate `host` token, which is the only generation that has one to check.
-    if body.get("schema_version") == dar.BODY_SCHEMA_V1 and body.get("host") != config.host:
-        raise Refusal(
-            f"the active receipt {str(path)!r} records host "
-            f"{dar.escape_display(str(body.get('host')))!r}, not {config.host!r}; a receipt names the "
-            "one host plane it observed"
-        )
+    # A v1 body could only ever have been written for the plane that owns the pre-keyed pointer, so on
+    # any other plane it is not history to be retired: this arm compares against THAT plane, and
+    # `admit_retired_scope` refuses the document outright where it could not have come from.
+    if body.get("schema_version") == dar.BODY_SCHEMA_V1:
+        expected_host = LEGACY_HOST if config.retires_legacy_pointer else config.host
+        if body.get("host") != expected_host:
+            raise Refusal(
+                f"the active receipt {str(path)!r} records host "
+                f"{dar.escape_display(str(body.get('host')))!r}, not {expected_host!r}; a receipt names "
+                "the one host plane it observed"
+            )
     phase = body["terminal_phase"]
     if phase not in RETIRABLE_PHASES:
         raise Refusal(
@@ -2123,14 +2194,20 @@ def bundle_config(bundle: ModuleType, config: Config) -> Any:
     ownership document, so they must serialize on the same lock file and retire rows through the
     same pending slot rather than through two private spellings (agentic-sdlc-42ec).
     """
+    # THE SCOPE'S ROOT IS THE BOUNDARY, and it is the installer configuration that enforces it:
+    # `destination_is_configured` compares each ownership row's destination against the root this
+    # configured home implies for the SELECTED agent, so a project-scope run selects exactly the rows
+    # under that project and a user-scope run selects exactly the rows under that agent's own root.
+    # The two slots are asymmetric because the installer's own model is: Claude's configured root is
+    # the home whose `.claude` holds its collections, while Codex's configured root IS its agent root.
+    # Whichever slot the selected plane does not use is filled with this host's OTHER default, so a run
+    # bounded by one plane cannot resolve a row under a root it never selected.
+    claude_root = config.boundary_home if config.plane.collection is not None else config.home
+    codex_root = config.boundary_home if config.plane.collection is None else config.codex_home
     return bundle.Config(
         config.scripts_dir.parent,
-        # THE SCOPE'S ROOT IS THE BOUNDARY, and it is the installer configuration that enforces it:
-        # `destination_is_configured` compares each ownership row's destination against the root this
-        # home implies, so a project-scope run selects exactly the rows under that project and a
-        # user-scope run selects exactly the rows under the operator's home.
-        config.boundary_home,
-        config.home / ".codex",
+        claude_root,
+        codex_root,
         "auto",
         False,
         config.host,
@@ -2142,14 +2219,22 @@ def main(argv: list[str]) -> int:
     """The dispatcher's entry point. Returns an admitted exit class 0-4 and never raises."""
     global _ESCAPE
     try:
-        if argv:
-            raise Refusal(f"ccodex sdlc uninstall accepts no arguments: {argv[0]!r}")
         refuse_read_only_guard()
         scripts_dir = Path(__file__).resolve().parent
+        # THE SELECTED PLANE IS READ FROM THE VECTOR THE DISPATCHER FORWARDED and replaces the
+        # configuration's default, so there is exactly one statement of which plane this run retires.
+        # This module owns no grammar: any other vector is a pre-effect refusal, not a usage error,
+        # because the dispatcher already owns usage and a second opinion would report one defect twice.
+        planes = load_sibling(scripts_dir, "ccodex_sdlc_host_planes")
+        if not (len(argv) == 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES):
+            raise Refusal(
+                f"ccodex sdlc uninstall admits exactly [{HOST_FLAG!r}, "
+                f"<{'|'.join(planes.AGENTS)}>]; this module received {argv!r}"
+            )
         dar = load_sibling(scripts_dir, "distribution_activation_receipt")
         bundle = load_sibling(scripts_dir, "install_skill_bundle")
         _ESCAPE = dar.escape_display
-        config = default_config(bundle)
+        config = dataclasses.replace(default_config(bundle), host=argv[1])
     except Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_REFUSED

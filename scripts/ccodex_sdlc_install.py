@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""``ccodex sdlc install --host claude``: copy-activate ONE acquired candidate, then seal ONE receipt.
+"""``ccodex sdlc install --host <claude|codex>``: copy-activate ONE acquired candidate, seal ONE receipt.
 
 WHAT LOADS THIS FILE, AND WHAT IT MAY RETURN. ``scripts/ccodex_sdlc.py`` parses the closed
 lifecycle grammar, refuses it, or loads this file by absolute non-symlink path and calls
-``main(["--host", "claude"])``.  That reader owns no writer authority and this module owns no
+``main(["--host", <agent>])``.  That reader owns no writer authority and this module owns no
 grammar: the two halves are deliberately separate.  The dispatcher's contract is narrow and this
 file honours it exactly.
 
@@ -36,7 +36,7 @@ THE FOUR PHASES, IN ORDER, EACH REFUSING BY NAME BEFORE THE NEXT COULD MOVE ANYT
      unobservable host version is refused rather than assumed compatible -- the receipt's closed
      ``unknowns`` vocabulary cannot even express "the host version was unknown", so admitting one
      would produce a document that silently omits an admission input it could not make.
-  3. COPY-ACTIVATE THE CLAUDE-HOST ENTRIES TRANSACTIONALLY.  Copies, never links.  Every entry is
+  3. COPY-ACTIVATE THE SELECTED HOST'S ENTRIES TRANSACTIONALLY.  Copies, never links.  Every entry is
      classified ``absent``/``owned``/``foreign``/``modified`` BEFORE anything is written, and a
      ``foreign`` or ``modified`` entry is PRESERVED and NAMED in both the journal and the receipt
      inventory rather than adopted, replaced, or dropped.  There is no wildcard, no ``--all``, no
@@ -130,7 +130,8 @@ RESIDUALS, STATED EXACTLY.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass, field as dataclass_field, replace as dataclass_replace
+import functools
 import hashlib
 import importlib.util
 import json
@@ -156,17 +157,20 @@ EXIT_REFUSED = 3
 #: An effect was admitted and its completion or its evidence cannot be claimed.
 EXIT_UNKNOWN = 4
 
-HOST = "claude"
-HOST_ARGV = ("--host", HOST)
+#: The plane this run activates is a PARAMETER, not a constant. Every per-agent fact -- the collection
+#: beneath the configured root, the release contract's host token and which member carries its row, the
+#: version-observation argv, and whether a Claude marketplace overlap blocks the plane -- lives in ONE
+#: record per agent in ``ccodex_sdlc_host_planes``. Five parallel per-agent constants here could each
+#: gain a second agent independently, and a plane widened in four of them would activate one host while
+#: checking another's compatibility row (agentic-sdlc-7a2b, WX).
+HOST_FLAG = "--host"
 OPERATION = "install"
 #: Which part of the host plane this operation touches, as the receipt body's own closed union. This
 #: verb activates the operator's user plane, so the kind is `user` and the body carries no root: a
 #: project root arrives with the project-scope verb, whose pointer is keyed by it. The v1 spelling
 #: (`activation_scope: "claude-home"`) is gone -- the union is the one statement of this fact.
 SCOPE_KIND = "user"
-ACTIVATION_AGENT = HOST
 EMITTING_PLANE = "acquired-candidate"
-ENTRY_AGENT = "claude"
 #: Copies, never links: the activation plane must not depend on a checkout that can move or vanish.
 ACTIVATION_MODE = "copy"
 #: The version this activation resolved was READ from the candidate manifest, not from an adapter
@@ -255,9 +259,11 @@ SUPPORTED_MACHINES = ("x86_64", "amd64")
 
 RELEASE_CONTRACT_NAME = "release-contract.v1.json"
 RELEASE_CONTRACT_SCHEMA = "release-contract/v1"
-#: The host the contract's core compatibility row is ABOUT. ``--host claude`` selects the Claude
-#: Code host plane, and the contract spells that host ``claude-code``.
-RELEASE_CONTRACT_HOST = "claude-code"
+#: Which contract host token and which ``compatibility`` member carry the selected plane's row are
+#: both per-agent facts and live in the host-plane record, not here. The ONE member that is not a
+#: keyed map is the primary product host's Core surface; re-expressed from
+#: ``ccodex_sdlc_host_planes.CONTRACT_SECTION_CORE`` and pinned against it by a test.
+CONTRACT_SECTION_CORE = "core"
 
 PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-activation-plan@1"
 JOURNAL_SCHEMA = "agentic-sdlc/ccodex-sdlc-activation-journal@1"
@@ -292,7 +298,9 @@ _MAX_MANIFEST_BYTES = 8388608
 _MAX_CONTRACT_BYTES = 1048576
 _INFINITY = float("inf")
 
-_HOST_VERSION_COMMAND = ("claude", "--version")
+#: The observation argv is per-agent and comes from the host-plane record. It is a SOURCE constant
+#: there and is never read from the payload's own contract: that document arrives inside an admitted
+#: archive, so a contract-supplied argv would be an arbitrary command this activation runs for it.
 _HOST_VERSION_TIMEOUT_SECONDS = 20
 
 
@@ -398,6 +406,11 @@ class Config:
     state_home: Path
     data_home: Path
     codex_home: Path
+    #: WHICH PLANE this run activates. Every path and vocabulary below that differs per agent is
+    #: derived from it through the host-plane record, so there is one selector and no second spelling.
+    #: The default is the primary product host, and ``main`` replaces it with the dispatcher's own
+    #: admitted ``--host`` value before this configuration reaches any admission logic.
+    agent: str = "claude"
     #: ``None`` means "the installer's own default state root"; a path relocates the ownership state.
     installer_state_root: Path | None = None
     #: ``UNSUPPLIED`` observes the host itself; ``None`` is an observation that failed.
@@ -413,6 +426,21 @@ class Config:
             object.__setattr__(
                 self, "installer_state_root", _absolute(self.installer_state_root)
             )
+
+    @property
+    def plane(self) -> Any:
+        """The selected agent's one host-plane record."""
+        return host_plane(self.agent)
+
+    @property
+    def configured_root(self) -> Path:
+        """The root the operator SELECTED for this agent, which the ownership rows are bounded by."""
+        return self.home if self.plane.collection is not None else self.codex_home
+
+    @property
+    def plane_root(self) -> Path:
+        """The collection root this agent's entries land in, derived from the installer's own model."""
+        return self.plane.agent_root(self.configured_root)
 
     @property
     def acquisition_receipts_dir(self) -> Path:
@@ -435,12 +463,22 @@ class Config:
         the filename IS the admission authority. `active_pointer_path` on the sibling verbs resolves
         the same way for the same reason.
         """
-        return _pointer_path(self.activation_dir, ACTIVATION_AGENT, SCOPE_KIND)
+        return _pointer_path(self.activation_dir, self.agent, SCOPE_KIND)
 
     @property
     def legacy_active_receipt_path(self) -> Path:
         """Where the pre-keyed plane wrote its single pointer. Only (claude, user) could have."""
         return self.activation_dir / LEGACY_ACTIVE_POINTER_NAME
+
+    @property
+    def migrates_legacy_pointer(self) -> bool:
+        """Whether THIS plane could have written the pre-keyed pointer.
+
+        Only (claude, user) could: every writer of ``activation/active-receipt.json`` spelled the scope
+        ``claude-home``. So a codex run neither claims that document nor is blocked by it -- re-filing
+        it under a codex key would move a claude statement onto a plane it was never about.
+        """
+        return bool(self.plane.owns_legacy_pointer)
 
     @property
     def plans_dir(self) -> Path:
@@ -493,6 +531,28 @@ def load_sibling(stem: str) -> ModuleType:
             f"ccodex sdlc install cannot import the sibling module {show(str(path))}: {show(exc)}"
         ) from exc
     return module
+
+
+@functools.lru_cache(maxsize=None)
+def host_plane(agent: str) -> Any:
+    """Resolve ONE agent's host-plane record from the closed table, or refuse before any effect.
+
+    Cached because the record is read at several points in one run -- the configured root, the plane
+    root, the contract row, the version observation, the report -- and the table is immutable pure
+    data, so re-executing its module per access would be the same answer at a cost.  A refusal is not
+    cached: an exception leaves no entry, so a tree repaired between calls is re-read.
+
+    An unadmitted agent lands here only when a caller forwarded a vector its own grammar rejected, so
+    the refusal names the table rather than restating the dispatcher's usage error.
+    """
+    planes = load_sibling("ccodex_sdlc_host_planes")
+    try:
+        return planes.plane_for(agent)
+    except KeyError as exc:
+        raise Refusal(
+            f"{show(agent)} is not one of this lifecycle's host planes"
+            f" ({', '.join(planes.AGENTS)})"
+        ) from exc
 
 
 # ---- strict document reading ----------------------------------------------------------------------
@@ -929,21 +989,24 @@ def reassert_acquisition_receipt(payload: AdmittedPayload, effect_started: bool)
 
 
 def observe_host_version(config: Config) -> str | None:
-    """Observe the Claude Code host version, or take the injected observation.
+    """Observe the SELECTED host's version, or take the injected observation.
 
-    The default observation runs the host's own ``--version`` once, with no shell, a bounded
-    timeout, and an argument vector.  ``shutil.which`` is consulted rather than the ambient PATH
-    being reshaped, because a test that strips PATH tests the developer's machine instead.  A host
-    that cannot be observed yields ``None``, which is a DIFFERENT input from ``UNSUPPLIED``.
+    The default observation runs that host's own ``--version`` once, with no shell, a bounded
+    timeout, and an argument vector taken from the closed host-plane table -- never from the payload's
+    own release contract, which arrives inside an admitted archive.  ``shutil.which`` is consulted
+    rather than the ambient PATH being reshaped, because a test that strips PATH tests the developer's
+    machine instead.  A host that cannot be observed yields ``None``, which is a DIFFERENT input from
+    ``UNSUPPLIED``.
     """
     if not isinstance(config.observed_host_version, _Unsupplied):
         return config.observed_host_version
-    executable = shutil.which(_HOST_VERSION_COMMAND[0])
+    command = tuple(config.plane.version_command)
+    executable = shutil.which(command[0])
     if executable is None:
         return None
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell, bounded
-            [executable, *_HOST_VERSION_COMMAND[1:]],
+            [executable, *command[1:]],
             capture_output=True,
             text=True,
             timeout=_HOST_VERSION_TIMEOUT_SECONDS,
@@ -981,27 +1044,69 @@ def _version_tuple(value: object, subject: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
 
 
+def select_compatibility_row(
+    compatibility: dict[str, Any], plane: Any, agent: str
+) -> tuple[dict[str, Any], str]:
+    """Resolve the ONE compatibility row the selected plane is about, and the label that names it.
+
+    Claude Code is the Core surface (ADR-0017) and every other host is a companion keyed by its agent
+    token, because ADR-0027 item 4 says a companion host never inherits Core's tier -- so a codex
+    activation that fell back to the Core row would be reading a claim about a different product host
+    and calling it its own.  An absent companion row is refused BY NAME, naming the wave whose reviewed
+    contract edit adds one; that is what keeps a grammar-admitted agent from activating against a
+    contract that says nothing about it.
+    """
+    section = plane.contract_section
+    if section == CONTRACT_SECTION_CORE:
+        row = compatibility.get(section)
+        label = f"compatibility.{section}"
+        if not isinstance(row, dict):
+            raise Refusal(f"the payload's release contract carries no {label} row")
+        return row, label
+    companions = compatibility.get(section)
+    label = f"compatibility.{section}.{agent}"
+    if not isinstance(companions, dict):
+        raise Refusal(
+            f"the payload's release contract carries no compatibility.{section} map, so it declares"
+            f" nothing about the {plane.display} plane that {HOST_FLAG} {show(agent)} selects"
+        )
+    row = companions.get(agent)
+    if not isinstance(row, dict):
+        raise Refusal(
+            f"the payload's release contract declares no {label} row, so it states no host, floor,"
+            f" or required capability for the {plane.display} plane; this operation refuses rather"
+            " than borrowing another host's compatibility claims"
+        )
+    return row, label
+
+
 def check_compatibility(config: Config, payload: AdmittedPayload) -> str:
     """Refuse a DECLARED incompatibility by name; never substitute another version for the observed.
 
     Three separate refusals, because collapsing them hides which half of the question was
-    unanswerable: the contract is about another host, the observed version is a version the payload
+    unanswerable: the contract row is about another host, the observed version is a version the payload
     DECLARES incompatible, or the observed version is below the declared eligibility floor.  A host
     version that could not be observed is refused too: the activation receipt's closed unknowns
     vocabulary has no way to say "the host version was unknown", so admitting one would seal a
     document that silently omits an admission input.
+
+    EVERY ONE OF THOSE IS ABOUT THE SELECTED PLANE'S OWN ROW AND ITS OWN HOST'S VERSIONS.  A declared
+    incompatibility names the host it is about, so a Claude Code version declared incompatible cannot
+    refuse a Codex activation and the reverse cannot happen either: two hosts' version spaces are
+    unrelated, and comparing an observation from one against a declaration about the other is the
+    cross-agent defect this plane's keying exists to delete, one layer up.
     """
+    plane = config.plane
     contract = load_release_contract(payload.candidate_root)
     compatibility = contract["compatibility"]
-    core = compatibility.get("core")
-    if not isinstance(core, dict):
-        raise Refusal("the payload's release contract carries no compatibility.core row")
-    declared_host = core.get("host")
-    if declared_host != RELEASE_CONTRACT_HOST:
+    row, label = select_compatibility_row(compatibility, plane, config.agent)
+    declared_host = row.get("host")
+    if declared_host != plane.contract_host:
         raise Refusal(
-            f"the payload's release contract states its core compatibility is about the host"
-            f" {show(declared_host)}, not {show(RELEASE_CONTRACT_HOST)}; --host claude selects the"
-            " Claude Code host plane and this operation activates no other one"
+            f"the payload's release contract states its {label} compatibility is about the host"
+            f" {show(declared_host)}, not {show(plane.contract_host)}; {HOST_FLAG}"
+            f" {show(config.agent)} selects the {plane.display} host plane and this operation"
+            " activates no other one"
         )
     known = compatibility.get("known_incompatible_host_versions")
     if not isinstance(known, list):
@@ -1011,10 +1116,10 @@ def check_compatibility(config: Config, payload: AdmittedPayload) -> str:
         )
     incompatible: dict[str, str] = {}
     for ordinal, record in enumerate(known):
-        if not isinstance(record, dict) or set(record) != {"reason", "version"}:
+        if not isinstance(record, dict) or set(record) != {"host", "reason", "version"}:
             raise Refusal(
                 f"compatibility.known_incompatible_host_versions[{ordinal}] is not a"
-                " {reason, version} record"
+                " {host, reason, version} record"
             )
         version = record["version"]
         _version_tuple(version, f"compatibility.known_incompatible_host_versions[{ordinal}].version")
@@ -1024,32 +1129,40 @@ def check_compatibility(config: Config, payload: AdmittedPayload) -> str:
                 f"compatibility.known_incompatible_host_versions[{ordinal}].reason is"
                 f" {show(reason)}, not a non-empty string"
             )
+        host = record["host"]
+        if not isinstance(host, str) or not host:
+            raise Refusal(
+                f"compatibility.known_incompatible_host_versions[{ordinal}].host is {show(host)},"
+                " not the non-empty name of the host that version is about"
+            )
+        if host != plane.contract_host:
+            continue
         incompatible[str(version)] = reason
 
     observed = observe_host_version(config)
     if observed is None:
         raise Refusal(
-            "the Claude Code host version could not be observed, so the payload's declared"
+            f"the {plane.display} host version could not be observed, so the payload's declared"
             " compatibility claims cannot be checked against this host. This operation refuses"
             " rather than assuming compatibility, and it never substitutes another version for the"
             " observed one"
         )
     if not isinstance(observed, str) or not _SEMVER.match(observed):
         raise Refusal(
-            f"the observed Claude Code host version {show(observed)} is not a three-part SemVer, so"
-            " it cannot be compared with the payload's declared claims"
+            f"the observed {plane.display} host version {show(observed)} is not a three-part SemVer,"
+            " so it cannot be compared with the payload's declared claims"
         )
     if observed in incompatible:
         raise Refusal(
-            f"the payload DECLARES the observed Claude Code host version {show(observed)}"
+            f"the payload DECLARES the observed {plane.display} host version {show(observed)}"
             f" incompatible: {show(incompatible[observed])}. A declared incompatibility is refused"
             " by name, and no other host version is substituted for the observed one"
         )
-    floor = _version_tuple(core.get("minimum_host_version"), "compatibility.core.minimum_host_version")
-    if _version_tuple(observed, "the observed Claude Code host version") < floor:
+    floor = _version_tuple(row.get("minimum_host_version"), f"{label}.minimum_host_version")
+    if _version_tuple(observed, f"the observed {plane.display} host version") < floor:
         raise Refusal(
-            f"the observed Claude Code host version {show(observed)} is below the payload's"
-            f" declared eligibility floor {show(core.get('minimum_host_version'))}; meeting that"
+            f"the observed {plane.display} host version {show(observed)} is below the payload's"
+            f" declared eligibility floor {show(row.get('minimum_host_version'))}; meeting that"
             " floor is eligibility only and falling below it is a declared incompatibility"
         )
     return observed
@@ -1097,7 +1210,7 @@ def entry_display_name(destination: Path, agent_root: Path) -> str:
         relative = destination.relative_to(agent_root).as_posix()
     except ValueError as exc:
         raise Refusal(
-            f"the destination {show(str(destination))} is not inside the activated Claude root"
+            f"the destination {show(str(destination))} is not inside the activated agent root"
             f" {show(str(agent_root))}"
         ) from exc
     if not _ENTRY_NAME.match(relative) or ".." in relative.split("/") or len(relative) > 256:
@@ -1185,22 +1298,25 @@ def classify_entries(
     bundle_config: Any,
     state: dict[str, Any],
     payload: AdmittedPayload,
+    agent: str,
 ) -> list[PlannedEntry]:
     """Per-entry prestate classification, entirely before any write.
 
     ``foreign`` and ``modified`` are PRESERVED and NAMED here, never adopted, replaced, or dropped:
     an inventory that omitted them would read as a clean activation of a collided plane.  There is
     no wildcard, no presence-based overwrite, and no delete anywhere in this function.
+
+    The entry filter is the SELECTED agent, not a constant: the payload carries both planes' entries
+    and the installer's own ``discover_entries`` labels each one, so selecting by the run's own agent
+    is what keeps a codex activation out of the Claude collections and the reverse.
     """
     discovered = [
-        entry
-        for entry in bundle.discover_entries(payload.candidate_root)
-        if entry.agent == ENTRY_AGENT
+        entry for entry in bundle.discover_entries(payload.candidate_root) if entry.agent == agent
     ]
     if not discovered:
         raise Refusal(
             f"the admitted candidate payload at {show(str(payload.candidate_root))} carries no"
-            " claude-host entries, so there is nothing this activation could copy"
+            f" {escape_display(agent)}-host entries, so there is nothing this activation could copy"
         )
     outstanding = state.get("pending")
     if isinstance(outstanding, dict):
@@ -1217,7 +1333,9 @@ def classify_entries(
             bundle.assert_safe_collection(entry, destination, bundle_config)
             agent_root = bundle.agent_root(entry, bundle_config)
         except bundle.InstallerError as exc:
-            raise Refusal(f"the claude activation destination is not admissible: {show(exc)}") from exc
+            raise Refusal(
+                f"the {escape_display(entry.agent)} activation destination is not admissible: {show(exc)}"
+            ) from exc
         name = entry_display_name(destination, agent_root)
         key = str(destination)
         record = state.get("entries", {}).get(key)
@@ -1424,12 +1542,14 @@ def build_plan_document(
         "archive_sha256": payload.archive_sha256,
         "candidate_id": payload.candidate_id,
         "candidate_root": str(payload.candidate_root),
-        "claude_root": str(config.home / ".claude"),
         "entries": rows,
-        "host": HOST,
+        "host": config.agent,
         "mode": ACTIVATION_MODE,
         "observed_host_version": host_version,
         "operation": OPERATION,
+        # WHICH COLLECTION ROOT this activation copies into. It replaces the pre-WX `claude_root`,
+        # whose name asserted one plane in a document that now states which plane it is about.
+        "plane_root": str(config.plane_root),
         "planned_at": instant,
         "public_channel": None,
         "release_claim": "none",
@@ -1438,21 +1558,22 @@ def build_plan_document(
         # The plan states the scope in the receipt body's own union spelling, so the intent and the
         # evidence say it identically. The plan is what the receipt's `plan_sha256` binds, and two
         # spellings of one scope across that pair would be one more place they could disagree.
-        "scope": scope_object(),
+        "scope": scope_object(config),
         "version_source": VERSION_SOURCE,
     }
 
 
-def scope_object() -> dict[str, Any]:
-    """The receipt body's closed scope union for this verb: the user plane of one agent.
+def scope_object(config: Config) -> dict[str, Any]:
+    """The receipt body's closed scope union for this verb: the user plane of the SELECTED agent.
 
     One construction site, read by the plan and by the receipt, because the pointer that admits every
     later verb is keyed by exactly these values.
     """
-    return {"agent": ACTIVATION_AGENT, "kind": SCOPE_KIND}
+    return {"agent": config.agent, "kind": SCOPE_KIND}
 
 
 def build_journal_document(
+    config: Config,
     payload: AdmittedPayload,
     plan_sha256: str,
     installer_state_path: Path,
@@ -1467,7 +1588,7 @@ def build_journal_document(
     return {
         "candidate_id": payload.candidate_id,
         "entries": rows,
-        "host": HOST,
+        "host": config.agent,
         "installer_state_path": str(installer_state_path),
         "operation": OPERATION,
         "phase": phase,
@@ -1711,6 +1832,7 @@ def derive_effect_state(
 
 def build_receipt_body(
     receipts: ModuleType,
+    config: Config,
     payload: AdmittedPayload,
     entries: list[dict[str, Any]],
     unknowns: list[dict[str, Any]],
@@ -1745,7 +1867,7 @@ def build_receipt_body(
         "schema_version": receipts.BODY_SCHEMA,
         # The closed union, not a display token: a reader derives any string it needs from this, and
         # the pointer this run lands is keyed by exactly these values.
-        "scope": scope_object(),
+        "scope": scope_object(config),
         "terminal_phase": terminal_phase,
         "unknowns": unknowns,
         "version_source": VERSION_SOURCE,
@@ -1797,10 +1919,17 @@ def seal_receipt(
     return result["receipt"]
 
 
-def receipt_identity(payload: AdmittedPayload, instant: str) -> str:
-    """One lowercase token identifying this receipt, derived from facts and never from a counter."""
+def receipt_identity(config: Config, payload: AdmittedPayload, instant: str) -> str:
+    """One lowercase token identifying this receipt, derived from facts and never from a counter.
+
+    THE AGENT IS PART OF THE IDENTITY, and it has to be: the acquisition receipt's ``operation_id``
+    names one payload, so activating that one payload into both planes yields the same
+    (operation, payload, instant) triple twice.  Receipts are create-only, so without the agent the
+    second plane's install would refuse against the first plane's filed receipt -- and a run whose
+    instants happened to differ would instead file two documents an operator cannot tell apart.
+    """
     compact = instant.replace("-", "").replace(":", "").lower()
-    token = f"{OPERATION}-{payload.operation_id}-{compact}"
+    token = f"{OPERATION}-{config.agent}-{payload.operation_id}-{compact}"
     if not re.match(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z", token):
         raise Refusal(f"the derived receipt identity {show(token)} is not a lowercase ASCII token")
     return token
@@ -1820,8 +1949,16 @@ def migrate_legacy_pointer(bundle: ModuleType, config: Config) -> str | None:
     so an interruption between the two leaves both present and the next verb refuses by name instead
     of acting on an ambiguity.
 
+    A PLANE THAT COULD NOT HAVE WRITTEN IT DOES NOT TOUCH IT. A codex run returns immediately: the
+    legacy document is a claude statement, so re-filing it under a codex key would move one plane's
+    activation onto another, and refusing on its mere presence would block a plane it says nothing
+    about. The claude plane still migrates and still refuses the ambiguity, so nothing is weakened for
+    the one plane the document can be about.
+
     Returns the one line to report, or ``None`` when there was nothing to migrate.
     """
+    if not config.migrates_legacy_pointer:
+        return None
     legacy = config.legacy_active_receipt_path
     keyed = config.active_receipt_path
     try:
@@ -1890,22 +2027,26 @@ def replace_active_pointer(bundle: ModuleType, config: Config, raw: bytes) -> No
 # ---- the run --------------------------------------------------------------------------------------
 
 
-def parse_argv(argv: list[str]) -> None:
+def parse_argv(argv: list[str]) -> str:
     """This module owns no grammar; it admits exactly the vector its dispatcher forwards.
 
     A direct invocation with any other vector is a pre-effect refusal, not a usage error, because
     the dispatcher already owns usage and a second opinion here would report the same defect twice.
+    What is returned is the ONE selected agent: the vector's shape is fixed and its value is the only
+    thing this module reads out of it.
     """
-    if tuple(argv) != HOST_ARGV:
-        raise Refusal(
-            f"ccodex sdlc install admits exactly {list(HOST_ARGV)}; this module received"
-            f" {[escape_display(item) for item in argv]}"
-        )
+    planes = load_sibling("ccodex_sdlc_host_planes")
+    if len(argv) == 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES:
+        return argv[1]
+    raise Refusal(
+        f"ccodex sdlc install admits exactly [{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>]; this"
+        f" module received {[escape_display(item) for item in argv]}"
+    )
 
 
 def run_install(config: Config, run: Run) -> int:
     """The four phases, in order, each refusing by name before the next could move anything."""
-    parsed_host = HOST
+    plane = config.plane
     admit_platform(config)
     instant = observe_instant(config)
     receipts = load_sibling("distribution_activation_receipt")
@@ -1925,10 +2066,14 @@ def run_install(config: Config, run: Run) -> int:
         config.codex_home,
         ACTIVATION_MODE,
         False,
-        parsed_host,
+        config.agent,
         config.installer_state_root,
     )
-    if bundle.marketplace_overlap(config.home):
+    # A marketplace overlap is a per-plane gate: only Claude has a plugin channel that can publish the
+    # same entries this bundle owns, so only Claude's activation can be blocked by one. The check is
+    # selected by the plane's own field rather than by an inline agent comparison, so the reason it is
+    # Claude-only stays beside the plane's other properties.
+    if plane.checks_marketplace_overlap and bundle.marketplace_overlap(config.home):
         raise Refusal(
             f"a Claude marketplace overlap is present under {show(str(config.home / '.claude'))};"
             " for Claude, use either direct installation or the marketplace, never both. The"
@@ -1950,14 +2095,21 @@ def run_install(config: Config, run: Run) -> int:
         except bundle.InstallerError as exc:
             raise Refusal(f"the installer ownership state is not admissible: {show(exc)}") from exc
 
-        planned = classify_entries(bundle, bundle_config, state, payload)
+        planned = classify_entries(bundle, bundle_config, state, payload, config.agent)
         plan_document = build_plan_document(config, payload, planned, host_version, instant)
         plan_raw = canonical_document_bytes(receipts, plan_document, "the activation plan")
         plan_sha256 = sha256_bytes(plan_raw)
-        plan_path = config.plans_dir / f"{OPERATION}-{payload.candidate_id}-{plan_sha256[:12]}.json"
+        plan_path = (
+            config.plans_dir
+            / f"{OPERATION}-{config.agent}-{payload.candidate_id}-{plan_sha256[:12]}.json"
+        )
         write_replaceable_document(bundle, plan_path, plan_raw, "the activation plan")
 
-        journal_path = config.journals_dir / f"{OPERATION}-{payload.candidate_id}.json"
+        # THE AGENT IS PART OF THE JOURNAL NAME, and it has to be: one payload activated into both
+        # planes shares a candidate id, this document is written replaceably, and the receipt binds
+        # its digest -- so without the agent the second plane's journal would overwrite the first
+        # plane's and leave that receipt naming a `journal_sha256` no file on disk carries.
+        journal_path = config.journals_dir / f"{OPERATION}-{config.agent}-{payload.candidate_id}.json"
         armed_records = [
             {"action": item.action, "entry_name": item.name, "phase": "armed", "prestate": item.prestate}
             for item in planned
@@ -1965,7 +2117,7 @@ def run_install(config: Config, run: Run) -> int:
         armed_raw = canonical_document_bytes(
             receipts,
             build_journal_document(
-                payload, plan_sha256, bundle_config.state_path, "armed", armed_records
+                config, payload, plan_sha256, bundle_config.state_path, "armed", armed_records
             ),
             "the activation journal",
         )
@@ -2002,7 +2154,7 @@ def run_install(config: Config, run: Run) -> int:
             terminal_raw = canonical_document_bytes(
                 receipts,
                 build_journal_document(
-                    payload, plan_sha256, bundle_config.state_path, "terminal", terminal_records
+                    config, payload, plan_sha256, bundle_config.state_path, "terminal", terminal_records
                 ),
                 "the activation journal",
             )
@@ -2018,6 +2170,7 @@ def run_install(config: Config, run: Run) -> int:
         effect_state, terminal_phase = derive_effect_state(receipts, run, journal_sha256, unknowns)
         body = build_receipt_body(
             receipts,
+            config,
             payload,
             entries,
             unknowns,
@@ -2026,7 +2179,7 @@ def run_install(config: Config, run: Run) -> int:
             effect_state,
             terminal_phase,
         )
-        receipt_id = receipt_identity(payload, instant)
+        receipt_id = receipt_identity(config, payload, instant)
         receipt = seal_receipt(receipts, body, payload, receipt_id, instant)
         receipt_raw = canonical_document_bytes(receipts, receipt, "the activation receipt")
         receipt_path = config.receipts_dir / f"{receipt_id}.json"
@@ -2068,12 +2221,13 @@ def report(
 ) -> None:
     """One line per fact, every artifact-derived value escaped, and no claim beyond the evidence."""
     lines = [
-        f"ccodex sdlc install --host {HOST}: effect {escape_display(effect_state)},"
-        f" terminal {escape_display(terminal_phase)}",
+        f"ccodex sdlc install {HOST_FLAG} {escape_display(config.agent)}:"
+        f" effect {escape_display(effect_state)}, terminal {escape_display(terminal_phase)}",
         f"candidate {escape_display(payload.candidate_id[:12])} resolved"
         f" {escape_display(payload.resolved_version)} via {VERSION_SOURCE}"
         f" (requested: no version was requested)",
-        f"claude root: {escape_display(str(config.home / '.claude'))} (copies, never links)",
+        f"{escape_display(config.agent)} root: {escape_display(str(config.plane_root))}"
+        " (copies, never links)",
     ]
     if run.pointer_migration is not None:
         lines.append(run.pointer_migration)
@@ -2106,8 +2260,12 @@ def main(argv: list[str] | None = None) -> int:
     selected = list(sys.argv[1:] if argv is None else argv)
     run = Run()
     try:
-        parse_argv(selected)
-        return run_install(default_config(), run)
+        agent = parse_argv(selected)
+        # The admitted selector REPLACES the configuration's default plane, so there is exactly one
+        # statement of which plane this run touches and it is the one the dispatcher forwarded. A
+        # configuration that carried its own agent and an argv that carried another would be two
+        # spellings of one fact, which is the shape this wave exists to delete everywhere else.
+        return run_install(dataclass_replace(default_config(), agent=agent), run)
     except Refusal as exc:
         if run.effect_started:
             # A refusal raised after an effect started is not a clean refusal; reporting it as one

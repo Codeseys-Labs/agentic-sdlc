@@ -293,6 +293,7 @@ RELEASE_CHECKOUT_KEYS = frozenset(
 )
 RELEASE_COMPATIBILITY_KEYS = frozenset(
     {
+        "companion_hosts",
         "core",
         "dated_references",
         "known_incompatible_host_versions",
@@ -302,6 +303,31 @@ RELEASE_COMPATIBILITY_KEYS = frozenset(
         "tuple_dimensions",
     }
 )
+# The companion-host rows the receipted lifecycle can activate, keyed by AGENT token, each carrying the
+# SAME key set as the Core row. A companion is not an optional profile: `optional_profile_floors`
+# requires a floor ABOVE the Core minimum, which is a comparison between two Claude Code versions, and
+# a Codex CLI version is not in that space at all. It is not a second Core row either, because ADR-0027
+# item 4 says a companion host never inherits Core's tier -- so it is its own surface, with its own
+# floor, its own required capabilities, and its own (absent) support rows.
+RELEASE_CORE_HOST = "claude-code"
+RELEASE_COMPANION_AGENTS = frozenset({"codex"})
+#: The host application each companion agent's row must be about, and the surface it must declare. Both
+#: are pinned here so a row cannot rename the host it describes or borrow the Core surface's name.
+RELEASE_COMPANION_HOSTS = {"codex": "codex-cli"}
+RELEASE_COMPANION_SURFACES = {"codex": "companion-codex"}
+#: The Codex CLI floor. It is what this project has OBSERVED (`codex --version` answered
+#: `codex-cli 0.148.0` on linux-x64, 2026-08-25 -- `docs/evidence/2026-08-25-codex-host-plane.md`), not
+#: a measured feature floor: no vendor document records one, so the row states the only version this
+#: project has ever looked at and refuses every older unobserved host rather than claiming it fails.
+#: `minimum_is_eligibility_only` is what keeps that honest -- meeting it makes a tuple eligible for
+#: assessment and nothing more, and `support_rows` carries no Codex tuple, so nothing here is certified
+#: or capability-qualified.
+RELEASE_COMPANION_MINIMUMS = {"codex": (0, 148, 0)}
+#: The capability a Codex plane actually depends on: the host reading skills and agent definitions out
+#: of its own configured home. It is DECLARED and unevidenced on purpose -- naming it is what makes a
+#: future Codex support row uncertifiable until a live journey passes it, where an empty list would have
+#: claimed the plane needs nothing from its host.
+RELEASE_COMPANION_CAPABILITIES = {"codex": ["configured-home-skill-and-agent-discovery"]}
 RELEASE_CORE_KEYS = frozenset(
     {
         "certification_requires_current_capability_evidence",
@@ -1163,27 +1189,126 @@ def _validate_release_capability_evidence(
 
 
 def _validate_release_known_incompatible_versions(
-    records: object, result: Validation
+    records: object, hosts: set[str], result: Validation
 ) -> set[str]:
+    """Every declared incompatibility, with the HOST it is about.
+
+    The host is required, and it is not decoration: two hosts' version spaces are unrelated, so a
+    record that named only a version would be compared against whichever host an activation happened to
+    select -- a Claude Code exclusion refusing a Codex install, or the reverse. Uniqueness is therefore
+    on (host, version), because the same version string can be a different fact for two hosts.
+
+    The returned set is the CORE host's versions only: `support_rows` are Core tuples, and a companion
+    host files none, so widening this return would compare a companion's exclusion against a Core row.
+    """
     if not isinstance(records, list):
         result.error("policy/release-contract.v1.json: compatibility.known_incompatible_host_versions must be a list")
         return set()
-    versions: set[str] = set()
+    seen: set[tuple[str, str]] = set()
+    core_versions: set[str] = set()
     for index, record in enumerate(records):
         label = f"compatibility.known_incompatible_host_versions[{index}]"
         record_map = _release_contract_mapping(record, label, result)
         if record_map is None:
             continue
-        _release_contract_exact_keys(record_map, frozenset({"reason", "version"}), label, result)
+        _release_contract_exact_keys(
+            record_map, frozenset({"host", "reason", "version"}), label, result
+        )
         _release_contract_string(record_map.get("reason"), f"{label}.reason", result)
+        host = record_map.get("host")
+        _release_contract_string(host, f"{label}.host", result)
+        if isinstance(host, str) and host and host not in hosts:
+            result.error(
+                f"policy/release-contract.v1.json: {label}.host {host} is not a host this contract"
+                f" declares a compatibility row for ({', '.join(sorted(hosts))})"
+            )
         version = record_map.get("version")
         if _release_contract_version(version, f"{label}.version", result) is None:
             continue
         assert isinstance(version, str)
-        if version in versions:
-            result.error("policy/release-contract.v1.json: known-incompatible host versions must be unique")
-        versions.add(version)
-    return versions
+        if not isinstance(host, str) or not host:
+            continue
+        if (host, version) in seen:
+            result.error(
+                "policy/release-contract.v1.json: known-incompatible host versions must be unique per host"
+            )
+        seen.add((host, version))
+        if host == RELEASE_CORE_HOST:
+            core_versions.add(version)
+    return core_versions
+
+
+def _validate_release_companion_hosts(
+    companions: object, core: dict[str, object], result: Validation
+) -> dict[str, dict[str, object]]:
+    """Every companion host's compatibility row: closed roster, Core's key set, its own floor.
+
+    The roster is closed here rather than open in the file, for the same reason the agent selector is:
+    a row this repository has neither reviewed nor gathered evidence for would otherwise arrive by
+    editing one JSON file, and the receipted lifecycle would then activate against it. Adding a
+    companion is a source change plus an ADR-0027 capability note, never a data edit alone.
+
+    A companion's floor is deliberately NOT compared against the Core minimum. `optional_profile_floors`
+    requires one, because a Claude Code feature profile lives above a Claude Code minimum; a Codex CLI
+    version is not in that space, and demanding `0.148.0 > 2.1.154` would make the honest row invalid.
+    """
+    companion_map = _release_contract_mapping(
+        companions, "compatibility.companion_hosts", result
+    )
+    if companion_map is None:
+        return {}
+    for agent in sorted(RELEASE_COMPANION_AGENTS - set(companion_map)):
+        result.error(
+            f"policy/release-contract.v1.json: compatibility.companion_hosts declares no row for the"
+            f" {agent} plane, which the receipted lifecycle admits"
+        )
+    validated: dict[str, dict[str, object]] = {}
+    for agent, row in companion_map.items():
+        label = f"compatibility.companion_hosts.{agent}"
+        if agent not in RELEASE_COMPANION_AGENTS:
+            result.error(
+                f"policy/release-contract.v1.json: {label} is not one of this lifecycle's companion"
+                f" agents ({', '.join(sorted(RELEASE_COMPANION_AGENTS))})"
+            )
+            continue
+        row_map = _release_contract_mapping(row, label, result)
+        if row_map is None:
+            continue
+        _release_contract_exact_keys(row_map, RELEASE_CORE_KEYS, label, result)
+        if row_map.get("host") != RELEASE_COMPANION_HOSTS[agent]:
+            result.error(
+                f"policy/release-contract.v1.json: {label} must be about the host"
+                f" {RELEASE_COMPANION_HOSTS[agent]}"
+            )
+        if row_map.get("surface") != RELEASE_COMPANION_SURFACES[agent]:
+            result.error(
+                f"policy/release-contract.v1.json: {label}.surface must be"
+                f" {RELEASE_COMPANION_SURFACES[agent]}, which is its own surface and never Core's"
+                f" ({core.get('surface')})"
+            )
+        minimum = _release_contract_version(
+            row_map.get("minimum_host_version"), f"{label}.minimum_host_version", result
+        )
+        if minimum is not None and minimum != RELEASE_COMPANION_MINIMUMS[agent]:
+            result.error(
+                f"policy/release-contract.v1.json: {label}.minimum_host_version must be"
+                f" {'.'.join(str(part) for part in RELEASE_COMPANION_MINIMUMS[agent])}, the version"
+                " this project has observed"
+            )
+        if row_map.get("required_capabilities") != RELEASE_COMPANION_CAPABILITIES[agent]:
+            result.error(
+                f"policy/release-contract.v1.json: {label}.required_capabilities must be"
+                f" {RELEASE_COMPANION_CAPABILITIES[agent]}"
+            )
+        if row_map.get("minimum_is_eligibility_only") is not True:
+            result.error(f"policy/release-contract.v1.json: {label} minimum must be eligibility-only")
+        if row_map.get("certification_requires_current_capability_evidence") is not True:
+            result.error(
+                f"policy/release-contract.v1.json: {label} certification requires current capability"
+                " evidence"
+            )
+        validated[agent] = row_map
+    return validated
 
 
 def _validate_release_optional_profile_floors(
@@ -1376,7 +1501,7 @@ def _validate_release_compatibility(
     if core is None:
         return None, []
     _release_contract_exact_keys(core, RELEASE_CORE_KEYS, "compatibility.core", result)
-    if core.get("surface") != "core" or core.get("host") != "claude-code":
+    if core.get("surface") != "core" or core.get("host") != RELEASE_CORE_HOST:
         result.error("policy/release-contract.v1.json: compatibility.core must identify the Claude Code Core surface")
     if _release_contract_version(core.get("minimum_host_version"), "compatibility.core.minimum_host_version", result) != (2, 1, 154):
         result.error("policy/release-contract.v1.json: Core minimum host version must be 2.1.154")
@@ -1387,8 +1512,14 @@ def _validate_release_compatibility(
     if core.get("certification_requires_current_capability_evidence") is not True:
         result.error("policy/release-contract.v1.json: Core certification requires current capability evidence")
     _validate_release_dated_references(compatibility.get("dated_references"), result)
+    companions = _validate_release_companion_hosts(
+        compatibility.get("companion_hosts"), core, result
+    )
+    declared_hosts = {RELEASE_CORE_HOST} | {
+        host for host in (row.get("host") for row in companions.values()) if isinstance(host, str)
+    }
     known_incompatible_versions = _validate_release_known_incompatible_versions(
-        compatibility.get("known_incompatible_host_versions"), result
+        compatibility.get("known_incompatible_host_versions"), declared_hosts, result
     )
     optional_profile_floors = _validate_release_optional_profile_floors(
         compatibility.get("optional_profile_floors"), core, result

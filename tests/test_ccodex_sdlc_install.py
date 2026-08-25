@@ -68,6 +68,9 @@ guard = _load(GUARD_PATH, "ccodex_sdlc_install_guard")
 # what this ticket must prove is that a real install produces a plane the real update admits; the
 # reader is loaded for its pure observers only, never for a guard-installing entrypoint.
 update = _load(ROOT / "scripts" / "ccodex_sdlc_update.py", "ccodex_sdlc_install_then_update")
+# The closed per-agent host-plane table, loaded directly: the pins below compare it against the shipped
+# contract and against the module under test, which is what makes each re-expression a checked copy.
+planes = _load(ROOT / "scripts" / "ccodex_sdlc_host_planes.py", "ccodex_sdlc_install_host_planes")
 reader = _load(READER_PATH, "ccodex_sdlc_install_reader")
 # The acquisition receipt's producer. It replaced the deleted acquisition engine and its policy
 # document, so the closed key set, the constants, and the two layout strings are pinned against the
@@ -514,10 +517,43 @@ class ReExpressedContractsTest(TemporaryRoot):
         self.assertNotEqual("a\nb", install.escape_display("a\nb"))
         self.assertEqual("a\\nb", install.escape_display("a\nb"))
 
-    def test_release_contract_fixture_is_the_shipped_one(self) -> None:
+    def test_every_host_plane_has_the_shipped_contract_row_it_will_be_checked_against(self) -> None:
+        """The table and the contract are two files; a plane in one and not the other is the defect.
+
+        This is the pin that makes the closed table a checked copy rather than a second opinion: for
+        each admitted agent, the shipped contract must carry a row about exactly the host that plane's
+        record names, in exactly the ``compatibility`` member that record selects.
+        """
         contract = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(install.RELEASE_CONTRACT_HOST, contract["compatibility"]["core"]["host"])
-        self.assertEqual([], contract["compatibility"]["known_incompatible_host_versions"])
+        compatibility = contract["compatibility"]
+        self.assertEqual(planes.AGENTS, ("claude", "codex"))
+        self.assertEqual(install.CONTRACT_SECTION_CORE, planes.CONTRACT_SECTION_CORE)
+        for agent in planes.AGENTS:
+            plane = planes.plane_for(agent)
+            with self.subTest(agent=agent):
+                if plane.contract_section == planes.CONTRACT_SECTION_CORE:
+                    row = compatibility[plane.contract_section]
+                else:
+                    row = compatibility[plane.contract_section][agent]
+                self.assertEqual(row["host"], plane.contract_host)
+                self.assertEqual(row["minimum_is_eligibility_only"], True)
+        self.assertEqual([], compatibility["known_incompatible_host_versions"])
+
+    def test_no_host_plane_reads_its_version_observation_command_from_the_payload(self) -> None:
+        """The argv is a SOURCE constant, because the contract arrives inside an admitted archive.
+
+        A contract-supplied argv would be an arbitrary command this activation runs on behalf of a
+        downloaded payload. The control is the second half: the table's own argv IS what gets run.
+        """
+        contract_keys = set(json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))["compatibility"])
+        for agent in planes.AGENTS:
+            plane = planes.plane_for(agent)
+            with self.subTest(agent=agent):
+                self.assertIsInstance(plane.version_command, tuple)
+                self.assertEqual(plane.version_command[1:], ("--version",))
+                self.assertNotIn("version_command", contract_keys)
+        code = executable_source(MODULE_PATH)
+        self.assertIn("config.plane.version_command", code)
 
     def test_module_carries_no_wildcard_purge_or_delete_vocabulary(self) -> None:
         """The MUST-NOTs are pinned in the CODE, with every docstring and comment stripped first.
@@ -695,6 +731,7 @@ class UninstallStatusSymmetryTest(TemporaryRoot):
             home=fixture.home,
             state_root=fixture.installer_state_root,
             activation_root=fixture.state_home / "agentic-sdlc" / "activation",
+            codex_home=fixture.config.codex_home,
             platform_system="Linux",
             stated_at=LATER_INSTANT,
         )
@@ -805,10 +842,16 @@ class PreservationTest(TemporaryRoot):
 
 @WINDOWS_SKIP
 class CompatibilityTest(TemporaryRoot):
-    def contract_with_incompatible(self, version: str) -> dict[str, Any]:
+    def contract_with_incompatible(
+        self, version: str, host: str = "claude-code"
+    ) -> dict[str, Any]:
         contract = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
         contract["compatibility"]["known_incompatible_host_versions"] = [
-            {"reason": "dynamic workflows regress on this host build", "version": version}
+            {
+                "host": host,
+                "reason": "dynamic workflows regress on this host build",
+                "version": version,
+            }
         ]
         return contract
 
@@ -824,6 +867,35 @@ class CompatibilityTest(TemporaryRoot):
         # Positive control: the SAME declaration about another version admits this host.
         other = self.fixture(contract=self.contract_with_incompatible("2.1.154"))
         self.assertEqual(0, call_main(other).code)
+
+    def test_an_incompatibility_declared_for_another_host_does_not_refuse_this_plane(self) -> None:
+        """Two hosts' version spaces are unrelated, so an exclusion is scoped to the host it names.
+
+        The refusal above is the positive control for this one: the SAME version, the SAME reason, and
+        the only difference is which host the record is about. Without the host field the record would
+        be compared against whichever plane an activation selected.
+        """
+        claude_scoped = self.fixture(contract=self.contract_with_incompatible(HOST_VERSION))
+        self.assertEqual(3, call_main(claude_scoped).code)
+
+        codex_scoped = self.fixture(
+            contract=self.contract_with_incompatible(HOST_VERSION, host="codex-cli")
+        )
+        outcome = call_main(codex_scoped)
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertNotIn("dynamic workflows regress on this host build", outcome.stderr)
+
+    def test_an_incompatibility_record_without_its_host_is_refused_by_name(self) -> None:
+        contract = self.contract_with_incompatible(HOST_VERSION)
+        contract["compatibility"]["known_incompatible_host_versions"][0].pop("host")
+        fixture = self.fixture(contract=contract)
+        outcome = call_main(fixture)
+        self.assertEqual(3, outcome.code)
+        self.assertIn("is not a {host, reason, version} record", outcome.stderr)
+        self.assertEqual([], fixture.activation_receipts())
+        # Positive control: restoring the host makes the same fixture reach the version comparison.
+        restored = self.fixture(contract=self.contract_with_incompatible(HOST_VERSION))
+        self.assertIn("dynamic workflows regress", call_main(restored).stderr)
 
     def test_host_version_below_the_declared_floor_refuses(self) -> None:
         fixture = self.fixture(host_version="2.1.153")
@@ -1412,7 +1484,7 @@ class InstallThenUpdateTest(TemporaryRoot):
             stack.enter_context(mock.patch.object(update, "default_config", lambda: config))
             stack.enter_context(contextlib.redirect_stdout(out))
             stack.enter_context(contextlib.redirect_stderr(err))
-            code = update.main([])
+            code = update.main(["--host", "claude"])
         assert isinstance(code, int) and not isinstance(code, bool), repr(code)
         return Outcome(code, out.getvalue(), err.getvalue())
 
@@ -1515,8 +1587,11 @@ class DispatchContractTest(TemporaryRoot):
     def test_main_returns_int_exit_classes_and_never_bool(self) -> None:
         cases = (
             (["--host", "claude"], 0, None),
-            (["--host", "codex"], 3, None),
+            # Both admitted planes now reach their own effect; a vector this module does not admit is
+            # still a pre-effect refusal, which is what the three below are.
+            (["--host", "codex"], 0, None),
             ([], 3, None),
+            (["--host", "gemini"], 3, None),
             (["--host=claude"], 3, None),
             (["--host", "claude", "--extra"], 3, None),
         )
@@ -1540,6 +1615,7 @@ class DispatchContractTest(TemporaryRoot):
             "scripts/ccodex_sdlc.py",
             "scripts/ccodex_sdlc_readonly.py",
             "scripts/ccodex_sdlc_install.py",
+            "scripts/ccodex_sdlc_host_planes.py",
             "scripts/install_operator_tools.py",
             "scripts/install_skill_bundle.py",
             "scripts/distribution_activation_receipt.py",
@@ -1570,15 +1646,18 @@ class DispatchContractTest(TemporaryRoot):
             self.assertTrue((fixture.home / ".claude" / relative).exists(), relative)
         receipt_dir = fixture.state_home / "agentic-sdlc" / "activation" / "receipts"
         self.assertEqual(1, len(sorted(receipt_dir.glob("*.json"))))
-        # Positive control: the same shadow refuses the codex host at exit 3 without a receipt.
+        # Positive control: the same shadow refuses an UNADMITTED host at exit 2 as a grammar error,
+        # so the exit 0 above is this plane's own activation and not the dispatcher admitting anything
+        # that arrives. `codex` is no longer that control -- it is an admitted plane of its own.
         refused = subprocess.run(
-            [str(Path(sys.executable)), "-I", "-B", str(shadow / "scripts" / "ccodex_sdlc.py"), "install", "--host", "codex"],
+            [str(Path(sys.executable)), "-I", "-B", str(shadow / "scripts" / "ccodex_sdlc.py"), "install", "--host", "gemini"],
             capture_output=True,
             text=True,
             check=False,
             timeout=600,
         )
         self.assertEqual(2, refused.returncode)
+        self.assertIn("unsupported ccodex sdlc install host: 'gemini'", refused.stderr)
 
 
 class GuardInteractionTest(unittest.TestCase):

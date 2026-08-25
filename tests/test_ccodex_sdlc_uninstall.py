@@ -147,6 +147,10 @@ class Plane:
         self.home = root / "home"
         self.state_root = root / "state"
         self.activation_root = self.state_root / "agentic-sdlc" / "activation"
+        #: The Codex plane's configured root IS its agent root, which is why it is a sibling of the
+        #: home rather than a collection inside it. Fixtures that never touch the codex plane still
+        #: supply it, so no run can fall back to the operator's own `~/.codex`.
+        self.codex_home = root / "codex-home"
         self.plane_root = self.home / ".claude"
         self.plane_root.mkdir(parents=True)
         self.activation_root.mkdir(parents=True)
@@ -213,6 +217,10 @@ class Plane:
             "home": self.home,
             "state_root": self.state_root,
             "activation_root": self.activation_root,
+            # Isolated on BOTH planes (agentic-sdlc-8dca): a codex-scoped run resolves its boundary
+            # from this root, so a fixture that left it unset would bound a removal at the operator's
+            # own `~/.codex`.
+            "codex_home": self.codex_home,
             "platform_system": "Linux",
             "stated_at": INSTANT,
             "checkpoint": self.record_checkpoint,
@@ -1512,7 +1520,11 @@ class LegacyUnreceipted(Harness):
         activate_with_ownership_rows(self.plane, payload)
         scripts = self.temp / "no-driver" / "scripts"
         scripts.mkdir(parents=True)
-        for name in ("distribution_activation_receipt.py", "install_skill_bundle.py"):
+        for name in (
+            "distribution_activation_receipt.py",
+            "install_skill_bundle.py",
+            "ccodex_sdlc_host_planes.py",
+        ):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
 
         code, report = self.plane.run(scripts_dir=scripts)
@@ -1701,11 +1713,23 @@ class Refusals(Harness):
     def test_an_argument_vector_this_verb_does_not_accept_is_refused_before_any_effect(self) -> None:
         self.plane.seal_active(self.plant_owned())
 
-        for vector in (["--all"], ["--host", "claude"], ["uninstall"], [""]):
+        # Every vector the dispatcher would never forward, refused BEFORE this module resolves any
+        # configuration -- which is also what keeps this test off the operator's real home, since
+        # `default_config` is never reached (agentic-sdlc-8dca).
+        for vector in (
+            ["--all"],
+            ["uninstall"],
+            [""],
+            [],
+            ["--host"],
+            ["--host", "gemini"],
+            ["--host", "claude", "extra"],
+            ["--host=claude"],
+        ):
             with self.subTest(vector=vector):
                 code, report = capture(lambda: target.main(list(vector)))
                 self.assertEqual(code, EXIT_REFUSED, report)
-                self.assertIn("accepts no arguments", report)
+                self.assertIn("admits exactly ['--host', <claude|codex>]", report)
         self.assert_nothing_removed()
 
     def test_a_read_only_guarded_process_refuses_before_any_effect(self) -> None:
@@ -1717,7 +1741,7 @@ class Refusals(Harness):
         saved = sys.modules.get("_ccodex_sdlc_readonly_guard")
         sys.modules["_ccodex_sdlc_readonly_guard"] = FakeGuard  # type: ignore[assignment]
         try:
-            code, report = capture(lambda: target.main([]))
+            code, report = capture(lambda: target.main(["--host", "claude"]))
             self.assertIn("already installed the read-only guard", report)
         finally:
             if saved is None:
@@ -1874,7 +1898,7 @@ class DispatchContract(unittest.TestCase):
             cwd=str(ROOT),
         )
         self.assertEqual(completed.returncode, EXIT_REFUSED, completed.stderr)
-        self.assertIn("accepts no arguments", completed.stderr)
+        self.assertIn("admits exactly ['--host', <claude|codex>]", completed.stderr)
         self.assertEqual(completed.stdout, "")
 
 

@@ -98,8 +98,11 @@ READER_FORMS = (
     (("recover", "--dry-run"), ("recover", True, False, None)),
     (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST)),
     (("install", "--host", "claude"), ("install", False, False, "claude")),
-    (("update",), ("update", False, False, None)),
-    (("uninstall",), ("uninstall", False, False, None)),
+    (("install", "--host", "codex"), ("install", False, False, "codex")),
+    (("update", "--host", "claude"), ("update", False, False, "claude")),
+    (("update", "--host", "codex"), ("update", False, False, "codex")),
+    (("uninstall", "--host", "claude"), ("uninstall", False, False, "claude")),
+    (("uninstall", "--host", "codex"), ("uninstall", False, False, "codex")),
 )
 READER_VERBS = (("inspect", ()), ("status", ()), ("doctor", ()), ("recover", ("--dry-run",)))
 
@@ -1025,12 +1028,20 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         for arguments, expected in READER_FORMS:
             with self.subTest(arguments=arguments):
                 self.assertEqual(reader.parse_command(list(arguments)), expected)
-        for invalid in (("inspect", "--dry-run"), ("recover",), ("install",), ("update", "--json")):
+        for invalid in (
+            ("inspect", "--dry-run"),
+            ("recover",),
+            ("install",),
+            ("update",),
+            ("uninstall",),
+            ("update", "--json"),
+            ("install", "--host", "gemini"),
+        ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(reader.UsageError):
                     reader.parse_command(list(invalid))
         self.assertEqual(sorted(reader.LIFECYCLE_VERBS), ["install", "uninstall", "update"])
-        self.assertEqual(reader.LIFECYCLE_HOSTS, ("claude",))
+        self.assertEqual(reader.LIFECYCLE_HOSTS, ("claude", "codex"))
 
     def test_a_mutating_verb_still_refuses_by_name_with_a_readiness_plane_present(self) -> None:
         self.write_candidate()
@@ -1038,8 +1049,15 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         self.write_activation()
         before = inventory(self.home, self.state)
 
-        for vector in (("install", "--host", "claude"), ("update",), ("uninstall",)):
-            with self.subTest(verb=vector[0]):
+        for vector in (
+            ("install", "--host", "claude"),
+            ("install", "--host", "codex"),
+            ("update", "--host", "claude"),
+            ("update", "--host", "codex"),
+            ("uninstall", "--host", "claude"),
+            ("uninstall", "--host", "codex"),
+        ):
+            with self.subTest(verb=vector[0], agent=vector[2]):
                 completed = self.run_reader(*vector)
                 self.assertEqual(completed.returncode, 3, completed.stderr)
                 # All three per-verb modules ship, so each refuses pre-effect in its OWN name; the
@@ -1485,9 +1503,9 @@ EXPECTED_USAGE = (
     "       ccodex sdlc doctor [--json]\n"
     "       ccodex sdlc recover --dry-run [--json]\n"
     "       ccodex sdlc recover --apply <plan-sha256>\n"
-    "       ccodex sdlc install --host claude\n"
-    "       ccodex sdlc update\n"
-    "       ccodex sdlc uninstall\n\n"
+    "       ccodex sdlc install --host claude|codex\n"
+    "       ccodex sdlc update --host claude|codex\n"
+    "       ccodex sdlc uninstall --host claude|codex\n\n"
     "inspect, status, doctor, and recover --dry-run read checkout-development ownership and\n"
     "recovery evidence without installing, updating, uninstalling, following, or changing state.\n"
     "`recover --dry-run` is proposal-only, requires the literal --dry-run safeguard, and renders\n"
@@ -1498,8 +1516,8 @@ EXPECTED_USAGE = (
     "install, update, and uninstall are the mutating lifecycle verbs. This reader performs no\n"
     "lifecycle mutation itself: it parses the closed grammar above and hands an admitted vector\n"
     "to one named per-verb module, refusing by name before any effect when that module is not\n"
-    "present in this distribution. install takes an explicit --host claude; there is no default\n"
-    "host and no wildcard.\n"
+    "present in this distribution. Each of the three takes an explicit --host; there is no default\n"
+    "host and no wildcard, so one agent's removal can never reach another agent's bytes.\n"
 )
 
 

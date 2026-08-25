@@ -831,7 +831,7 @@ class SpecDecisionNineTest(Conformance):
         )
         # Positive control: the help text is not empty of everything, so the absence of a sixth
         # class below is a fact about the vocabulary rather than about a failed capture.
-        self.assertIn("sdlc install --host claude", collapsed)
+        self.assertIn("sdlc install --host <claude|codex>", collapsed)
         self.assertNotIn("5 ", collapsed.split("exit codes:")[1][:120])
 
     def test_this_module_pins_the_classes_as_literals_not_as_a_module_import(self) -> None:
@@ -890,20 +890,25 @@ class SpecDecisionNineTest(Conformance):
 GRAMMAR_MATRIX: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("no-verb", ("sdlc",), "needs inspect, status, doctor"),
     ("unknown-verb", ("sdlc", "frobnicate"), "unknown ccodex sdlc verb: 'frobnicate'"),
-    ("install-no-host", ("sdlc", "install"), "requires an explicit --host claude"),
-    ("install-joined-host", ("sdlc", "install", "--host=claude"), "spells its host as two arguments"),
-    ("install-host-no-value", ("sdlc", "install", "--host"), "--host was supplied without a host value"),
-    ("install-unsupported-host", ("sdlc", "install", "--host", "codex"), "unsupported ccodex sdlc install host"),
-    ("install-wildcard-host", ("sdlc", "install", "--host", "all"), "unsupported ccodex sdlc install host"),
-    ("install-extra", ("sdlc", "install", "--host", "claude", "--force"), "accepts exactly --host claude"),
-    ("install-unknown-flag", ("sdlc", "install", "--yes"), "unknown ccodex sdlc install argument"),
-    ("install-unicode-host", ("sdlc", "install", "--host", "claude٩"), "unsupported ccodex sdlc install host"),
-    ("update-json", ("sdlc", "update", "--json"), "ccodex sdlc update accepts no arguments"),
-    ("update-host", ("sdlc", "update", "--host", "claude"), "ccodex sdlc update accepts no arguments"),
-    ("update-positional", ("sdlc", "update", "latest"), "ccodex sdlc update accepts no arguments"),
-    ("uninstall-json", ("sdlc", "uninstall", "--json"), "ccodex sdlc uninstall accepts no arguments"),
-    ("uninstall-positional", ("sdlc", "uninstall", "claude"), "ccodex sdlc uninstall accepts no arguments"),
-    ("uninstall-force", ("sdlc", "uninstall", "--force"), "ccodex sdlc uninstall accepts no arguments"),
+    # Every mutating verb, not just install: the selector is required on all three, so each one's
+    # missing, joined, valueless, unadmitted, wildcard, extra-argument, and unknown-flag spellings are
+    # proven per verb rather than once for install and assumed for the others.
+    *(
+        row
+        for verb in ("install", "update", "uninstall")
+        for row in (
+            (f"{verb}-no-host", ("sdlc", verb), f"ccodex sdlc {verb} requires an explicit --host claude|codex"),
+            (f"{verb}-joined-host", ("sdlc", verb, "--host=claude"), f"ccodex sdlc {verb} spells its host as two arguments"),
+            (f"{verb}-host-no-value", ("sdlc", verb, "--host"), f"ccodex sdlc {verb} --host was supplied without a host value"),
+            (f"{verb}-unadmitted-host", ("sdlc", verb, "--host", "gemini"), f"unsupported ccodex sdlc {verb} host: 'gemini'"),
+            (f"{verb}-wildcard-host", ("sdlc", verb, "--host", "all"), f"unsupported ccodex sdlc {verb} host: 'all'"),
+            # `[0-9]` never `\d` on the host axis too: a Unicode-digit lookalike is a DIFFERENT token.
+            (f"{verb}-unicode-host", ("sdlc", verb, "--host", "claude\u0669"), f"unsupported ccodex sdlc {verb} host"),
+            (f"{verb}-extra", ("sdlc", verb, "--host", "codex", "--force"), f"ccodex sdlc {verb} accepts exactly --host claude|codex"),
+            (f"{verb}-unknown-flag", ("sdlc", verb, "--yes"), f"unknown ccodex sdlc {verb} argument"),
+            (f"{verb}-positional", ("sdlc", verb, "latest"), f"unknown ccodex sdlc {verb} argument: 'latest'"),
+        )
+    ),
     ("recover-bare", ("sdlc", "recover"), "requires exactly --dry-run"),
     ("recover-json-only", ("sdlc", "recover", "--json"), "requires exactly --dry-run"),
     ("recover-apply-no-digest", ("sdlc", "recover", "--apply"), "was supplied without the plan digest"),
@@ -954,7 +959,7 @@ class GrammarErrorExitTwoTest(Conformance):
         read = plane.dispatch("sdlc", "status")
         self.assertEqual(EXIT_OK, read.returncode, read.stderr)
         self.assertEqual(before, tree_hash(*plane.observed_roots()))
-        mutation = plane.dispatch("sdlc", "update")
+        mutation = plane.dispatch("sdlc", "update", "--host", "claude")
         self.assertEqual(EXIT_OK, mutation.returncode, mutation.stderr)
         self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
 
@@ -1058,7 +1063,7 @@ class DurableCompleteExitZeroTest(Conformance):
         self.install_once(plane)
         prior = json.loads(plane.pointer.read_text(encoding="utf-8"))
         plane.acquire_b()
-        completed = plane.dispatch("sdlc", "update")
+        completed = plane.dispatch("sdlc", "update", "--host", "claude")
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stderr)
         body = self.assert_complete_receipt(plane, "update")
@@ -1079,7 +1084,7 @@ class DurableCompleteExitZeroTest(Conformance):
         plane.acquire_a()
         self.install_once(plane)
         recorded = [entry["entry_name"] for entry in json.loads(plane.pointer.read_text())["body"]["entries"]]
-        completed = plane.dispatch("sdlc", "uninstall")
+        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stderr)
         for relative in recorded:
@@ -1177,9 +1182,9 @@ class CleanRefusalExitThreeTest(Conformance):
         plane.acquire_a()
         plane.acquire_b()
         before = tree_hash(*plane.observed_roots())
-        update = plane.dispatch("sdlc", "update")
+        update = plane.dispatch("sdlc", "update", "--host", "claude")
         self.assert_clean_refusal(plane, update, before, "no usable active distribution-activation receipt")
-        uninstall = plane.dispatch("sdlc", "uninstall")
+        uninstall = plane.dispatch("sdlc", "uninstall", "--host", "claude")
         self.assert_clean_refusal(plane, uninstall, before, "no installer ownership document")
 
     def test_update_refuses_a_pointer_that_is_a_link_rather_than_following_it(self) -> None:
@@ -1191,14 +1196,14 @@ class CleanRefusalExitThreeTest(Conformance):
         shutil.move(str(plane.pointer), str(real))
         plane.pointer.symlink_to(real)
         before = tree_hash(*plane.observed_roots())
-        completed = plane.dispatch("sdlc", "update")
+        completed = plane.dispatch("sdlc", "update", "--host", "claude")
         self.assert_clean_refusal(plane, completed, before, "user.json")
         self.assertTrue(plane.pointer.is_symlink(), "the link itself is preserved, never resolved away")
         # Positive control: the same bytes at a PHYSICAL pointer are admitted, so the refusal is
         # about the link and not about the document it names.
         plane.pointer.unlink()
         shutil.move(str(real), str(plane.pointer))
-        admitted = plane.dispatch("sdlc", "update")
+        admitted = plane.dispatch("sdlc", "update", "--host", "claude")
         self.assertEqual(EXIT_OK, admitted.returncode, admitted.stderr)
 
     def test_recover_apply_refuses_a_clean_host_and_a_foreign_digest_differently(self) -> None:
@@ -1335,7 +1340,7 @@ class AdmittedEffectExitFourTest(Conformance):
         plane.acquire_b()
         completed = plane.drive(
             "ccodex_sdlc_update",
-            [],
+            ["--host", "claude"],
             fault={"function": "transactional_replace", "after": 1, "kind": "raise", "message": FAULT_MESSAGE},
         )
         self.assert_admitted_class(completed)
@@ -1359,7 +1364,7 @@ class AdmittedEffectExitFourTest(Conformance):
         control.acquire_a()
         self.install_once(control)
         control.acquire_b()
-        clean = control.drive("ccodex_sdlc_update", [], fault=None)
+        clean = control.drive("ccodex_sdlc_update", ["--host", "claude"], fault=None)
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
         self.assertEqual("update", json.loads(control.pointer.read_text())["body"]["operation"])
 
@@ -1369,7 +1374,7 @@ class AdmittedEffectExitFourTest(Conformance):
         self.install_once(plane)
         completed = plane.drive(
             "ccodex_sdlc_uninstall",
-            [],
+            ["--host", "claude"],
             fault={"function": "remove_path", "after": 0, "kind": "raise", "message": FAULT_MESSAGE},
         )
         self.assert_admitted_class(completed)
@@ -1396,7 +1401,7 @@ class AdmittedEffectExitFourTest(Conformance):
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
-        clean = control.drive("ccodex_sdlc_uninstall", [], fault=None)
+        clean = control.drive("ccodex_sdlc_uninstall", ["--host", "claude"], fault=None)
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
 
     def test_recover_apply_interrupted_after_an_effect_reports_an_unknown_effect(self) -> None:
@@ -1516,8 +1521,8 @@ class InternalFailureExitOneTest(Conformance):
         """The dispatch contract, by EXECUTION: a module that raises leaves an unknown effect."""
         modules = {
             "install": ("ccodex_sdlc_install", ("install", "--host", "claude")),
-            "update": ("ccodex_sdlc_update", ("update",)),
-            "uninstall": ("ccodex_sdlc_uninstall", ("uninstall",)),
+            "update": ("ccodex_sdlc_update", ("update", "--host", "claude")),
+            "uninstall": ("ccodex_sdlc_uninstall", ("uninstall", "--host", "claude")),
             "recover": ("ccodex_sdlc_recover", ("recover", "--apply", FOREIGN_DIGEST)),
         }
         for verb, (stem, vector) in modules.items():
@@ -1660,7 +1665,7 @@ class ForeignPreservationTest(Conformance):
         before = plane_inventory(plane.claude_root)
         before_hash = tree_hash(*plane.observed_roots())
 
-        completed = plane.dispatch("sdlc", "update")
+        completed = plane.dispatch("sdlc", "update", "--host", "claude")
 
         self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stdout)
@@ -1681,7 +1686,7 @@ class ForeignPreservationTest(Conformance):
         # foreign entry still blocks, which is why the control restores the modified one and asserts
         # the refusal now names exactly one entry.
         plane.destination(OWNED_ENTRY).write_text("cartographer one\n", encoding="utf-8")
-        narrowed = plane.dispatch("sdlc", "update")
+        narrowed = plane.dispatch("sdlc", "update", "--host", "claude")
         self.assertEqual(EXIT_REFUSED, narrowed.returncode, narrowed.stderr)
         self.assertIn("1 entry the new payload would write cannot be proved unchanged", narrowed.stderr)
         self.assertNotIn("modified-content", narrowed.stderr)
@@ -1691,7 +1696,7 @@ class ForeignPreservationTest(Conformance):
         self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "install", "--host", "claude").returncode)
         plane.destination(OWNED_ENTRY).write_text(MODIFIED_BYTES, encoding="utf-8")
 
-        completed = plane.dispatch("sdlc", "uninstall")
+        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
 
         self.assert_admitted_class(completed)
         self.assertIn(f"preserved: {OWNED_ENTRY}", completed.stdout)
@@ -1737,7 +1742,7 @@ class ForeignPreservationTest(Conformance):
             bundle.digest(plane.destination(FOREIGN_ENTRY)), entries[FOREIGN_ENTRY]["content_sha256"]
         )
 
-        completed = plane.dispatch("sdlc", "uninstall")
+        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
 
         self.assert_admitted_class(completed)
         self.assertEqual(
@@ -1763,7 +1768,7 @@ class ForeignPreservationTest(Conformance):
         plane_two = self.layout()
         self.assertEqual(EXIT_OK, plane_two.dispatch("sdlc", "install", "--host", "claude").returncode)
         plane_two.destination(FOREIGN_ENTRY).write_text("edited after the install\n", encoding="utf-8")
-        second = plane_two.dispatch("sdlc", "uninstall")
+        second = plane_two.dispatch("sdlc", "uninstall", "--host", "claude")
         self.assertEqual(
             "edited after the install\n",
             plane_two.destination(FOREIGN_ENTRY).read_text(encoding="utf-8"),
@@ -1796,7 +1801,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         self.install_once(plane)
         plane.destination(OWNED_ENTRY).write_text(MODIFIED_BYTES, encoding="utf-8")
 
-        completed = plane.dispatch("sdlc", "uninstall")
+        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
 
         self.assert_admitted_class(completed)
         self.assertEqual(EXIT_UNKNOWN, completed.returncode, completed.stdout)
@@ -1814,7 +1819,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
-        clean = control.dispatch("sdlc", "uninstall")
+        clean = control.dispatch("sdlc", "uninstall", "--host", "claude")
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
 
     def test_a_plane_whose_entries_already_left_exits_four_and_its_receipt_records_none(self) -> None:
@@ -1838,7 +1843,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
                 destination.unlink()
         before = tree_hash(*plane.observed_roots())
 
-        completed = plane.dispatch("sdlc", "uninstall")
+        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
 
         self.assert_admitted_class(completed)
         self.assertEqual(EXIT_UNKNOWN, completed.returncode, completed.stdout + completed.stderr)
@@ -1853,7 +1858,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         # WHY NOT 3: this run is not repeatable, so it was not a refusal before effect.  Executed, not
         # asserted from the docstring -- and the tree DID change, by exactly the receipt it sealed.
         self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
-        repeat = plane.dispatch("sdlc", "uninstall")
+        repeat = plane.dispatch("sdlc", "uninstall", "--host", "claude")
         self.assertEqual(EXIT_REFUSED, repeat.returncode, repeat.stdout + repeat.stderr)
         self.assertIn("a second retirement of one activation is refused rather than repeated", repeat.stderr)
         # POSITIVE CONTROL: the same harness reports 0 for a plane whose entries are all present, so
@@ -1861,7 +1866,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
-        clean = control.dispatch("sdlc", "uninstall")
+        clean = control.dispatch("sdlc", "uninstall", "--host", "claude")
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
 
     def test_a_second_retirement_of_one_activation_is_a_clean_refusal_not_a_repeat(self) -> None:
@@ -1869,10 +1874,10 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         plane = self.plane()
         plane.acquire_a()
         self.install_once(plane)
-        self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "uninstall").returncode)
+        self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "uninstall", "--host", "claude").returncode)
         before = tree_hash(*plane.observed_roots())
 
-        again = plane.dispatch("sdlc", "uninstall")
+        again = plane.dispatch("sdlc", "uninstall", "--host", "claude")
 
         self.assert_admitted_class(again)
         self.assertEqual(EXIT_REFUSED, again.returncode, again.stdout + again.stderr)
@@ -1902,7 +1907,7 @@ class StalePrestateTest(Conformance):
         self.assertNotEqual(recorded[OWNED_ENTRY], bundle.digest(victim))
         before = tree_hash(*plane.observed_roots())
 
-        completed = plane.dispatch("sdlc", "update")
+        completed = plane.dispatch("sdlc", "update", "--host", "claude")
 
         self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
         self.assertIn(OWNED_ENTRY, completed.stderr)
@@ -1921,7 +1926,7 @@ class StalePrestateTest(Conformance):
         # is the moved prestate and not a permanently blocked host.
         victim.write_text("cartographer one\n", encoding="utf-8")
         self.assertEqual(recorded[OWNED_ENTRY], bundle.digest(victim))
-        admitted = plane.dispatch("sdlc", "update")
+        admitted = plane.dispatch("sdlc", "update", "--host", "claude")
         self.assertEqual(EXIT_OK, admitted.returncode, admitted.stderr)
 
     def test_recover_refuses_a_digest_whose_state_moved_between_the_dry_run_and_the_apply(self) -> None:
@@ -2029,7 +2034,7 @@ class CrashHonestyTest(Conformance):
         # 2. THE NEIGHBOURING VERBS REFUSE, because the plane states no active receipt.
         for verb in ("update", "uninstall"):
             with self.subTest(verb=verb):
-                refused = plane.dispatch("sdlc", verb)
+                refused = plane.dispatch("sdlc", verb, "--host", "claude")
                 self.assertEqual(EXIT_REFUSED, refused.returncode, refused.stderr)
 
         # 3. THE ASSESSMENT PLANS IT, read-only, and offers exactly one digest.
@@ -2054,7 +2059,7 @@ class CrashHonestyTest(Conformance):
             plane.dispatch("sdlc", "recover", "--dry-run").stderr,
         )
         self.assertFalse(plane.pointer.exists(), "recovery completes a transaction, never an activation")
-        self.assertEqual(EXIT_REFUSED, plane.dispatch("sdlc", "update").returncode)
+        self.assertEqual(EXIT_REFUSED, plane.dispatch("sdlc", "update", "--host", "claude").returncode)
         reinstalled = plane.dispatch("sdlc", "install", "--host", "claude")
         self.assertEqual(EXIT_OK, reinstalled.returncode, reinstalled.stderr)
         body = self.sealed(plane, plane.pointer)["body"]
@@ -2115,12 +2120,14 @@ class CrashHonestyTest(Conformance):
         self.assertEqual(1, len(filed))
         stem = filed[0].name[: -len(".json")]
         self.assertNotEqual(64, len(stem), "the fix is about the NAME, so its shape is pinned here")
-        self.assertTrue(stem.startswith("install-op-"), stem)
+        # The agent is part of the receipt identity: one payload activated into two planes would
+        # otherwise share an (operation, payload, instant) triple, and receipts are create-only.
+        self.assertTrue(stem.startswith("install-claude-op-"), stem)
         self.assertTrue(recover.is_lifecycle_receipt_stem(stem), stem)
         receipt_bytes = filed[0].read_bytes()
 
         plane.acquire_b()
-        killed = plane.drive("ccodex_sdlc_update", [], fault=self.SIGKILL_FAULT)
+        killed = plane.drive("ccodex_sdlc_update", ["--host", "claude"], fault=self.SIGKILL_FAULT)
         self.assertEqual(-9, killed.returncode)
         outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"]
         self.assertIsNotNone(outstanding, "there IS an interrupted transition to recover")
@@ -2208,7 +2215,7 @@ class CrashHonestyTest(Conformance):
         original_bytes = receipt_path.read_bytes()
 
         plane.acquire_b()
-        killed = plane.drive("ccodex_sdlc_update", [], fault=self.SIGKILL_FAULT)
+        killed = plane.drive("ccodex_sdlc_update", ["--host", "claude"], fault=self.SIGKILL_FAULT)
         self.assertEqual(-9, killed.returncode)
         outstanding = json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"]
         self.assertIsNotNone(outstanding, "there IS an interrupted transition to recover")
@@ -2306,7 +2313,7 @@ class OwnershipSchemaTest(Conformance):
         keys_before = set(produced["entries"])
 
         plane.acquire_b()
-        completed = plane.dispatch("sdlc", "update")
+        completed = plane.dispatch("sdlc", "update", "--host", "claude")
 
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         persisted = json.loads(plane.installer_state.read_text(encoding="utf-8"))
@@ -2328,7 +2335,7 @@ class OwnershipSchemaTest(Conformance):
                 before = plane.installer_state.read_bytes()
 
                 plane.acquire_b()
-                refused = plane.dispatch("sdlc", "update")
+                refused = plane.dispatch("sdlc", "update", "--host", "claude")
 
                 self.assertEqual(EXIT_REFUSED, refused.returncode, refused.stderr)
                 self.assertIn("different installer schema", refused.stderr)
@@ -2386,14 +2393,14 @@ class NonAuthorityTest(Conformance):
         plane.acquire_a()
         runs = [plane.dispatch("sdlc", "install", "--host", "claude")]
         plane.acquire_b()
-        runs.append(plane.dispatch("sdlc", "update"))
+        runs.append(plane.dispatch("sdlc", "update", "--host", "claude"))
         runs.append(plane.dispatch("sdlc", "inspect"))
         runs.append(plane.dispatch("sdlc", "status"))
         runs.append(plane.dispatch("sdlc", "doctor"))
         runs.append(plane.dispatch("sdlc", "recover", "--dry-run"))
-        runs.append(plane.dispatch("sdlc", "uninstall"))
+        runs.append(plane.dispatch("sdlc", "uninstall", "--host", "claude"))
         # Refusals and admitted-effect paths speak to the operator too.
-        runs.append(plane.dispatch("sdlc", "update"))
+        runs.append(plane.dispatch("sdlc", "update", "--host", "claude"))
         runs.append(plane.dispatch("sdlc", "recover", "--apply", FOREIGN_DIGEST))
         faulted = self.plane()
         faulted.acquire_a()

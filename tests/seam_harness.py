@@ -268,6 +268,30 @@ def _lifecycle_case(identifier: str, argv: tuple[str, ...], verb: str, named: st
     )
 
 
+def _plane_cases() -> tuple[SeamCase, ...]:
+    """The three mutating verbs on BOTH receipted planes, refusing in their own name.
+
+    Two agents, six cases, and that is the point of the wave that added the second one: a suite that
+    only ever spelled ``claude`` would stay green with the codex arm re-pinned shut, so each admitted
+    plane drives every verb here. What each case proves is narrow and route-sensitive -- the vector
+    reached its own module through the isolated route, that module named ITSELF and its own reason, and
+    the fixture is untouched -- which is exactly what a plane that refused as a GRAMMAR error (exit 2,
+    ``unsupported ... host``) or fell through to another plane's module would fail.
+    """
+    cases: list[SeamCase] = []
+    for verb in ("install", "update", "uninstall"):
+        for agent in ("claude", "codex"):
+            cases.append(
+                _lifecycle_case(
+                    f"sdlc-{verb}-on-the-{agent}-plane-reaches-its-module-and-refuses-before-any-effect",
+                    ("sdlc", verb, "--host", agent),
+                    verb,
+                    verb,
+                )
+            )
+    return tuple(cases)
+
+
 SEAM_CASES: tuple[SeamCase, ...] = (
     # ---- the four reader verbs, canonical JSON -------------------------------------------------
     _reader_json_case("inspect", ("sdlc", "inspect", "--json")),
@@ -329,25 +353,8 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         forbid_finding_codes=("runtime-admission-refused",),
         canonical_json_stdout=True,
     ),
-    # ---- the four mutating verbs, refusing before any effect -----------------------------------
-    _lifecycle_case(
-        "sdlc-install-reaches-its-module-and-refuses-before-any-effect",
-        ("sdlc", "install", "--host", "claude"),
-        "install",
-        "install",
-    ),
-    _lifecycle_case(
-        "sdlc-update-reaches-its-module-and-refuses-before-any-effect",
-        ("sdlc", "update"),
-        "update",
-        "update",
-    ),
-    _lifecycle_case(
-        "sdlc-uninstall-reaches-its-module-and-refuses-before-any-effect",
-        ("sdlc", "uninstall"),
-        "uninstall",
-        "uninstall",
-    ),
+    # ---- the three mutating verbs on both planes, refusing before any effect --------------------
+    *_plane_cases(),
     _lifecycle_case(
         "sdlc-recover-apply-reaches-its-module-and-refuses-before-any-effect",
         ("sdlc", "recover", "--apply", _UNAPPROVED_DIGEST),
@@ -379,8 +386,8 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         insensitivity_reason="decided by the reader's parser before any runtime admission",
         stdout_empty=True,
         stderr_present=(
-            "error: ccodex sdlc needs inspect, status, doctor, recover --dry-run,"
-            " install --host claude, update, or uninstall",
+            "error: ccodex sdlc needs inspect, status, doctor, recover --dry-run, or one of install,"
+            " update, uninstall with --host claude|codex",
         ),
         stderr_absent=("expected direct -I -B execution", "Traceback"),
     ),
@@ -391,7 +398,46 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         route_sensitive=False,
         insensitivity_reason="decided by the reader's parser before any runtime admission",
         stdout_empty=True,
-        stderr_present=("error: ccodex sdlc install requires an explicit --host claude",),
+        stderr_present=(
+            "error: ccodex sdlc install requires an explicit --host claude|codex; there is no default"
+            " host",
+        ),
+        stderr_absent=("expected direct -I -B execution", "Traceback"),
+    ),
+    SeamCase(
+        # The selector is required on EVERY mutating verb, not only install: with two planes live a
+        # bare `uninstall` would have to pick one, and whichever it picked would remove that agent's
+        # bytes on the strength of an argument nobody typed.
+        identifier="sdlc-uninstall-without-a-host-is-a-usage-error-and-never-a-default-plane",
+        argv=("sdlc", "uninstall"),
+        expect_exit=2,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "the reader parses argv before it admits a runtime, so a missing selector is decided on"
+            " either route; it is a control, and its subject is the grammar rather than the route"
+        ),
+        stdout_empty=True,
+        stderr_present=(
+            "error: ccodex sdlc uninstall requires an explicit --host claude|codex; there is no"
+            " default host",
+        ),
+        stderr_absent=("expected direct -I -B execution", "Traceback", "no installer ownership document"),
+    ),
+    SeamCase(
+        identifier="an-unadmitted-sdlc-host-is-a-usage-error-naming-the-admitted-planes",
+        argv=("sdlc", "install", "--host", "gemini"),
+        expect_exit=2,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "an unadmitted selector is refused by the reader's parser before any runtime admission, so"
+            " it is decided identically on either route; it is the positive control for the six"
+            " admitted-plane cases above"
+        ),
+        stdout_empty=True,
+        stderr_present=(
+            "error: unsupported ccodex sdlc install host: 'gemini'; the admitted hosts are"
+            " claude, codex",
+        ),
         stderr_absent=("expected direct -I -B execution", "Traceback"),
     ),
     SeamCase(
@@ -400,7 +446,12 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         expect_exit=0,
         route_sensitive=False,
         insensitivity_reason="help is answered by the reader's parser before any runtime admission",
-        stdout_present=("usage: ccodex sdlc inspect [--json]", "ccodex sdlc install --host claude"),
+        stdout_present=(
+            "usage: ccodex sdlc inspect [--json]",
+            "ccodex sdlc install --host claude|codex",
+            "ccodex sdlc update --host claude|codex",
+            "ccodex sdlc uninstall --host claude|codex",
+        ),
         stdout_absent=("Traceback",),
     ),
     # ---- boundaries the dispatcher owns, upstream of any interpreter ---------------------------

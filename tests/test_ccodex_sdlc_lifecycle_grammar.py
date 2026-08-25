@@ -47,10 +47,26 @@ guard = importlib.util.module_from_spec(_guard_spec)
 sys.modules[_guard_spec.name] = guard
 _guard_spec.loader.exec_module(guard)
 
+
+def load_module(name: str, path: Path):
+    """Load one shipped module by absolute path, for the cross-module vocabulary pins below."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+# Every mutating verb carries an explicit host, and BOTH planes appear so a vector set that only ever
+# spelled `claude` could not pass while the codex arm was broken.
 MUTATING_VECTORS = (
     ("install", "--host", "claude"),
-    ("update",),
-    ("uninstall",),
+    ("install", "--host", "codex"),
+    ("update", "--host", "claude"),
+    ("update", "--host", "codex"),
+    ("uninstall", "--host", "claude"),
+    ("uninstall", "--host", "codex"),
 )
 MUTATING_MODULES = {
     "install": "ccodex_sdlc_install.py",
@@ -239,7 +255,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                 self.assertEqual(completed.stderr, "")
                 self.assertTrue(marker.is_file(), completed.stdout)
                 forwarded = json.loads(marker.read_text(encoding="utf-8"))
-                self.assertEqual(forwarded, ["--host", "claude"] if verb == "install" else [])
+                self.assertEqual(forwarded, ["--host", vector[2]])
 
     def test_absent_module_refuses_by_name_at_exit_three_without_a_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -260,7 +276,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             # exit-3 refusals above are the missing module and not a broken invocation.
             marker = root / "control.json"
             self.write_module(shadow, "update", self.marker_module(marker))
-            control = self.run_reader(shadow, "update")
+            control = self.run_reader(shadow, "update", "--host", "claude")
             self.assertEqual(control.returncode, 0, control.stderr)
             self.assertTrue(marker.is_file())
 
@@ -274,7 +290,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             link = shadow / "scripts" / MUTATING_MODULES["update"]
             link.symlink_to(real)
 
-            linked = self.run_reader(shadow, "update")
+            linked = self.run_reader(shadow, "update", "--host", "claude")
 
             self.assertEqual(linked.returncode, 3, linked.stderr)
             self.assertIn("ccodex sdlc update is unavailable in this distribution", linked.stderr)
@@ -283,7 +299,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             # the link and not about the module's contents.
             link.unlink()
             shutil.copy2(real, link)
-            physical = self.run_reader(shadow, "update")
+            physical = self.run_reader(shadow, "update", "--host", "claude")
             self.assertEqual(physical.returncode, 0, physical.stderr)
             self.assertTrue(marker.is_file())
 
@@ -340,7 +356,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                 shadow = self.make_shadow_reader(Path(temp))
                 self.write_module(shadow, "uninstall", body)
 
-                completed = self.run_reader(shadow, "uninstall")
+                completed = self.run_reader(shadow, "uninstall", "--host", "claude")
 
                 self.assertEqual(completed.returncode, expected, completed.stderr)
                 self.assertIn(fragment, completed.stderr)
@@ -351,7 +367,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             for returned in (0, 3):
                 shadow = self.make_shadow_reader(Path(temp) / f"case-{returned}")
                 self.write_module(shadow, "uninstall", f"def main(argv):\n    return {returned}\n")
-                forwarded = self.run_reader(shadow, "uninstall")
+                forwarded = self.run_reader(shadow, "uninstall", "--host", "claude")
                 self.assertEqual(forwarded.returncode, returned, forwarded.stderr)
                 self.assertEqual(forwarded.stderr, "")
 
@@ -383,6 +399,8 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
         # A digest is not a host and a host is not a digest: the shared fourth slot never lets one
         # verb's argument reach the other's module.
         self.assertEqual(reader.parse_command(["install", "--host", "claude"])[3], "claude")
+        self.assertEqual(reader.parse_command(["install", "--host", "codex"])[3], "codex")
+        self.assertEqual(reader.parse_command(["uninstall", "--host", "codex"])[3], "codex")
         with self.assertRaises(reader.UsageError):
             reader.parse_command(["install", "--host", PLAN_DIGEST])
 
@@ -432,7 +450,11 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                     self.assertIn(fragment, completed.stderr)
             help_output = self.run_dispatcher(dispatcher, environment, "sdlc", "--help")
             self.assertEqual(help_output.returncode, 0, help_output.stderr)
-            for named in ("ccodex sdlc install --host claude", "ccodex sdlc update", "ccodex sdlc uninstall"):
+            for named in (
+                "ccodex sdlc install --host claude|codex",
+                "ccodex sdlc update --host claude|codex",
+                "ccodex sdlc uninstall --host claude|codex",
+            ):
                 self.assertIn(named, help_output.stdout)
             self.assertNotIn("profile", help_output.stdout)
             self.assertNotIn("refresh", help_output.stdout)
@@ -448,7 +470,11 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             completed = self.run_dispatcher(dispatcher, environment, "--help")
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            for named in ("sdlc install --host claude", "sdlc update", "sdlc uninstall"):
+            for named in (
+                "sdlc install --host <claude|codex>",
+                "sdlc update --host <claude|codex>",
+                "sdlc uninstall --host <claude|codex>",
+            ):
                 self.assertIn(named, completed.stdout)
             # Positive control for the two negative assertions: the dispatcher's help really is the
             # document being searched, and it really does carry the sdlc reader lines beside them.
@@ -458,36 +484,49 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
             self.assertNotIn("refresh", completed.stdout)
             self.assertFalse(query_state.exists())
 
-    def test_install_requires_an_explicit_claude_host_and_names_which_half_was_wrong(self) -> None:
+    def test_every_mutating_verb_requires_an_explicit_host_and_names_which_half_was_wrong(self) -> None:
+        """All three verbs, not just install: a bare mutating verb would have to pick a plane.
+
+        Before the codex arm, `update` and `uninstall` took no arguments and each module named its own
+        single plane. With two planes live that omission is the cross-agent defect at the grammar layer,
+        so the selector is required everywhere and the refusals below are proven per verb.
+        """
         with tempfile.TemporaryDirectory() as temp:
             dispatcher, environment, query_state = self.make_dispatcher(Path(temp))
-            for vector, fragment in (
-                (("install",), "requires an explicit --host claude; there is no default host"),
-                (("install", "--host"), "--host was supplied without a host value"),
-                (("install", "--host", ""), "unsupported ccodex sdlc install host: ''"),
-                (("install", "--host", "codex"), "unsupported ccodex sdlc install host: 'codex'"),
-                (("install", "--host", "all"), "unsupported ccodex sdlc install host: 'all'"),
-                (("install", "--host", "*"), "unsupported ccodex sdlc install host: '*'"),
-                (("install", "--host=claude"), "spells its host as two arguments: --host claude"),
-                (("install", "--host", "claude", "--json"), "accepts exactly --host claude: '--json'"),
-                (("install", "--host", "claude", "extra"), "accepts exactly --host claude: 'extra'"),
-                (("update", "--json"), "ccodex sdlc update accepts no arguments: '--json'"),
-                (("update", "--host", "claude"), "ccodex sdlc update accepts no arguments: '--host'"),
-                (("uninstall", "--host", "claude"), "ccodex sdlc uninstall accepts no arguments: '--host'"),
-                (("uninstall", "--dry-run"), "ccodex sdlc uninstall accepts no arguments: '--dry-run'"),
-            ):
+            per_verb = []
+            for verb in ("install", "update", "uninstall"):
+                per_verb.extend(
+                    (
+                        ((verb,), f"ccodex sdlc {verb} requires an explicit --host claude|codex; there is no default host"),
+                        ((verb, "--host"), f"ccodex sdlc {verb} --host was supplied without a host value"),
+                        ((verb, "--host", ""), f"unsupported ccodex sdlc {verb} host: ''"),
+                        ((verb, "--host", "all"), f"unsupported ccodex sdlc {verb} host: 'all'"),
+                        ((verb, "--host", "*"), f"unsupported ccodex sdlc {verb} host: '*'"),
+                        ((verb, "--host", "gemini"), f"unsupported ccodex sdlc {verb} host: 'gemini'"),
+                        ((verb, "--host=claude"), f"ccodex sdlc {verb} spells its host as two arguments"),
+                        ((verb, "--host", "claude", "--json"), f"ccodex sdlc {verb} accepts exactly --host claude|codex: '--json'"),
+                        ((verb, "--host", "codex", "extra"), f"ccodex sdlc {verb} accepts exactly --host claude|codex: 'extra'"),
+                        ((verb, "--profile", "claude"), f"unknown ccodex sdlc {verb} argument: '--profile'"),
+                    )
+                )
+            for vector, fragment in per_verb:
                 with self.subTest(vector=vector):
                     completed = self.run_dispatcher(dispatcher, environment, "sdlc", *vector)
                     self.assertEqual(completed.returncode, 2, completed.stderr)
                     self.assertIn("usage: ccodex sdlc", completed.stderr)
                     self.assertIn(fragment, completed.stderr)
-            # Positive control: the one admitted spelling is NOT a grammar error. It reaches the
-            # shipped install module and refuses there pre-effect, which is what makes the exit-2s
-            # above attributable to the spelling rather than to the verb being unreachable.
-            admitted = self.run_dispatcher(dispatcher, environment, "sdlc", "install", "--host", "claude")
-            self.assertEqual(admitted.returncode, 3, admitted.stderr)
-            self.assertIn("ccodex sdlc install refused before any effect", admitted.stderr)
-            self.assertNotIn("usage: ccodex sdlc", admitted.stderr)
+            # Positive control, on BOTH planes: an admitted spelling is NOT a grammar error. Each
+            # reaches its shipped module and refuses there pre-effect, which is what makes the exit-2s
+            # above attributable to the spelling rather than to the plane being unreachable.
+            for verb in ("install", "update", "uninstall"):
+                for agent in ("claude", "codex"):
+                    with self.subTest(admitted=(verb, agent)):
+                        admitted = self.run_dispatcher(
+                            dispatcher, environment, "sdlc", verb, "--host", agent
+                        )
+                        self.assertEqual(admitted.returncode, 3, admitted.stderr)
+                        self.assertIn(f"error: ccodex sdlc {verb}", admitted.stderr)
+                        self.assertNotIn("usage: ccodex sdlc", admitted.stderr)
             self.assertFalse(query_state.exists())
 
     def test_a_control_character_in_a_refused_argument_cannot_forge_an_output_line(self) -> None:
@@ -510,8 +549,8 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                 )
             # Positive control: an ordinary value is still rendered plainly, so the escaping above
             # is escaping and not a blanket refusal to echo the caller's token.
-            plain = self.run_dispatcher(dispatcher, environment, "sdlc", "install", "--host", "codex")
-            self.assertIn("unsupported ccodex sdlc install host: 'codex'", plain.stderr)
+            plain = self.run_dispatcher(dispatcher, environment, "sdlc", "install", "--host", "gemini")
+            self.assertIn("unsupported ccodex sdlc install host: 'gemini'", plain.stderr)
             self.assertNotIn("\\n", plain.stderr)
 
     # ---- the reader keeps borrowing no writer authority ---------------------------------------
@@ -548,7 +587,18 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                         " to the absence refusal",
                     )
         self.assertEqual(sorted(reader.LIFECYCLE_VERBS), ["install", "uninstall", "update"])
-        self.assertEqual(reader.LIFECYCLE_HOSTS, ("claude",))
+        self.assertEqual(reader.LIFECYCLE_HOSTS, ("claude", "codex"))
+        # The three re-expressions of one host vocabulary, pinned against each other: the reader's
+        # grammar tuple, the closed host-plane table it is a copy of, and the receipt family's own
+        # `HOSTS`, which is what a sealed body's `scope.agent` is checked against. Widening one and not
+        # the others is what this equality exists to fail on.
+        planes = load_module("lifecycle_grammar_host_planes", ROOT / "scripts" / "ccodex_sdlc_host_planes.py")
+        receipts = load_module(
+            "lifecycle_grammar_receipts", ROOT / "scripts" / "distribution_activation_receipt.py"
+        )
+        self.assertEqual(reader.LIFECYCLE_HOSTS, planes.AGENTS)
+        self.assertEqual(tuple(sorted(receipts.HOSTS)), planes.AGENTS)
+        self.assertEqual(reader.LIFECYCLE_HOST_CHOICE, "claude|codex")
 
 
 if __name__ == "__main__":

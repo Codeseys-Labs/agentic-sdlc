@@ -62,6 +62,9 @@ def _load(path: Path, name: str) -> ModuleType:
 update = _load(MODULE_PATH, "ccodex_sdlc_update_under_test")
 receipts = _load(RECEIPT_PRODUCER_PATH, "ccodex_sdlc_update_receipt_producer")
 bundle = _load(INSTALLER_PATH, "ccodex_sdlc_update_installer")
+# The closed per-agent host-plane table, loaded directly for the pins that compare it against the
+# shipped contract and against the module under test.
+planes = _load(ROOT / "scripts" / "ccodex_sdlc_host_planes.py", "ccodex_sdlc_update_host_planes")
 reader = _load(READER_PATH, "ccodex_sdlc_update_reader")
 # The acquisition receipt's producer, pinned in place of the deleted acquisition policy's schema
 # table: the contract this module re-expresses is now owned by the module that writes the document.
@@ -559,7 +562,10 @@ def call_main(
     fail_refresh_after: int | None = None,
     fail_observe_content_at: int | None = None,
 ) -> Outcome:
-    """Drive ``main([])`` exactly as the dispatcher does, optionally injecting one fault.
+    """Drive ``main(["--host", <agent>])`` exactly as the dispatcher does, optionally injecting a fault.
+
+    The default vector selects the Claude plane, which is what every fixture below builds; a codex-plane
+    run passes its own ``argv`` and its own configuration.
 
     ``fail_refresh_after`` is injected at the seam a real interruption would hit: the shipped
     installer's ``transactional_replace``, on the sibling instance this run loads.  Patching the file
@@ -612,7 +618,7 @@ def call_main(
             )
         stack.enter_context(contextlib.redirect_stdout(out))
         stack.enter_context(contextlib.redirect_stderr(err))
-        code = update.main([] if argv is None else argv)
+        code = update.main(["--host", "claude"] if argv is None else argv)
     assert isinstance(code, int) and not isinstance(code, bool), repr(code)
     assert 0 <= code <= 4, code
     return Outcome(code, out.getvalue(), err.getvalue())
@@ -699,10 +705,21 @@ class ReExpressedContractsTest(TemporaryRoot):
         self.assertNotEqual("a\nb", update.escape_display("a\nb"))
         self.assertEqual("a\\nb", update.escape_display("a\nb"))
 
-    def test_release_contract_fixture_is_the_shipped_one(self) -> None:
+    def test_every_host_plane_has_the_shipped_contract_row_it_will_be_checked_against(self) -> None:
+        """A plane in the closed table and not in the contract is the defect this equality catches."""
         contract = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(update.RELEASE_CONTRACT_HOST, contract["compatibility"]["core"]["host"])
-        self.assertEqual([], contract["compatibility"]["known_incompatible_host_versions"])
+        compatibility = contract["compatibility"]
+        self.assertEqual(planes.AGENTS, ("claude", "codex"))
+        self.assertEqual(update.CONTRACT_SECTION_CORE, planes.CONTRACT_SECTION_CORE)
+        for agent in planes.AGENTS:
+            plane = planes.plane_for(agent)
+            with self.subTest(agent=agent):
+                if plane.contract_section == planes.CONTRACT_SECTION_CORE:
+                    row = compatibility[plane.contract_section]
+                else:
+                    row = compatibility[plane.contract_section][agent]
+                self.assertEqual(row["host"], plane.contract_host)
+        self.assertEqual([], compatibility["known_incompatible_host_versions"])
 
     def test_the_family_admits_no_removal_for_an_update_so_a_dropped_entry_is_preserved(self) -> None:
         """The recorded reason this module preserves rather than removes a dropped entry.
@@ -902,7 +919,7 @@ class EndToEndUpdateTest(TemporaryRoot):
         stub.write_text(f"#!/bin/sh\necho '{HOST_VERSION} (Claude Code)'\n", encoding="utf-8")
         stub.chmod(0o755)
         completed = subprocess.run(
-            [sys.executable, "-I", "-B", str(READER_PATH), "update"],
+            [sys.executable, "-I", "-B", str(READER_PATH), "update", "--host", "claude"],
             env={
                 "HOME": str(fixture.home),
                 "LANG": "C",
@@ -918,7 +935,9 @@ class EndToEndUpdateTest(TemporaryRoot):
         )
         skip_when_a_child_refused_this_host(self, completed)
         self.assertEqual(0, completed.returncode, completed.stderr)
-        self.assertIn("ccodex sdlc update: effect complete, terminal activated", completed.stdout)
+        self.assertIn(
+            "ccodex sdlc update --host claude: effect complete, terminal activated", completed.stdout
+        )
         self.assertNotIn("Traceback", completed.stderr)
         self.assertEqual("cartographer two\n", fixture.destination("agents/cartographer.md").read_text())
         receipt = fixture.new_receipt()
@@ -931,7 +950,7 @@ class EndToEndUpdateTest(TemporaryRoot):
         # Positive control: the same dispatcher refuses the same plane once the pointer is gone.
         fixture.pointer.unlink()
         again = subprocess.run(
-            [sys.executable, "-I", "-B", str(READER_PATH), "update"],
+            [sys.executable, "-I", "-B", str(READER_PATH), "update", "--host", "claude"],
             env={
                 "HOME": str(fixture.home),
                 "LANG": "C",
@@ -1356,13 +1375,32 @@ class AdmissionRefusalTest(TemporaryRoot):
     def test_a_declared_incompatibility_and_an_unobservable_host_version_both_refuse(self) -> None:
         contract = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
         contract["compatibility"]["known_incompatible_host_versions"] = [
-            {"reason": "the fabricated payload declares this host broken", "version": HOST_VERSION}
+            {
+                "host": "claude-code",
+                "reason": "the fabricated payload declares this host broken",
+                "version": HOST_VERSION,
+            }
         ]
         declared = self.fixture(contract_b=contract)
         outcome = call_main(declared)
         self.assert_clean_refusal(
             declared, outcome, "DECLARES the observed Claude Code host version", "refused by name"
         )
+
+        # The same declaration filed for the OTHER host admits this plane: two hosts' version spaces
+        # are unrelated, so an exclusion is scoped to the host its record names. The refusal above is
+        # this assertion's positive control -- the only difference between them is that one field.
+        other_host = json.loads(RELEASE_CONTRACT_PATH.read_text(encoding="utf-8"))
+        other_host["compatibility"]["known_incompatible_host_versions"] = [
+            {
+                "host": "codex-cli",
+                "reason": "the fabricated payload declares this host broken",
+                "version": HOST_VERSION,
+            }
+        ]
+        elsewhere = self.fixture(contract_b=other_host)
+        admitted = call_main(elsewhere)
+        self.assertEqual(0, admitted.code, admitted.stderr)
 
         blind = self.fixture()
         second = call_main(blind, config=blind.config_at(observed_host_version=None))
@@ -1386,13 +1424,15 @@ class AdmissionRefusalTest(TemporaryRoot):
         # Positive control: the same reader accepts an ordinary document with a finite number.
         self.assertEqual({"n": 1.5}, update.parse_json_object(b'{"n": 1.5}', "a fabricated document"))
 
-    def test_the_module_admits_no_arguments_and_returns_an_exit_class_never_a_bool(self) -> None:
+    def test_the_module_admits_only_the_forwarded_host_vector_and_returns_an_exit_class(self) -> None:
         fixture = self.fixture()
-        outcome = call_main(fixture, argv=["--host", "claude"])
-        self.assertEqual(3, outcome.code)
-        self.assertIn("accepts no arguments", outcome.stderr)
-        self.assertEqual([], fixture.journals())
-        # Positive control: the empty vector the dispatcher forwards is admitted.
+        for rejected in ([], ["--host"], ["--host", "gemini"], ["--host", "claude", "extra"]):
+            with self.subTest(argv=rejected):
+                outcome = call_main(fixture, argv=rejected)
+                self.assertEqual(3, outcome.code)
+                self.assertIn("admits exactly ['--host', <claude|codex>]", outcome.stderr)
+                self.assertEqual([], fixture.journals())
+        # Positive control: the vector the dispatcher forwards is admitted.
         clean = call_main(fixture)
         self.assertEqual(0, clean.code, clean.stderr)
         self.assertIsInstance(clean.code, int)
@@ -1663,7 +1703,7 @@ class InterruptionTest(TemporaryRoot):
 
     def test_an_existing_receipt_for_this_identity_and_instant_refuses_rather_than_repeating(self) -> None:
         fixture = self.fixture()
-        receipt_id = f"update-{OPERATION_B}-20260820t121314z"
+        receipt_id = f"update-claude-{OPERATION_B}-20260820t121314z"
         occupied = fixture.activation_dir / "receipts" / f"{receipt_id}.json"
         occupied.write_bytes(b"{}\n")
         outcome = call_main(fixture)

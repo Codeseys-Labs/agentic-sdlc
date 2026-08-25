@@ -69,6 +69,7 @@ READER_PAYLOAD_FILES = (
     "scripts/install_operator_tools.py",
     "scripts/install_skill_bundle.py",
     "scripts/distribution_activation_receipt.py",
+    "scripts/ccodex_sdlc_host_planes.py",
     "policy/ccodex-sdlc-read-report.v1.json",
     "policy/release-contract.v1.json",
 )
