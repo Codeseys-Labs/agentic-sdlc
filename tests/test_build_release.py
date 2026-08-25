@@ -1,9 +1,18 @@
 """The release builder's three load-bearing properties: determinism, refusal, and allowlist scope.
 
 Every fixture repository is built with an isolated Git environment (``GIT_CONFIG_GLOBAL`` at
-``os.devnull``, ``GIT_CONFIG_NOSYSTEM=1``, a pinned ``HOME``) so the operator's own config -- hooks,
-``core.autocrlf``, ``commit.gpgsign``, a template dir -- cannot decide whether these assertions
-hold.
+``os.devnull``, ``GIT_CONFIG_NOSYSTEM=1``, a pinned ``HOME``) so the operator's own hooks,
+``commit.gpgsign``, and template dir cannot decide whether these assertions hold.
+
+That isolation does NOT cover ``core.autocrlf``, and this docstring used to claim it did: on
+windows-2025 autocrlf was active anyway -- git warned ``LF will be replaced by CRLF`` and
+``git archive`` emitted CRLF for a working tree that was already LF -- so the archived bytes these
+assertions compare were decided by host config after all (agentic-sdlc-5ce7). Neutralizing the two
+config FILES leaves at least the repository-local config `git init` writes and any
+``GIT_CONFIG_COUNT``/``GIT_CONFIG_KEY_n`` pair in the inherited environment, and which of those the
+runner used is not observable from a Linux host. The fixture therefore pins eol the way the real
+repository does, with a ``.gitattributes`` rule: attributes beat every config source, so this one is
+a guarantee rather than a hope.
 """
 
 from __future__ import annotations
@@ -109,6 +118,14 @@ class BuilderFixture(unittest.TestCase):
         # `git add` would then skip an allowlisted payload file.
         generated = {name: f"# {name}\n" for name in POLICY["payload"]["files"]}
         generated |= {f"{tree}/placeholder.txt": f"# {tree}\n" for tree in POLICY["payload"]["trees"]}
+        # `.gitattributes` is the ONE allowlisted payload file whose comment-shaped stub is not
+        # inert: the real repository pins its bytes with exactly this rule, and a fixture that
+        # stubs it out is a repository with no eol policy, so whatever `core.autocrlf` the host's
+        # git carries decides the archived bytes instead. That is the second CRLF source behind
+        # these two claims on windows-2025 -- disk bytes were already LF and `git archive` still
+        # emitted CRLF (agentic-sdlc-5ce7). Attributes beat config from any source, which matters
+        # because where the runner's autocrlf comes from is not observable from here.
+        generated[".gitattributes"] = "* text=auto eol=lf\n"
         for relative, text in {**generated, **self.PAYLOAD, **self.OUTSIDE}.items():
             path = self.repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -46,6 +46,35 @@ def _load(name: str, path: Path):
 sync = _load("plugin_tree_sync", SYNC_PATH)
 validator = _load("plugin_tree_validator", VALIDATOR_PATH)
 
+def _execute_bit_is_observable() -> bool:
+    """Whether this filesystem carries the one mode bit the mirror publishes and compares.
+
+    `sync` reads `stat().st_mode & 0o100` on both sides, and a Windows filesystem never sets it:
+    `chmod(path, 0o755)` cannot grant it and `chmod(path, 0o644)` cannot take it away, so the
+    fixture cannot establish its own premise and removing the bit is a no-op the checker correctly
+    reports as no drift. Measured as `0 is not true` and `0 != 1` on windows-2025
+    (agentic-sdlc-5ce7). Git's own record of that bit lives in the INDEX there rather than on disk,
+    so reading it would be a different checker rather than a fixed one, and the mirror gate that
+    publishes runs on Linux.
+
+    Probed on a real temporary file instead of branching on `os.name`, so a POSIX host that also
+    cannot honour the bit is reported the same way and for the same stated reason.
+    """
+    with tempfile.NamedTemporaryFile(suffix="-execute-bit-probe", delete=False) as handle:
+        probe = Path(handle.name)
+    try:
+        os.chmod(probe, 0o755)
+        return bool(os.stat(probe).st_mode & 0o100)
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+EXECUTE_BIT_IS_OBSERVABLE = _execute_bit_is_observable()
+EXECUTE_BIT_SKIP_REASON = (
+    "this filesystem does not carry the owner-execute bit the plugin mirror publishes and "
+    "compares, so the drift this asserts cannot be created here (agentic-sdlc-5ce7)"
+)
+
 
 class ShippedTreeTest(unittest.TestCase):
     """Assertions about the tree this repository actually publishes."""
@@ -149,7 +178,10 @@ class FixtureTest(unittest.TestCase):
         self.assertEqual(self.run_sync("--check"), sync.EXIT_OK)
         for destination, _ in sync.COMPONENTS:
             self.assertTrue(self.published(f"{destination}/{destination}-entry.md").is_file())
-        self.assertTrue(os.stat(self.published("skills/tool.py")).st_mode & 0o100)
+        # The materialisation above is platform-neutral and stays asserted everywhere; only the
+        # mode half is not, so it is guarded rather than skipping the whole claim.
+        if EXECUTE_BIT_IS_OBSERVABLE:
+            self.assertTrue(os.stat(self.published("skills/tool.py")).st_mode & 0o100)
         self.assertFalse(os.stat(self.published("skills/skills-entry.md")).st_mode & 0o100)
 
     def test_write_is_idempotent(self) -> None:
@@ -184,6 +216,7 @@ class FixtureTest(unittest.TestCase):
         drift = sync.differences(self.root)
         self.assertEqual(drift, ["plugin/agents/agents-entry.md: missing"])
 
+    @unittest.skipUnless(EXECUTE_BIT_IS_OBSERVABLE, EXECUTE_BIT_SKIP_REASON)
     def test_check_refuses_a_copy_that_lost_its_execute_bit(self) -> None:
         """Git tracks exactly this one mode bit, so a published script must keep it."""
         self.run_sync("--write")

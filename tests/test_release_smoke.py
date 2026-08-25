@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import platform
 import re
 import shutil
 import subprocess
@@ -52,6 +53,22 @@ def _load(path: Path, name: str) -> ModuleType:
 
 smoke = _load(SMOKE_SCRIPT, "smoke_release_under_test")
 validator = _load(VALIDATOR_PATH, "validate_bundle_for_release_smoke_test")
+
+#: Whether the reader will select any case on this host, asked of the READER's own allowlist rather
+#: than of `os.name`, so adding a platform there starts these running instead of leaving them
+#: skipped. `smoke.PLATFORMS` is `("Darwin", "Linux")` and Windows is deliberately absent -- a case
+#: naming it would claim coverage nobody observed (issue #9) -- and a manifest may name nothing
+#: outside it, so on Windows every fixture manifest here selects zero cases and `main` refuses at
+#: exit 3 before any verdict is computed. Measured on windows-2025 as six failures reading
+#: `refused: no case in ...manifest.json is declared for Windows` (agentic-sdlc-5ce7). The verdict
+#: logic itself is platform-independent; it is simply unreachable through this CLI there, and the
+#: two sibling cases asserting a usage error still run because argument validation precedes the
+#: platform gate.
+SMOKE_SELECTS_A_CASE_HERE = platform.system() in smoke.PLATFORMS
+NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON = (
+    "the release smoke declares no case for this platform (smoke_release.PLATFORMS omits it by "
+    "design, issue #9), so the reader refuses before reaching a verdict (agentic-sdlc-5ce7)"
+)
 
 
 def report(*, admitted: bool) -> str:
@@ -328,12 +345,14 @@ class VerdictTest(unittest.TestCase):
         )
         return stub.root
 
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
     def test_an_admitted_report_passes_its_case(self) -> None:
         completed = run_smoke(self.tree(admitted=True), self.manifest)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("pass stub-status-is-admitted", completed.stdout)
         self.assertIn("1 selected, 1 passed, 0 failed", completed.stdout)
 
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
     def test_the_v074_refusal_shape_fails_and_names_both_markers(self) -> None:
         completed = run_smoke(self.tree(admitted=False), self.manifest)
         self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
@@ -343,6 +362,7 @@ class VerdictTest(unittest.TestCase):
         # The captured evidence reaches the log, so a CI reader sees WHY rather than a bare verdict.
         self.assertIn(ADMISSION_MARKER, completed.stdout)
 
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
     def test_expect_refusal_admits_the_mutated_shape(self) -> None:
         completed = run_smoke(
             self.tree(admitted=False),
@@ -354,6 +374,7 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("refusal proven", completed.stdout)
 
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
     def test_expect_refusal_fails_when_nothing_broke(self) -> None:
         """The anti-vacuity control: a mutation job cannot be green because the mutation stopped mattering."""
         completed = run_smoke(
@@ -366,6 +387,7 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
         self.assertIn("every case passed", completed.stdout)
 
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
     def test_expect_refusal_rejects_a_failure_it_cannot_attribute(self) -> None:
         """An unrelated breakage must not satisfy the mutation proof."""
         directory = self.base / "unrelated"
@@ -387,6 +409,7 @@ class VerdictTest(unittest.TestCase):
         completed = run_smoke(self.tree(admitted=True), self.manifest, "--require-marker", "x")
         self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
 
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
     def test_a_truthy_integer_does_not_satisfy_a_boolean_assertion(self) -> None:
         """`isolated: 1` is not `isolated: true`; Python's `1 == True` must not decide this gate."""
         directory = self.base / "truthy"
@@ -525,7 +548,10 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn(f"--require-marker {REFUSAL_FINDING}", step["run"])
         self.assertIn(f"--require-marker '{ADMISSION_MARKER}'", step["run"])
         applied = self._step(self.jobs["mutation"], "Restore the v0.7.4 sdlc route")
-        self.assertIn(str(MUTATION_PATCH.relative_to(ROOT)), applied["run"])
+        # `as_posix`, not `str`: this path is being looked for inside a POSIX shell script that a
+        # Linux runner executes, so its separator is `/` on every host reading this file. `str` gave
+        # `.github\mutations\...` on windows-2025 and matched nothing (agentic-sdlc-5ce7).
+        self.assertIn(MUTATION_PATCH.relative_to(ROOT).as_posix(), applied["run"])
         self.assertIn("git apply --check", applied["run"])
 
     def test_every_action_is_pinned_to_a_commit(self) -> None:

@@ -147,10 +147,17 @@ class ExtractedTreeFixture(unittest.TestCase):
             "manage_claude_statusline.py",
         ):
             generated[f"scripts/{entry}"] = "raise SystemExit(0)\n"
+        # Pin eol the way the real repository does, rather than leaving it to whatever
+        # `core.autocrlf` the host's git carries. This fixture plants REAL repository bytes, and on
+        # windows-2025 git reported converting them -- `warning: in the working copy of 'mise.lock',
+        # LF will be replaced by CRLF` -- so the extracted tree held bytes the checkout does not.
+        # No assertion here compares them today, which is exactly why it was invisible; the
+        # dispatcher under test is a shell script, where a stray CR is not cosmetic.
+        generated[".gitattributes"] = "* text=auto eol=lf\n"
         for relative, text in generated.items():
             path = repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
+            path.write_text(text, encoding="utf-8", newline="\n")
         for relative in self.real_payload_files:
             source = ROOT / relative
             destination = repo / relative
