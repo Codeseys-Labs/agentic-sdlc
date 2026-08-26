@@ -235,6 +235,35 @@ to *every* refusal case above wherever the surface exists in the implementation 
     assertions above (redaction must hold on every carrier, not just the one a test happens
     to check first).
 
+### Operator-state isolation belongs OUTSIDE the code under test
+
+**A test whose safety rests on the product refusing first is one mutation away from mutating the
+operator's machine.** Mutation testing deletes guards by design, so "the CLI refuses before it reads
+a home, therefore no isolated home is needed" is not an isolation argument — it is a bet that the
+refusal is still there, and the mutation run is precisely where it is not. Measured, not
+hypothetical (`agentic-sdlc-8dca`): a test called an installer's `main(["uninstall"])` with no
+isolated homes, and removing the refusal under mutation drove a real uninstall pass across the
+operator's own agent-configuration directories.
+
+- **Every test that drives a real entrypoint passes isolated roots**, including — especially — the
+  tests where a refusal is expected to fire before any root is read.
+- **The isolation is enforced by a shared seam the mutation cannot reach**, not by a rule in a
+  docstring: route every such call through one test-support module that resolves what the
+  entrypoint *would* select (through the product's own parser and path normalisation, so the guard
+  predicts rather than restates) and **fails the calling test** when any of it overlaps the
+  operator's real state. Snapshot the operator's real locations at IMPORT, before any test patches
+  the environment — a guard that reads them at call time is told by the very patch it exists to
+  police that the real home is a fixture.
+- **A test that cannot be run safely has not passed**: the verdict is a failure, never a skip.
+- **Assert "nothing happened" independently of "it refused."** The exit code and the emptiness of
+  the sandbox are two claims; one assertion covering both lets either carry the other, so a
+  refusal that fired *after* writing would still read green.
+- **Keep the guard's refusal and the product's distinguishable by name.** They answer different
+  questions ("the test did not isolate" against "the operator aimed the plane somewhere it may not
+  publish"), and a shared or overlapping token lets a report about one pass as evidence about the
+  other. Check the guard has not made a product refusal unreachable: keep one test that reaches the
+  product's token through a fixture that is isolated *and* carries the shape the product refuses.
+
 ## Control cases (the boundary's other side)
 
 Keep both of these alongside the planted violations. Removing them turns the suite into "an

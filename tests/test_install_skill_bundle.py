@@ -26,6 +26,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "install_skill_bundle.py"
@@ -36,6 +37,15 @@ assert spec and spec.loader
 installer = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = installer
 spec.loader.exec_module(installer)
+
+# The shared CLI guard, loaded the way this suite loads every sibling support module. It snapshots the
+# operator's real home AT IMPORT, which is here -- before any test in this file patches `HOME`.
+CLI_SAFETY = Path(__file__).with_name("installer_cli_safety.py")
+_safety_spec = importlib.util.spec_from_file_location("install_bundle_cli_safety", CLI_SAFETY)
+assert _safety_spec and _safety_spec.loader
+cli_safety = importlib.util.module_from_spec(_safety_spec)
+sys.modules[_safety_spec.name] = cli_safety
+_safety_spec.loader.exec_module(cli_safety)
 
 
 class LifecycleTestCase(unittest.TestCase):
@@ -353,8 +363,26 @@ class InstallSkillBundleTests(LifecycleTestCase):
             self.assertTrue((config.home / ".claude" / "skills" / "example").is_dir())
 
     def test_cli_rejects_empty_codex_home(self) -> None:
-        with mock.patch.dict(os.environ, {"CODEX_HOME": ""}), mock.patch("sys.stderr"):
-            self.assertEqual(installer.main(["status", "--agent", "claude"]), 2)
+        """A blank `CODEX_HOME` is refused rather than resolved to some fallback root.
+
+        Isolated homes are supplied even though the refusal fires before any home is read, and the
+        temp root's emptiness is asserted independently of the exit code (`agentic-sdlc-8dca`): this
+        was the pre-existing test whose safety rested entirely on the product refusing first, and a
+        mutation run deletes exactly that. `--codex-home` is deliberately NOT passed, because the
+        ambient value is the input under test; the guard follows the blank value to the same
+        `<home>/.codex` fallback `main` would reach without its refusal, and admits it as isolated.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with mock.patch.dict(os.environ, {"CODEX_HOME": ""}):
+                run = cli_safety.run_cli(
+                    self,
+                    installer,
+                    ["status", "--agent", "claude", "--home", str(root / "home")],
+                    must_stay_empty=root,
+                )
+            self.assertEqual(run.exit_code, 2)
+            self.assertIn("CODEX_HOME must not be empty", run.stderr)
 
     def test_cli_requires_one_agent_selector_on_every_lifecycle_verb(self) -> None:
         """No default and no wildcard: a verb that moves or reads a plane must be told which one.
@@ -367,30 +395,28 @@ class InstallSkillBundleTests(LifecycleTestCase):
         # test's own mutation lever removes the refusal, and a lever that then drove a real
         # `uninstall` across the operator's `~/.claude` and `~/.codex` would be a test that damages
         # the machine it is run on. Measured, not hypothetical -- the first run of that mutation did
-        # exactly that.
+        # exactly that. The isolation is now enforced by `installer_cli_safety`, so the mutation that
+        # deletes this refusal can no longer reach the operator's plane either.
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for command in ("install", "status", "uninstall"):
                 with self.subTest(command=command):
-                    stream = io.StringIO()
-                    with mock.patch("sys.stderr", stream):
-                        self.assertEqual(
-                            installer.main(
-                                [
-                                    command,
-                                    "--home",
-                                    str(root / "home"),
-                                    "--codex-home",
-                                    str(root / "codex"),
-                                ]
-                            ),
-                            2,
-                        )
-                    message = stream.getvalue()
-                    self.assertIn(f"{command} requires --agent", message)
-                    self.assertIn("--agent claude", message)
-                    self.assertIn("--agent codex", message)
-            self.assertEqual(sorted(path.name for path in root.iterdir()), [])
+                    run = cli_safety.run_cli(
+                        self,
+                        installer,
+                        [
+                            command,
+                            "--home",
+                            str(root / "home"),
+                            "--codex-home",
+                            str(root / "codex"),
+                        ],
+                        must_stay_empty=root,
+                    )
+                    self.assertEqual(run.exit_code, 2)
+                    self.assertIn(f"{command} requires --agent", run.stderr)
+                    self.assertIn("--agent claude", run.stderr)
+                    self.assertIn("--agent codex", run.stderr)
 
     def test_cli_offers_no_wildcard_agent_selector(self) -> None:
         """`--agent all` is not a spelling an operator can reach; argparse names the two that are."""
@@ -411,16 +437,15 @@ class InstallSkillBundleTests(LifecycleTestCase):
         self.assertIsNone(parsed.agent)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            with mock.patch("builtins.print"):
-                self.assertEqual(
-                    installer.main(
-                        ["self-test", "--home", str(root / "home"), "--codex-home", str(root / "codex")]
-                    ),
-                    0,
-                )
-            # `self_test` builds its own throwaway configuration, so even the homes handed to it
-            # here stay untouched.
-            self.assertEqual(sorted(path.name for path in root.iterdir()), [])
+            # `self_test` builds its own throwaway configuration, so even the homes handed to it here
+            # stay untouched -- which `must_stay_empty` asserts separately from the exit code.
+            run = cli_safety.run_cli(
+                self,
+                installer,
+                ["self-test", "--home", str(root / "home"), "--codex-home", str(root / "codex")],
+                must_stay_empty=root,
+            )
+            self.assertEqual(run.exit_code, 0)
 
     def test_cli_rejects_duplicate_agent_selectors(self) -> None:
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
@@ -478,18 +503,27 @@ class InstallSkillBundleTests(LifecycleTestCase):
             state_path.parent.mkdir(parents=True)
             state_path.write_text("invalid")
 
-            with mock.patch.object(
-                installer, "state_directory", return_value=state_root
-            ), mock.patch("sys.stderr") as stderr:
-                self.assertEqual(
-                    installer.main(["status", "--agent", "claude", "--home", str(root / "home")]), 2
+            with mock.patch.object(installer, "state_directory", return_value=state_root):
+                run = cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "status",
+                        "--agent",
+                        "claude",
+                        "--home",
+                        str(root / "home"),
+                        "--codex-home",
+                        str(root / "codex"),
+                    ],
                 )
+            self.assertEqual(run.exit_code, 2)
             # The selector is supplied so this stays a STATE failure: without it the missing-selector
             # refusal would return the same 2 and this test would pass while proving nothing.
-            self.assertIn(
-                "cannot read state",
-                "".join(str(call.args[0]) for call in stderr.write.call_args_list),
-            )
+            self.assertIn("cannot read state", run.stderr)
+            # `--codex-home` is now explicit too: it used to default through the ambient `CODEX_HOME`,
+            # so on a host that sets it this read-only verb resolved the operator's own Codex root.
+            self.assertFalse((root / "codex").exists())
 
     def test_changed_codex_home_preserves_old_records_and_installs_new_home(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2074,6 +2108,456 @@ class RetiredHomeRelativeStateMirrorTests(unittest.TestCase):
                 b"    root = self.state_root or " + self.TOKEN + b"_directory(self.home)\n"
             )
             self.assertEqual([f"{regressed}:1"], self.occurrences([regressed]))
+
+
+class ClaudeHomeProjectAdmissionTests(LifecycleTestCase):
+    """`agentic-sdlc-3605`: the argv side door that wrote unreceipted ledger rows under a repository.
+
+    The front-door unification's plan claimed wave W1 had deleted `--claude-home`. It had not, so an
+    operator could aim the user plane at a git project root and get ownership rows under that
+    repository with no receipt naming them -- the un-uninstallable-teammate-clone trap the receipted
+    project scope exists to close. What lands here is a refusal on the CLI ONLY: `Config` stays
+    constructible with a repository-nested home, because the receipted front door builds one on purpose
+    and the fixtures that drive an isolated plane through the library reach it that way too. The last
+    test in this class is that boundary, asserted rather than assumed.
+    """
+
+    def make_git_project(self, root: Path) -> Path:
+        """A directory the shared detector admits as a git project root."""
+        metadata = root / ".git"
+        metadata.mkdir(parents=True)
+        (metadata / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (metadata / "objects").mkdir()
+        (metadata / "refs").mkdir()
+        return root
+
+    def as_operator_home(self, home: Path) -> Any:
+        """Redirect the home `main` reads for its exemption, on both platforms' spellings."""
+        return mock.patch.dict(
+            os.environ, {"HOME": str(home), "USERPROFILE": str(home)}, clear=False
+        )
+
+    def test_a_claude_home_inside_a_git_project_is_refused_by_name(self) -> None:
+        """The token, the enclosing root, and the receipted remedy are all in the refusal.
+
+        The home handed over here is an ISOLATED fixture home that merely happens to sit inside a
+        fixture repository, which is exactly the shape `installer_cli_safety` must keep admitting: if
+        that guard refused it, this product refusal would become an unreachable branch and the two
+        would be one control instead of two.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            operator = root / "operator"
+            operator.mkdir()
+            project = self.make_git_project(root / "project")
+            nested = project / "isolated-home"
+
+            with self.as_operator_home(operator):
+                run = cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "install",
+                        "--agent",
+                        "claude",
+                        "--claude-home",
+                        str(nested),
+                        "--codex-home",
+                        str(root / "codex"),
+                    ],
+                )
+
+            self.assertEqual(run.exit_code, 2)
+            self.assertIn(installer.CLAUDE_HOME_INSIDE_PROJECT, run.stderr)
+            self.assertIn(str(project), run.stderr)
+            self.assertIn(
+                f"ccodex install --scope project --agent claude --project {project}", run.stderr
+            )
+
+    def test_the_refused_project_is_left_exactly_as_it_was(self) -> None:
+        """The independent control: refusing is worth nothing if the run still wrote on its way there.
+
+        Asserted as the project tree's own contents rather than as a second reading of the exit code,
+        so a refusal that fired AFTER placing a row would fail here while the code assertion passed.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            operator = root / "operator"
+            operator.mkdir()
+            project = self.make_git_project(root / "project")
+
+            with self.as_operator_home(operator):
+                run = cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "install",
+                        "--agent",
+                        "claude",
+                        "--claude-home",
+                        str(project),
+                        "--codex-home",
+                        str(root / "codex"),
+                    ],
+                )
+
+            self.assertEqual(run.exit_code, 2)
+            self.assertEqual(sorted(path.name for path in project.iterdir()), [".git"])
+            self.assertFalse((root / "codex").exists())
+
+    def test_every_lifecycle_verb_refuses_the_same_root(self) -> None:
+        """One admission for the whole CLI, not one per verb: a read is as unreceipted as a write."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            operator = root / "operator"
+            operator.mkdir()
+            project = self.make_git_project(root / "project")
+
+            for command, selector in (
+                ("install", ["--agent", "claude"]),
+                ("status", ["--agent", "claude"]),
+                ("uninstall", ["--agent", "claude"]),
+                ("install", ["--agent", "codex"]),
+                ("self-test", []),
+            ):
+                with self.subTest(command=command, selector=selector):
+                    with self.as_operator_home(operator):
+                        run = cli_safety.run_cli(
+                            self,
+                            installer,
+                            [
+                                command,
+                                *selector,
+                                "--claude-home",
+                                str(project / "home"),
+                                "--codex-home",
+                                str(root / "codex"),
+                            ],
+                        )
+                    self.assertEqual(run.exit_code, 2)
+                    self.assertIn(installer.CLAUDE_HOME_INSIDE_PROJECT, run.stderr)
+            self.assertEqual(sorted(path.name for path in project.iterdir()), [".git"])
+
+    def test_a_home_outside_every_git_project_still_installs(self) -> None:
+        """Positive control: the refusal is conditional, so the tests above are about the condition."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            operator = root / "operator"
+            operator.mkdir()
+            source = root / "payload" / "example"
+            source.mkdir(parents=True)
+            (source / "SKILL.md").write_text("---\nname: example\n---\n", encoding="utf-8")
+
+            with self.as_operator_home(operator), mock.patch.object(
+                installer,
+                "discover_entries",
+                return_value=[installer.Entry("claude", "skill", "example", source)],
+            ):
+                run = cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "install",
+                        "--agent",
+                        "claude",
+                        "--claude-home",
+                        str(root / "home"),
+                        "--codex-home",
+                        str(root / "codex"),
+                    ],
+                )
+
+            self.assertEqual(run.exit_code, 0)
+            self.assertNotIn(installer.CLAUDE_HOME_INSIDE_PROJECT, run.stderr)
+            self.assertTrue((root / "home" / ".claude" / "skills" / "example").exists())
+
+    def test_a_version_controlled_operator_home_is_not_a_steered_side_door(self) -> None:
+        """The one exemption, asserted so it is a decision rather than an accident.
+
+        A `$HOME` under version control is an ordinary host -- dotfiles repositories are common -- and
+        refusing every install on one would break the default user plane for a configuration this
+        lifecycle has no quarrel with. So the enclosing root the operator's own home already sits in is
+        admitted, and only a home steered into some OTHER repository refuses. The second half is the
+        control: on that same host, a different project still refuses.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dotfiles = self.make_git_project(root / "dotfiles-home")
+            elsewhere = self.make_git_project(root / "elsewhere")
+            source = root / "payload" / "example"
+            source.mkdir(parents=True)
+            (source / "SKILL.md").write_text("---\nname: example\n---\n", encoding="utf-8")
+
+            with self.as_operator_home(dotfiles), mock.patch.object(
+                installer,
+                "discover_entries",
+                return_value=[installer.Entry("claude", "skill", "example", source)],
+            ):
+                admitted = cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "install",
+                        "--agent",
+                        "claude",
+                        "--claude-home",
+                        str(dotfiles),
+                        "--codex-home",
+                        str(root / "codex"),
+                    ],
+                )
+                refused = cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "install",
+                        "--agent",
+                        "claude",
+                        "--claude-home",
+                        str(elsewhere),
+                        "--codex-home",
+                        str(root / "codex-two"),
+                    ],
+                )
+
+            self.assertEqual(admitted.exit_code, 0)
+            self.assertTrue((dotfiles / ".claude" / "skills" / "example").exists())
+            self.assertEqual(refused.exit_code, 2)
+            self.assertIn(installer.CLAUDE_HOME_INSIDE_PROJECT, refused.stderr)
+            self.assertEqual(sorted(path.name for path in elsewhere.iterdir()), [".git"])
+
+    def test_a_git_entry_that_would_not_admit_still_refuses(self) -> None:
+        """Presence, not admission: a BROKEN repository is not a licence to publish inside it.
+
+        The predicate walks to the first `.git` of any shape rather than to the first one that admits,
+        because walking past a `.git` this lifecycle cannot read would publish into a parent the
+        operator never named -- and a repository whose metadata is currently unreadable is still a
+        repository a teammate will clone.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            operator = root / "operator"
+            operator.mkdir()
+            broken = root / "broken"
+            broken.mkdir()
+            (broken / ".git").write_text("gitdir: nowhere\nand a second line\n", encoding="utf-8")
+
+            self.assertEqual(
+                installer.load_git_project_detector().admit(broken).verdict,
+                installer.load_git_project_detector().INVALID_METADATA,
+            )
+            with self.as_operator_home(operator):
+                run = cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "install",
+                        "--agent",
+                        "claude",
+                        "--claude-home",
+                        str(broken / "home"),
+                        "--codex-home",
+                        str(root / "codex"),
+                    ],
+                )
+
+            self.assertEqual(run.exit_code, 2)
+            self.assertIn(installer.CLAUDE_HOME_INSIDE_PROJECT, run.stderr)
+
+    def test_the_library_path_still_publishes_into_a_repository_nested_home(self) -> None:
+        """The preserved half: `Config` is not the CLI, and the receipted front door builds one.
+
+        `scripts/ccodex_sdlc.py` reaches this lifecycle by constructing `Config` directly, so a
+        refusal in the library would have refused the very path the unification made canonical. The
+        fixture home here sits inside a real git project and the whole lifecycle runs on it.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            project = self.make_git_project(root / "project")
+            config = installer.Config(
+                root, project / "home", root / "codex", "copy", False, "claude"
+            )
+
+            self.assertEqual(installer.install(config).exit_code, 0)
+            self.assertTrue((project / "home" / ".claude" / "skills" / "example").exists())
+            self.assertEqual(installer.status(config).exit_code, 0)
+            self.assertEqual(installer.uninstall(config).exit_code, 0)
+            # And the enclosing project is still what the CLI would have refused, so this test is
+            # about the boundary rather than about a home that was never nested.
+            self.assertEqual(
+                installer.claude_home_inside_project(
+                    project / "home", operator_home=root / "operator"
+                ),
+                project,
+            )
+
+
+class InstallerCliSafetyGuardTests(LifecycleTestCase):
+    """`agentic-sdlc-8dca`: the isolation a mutation run cannot delete.
+
+    The guard lives in `tests/installer_cli_safety.py`, OUTSIDE the code under test, because the
+    near-miss it answers was a test kept safe only by a product refusal that the wave's own mutation
+    run then removed -- driving a real `uninstall` across the operator's `~/.claude` and `~/.codex`.
+    These tests are what make the guard a guard rather than a helper: each names a way a call site can
+    fail to isolate, and asserts that `main` is never reached.
+    """
+
+    def isolated(self, root: Path, *extra: str) -> list[str]:
+        return [
+            "status",
+            "--agent",
+            "claude",
+            "--claude-home",
+            str(root / "home"),
+            "--codex-home",
+            str(root / "codex"),
+            *extra,
+        ]
+
+    def test_the_guard_fails_a_run_that_would_resolve_the_operator_home(self) -> None:
+        """No isolated home supplied means the calling test fails, and `main` is never called."""
+        with mock.patch.object(installer, "main") as never:
+            with self.assertRaises(AssertionError) as raised:
+                cli_safety.run_cli(self, installer, ["status", "--agent", "claude"])
+        never.assert_not_called()
+        self.assertIn(cli_safety.GUARD_REFUSAL, str(raised.exception))
+        self.assertIn(str(cli_safety.REAL_HOME), str(raised.exception))
+
+    def test_the_guard_fails_a_home_that_encloses_the_operator_home(self) -> None:
+        """Containment is checked in BOTH directions: a parent of the real home is not isolation."""
+        with mock.patch.object(installer, "main") as never:
+            with self.assertRaises(AssertionError) as raised:
+                cli_safety.run_cli(
+                    self,
+                    installer,
+                    [
+                        "uninstall",
+                        "--agent",
+                        "claude",
+                        "--claude-home",
+                        str(cli_safety.REAL_HOME.parent),
+                        "--codex-home",
+                        str(cli_safety.REAL_HOME.parent / "codex"),
+                    ],
+                )
+        never.assert_not_called()
+        self.assertIn(cli_safety.GUARD_REFUSAL, str(raised.exception))
+
+    def test_the_guard_fails_an_ambient_codex_home_the_test_never_redirected(self) -> None:
+        """An omitted `--codex-home` is followed to what `main` would resolve, not assumed safe."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with mock.patch.dict(
+                os.environ, {"CODEX_HOME": str(cli_safety.REAL_CODEX_HOME)}, clear=False
+            ), mock.patch.object(installer, "main") as never:
+                with self.assertRaises(AssertionError) as raised:
+                    cli_safety.run_cli(
+                        self, installer, ["status", "--agent", "claude", "--home", str(root / "home")]
+                    )
+            never.assert_not_called()
+            self.assertIn(cli_safety.GUARD_REFUSAL, str(raised.exception))
+            self.assertIn(str(cli_safety.REAL_CODEX_HOME), str(raised.exception))
+
+    def test_the_guard_fails_an_unredirected_state_root(self) -> None:
+        """Isolated homes are not enough: the ownership document is the other operator-owned file."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with mock.patch.object(
+                installer, "state_directory", return_value=cli_safety.REAL_HOME / ".local" / "state"
+            ), mock.patch.object(installer, "main") as never:
+                with self.assertRaises(AssertionError) as raised:
+                    cli_safety.run_cli(self, installer, self.isolated(root))
+            never.assert_not_called()
+            self.assertIn(cli_safety.GUARD_REFUSAL, str(raised.exception))
+
+    def test_the_guard_admits_an_isolated_run_and_returns_its_report(self) -> None:
+        """Positive control: an isolated argv reaches `main` and its output comes back verbatim."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = cli_safety.run_cli(self, installer, self.isolated(root), must_stay_empty=root)
+
+            self.assertEqual(run.exit_code, 0)
+            self.assertEqual(run.stderr, "")
+            self.assertIn("no owned entries for this host", run.stdout)
+
+    def test_the_guard_admits_a_run_isolated_by_a_redirected_home_alone(self) -> None:
+        """The subject is the resolved path, so isolating through `HOME` is isolation."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with mock.patch.dict(
+                os.environ, {"HOME": str(root / "home"), "USERPROFILE": str(root / "home")}
+            ):
+                os.environ.pop("CODEX_HOME", None)
+                run = cli_safety.run_cli(self, installer, ["status", "--agent", "claude"])
+            self.assertEqual(run.exit_code, 0)
+
+    def test_the_guard_reports_a_sandbox_the_run_dirtied(self) -> None:
+        """`must_stay_empty` is a real reading of the filesystem, not a restatement of the verdict."""
+        with tempfile.TemporaryDirectory() as payload, tempfile.TemporaryDirectory() as temp:
+            source = Path(payload) / "example"
+            source.mkdir()
+            (source / "SKILL.md").write_text("---\nname: example\n---\n", encoding="utf-8")
+            root = Path(temp)
+
+            with mock.patch.object(
+                installer,
+                "discover_entries",
+                return_value=[installer.Entry("claude", "skill", "example", source)],
+            ):
+                with self.assertRaises(AssertionError) as raised:
+                    cli_safety.run_cli(
+                        self,
+                        installer,
+                        [
+                            "install",
+                            "--agent",
+                            "claude",
+                            "--claude-home",
+                            str(root / "home"),
+                            "--codex-home",
+                            str(root / "codex"),
+                        ],
+                        must_stay_empty=root,
+                    )
+            self.assertIn("created state under", str(raised.exception))
+            # The effect it detected was real, so the assertion is about the filesystem.
+            self.assertTrue((root / "home" / ".claude" / "skills" / "example").exists())
+
+    def test_the_two_refusals_are_distinguishable_by_name(self) -> None:
+        """The guard's reason and the product's must never be reported as one another.
+
+        They answer different questions -- "the TEST did not isolate" against "the OPERATOR aimed the
+        user plane at a repository" -- and a shared or overlapping token would let a report about one
+        pass as evidence about the other.
+        """
+        guard = cli_safety.GUARD_REFUSAL
+        product = installer.CLAUDE_HOME_INSIDE_PROJECT
+
+        self.assertNotEqual(guard, product)
+        self.assertNotIn(guard, product)
+        self.assertNotIn(product, guard)
+
+    def test_every_cli_invocation_in_this_module_routes_through_the_guard(self) -> None:
+        """Structure, not doctrine: a direct `main` call in this file is a test failure.
+
+        Seed `agentic-sdlc-8dca`'s second item asks for the lesson encoded where a mutation cannot
+        remove it. A prose rule in a reference file is removed by nobody and enforced by nobody; this
+        scan is what makes a future unisolated call site fail before it can be run.
+        """
+        needle = "installer" + ".main("
+        source = Path(__file__).read_text(encoding="utf-8")
+
+        offenders = [
+            f"{index}: {line.strip()}"
+            for index, line in enumerate(source.splitlines(), start=1)
+            if needle in line
+        ]
+        self.assertEqual([], offenders)
+        # Two positive controls: the scan finds the seam every call site DOES use, and it can see the
+        # token it forbids when that token is present.
+        self.assertGreaterEqual(source.count("cli_safety.run_cli("), 4)
+        self.assertIn(needle, f"        {needle}['uninstall'])\n")
 
 
 if __name__ == "__main__":

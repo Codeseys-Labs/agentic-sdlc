@@ -869,6 +869,49 @@ def resolve_project_root(
     )
 
 
+#: The named reason a CLI-supplied Claude home is refused: it resolves inside a git project, so this
+#: plane's ownership rows would land under a repository only the RECEIPTED project scope accounts for.
+#: The token is stable and is what the refusal's tests grep for; the sentence around it may improve.
+#: It is deliberately distinct from every `PROJECT_*` reason above, because those name why a resolved
+#: PROJECT root is inadmissible while this names a USER-plane root that is secretly a project one.
+CLAUDE_HOME_INSIDE_PROJECT = "claude-home-inside-git-project"
+
+
+def claude_home_inside_project(
+    home: Path, *, operator_home: Path, detector: Any | None = None
+) -> Path | None:
+    """The git project root enclosing a configured Claude home, or `None` when there is no side door.
+
+    This is the `--claude-home` half of the front-door unification (`agentic-sdlc-3605`). Pointing the
+    user plane at a directory inside a repository writes UNRECEIPTED ownership rows under that
+    repository -- the same defect class the receipted project scope exists to replace, and the
+    un-uninstallable-teammate-clone trap, since a clone that never ran this install carries the bytes
+    with no document naming them.
+
+    ONE EXEMPTION, and it is about the operator's own machine rather than about the flag: a `$HOME`
+    that is itself version-controlled (a dotfiles repository) is an ordinary host, and refusing every
+    install on it would break the default plane for a configuration this lifecycle has no quarrel
+    with. So the enclosing root the operator's REAL home already sits in is admitted, and the refusal
+    fires exactly when a supplied home was STEERED into some other repository. The residual is stated
+    rather than hidden: on such a host any path inside that one enclosing repository stays admitted,
+    because this predicate cannot tell that spelling apart from the default one.
+
+    Presence, not admission: `walk_up` stops at the first `.git` of any shape, so a broken or unsafe
+    `.git` still refuses. A home that does not exist yet is judged by its ancestors, which is what
+    makes the check fire BEFORE the run would create it.
+    """
+    reader = detector if detector is not None else load_git_project_detector()
+    enclosing = reader.walk_up(operational_path(home))
+    if enclosing is None:
+        return None
+    baseline = reader.walk_up(operational_path(operator_home))
+    if baseline is not None and os.path.normcase(os.path.abspath(enclosing)) == os.path.normcase(
+        os.path.abspath(baseline)
+    ):
+        return None
+    return enclosing
+
+
 def statusline_entry(repo_root: Path) -> Entry | None:
     """The one `statusline` payload, or None when this tree does not carry the source.
 
@@ -2228,6 +2271,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     home = operational_path(args.claude_home)
+    # The CLI's own admission, and deliberately only the CLI's: `Config` stays constructible with a
+    # repository-nested home, because the RECEIPTED front door builds one on purpose and the fixtures
+    # that drive an isolated plane through the library reach it that way too. What is closed here is
+    # the argv side door, which had no receipt behind it.
+    try:
+        enclosing_project = claude_home_inside_project(home, operator_home=Path.home())
+    except InstallerError as exc:
+        print(f"fatal: {exc}", file=sys.stderr)
+        return 2
+    if enclosing_project is not None:
+        # The two spellings are the same refusal and differ only in how they read: naming the root as
+        # something the home "resolves inside" is wrong when the home IS that root, and an operator who
+        # typed the repository itself should be told that rather than shown a path repeated twice.
+        names_the_root = os.path.normcase(os.path.abspath(enclosing_project)) == os.path.normcase(
+            os.path.abspath(home)
+        )
+        located = (
+            f"{home} is the root of a git project"
+            if names_the_root
+            else f"{home} resolves inside the git project {enclosing_project}"
+        )
+        print(
+            f"fatal: {CLAUDE_HOME_INSIDE_PROJECT}: {located}, so this plane's ownership rows would land"
+            " under a repository no receipt accounts for; the receipted path is"
+            f" `ccodex install --scope project --agent claude --project {enclosing_project}`",
+            file=sys.stderr,
+        )
+        return 2
     codex_home_value = args.codex_home
     if codex_home_value is None:
         environment_value = os.environ.get("CODEX_HOME")
