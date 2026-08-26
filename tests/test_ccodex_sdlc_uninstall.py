@@ -1312,7 +1312,83 @@ class KeyedPointerPlane(Harness):
 # ---- the legacy-unreceipted retirement ------------------------------------------------------------
 
 
-class LegacyUnreceipted(Harness):
+class LedgerFixtures:
+    """The fixtures the three ledger-rung suites share. A MIXIN, deliberately not a ``TestCase``.
+
+    Two of these classes used to subclass a third to borrow ``payload`` and ``distribution``, which
+    also inherited its ten tests -- so every one of them ran three times and one defect was reported
+    under three class names. Helpers live here; tests live in the suites.
+    """
+
+    def payload(self, name: str = "payload") -> Path:
+        root = self.temp / name
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def distribution(self, name: str, *, git: bool = False) -> Path:
+        """One fabricated distribution root: a scripts/ this module can load, plus a bump driver.
+
+        SELF-CONTAINED BY CONSTRUCTION, because the alternative reads the developer's machine. The
+        ledger rung observes ``config.scripts_dir.parent``, so a fixture that passed this suite's own
+        ``ROOT / "scripts"`` would make the product compute the dirtiness of the REPOSITORY -- which
+        answers False on a clean checkout and True mid-wave, and a test asserting either is asserting
+        the state of whoever ran it. ``git=False`` leaves the root with no git metadata at all, which
+        is the one input whose answer is fixed on every host.
+        """
+        root = self.temp / name
+        scripts = root / "scripts"
+        scripts.mkdir(parents=True)
+        for module in (
+            "distribution_activation_receipt.py",
+            "install_skill_bundle.py",
+            "ccodex_sdlc_host_planes.py",
+        ):
+            shutil.copy2(ROOT / "scripts" / module, scripts / module)
+        (root / target.VERSION_DRIVER_NAME).write_text(
+            json.dumps({"current": "0.7.5"}), encoding="utf-8"
+        )
+        (root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        if git:
+            self.commit_tree(root)
+        return root
+
+    @staticmethod
+    def commit_tree(root: Path) -> str:
+        """Make the fabricated root a real single-commit git repository, and return its commit.
+
+        The TEST spawns git; the product never does. That asymmetry is the point: what is under test is
+        a reader of ``.git`` metadata, so the fixture has to be metadata a real git wrote rather than
+        bytes this file invented.
+        """
+        environment = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+        }
+        for arguments in (
+            ("init", "-q", "--initial-branch=main", "."),
+            ("add", "-A"),
+            ("commit", "-q", "-m", "fixture"),
+        ):
+            subprocess.run(
+                ["git", *arguments], cwd=root, env=environment, check=True, capture_output=True
+            )
+        resolved = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return resolved.stdout.strip()
+
+
+class LegacyUnreceipted(LedgerFixtures, Harness):
     """A plane with ownership rows and no receipt: the FINDING-1 defect class, given a verb.
 
     ``bundle install`` wrote rows for years without sealing anything, and a repository root could be
@@ -1321,19 +1397,21 @@ class LegacyUnreceipted(Harness):
     evidence authorised the removal.
     """
 
-    def payload(self, name: str = "payload") -> Path:
-        root = self.temp / name
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-
     def test_ownership_rows_with_no_receipt_are_retired_and_receipted(self) -> None:
         payload = self.payload()
+        # THE DISTRIBUTION ROOT IS FABRICATED, and it has to be: this rung's receipt records what it can
+        # read about the distribution it ran from, and `checkout.dirty` is now COMPUTED from that root's
+        # git metadata. Handing it this suite's own `ROOT / "scripts"` made the product compute the
+        # dirtiness of the REPOSITORY -- False on a clean checkout, True mid-wave -- so the assertion
+        # below silently asserted the state of whoever ran it, and it passed for a whole wave only
+        # because a gate runs before a commit. A git-less root is the input whose answer is fixed.
+        distribution = self.distribution("legacy-distribution")
         activate_with_ownership_rows(self.plane, payload)
         self.assertFalse(self.plane.pointer.exists())
         implementer = self.plane.plane_root / "agents" / "sdlc-implementer.md"
         self.assertTrue(implementer.is_file())
 
-        code, report = self.plane.run()
+        code, report = self.plane.run(scripts_dir=distribution / "scripts")
 
         self.assertEqual(code, EXIT_RETIRED, report)
         self.assertIn("legacy-unreceipted uninstall (no activation receipt for claude/user)", report)
@@ -1356,7 +1434,13 @@ class LegacyUnreceipted(Harness):
         self.assertIsNone(document["body"]["archive_sha256"])
         self.assertEqual("checkout-tree", document["body"]["version_source"])
         self.assertIn("checkout", document["body"])
+        # A root with no git metadata cannot be compared with any commit, so the flag fails toward
+        # NOT-ASSERTED and the report says which observation was unavailable. The computed `False`
+        # direction is proven on a real single-commit fixture in `CheckoutDirtiness`.
         self.assertIs(True, document["body"]["checkout"]["dirty"])
+        self.assertEqual("unknown", document["body"]["checkout"]["commit"])
+        self.assertIn("dirty=true", report)
+        self.assertIn("no readable git metadata", report)
         self.assertEqual([], document["body"]["unknowns"], "no archive existed, so none is unknown")
         # The sealed document validates through the family's own checker, not just this module's eye.
         self.assertEqual("validated", dar.derive("validate", document, "the retirement")["verdict"])
@@ -1546,67 +1630,13 @@ class LegacyUnreceipted(Harness):
         # No git metadata beside that driver, so the commit is the explicit unknown.
         self.assertEqual("unknown", document["body"]["checkout"]["commit"])
         # ... and dirty is TRUE for the same reason: with nothing to compare against, this flag fails
-        # toward "not asserted". `CheckoutDirtiness` below proves the computed direction both ways.
+        # toward "not asserted", and the report names the missing observation rather than leaving the
+        # boolean unattributable. `CheckoutDirtiness` proves the computed direction both ways.
         self.assertTrue(document["body"]["checkout"]["dirty"])
-
-    def distribution(self, name: str) -> Path:
-        """One fabricated distribution root: a scripts/ this module can load, plus a bump driver.
-
-        Built rather than pointed at this repository's own root, because a detector that read the
-        developer's worktree would answer differently on a clean checkout and in the middle of a wave.
-        """
-        root = self.temp / name
-        scripts = root / "scripts"
-        scripts.mkdir(parents=True)
-        for module in (
-            "distribution_activation_receipt.py",
-            "install_skill_bundle.py",
-            "ccodex_sdlc_host_planes.py",
-        ):
-            shutil.copy2(ROOT / "scripts" / module, scripts / module)
-        (root / target.VERSION_DRIVER_NAME).write_text(
-            json.dumps({"current": "0.7.5"}), encoding="utf-8"
-        )
-        (root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
-        return root
-
-    @staticmethod
-    def commit_tree(root: Path) -> str:
-        """Make the fabricated root a real single-commit git repository, and return its commit.
-
-        The TEST spawns git; the product never does. That asymmetry is the point: what is under test is
-        a reader of ``.git`` metadata, so the fixture has to be metadata a real git wrote rather than
-        bytes this file invented.
-        """
-        environment = {
-            **os.environ,
-            "GIT_AUTHOR_NAME": "fixture",
-            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
-            "GIT_COMMITTER_NAME": "fixture",
-            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_SYSTEM": os.devnull,
-        }
-        for arguments in (
-            ("init", "-q", "--initial-branch=main", "."),
-            ("add", "-A"),
-            ("commit", "-q", "-m", "fixture"),
-        ):
-            subprocess.run(
-                ["git", *arguments], cwd=root, env=environment, check=True, capture_output=True
-            )
-        resolved = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            env=environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return resolved.stdout.strip()
+        self.assertIn("no readable git metadata", report_two)
 
 
-class CheckoutDirtiness(LegacyUnreceipted):
+class CheckoutDirtiness(LedgerFixtures, Harness):
     """``checkout.dirty`` is COMPUTED, and both directions are proven on one fixture.
 
     It was unconditionally ``true`` for one wave. What makes the ``false`` direction admissible is that
@@ -1704,7 +1734,7 @@ class CheckoutDirtiness(LegacyUnreceipted):
         self.assertIn("no readable git metadata", reason)
 
 
-class LedgerPreview(LegacyUnreceipted):
+class LedgerPreview(LedgerFixtures, Harness):
     """``--dry-run`` on both admission rungs: the plan is rendered and nothing is touched."""
 
     def test_a_preview_renders_the_plan_and_removes_nothing_on_either_rung(self) -> None:
