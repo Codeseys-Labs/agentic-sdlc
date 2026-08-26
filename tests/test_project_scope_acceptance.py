@@ -34,6 +34,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -42,6 +43,7 @@ sys.path.insert(0, str(ROOT))
 
 from scripts import ccodex_sdlc_install as install  # noqa: E402
 from scripts import ccodex_sdlc_uninstall as uninstall  # noqa: E402
+from scripts import ccodex_sdlc_update as update  # noqa: E402
 from scripts import distribution_activation_receipt as receipts  # noqa: E402
 from scripts import install_skill_bundle as bundle  # noqa: E402
 
@@ -58,6 +60,11 @@ def _load(path: Path, name: str) -> object:
 #: The install suite owns the acquisition fixture: one real candidate payload tree, one real manifest,
 #: and one really sealed acquisition receipt.
 install_suite = _load(ROOT / "tests" / "test_ccodex_sdlc_install.py", "project_acceptance_install_suite")
+
+#: The shipped per-agent plane table, loaded ONCE for this module: the session-snapshot sentence the
+#: project-scope verbs print is that table's own field, so every assertion below quotes the shipped
+#: string instead of a copy this file would have to keep in step.
+planes = _load(ROOT / "scripts" / "ccodex_sdlc_host_planes.py", "project_acceptance_planes")
 
 GIT = shutil.which("git")
 GIT_SKIP = unittest.skipIf(GIT is None, "a real git is required to build project-root fixtures")
@@ -310,50 +317,170 @@ class ProjectScopeAcceptance(unittest.TestCase):
                 f"{root} lost rows it still owns",
             )
 
-    def test_the_workflow_kind_is_deferred_at_project_scope_and_still_published_at_user_scope(self) -> None:
-        """§4.3's window rule, measured on a payload that really carries a workflow.
+    # ---- §4.2: the fold of the per-file workflows enabler ---------------------------------------
 
-        `manage_claude_workflows` keeps its receipts in its OWN store and writes no installer ownership
-        row, so a repository whose operator already enabled a workflow would present this activation an
-        unowned byte-identical destination -- which §3.7's adoption arm would take as removable, leaving
-        two authorities over one file and a later project uninstall removing bytes the manager's receipt
-        still claims. The deferral keeps exactly one path authoritative until W5 deletes the manager.
-
-        BOTH DIRECTIONS, because a deferral that was really a deletion would pass a one-sided check: the
-        same payload's workflow IS published at user scope, on the same plane, in the same test.
-        """
-        payload = {
+    def workflow_payload(self, name: str) -> dict[str, str]:
+        """The acquisition fixture's payload plus one real workflow, so placement has a subject."""
+        return {
             **install_suite.PAYLOAD_FILES,
-            "workflows/sdlc-wave-scout.js": "// workflow: sdlc-wave-scout\nexport const meta = {};\n",
+            f"workflows/{name}.js": f"// workflow: {name}\nexport const meta = {{}};\n",
         }
-        self.fixture = install_suite.build_fixture(self.temp / "with-workflow", payload=payload)
+
+    def use_workflow_fixture(self, label: str, name: str = "sdlc-wave-scout") -> str:
+        """Re-point this test's plane at a fixture whose payload carries a workflow."""
+        self.fixture = install_suite.build_fixture(
+            self.temp / label, payload=self.workflow_payload(name)
+        )
         self.activation = self.fixture.state_home / "agentic-sdlc" / "activation"
         self.pointers = self.activation / "active" / "claude"
-        repo = self.repository("deferred")
+        return f"workflows/{name}.js"
+
+    def test_the_workflow_kind_is_placed_as_a_copy_at_project_scope_and_the_change_names_its_session(
+        self,
+    ) -> None:
+        """§4.2's fold, measured on a payload that really carries a workflow (W5).
+
+        W4 EXCLUDED this kind at project scope, because a per-file enabler was a second authority over
+        the same destination that wrote no ownership row here. W5 deleted that enabler, so the payload
+        set is now the same at both scopes -- and this is the test that says so in both directions: the
+        workflow lands in the repository AND in the operator's own home, from one payload.
+
+        The placement is what ENABLES the workflow, so the report has to name the session boundary it
+        lands on; that sentence is asserted here rather than left as prose, which is the mutation §7
+        names for this wave.
+        """
+        entry_name = self.use_workflow_fixture("with-workflow")
+        repo = self.repository("placed")
 
         project = self.install_plane(scope="project", project=repo, instant="2026-08-25T13:00:00Z")
         user = self.install_plane(scope="user", project=None, instant="2026-08-25T13:01:00Z")
 
         self.assertEqual(0, project[0], project[1])
         self.assertEqual(0, user[0], user[1])
-        # DEFERRED at project scope: no destination, no inventory row, and the report says so by name.
-        self.assertFalse((repo / ".claude" / "workflows").exists())
-        self.assertIn("deferred at this scope: workflow", project[1])
-        self.assertIn("claude:workflows:activate", project[1])
-        body = json.loads(self.pointer_for(repo).read_text(encoding="utf-8"))["body"]
+        # PLACED, as a real copy of the payload's own bytes -- never a link, whose target would embed a
+        # user-specific absolute path in a file a repository may commit.
+        placed = repo / ".claude" / "workflows" / "sdlc-wave-scout.js"
+        source = self.fixture.candidate_root / entry_name
+        self.assertTrue(placed.is_file())
+        self.assertFalse(placed.is_symlink())
+        self.assertEqual(source.read_bytes(), placed.read_bytes())
         self.assertEqual(
-            [], [entry for entry in body["entries"] if entry["entry_name"].startswith("workflows/")]
+            [], [path for path in (repo / ".claude").rglob("*") if path.is_symlink()]
         )
-        # PUBLISHED at user scope, from the same payload: the deferral is scoped, not a deletion.
+        # ... and the receipt owns it: one inventory row, published as a copy.
+        body = json.loads(self.pointer_for(repo).read_text(encoding="utf-8"))["body"]
+        rows = [entry for entry in body["entries"] if entry["entry_name"] == entry_name]
+        self.assertEqual(1, len(rows), body["entries"])
+        self.assertEqual("absent", rows[0]["prestate"])
+        self.assertEqual("copy", rows[0]["mode"])
+        self.assertIs(True, self.ledger()[str(placed)]["removable"])
+        # THE SESSION BOUNDARY IS PRINTED, from the plane table's own field rather than from a sentence
+        # this test invented, and the W4 deferral vocabulary is gone with the deferral.
+        self.assertIn(planes.plane_for("claude").project_session_note, project[1])
+        self.assertNotIn("deferred at this scope", project[1])
+        self.assertFalse(hasattr(bundle, "PROJECT_DEFERRED_KINDS"))
+        # PUBLISHED AT USER SCOPE TOO, from the same payload: this is a placement, not a scope swap.
         self.assertTrue((self.fixture.home / ".claude" / "workflows" / "sdlc-wave-scout.js").is_file())
-        # ONE TABLE, read by both verbs: a second copy in either would be two places to widen.
-        self.assertEqual(("workflow",), bundle.PROJECT_DEFERRED_KINDS)
-        self.assertNotIn("PROJECT_DEFERRED_KINDS = (", (ROOT / "scripts" / "ccodex_sdlc_install.py").read_text(encoding="utf-8"))
-        self.assertNotIn("PROJECT_DEFERRED_KINDS = (", (ROOT / "scripts" / "ccodex_sdlc_update.py").read_text(encoding="utf-8"))
-        self.assertTrue(
-            (ROOT / "scripts" / "manage_claude_workflows.py").is_file(),
-            "the deferral's whole reason is that the manager still ships; W5 deletes both together",
+        # ... where the session sentence is NOT owed, because a user home carries no session-start name
+        # registry to be stale against. Positive control for the assertion above.
+        self.assertNotIn(planes.plane_for("claude").project_session_note, user[1])
+
+    def test_an_enabled_byte_identical_workflow_copy_is_adopted_and_a_drifted_one_is_preserved(
+        self,
+    ) -> None:
+        """§4.3 as corrected: the enabler's live copies migrate by ADOPTION, and drift does not (W5).
+
+        The prestate fabricated here is exactly what the deleted per-file enabler left behind -- one
+        copy of the owned installed bytes at `<repo>/.claude/workflows/<name>.js`, with no ownership row
+        anywhere, because that enabler kept its receipts in a store of its own. Adopting it is only safe
+        once the enabler is gone: while both shipped, one file would have had two authorities and a
+        later project uninstall would have removed bytes the enabler's receipt still claimed.
+
+        The drifted arm is the control that the adoption is about BYTES and not about the destination
+        being a workflow: an operator-edited copy is preserved and named, never adopted or overwritten.
+        """
+        entry_name = self.use_workflow_fixture("enabled-copy")
+        source = self.fixture.candidate_root / entry_name
+
+        adopted_repo = self.repository("already-enabled")
+        enabled = adopted_repo / ".claude" / "workflows" / "sdlc-wave-scout.js"
+        enabled.parent.mkdir(parents=True)
+        shutil.copyfile(source, enabled)
+        enabled_before = enabled.read_bytes()
+
+        code, report = self.install_plane(
+            scope="project", project=adopted_repo, instant="2026-08-25T16:00:00Z"
         )
+
+        self.assertEqual(0, code, report)
+        # ADOPTED: the bytes are untouched, the row is removable, and the receipt says nothing was
+        # published for it -- which is what makes the eventual uninstall able to remove it.
+        self.assertEqual(enabled_before, enabled.read_bytes(), "an adoption rewrote the enabled copy")
+        self.assertIn("adopted as removable", report)
+        self.assertIs(True, self.ledger()[str(enabled)]["removable"])
+        body = json.loads(self.pointer_for(adopted_repo).read_text(encoding="utf-8"))["body"]
+        row = next(entry for entry in body["entries"] if entry["entry_name"] == entry_name)
+        self.assertEqual("owned", row["prestate"])
+        self.assertEqual("preserved", row["disposition"])
+        self.assertIsNone(row["mode"])
+        # ... and the uninstall really does remove it, which is the half of the adoption that matters
+        # to an operator retiring a plane the deleted enabler had populated.
+        retired = self.retire_plane(
+            scope="project", project=adopted_repo, instant="2026-08-25T16:05:00Z"
+        )
+        self.assertEqual(0, retired[0], retired[1])
+        self.assertFalse(enabled.exists(), "an adopted workflow copy survived its retirement")
+
+        # THE DRIFTED ARM: same fixture, same kind, one edited byte -- and the answer changes.
+        drifted_repo = self.repository("operator-edited")
+        drifted = drifted_repo / ".claude" / "workflows" / "sdlc-wave-scout.js"
+        drifted.parent.mkdir(parents=True)
+        drifted.write_bytes(source.read_bytes() + b"// an operator's own edit\n")
+        drifted_before = drifted.read_bytes()
+
+        code, report = self.install_plane(
+            scope="project", project=drifted_repo, instant="2026-08-25T16:10:00Z"
+        )
+
+        self.assertEqual(0, code, report)
+        self.assertEqual(drifted_before, drifted.read_bytes(), "a drifted copy was overwritten")
+        self.assertNotIn(str(drifted), self.ledger())
+        body = json.loads(self.pointer_for(drifted_repo).read_text(encoding="utf-8"))["body"]
+        row = next(entry for entry in body["entries"] if entry["entry_name"] == entry_name)
+        self.assertEqual("foreign", row["prestate"])
+        self.assertEqual("preserved", row["disposition"])
+        self.assertIn("preserved and named, never adopted", report)
+
+    def test_every_completed_project_scope_mutation_names_the_session_it_takes_effect_in(self) -> None:
+        """§4.2's carried-over sentence, on the verbs that can make a session stale (W5).
+
+        THE INSTALL AND THE UNINSTALL ARE DRIVEN FOR REAL here. `update` is asserted at its own report
+        level in `ProjectScopeSessionNoteTest` below, because a project-scope refresh needs a second
+        admissible payload identity that this acquisition fixture does not carry -- and a report-level
+        check is what the sentence actually is.
+
+        The READ verb is deliberately absent from this claim, exactly as it was for the deleted
+        enabler's own `status`: a read makes no change, so it has no session to become visible in.
+        """
+        self.use_workflow_fixture("session-note-fixture")
+        note = planes.plane_for("claude").project_session_note
+        repo = self.repository("session-note-repo")
+
+        installed = self.install_plane(scope="project", project=repo, instant="2026-08-25T17:00:00Z")
+        self.assertEqual(0, installed[0], installed[1])
+        self.assertIn(note, installed[1])
+
+        retired = self.retire_plane(scope="project", project=repo, instant="2026-08-25T17:01:00Z")
+        self.assertEqual(0, retired[0], retired[1])
+        self.assertIn(note, retired[1])
+
+        # POSITIVE CONTROL on the scope condition, both verbs: the user plane owes no such sentence.
+        user_installed = self.install_plane(scope="user", project=None, instant="2026-08-25T17:02:00Z")
+        user_retired = self.retire_plane(scope="user", project=None, instant="2026-08-25T17:03:00Z")
+        self.assertEqual(0, user_installed[0], user_installed[1])
+        self.assertEqual(0, user_retired[0], user_retired[1])
+        self.assertNotIn(note, user_installed[1])
+        self.assertNotIn(note, user_retired[1])
 
     # ---- §2.2 items 6 and 7: the two states a root can leave its pointer in ----------------------
 
@@ -647,8 +774,6 @@ class ProjectScopeSubstrateTest(unittest.TestCase):
 
     def test_the_codex_plane_declares_no_project_collection_and_claude_declares_one(self) -> None:
         """The reviewed layout decision, read from the plane table rather than from a call site."""
-        planes = _load(ROOT / "scripts" / "ccodex_sdlc_host_planes.py", "project_acceptance_planes")
-
         self.assertEqual(".claude", planes.plane_for("claude").project_collection)
         self.assertIsNone(planes.plane_for("codex").project_collection)
         # A plane with no project collection REFUSES to answer a root rather than returning one, so a
@@ -658,6 +783,18 @@ class ProjectScopeSubstrateTest(unittest.TestCase):
         self.assertEqual(
             Path("/repo/.claude"), planes.plane_for("claude").project_root_collection(Path("/repo"))
         )
+        # AND THE SESSION SENTENCE IS PINNED TO THE SAME HALF OF THE TABLE (W5): the three mutating
+        # verbs assert the note is present whenever they report at project scope, so a plane that
+        # declared a project collection and no note would trip that assertion on a live run. Pinned
+        # here for EVERY row, so widening the table cannot half-widen it.
+        for agent in planes.AGENTS:
+            with self.subTest(agent=agent):
+                plane = planes.plane_for(agent)
+                self.assertEqual(
+                    plane.project_collection is None,
+                    plane.project_session_note is None,
+                    "a plane's project layout and its session sentence must arrive together",
+                )
 
     def test_the_substrate_forces_copies_at_project_scope_by_refusing_the_link_request(self) -> None:
         """Copy-only is enforced at three layers, and this is the one the operator reaches first."""
@@ -668,6 +805,73 @@ class ProjectScopeSubstrateTest(unittest.TestCase):
         reader = _load(ROOT / "scripts" / "ccodex_sdlc.py", "project_acceptance_reader")
         with self.assertRaises(reader.UsageError):
             reader.parse_command(["install", "--scope", "project", "--agent", "claude", "--mode", "copy"])
+
+
+@WINDOWS_SKIP
+class ProjectScopeSessionNoteTest(unittest.TestCase):
+    """The third mutating verb's half of §4.2's sentence, and the one-spelling rule behind it.
+
+    `update` is asserted HERE rather than in the acceptance sequence above because a project-scope
+    refresh needs a second admissible payload identity the acquisition fixture does not carry, and the
+    claim under test is a property of the report: at project scope the plane's own sentence is emitted,
+    at user scope it is not. The stub supplies exactly the fields `report` reads, and the SENTENCE comes
+    from the shipped plane table -- so this cannot pass against a report that emits some other string.
+    """
+
+    def render(self, scope_kind: str) -> str:
+        plane = planes.plane_for("claude")
+        config = SimpleNamespace(
+            agent="claude",
+            plane=plane,
+            plane_root=Path("/repo/.claude"),
+            scope_kind=scope_kind,
+            active_receipt_path=Path("/state/active/claude/user.json"),
+        )
+        active = SimpleNamespace(
+            body={"candidate_id": "a" * 64, "resolved_version": "0.7.5"},
+            receipt_id="prior-receipt",
+        )
+        payload = SimpleNamespace(candidate_id="b" * 64, resolved_version="0.7.5")
+        run = SimpleNamespace(pointer_migration=None, failures=[], pointer_replaced=True)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            update.report(
+                config,
+                payload,
+                active,
+                [],
+                [],
+                "complete",
+                "activated",
+                Path("/state/receipts/new.json"),
+                Path("/state/receipts/prior.json"),
+                Path("/state/journals/one.json"),
+                run,
+            )
+        return out.getvalue()
+
+    def test_a_project_scope_refresh_names_its_session_and_a_user_scope_refresh_does_not(self) -> None:
+        note = planes.plane_for("claude").project_session_note
+
+        self.assertIn(note, self.render("project"))
+        # POSITIVE CONTROL for the condition, not just for the string: the same report over the same
+        # plane at user scope owes no session sentence, so the assertion above is the scope arm.
+        self.assertNotIn(note, self.render("user"))
+
+    def test_no_verb_module_carries_its_own_copy_of_the_session_sentence(self) -> None:
+        """One fact, one spelling: three verbs READ the sentence, and none of them holds one.
+
+        The fragment is asserted against the runtime value first, so a sentence that was reworded
+        without this test moving fails here instead of quietly making the three negatives vacuous.
+        """
+        fragment = "so this change takes effect at the target's NEXT Claude Code session"
+        self.assertIn(fragment, planes.plane_for("claude").project_session_note)
+
+        for stem in ("ccodex_sdlc_install", "ccodex_sdlc_update", "ccodex_sdlc_uninstall"):
+            with self.subTest(module=stem):
+                source = (ROOT / "scripts" / f"{stem}.py").read_text(encoding="utf-8")
+                self.assertIn("project_session_note", source, "this verb states the sentence itself")
+                self.assertNotIn(fragment, source, "this verb carries a second copy of the sentence")
 
 
 if __name__ == "__main__":

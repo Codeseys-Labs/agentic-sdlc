@@ -100,8 +100,9 @@ FORWARDED_AGENT_FLAG = "--host"
 #: The wave that wires each parsed-but-not-yet-served part of the ratified grammar. Spelled once so a
 #: refusal cannot name a different wave than its sibling refusal.
 FRONT_DOOR_SEED = "agentic-sdlc-7a2b"
-#: The three reasons project scope is copy-only, carried verbatim from
-#: `manage_claude_workflows.py`'s own header so the refusal states the doctrine rather than citing it.
+#: The three reasons project scope is copy-only, carried verbatim from the header of the workflows
+#: manager this lifecycle subsumed and W5 deleted, so the refusal states the doctrine rather than
+#: citing a module an operator can no longer read.
 PROJECT_SCOPE_IS_COPY_ONLY = (
     "a committed entry must be self-contained; a link embeds a user-specific absolute path; and a"
     " later bundle refresh must not silently change what a target's sessions execute without new"
@@ -2040,23 +2041,51 @@ RETIRED_OPERATOR_TOOLS_REMEDY = (
     "${XDG_BIN_HOME:-~/.local/bin}, by hand"
 )
 
+#: The SECOND leftover store, and the same shape one plane down (agentic-sdlc-7a2b, W5).  The per-file
+#: workflows enabler kept one receipt per (workflow, destination) in a store of its own; project-scope
+#: activation now owns those destinations under its own receipt and ownership rows, so every document in
+#: that store describes a file another plane accounts for.  They are EVIDENCE, not payload -- nothing
+#: breaks by their existence and nothing here reads, migrates, or removes them.  The remedy names the
+#: verb that can prove the new plane owns the destinations before the operator deletes the old evidence.
+ORPHANED_WORKFLOW_RECEIPTS_STORE = "agentic-sdlc-claude-workflows"
+#: Within ``MAX_FINDING_MESSAGE_CHARS`` on purpose: a remedy the reader truncates loses the end of the
+#: recipe, which is exactly the part that says what to verify BEFORE deleting evidence.
+ORPHANED_WORKFLOW_RECEIPTS_REMEDY = (
+    "superseded by project-scope activation receipts; nothing here reads, migrates, or removes this "
+    "store. Remove the directory by hand after verifying "
+    "`ccodex status --scope project --agent claude` for each repository it names"
+)
+
+#: Every store a deleted plane left behind: the directory name, the report component that names it, and
+#: the manual remedy.  One table rather than one function per store, because the reading is identical and
+#: the only per-store facts are these three; a third leftover arrives as a row.
+RETIRED_STORES: tuple[tuple[str, str, str], ...] = (
+    (RETIRED_OPERATOR_TOOLS_STORE, "operator-tools", RETIRED_OPERATOR_TOOLS_REMEDY),
+    (ORPHANED_WORKFLOW_RECEIPTS_STORE, "claude-workflows", ORPHANED_WORKFLOW_RECEIPTS_REMEDY),
+)
+
 
 def retired_store_findings(bundle: ModuleType) -> list[dict[str, str]]:
-    """Name a leftover operator-tools store, or say nothing at all.
+    """Name every leftover store a deleted plane left behind, or say nothing at all.
 
     ``lstat`` and not ``exists``: a store replaced by a symlink is still a leftover this reader
     reports, and following it to decide would be following a link out of the state root.  Absence is
-    the ordinary case and is not a finding -- a host that never ran the retired installer must read
-    byte-identically to one on a tree that never shipped it.
+    the ordinary case and is not a finding -- a host that never ran either retired path must read
+    byte-identically to one on a tree that never shipped them.
+
+    Each store gets its OWN component, so a host carrying both reads as two findings with two remedies
+    rather than one component speaking for two unrelated directories.
     """
-    store = state_root_for(bundle.operational_path(Path.home())) / RETIRED_OPERATOR_TOOLS_STORE
-    try:
-        store.lstat()
-    except OSError:
-        return []
-    return [
-        make_finding("foreign-state", "operator-tools", bounded_message(RETIRED_OPERATOR_TOOLS_REMEDY), store)
-    ]
+    state_root = state_root_for(bundle.operational_path(Path.home()))
+    findings: list[dict[str, str]] = []
+    for directory, component, remedy in RETIRED_STORES:
+        store = state_root / directory
+        try:
+            store.lstat()
+        except OSError:
+            continue
+        findings.append(make_finding("foreign-state", component, bounded_message(remedy), store))
+    return findings
 
 
 def overall_state(bundle: dict[str, Any]) -> str:

@@ -1735,15 +1735,14 @@ def classify_footprint(
     # and the installer's own discovery labels each one, so selecting by this run's agent is what keeps
     # a codex refresh out of the Claude collections and the reverse.
     #
-    # AND THE SCOPE'S DEFERRED KINDS, read from the substrate's one table rather than re-expressed here:
-    # a project install that never placed a workflow followed by an update that placed one would be a
-    # plane whose two verbs disagree about what it owns, and it would reach a destination
-    # `claude:workflows:activate` still owns.
+    # AND NOTHING ELSE. W4's companion clause here excluded the scope's deferred kinds, so that a
+    # project install which never placed a workflow could not be followed by an update that did; W5
+    # deleted both the deferral and the second authority it protected, so the two verbs see the same
+    # payload set at both scopes by construction rather than by two filters agreeing.
     discovered = [
         entry
         for entry in bundle.discover_entries(payload.candidate_root)
         if entry.agent == config.agent
-        and not (config.scope_kind == SCOPE_PROJECT and entry.kind in bundle.PROJECT_DEFERRED_KINDS)
     ]
     if not discovered:
         raise Refusal(
@@ -2634,6 +2633,14 @@ def report(
         f"{escape_display(config.agent)} root: {escape_display(str(config.plane_root))}"
         " (copies, never links)",
     ]
+    # A COMPLETED PROJECT-SCOPE REFRESH IS AS INVISIBLE AS THE PLACEMENT WAS (agentic-sdlc-7a2b, W5):
+    # the target's Workflow name registry was read at ITS session start, so a workflow whose bytes this
+    # run just replaced still runs the old bytes for the rest of that session. One sentence, read from
+    # the plane table `install` and `uninstall` read, so the three verbs cannot drift into three.
+    if config.scope_kind == SCOPE_PROJECT:
+        note = config.plane.project_session_note
+        assert note is not None  # pinned to `project_collection` by the plane table's own test
+        lines.append(note)
     if run.pointer_migration is not None:
         lines.append(run.pointer_migration)
     for outcome in outcomes:

@@ -869,8 +869,8 @@ print('guard blocked every attempted effect')
                 self.assertNotIn(f'{sentinel_bin}/{name}",', syscalls)
 
 
-class RetiredOperatorToolsStoreFindingTests(unittest.TestCase):
-    """``retired_store_findings`` is now the ONLY producer of the ``operator-tools`` finding.
+class RetiredStoreFindingTests(unittest.TestCase):
+    """``retired_store_findings`` is the ONLY producer of the two leftover-store findings.
 
     Unit-level and in-process, over the real ``reader``/``bundle`` modules loaded by absolute
     path at module scope above -- the same admission shape the reader itself uses to load its own
@@ -922,6 +922,80 @@ class RetiredOperatorToolsStoreFindingTests(unittest.TestCase):
 
             self.assertEqual(len(findings), 1)
             self.assertEqual(findings[0]["path"], str(store))
+
+    def test_the_orphaned_workflow_receipt_store_is_named_under_its_own_component(self) -> None:
+        """W5's leftover: the deleted per-file enabler's receipt store, and its own remedy line.
+
+        The two leftovers are independent dimensions, so the host carrying BOTH is the case under
+        test: two findings, two components, two remedies, and neither message speaking for the other
+        directory. A single shared component would print the operator-tools recipe for a store of
+        workflow receipts.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            state = Path(temp) / "state"
+            home.mkdir()
+            orphaned = state / reader.ORPHANED_WORKFLOW_RECEIPTS_STORE
+            orphaned.mkdir(parents=True)
+            (orphaned / "sdlc-wave-scout.0123456789abcdef.json").write_text(
+                '{"version":1,"phase":"committed"}'
+            )
+
+            with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_STATE_HOME": str(state)}, clear=False):
+                alone = reader.retired_store_findings(bundle)
+
+            self.assertEqual(len(alone), 1)
+            self.assertEqual(alone[0]["code"], "foreign-state")
+            self.assertEqual(alone[0]["component"], "claude-workflows")
+            self.assertEqual(alone[0]["path"], str(orphaned))
+            self.assertIn("superseded by project-scope activation receipts", alone[0]["message"])
+            self.assertIn("status --scope project", alone[0]["message"])
+            # NOTHING WAS READ, MIGRATED, OR REMOVED: the store is still exactly what was planted.
+            self.assertEqual(
+                ["sdlc-wave-scout.0123456789abcdef.json"],
+                sorted(path.name for path in orphaned.iterdir()),
+            )
+
+            # BOTH leftovers on one host: two independent findings, each with its own component.
+            (state / reader.RETIRED_OPERATOR_TOOLS_STORE).mkdir(parents=True)
+            with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_STATE_HOME": str(state)}, clear=False):
+                both = reader.retired_store_findings(bundle)
+
+            self.assertEqual(
+                {("operator-tools", "foreign-state"), ("claude-workflows", "foreign-state")},
+                {(finding["component"], finding["code"]) for finding in both},
+            )
+            messages = {finding["component"]: finding["message"] for finding in both}
+            self.assertNotIn("XDG_BIN_HOME", messages["claude-workflows"])
+            self.assertNotIn("project-scope activation receipts", messages["operator-tools"])
+
+    def test_no_leftover_remedy_is_long_enough_for_the_reader_to_truncate_it(self) -> None:
+        """The END of a remedy is the part that says what to verify before deleting evidence.
+
+        `bounded_message` truncates silently, so a remedy that outgrows the bound loses its recipe in
+        the report and nothing fails. Measured against the reader's own constant, with the positive
+        control that the measurement really can go red.
+        """
+        for _directory, component, remedy in reader.RETIRED_STORES:
+            with self.subTest(component=component):
+                self.assertLessEqual(len(remedy), reader.MAX_FINDING_MESSAGE_CHARS)
+                self.assertNotIn("(truncated)", reader.bounded_message(remedy))
+        self.assertIn(
+            "(truncated)", reader.bounded_message("x" * (reader.MAX_FINDING_MESSAGE_CHARS + 1))
+        )
+
+    def test_every_component_the_store_table_names_is_in_the_pinned_report_vocabulary(self) -> None:
+        """A row whose component the digest-pinned policy does not admit would fail every read verb."""
+        policy = json.loads(
+            (ROOT / "policy" / reader.POLICY_NAME).read_text(encoding="utf-8")
+        )
+        admitted = policy["vocabularies"]["finding_components"]
+
+        for _directory, component, _remedy in reader.RETIRED_STORES:
+            with self.subTest(component=component):
+                self.assertIn(component, admitted)
+        # Positive control: an invented component is NOT admitted, so the loop above is a real check.
+        self.assertNotIn("claude-workflows-invented", admitted)
 
 
 if __name__ == "__main__":

@@ -94,25 +94,17 @@ COPY_ONLY_KINDS = frozenset(POSIX_MODE_FOR_KIND)
 #: operator sees in their own settings document.
 STATUSLINE_SOURCE_RELATIVE = Path("assets") / "claude" / "statusline-command.sh"
 STATUSLINE_COMMAND_NAME = "agentic-sdlc-statusline"
-#: THE ONE ENTRY KIND A PROJECT-SCOPE ACTIVATION DOES NOT PUBLISH YET, and the front-door design's §4.3
-#: window rule is why: exactly one path must be authoritative for each destination at every intermediate
-#: commit. `scripts/manage_claude_workflows.py` is this tree's existing project-scope path for that one
-#: kind -- `claude:workflows:activate` copies one owned workflow into `<repo>/.claude/workflows/<name>.js`
-#: under a receipt in its OWN store, and it writes no ownership row here. So a repository whose operator
-#: already enabled a workflow presents a project activation a destination it owns no row for, whose bytes
-#: are byte-identical to the payload's -- which the project-scope adoption rule would take as removable,
-#: leaving two authorities over one file and a later project uninstall removing bytes the manager's
-#: receipt still claims.
+#: THERE IS NO PROJECT-SCOPE KIND EXCLUSION, and the absence is the decision rather than an omission.
+#: W4 carried a `PROJECT_DEFERRED_KINDS = ("workflow",)` table for exactly one release, because a
+#: per-file workflows enabler was then a SECOND authority over
+#: `<repo>/.claude/workflows/<name>.js` that wrote no ownership row here -- so a project activation
+#: would have adopted an already-enabled copy as removable and a later project uninstall would have
+#: removed bytes that manager's own receipt still claimed. W5 deleted the manager, which restores
+#: single authority and makes the exclusion pointless; the table went with it rather than surviving as
+#: an empty tuple whose two comprehension clauses could never exclude anything.
 #:
-#: Excluding the kind keeps the manager sole owner of that destination until the wave that deletes it, at
-#: which point removing this row is purely additive. It is a DEFERRAL and never a silent drop: every
-#: project-scope report names it. The alternative -- reading the manager's own receipt store from an
-#: activation to refuse a claimed destination -- would couple this lifecycle to a store the next wave
-#: removes, and would block a whole plane for an operator who used the supported command.
-#:
-#: It lives HERE, beside the other per-kind tables, because both the install and the update verb read it
-#: and a re-expression in each would be two places to widen (agentic-sdlc-7a2b, W4).
-PROJECT_DEFERRED_KINDS = ("workflow",)
+#: A future kind that needs deferring brings the table back WITH a value in it, which is a smaller
+#: change than an always-false filter is to read (agentic-sdlc-7a2b, W5).
 
 #: The closed key set of one ownership record.
 RECORD_FIELDS = frozenset({"agent", "kind", "name", "source", "mode", "digest", "removable"})

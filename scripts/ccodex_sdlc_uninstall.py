@@ -1445,9 +1445,10 @@ def render_report(
     """One offline report: removed, preserved, attention. Every artifact-derived value is escaped.
 
     ``facts`` is what this run can SAY about the plane it retired -- host, scope, resolved version, the
-    unknowns it inherited, and the announcement a legacy-unreceipted retirement owes.  It is passed
-    explicitly rather than read out of a retired receipt body, because the ledger-directed path has no
-    such body: its prestate evidence is the ownership rows themselves.
+    session note a project-scope retirement owes, the unknowns it inherited, and the announcement a
+    legacy-unreceipted retirement owes.  It is passed explicitly rather than read out of a retired
+    receipt body, because the ledger-directed path has no such body: its prestate evidence is the
+    ownership rows themselves.
     """
     lines = [f"ccodex sdlc uninstall: {state}"]
     for announcement in facts.get("announcements", []):
@@ -1456,6 +1457,13 @@ def render_report(
         f"retired activation: {dar_escape(retired_label)} (host {dar_escape(facts['host'])},"
         f" scope {dar_escape(facts['scope'])}, resolved {dar_escape(facts['resolved_version'])})"
     )
+    # A REMOVAL HAS THE SAME SESSION BOUNDARY AS THE PLACEMENT DID (agentic-sdlc-7a2b, W5): the target's
+    # Workflow name registry was read at ITS session start, so a workflow whose file this run removed is
+    # still callable for the rest of that session. `install` and `update` print the same sentence from
+    # the same plane-table field; a `None` here would mean a plane with no project layout reached a
+    # completed project-scope retirement, which the resolution ladder refuses long before this report.
+    if facts.get("session_note") is not None:
+        lines.append(str(facts["session_note"]))
     for item in sorted(observations, key=lambda row: str(row["entry_name"])):
         name = dar_escape(item["entry_name"])
         if item["entry_name"] in outstanding:
@@ -1875,6 +1883,7 @@ def run_receipt_directed(
             "host": config.host,
             "resolved_version": body["resolved_version"],
             "scope": scope_display(config),
+            "session_note": session_note(config),
             "unknowns": body.get("unknowns", []),
         },
         observations,
@@ -1893,6 +1902,19 @@ def scope_display(config: Config) -> str:
     if config.scope_kind == SCOPE_PROJECT:
         return f"{SCOPE_PROJECT}:{config.boundary_home}"
     return SCOPE_USER
+
+
+def session_note(config: Config) -> str | None:
+    """The plane's session-snapshot sentence at project scope, and nothing at user scope.
+
+    ``None`` at user scope is the whole point: the operator's own home carries no session-start name
+    registry to be stale against, so a user-scope retirement that printed this line would state a
+    boundary that does not exist.  The string itself is the plane table's, read rather than
+    re-expressed, so `install`, `update`, and this verb print one sentence (agentic-sdlc-7a2b, W5).
+    """
+    if config.scope_kind != SCOPE_PROJECT:
+        return None
+    return config.plane.project_session_note
 
 
 # ---- the ledger-directed path: a legacy-unreceipted plane, retired and then receipted --------------
@@ -2304,6 +2326,7 @@ def run_ledger_directed(
             "host": config.host,
             "resolved_version": resolved_version,
             "scope": scope_display(config),
+            "session_note": session_note(config),
             "unknowns": [],
         },
         observations,

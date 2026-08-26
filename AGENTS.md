@@ -98,14 +98,26 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   pin, and the absence of user-specific paths. The home-plane collection is NOT a name-discovery
   surface: the host's Workflow name registry reads only a project's own `.claude/workflows/`,
   once at session start (live measurement 2026-08-24, recorded on agentic-sdlc-4d2b), so the
-  installed bytes stay undiscovered until the separately authorized per-repo
-  `claude:workflows:activate` (`scripts/manage_claude_workflows.py`) copies one owned installed
-  workflow into a target repository's `.claude/workflows/<name>.js` under a receipt — a copy,
-  never a symlink, so the enabled entry is self-contained repo bytes carrying no user-specific
-  path. Activate refuses an absent, unowned, or digest-drifted installed source and an occupied
-  foreign destination; deactivate removes only a copy still byte-identical to its receipt;
-  foreign and modified files are preserved and reported. Enablement takes effect at the target's
-  next session, and the manager's output says so.
+  installed bytes stay undiscovered until an explicit PROJECT-SCOPE activation places a copy in a
+  target repository. **That enablement is now `ccodex install --scope project --agent claude
+  [--project PATH]` and nothing else** (agentic-sdlc-7a2b W5): the per-file
+  `claude:workflows:activate` manager and its three tasks are DELETED, and the receipted lifecycle
+  verb owns those destinations under one v2 activation receipt keyed by (agent, scope, root) plus
+  ordinary ownership rows. Project scope is copy-only, never a symlink, so the enabled entry is
+  self-contained repo bytes carrying no user-specific path. What changed with the fold is the GRANT
+  UNIT, from one file to one (agent, root) plane: the verb places the whole selected plane's payload
+  set, so per-entry selection is gone and is deliberately not replaced by a flag. What did not
+  change is the doctrine — enablement is a separately authorized per-repo step reached by no gate,
+  `bundle`/`lifecycle`, or setup path, and it refuses an occupied FOREIGN or operator-drifted
+  destination per entry while preserving it. An already-enabled copy that is byte-identical to the
+  payload's own bytes and inside the resolved root is ADOPTED as removable, which is what carries a
+  repository the deleted manager had already enabled across the fold. Every completed project-scope
+  install, update, and uninstall prints the session-registry sentence, because the target's registry
+  was read at ITS session start and a placement, a refresh, and a removal are equally invisible
+  until the next one. The manager's own per-file receipt store
+  (`<state>/agentic-sdlc-claude-workflows/`) is left untouched and is named by every `ccodex`
+  read verb as one `foreign-state` finding with its own manual remedy; nothing here reads,
+  migrates, or removes it.
 - `hooks/` — agent-CLI hook scripts (Claude Code first), installed as ordinary owned bytes into
   `<claude-home>/.claude/hooks/` by the same lifecycle and under the same preservation rules as
   workflows; Codex owns no record of them. That directory is not an auto-discovery surface —
@@ -336,13 +348,6 @@ model selection as policy.
   explicitly wire installed agent hooks into the operator's Claude settings, one hook and one
   owned array element at a time (`-- --hook <name>`, never "all"); never gate leaves, unreachable
   from `lifecycle:install`, and each activation is its own operation-specific settings mutation
-- `claude:workflows:status`, `claude:workflows:activate`, `claude:workflows:deactivate` —
-  inspect or explicitly enable installed workflows for one target repository, one owned copied
-  file at a time (`-- --workflow <name> --target <repo>`, never "all"); activation copies the
-  owned installed bytes into the target's `.claude/workflows/`, refuses foreign or drifted
-  state, and states that the change takes effect at the target's next session; never gate
-  leaves, unreachable from `lifecycle:install`, and each activation is its own operation-specific
-  per-repo mutation
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
 - `rightsize:evaluate` — explicit model-rightsizing discovery/plan/evaluate/render surface; never a
   gate leaf. `plan` makes no model calls. `evaluate` requires the plan's exact authorization digest
@@ -519,6 +524,16 @@ inside that store is preserved and NAMED, never resumed: the substrate that knew
 is deleted, and `recover` does not guess at a half-finished transition. Nothing shipped here sets
 `$AGENTIC_SDLC_OCX`, `$AGENTIC_SDLC_JQ`, or `$AGENTIC_SDLC_NODE` any more; they remain
 caller-supplied exact-absolute overrides.
+
+There are now TWO such leftover stores, and every `ccodex` read verb names each under its own
+component so one remedy is never printed for the other directory. The second is
+`<state_root>/agentic-sdlc-claude-workflows/`, left by the per-file workflows enabler W5 deleted
+(agentic-sdlc-7a2b): project-scope activation owns those destinations under its own receipt and
+ownership rows, so every document there describes a file another plane already accounts for. They
+are evidence with no reader, not payload — nothing breaks by their existence, and nothing in this
+distribution reads, migrates, or removes them. The remedy names what to verify first
+(`ccodex status --scope project --agent claude` for each repository the store names) and then says
+to remove the directory by hand.
 
 The packaged statusline is now one BUNDLE LEDGER ROW (gh #10 phase 2): `lifecycle:install -- --agent
 claude` publishes `assets/claude/statusline-command.sh` to

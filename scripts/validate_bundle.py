@@ -141,9 +141,6 @@ REQUIRED_TASKS = {
     "claude:hooks:status",
     "claude:hooks:activate",
     "claude:hooks:deactivate",
-    "claude:workflows:status",
-    "claude:workflows:activate",
-    "claude:workflows:deactivate",
     "libraries:list",
     "libraries:install",
     "libraries:status",
@@ -274,7 +271,12 @@ CCODEX_SDLC_REPORT_POLICY_SHA256 = {
     # `pointer-outlived-root`, the two states a project pointer's root can be in that a reader must be
     # able to NAME. Re-pinned deliberately from the reviewed bytes, never by copying whatever the tree
     # now holds.
-    "policy/ccodex-sdlc-read-report.v1.json": "372359480a25ffee90820f4d27c71f60ad77a27b6cbebfae2915a980ed96fd3e",
+    # v1 moved a THIRD time, at agentic-sdlc-7a2b W5: `finding_components` gained `claude-workflows`,
+    # so the receipt store the deleted per-file workflows enabler left behind is named under its own
+    # component rather than borrowing `operator-tools`. Same shape as gh #10 phase 4's leftover: the
+    # plane is gone, its store is not, and a reader that could not distinguish the two leftovers would
+    # print one remedy for two different directories.
+    "policy/ccodex-sdlc-read-report.v1.json": "d8b820e23b0fc27be0969574d459fb4edf90a7039a319596940e0a0cd43658bf",
     "policy/ccodex-sdlc-read-report.v2.json": "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9",
 }
 RELEASE_CONTRACT_TOP_LEVEL_KEYS = (

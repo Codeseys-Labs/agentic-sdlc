@@ -529,10 +529,11 @@ class RouteRegressionLeverTest(unittest.TestCase):
                 self.assertIn("expected direct -I -B execution", observation.stdout)
         self.assertEqual(
             witnessed,
-            len(reader.READER_VERBS) * 2 + 3,
+            len(reader.READER_VERBS) * 2 + 4,
             "the reader-verb selection drifted from the inventory: three verbs in both render forms,"
-            " plus the THREE planted-state cases (the armed bundle transition in both doctor and"
-            " recover --dry-run, and the retired operator-tools store)",
+            " plus the FOUR planted-state cases (the armed bundle transition in both doctor and"
+            " recover --dry-run, and one case per leftover store -- the retired operator-tools PATH"
+            " plane's, and the deleted per-file workflows enabler's receipt store)",
         )
 
 

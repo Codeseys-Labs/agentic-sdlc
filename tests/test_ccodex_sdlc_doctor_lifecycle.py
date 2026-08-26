@@ -726,6 +726,16 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         self.assertIn(("checkout", "pending-recovery"), retired_pairs)
         self.assertIn(("bundle", "pending-recovery"), retired_pairs)
         self.assertNotIn(("operator-tools", "pending-recovery"), retired_pairs)
+        # And a FOURTH dimension, from the other deleted plane (agentic-sdlc-7a2b, W5): the per-file
+        # workflows enabler's receipt store. It is named under its own component beside the first
+        # three, so a host carrying both leftovers reads two remedies rather than one.
+        self.assertNotIn(("claude-workflows", "foreign-state"), retired_pairs)
+        (self.state / reader.ORPHANED_WORKFLOW_RECEIPTS_STORE).mkdir(parents=True, exist_ok=True)
+        orphaned = json.loads(self.run_reader("doctor", "--json").stdout)["findings"]
+        orphaned_pairs = {(finding["component"], finding["code"]) for finding in orphaned}
+        self.assertIn(("claude-workflows", "foreign-state"), orphaned_pairs)
+        self.assertIn(("operator-tools", "foreign-state"), orphaned_pairs)
+        self.assertNotIn(("claude-workflows", "pending-recovery"), orphaned_pairs)
         # Positive control: a completed transition in the same plane produces no checkout pending
         # finding, so the assertion above is the recorded effect state and not a constant.
         self.write_activation(effect_state="complete", terminal_phase="activated")

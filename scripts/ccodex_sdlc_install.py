@@ -1646,11 +1646,12 @@ def classify_entries(
     against the resolved root rather than inferred from the configured root, because this is the arm
     that decides removability.
     """
+    # NO KIND IS EXCLUDED AT PROJECT SCOPE (agentic-sdlc-7a2b, W5). W4 filtered the `workflow` kind out
+    # here while `claude:workflows:activate` was a second authority over the same destinations; deleting
+    # that manager restored single authority, so the payload set is now the same at both scopes and the
+    # filter is the selected agent alone.
     discovered = [
-        entry
-        for entry in bundle.discover_entries(payload.candidate_root)
-        if entry.agent == agent
-        and not (project_root is not None and entry.kind in bundle.PROJECT_DEFERRED_KINDS)
+        entry for entry in bundle.discover_entries(payload.candidate_root) if entry.agent == agent
     ]
     if not discovered:
         raise Refusal(
@@ -2899,34 +2900,42 @@ def acquisition_report_line(payload: AdmittedPayload) -> str:
 def scope_report_lines(config: Config) -> list[str]:
     """What a project-scope run owes its operator, and nothing at user scope.
 
-    Three facts, each said once:
+    Four facts, each said once:
 
       * WHICH ROOT was resolved, because the operator may have named none and the walk chose one.
-      * THAT ENABLEMENT TAKES EFFECT AT THE TARGET'S NEXT SESSION, carried over verbatim from the
-        workflows manager: a repository's own `.claude/workflows/` is the host's only name-discovery
-        surface and it is read once at session start (agentic-sdlc-4d2b), so placing a workflow there
-        enables it -- while hook bytes land inert, since settings wiring is its own separate grant.
+      * THAT THE CHANGE TAKES EFFECT AT THE TARGET'S NEXT SESSION, read from the plane table's own
+        `project_session_note` -- the sentence carried over from the deleted workflows manager's
+        `SESSION_SNAPSHOT_NOTE`. It is the SAME string `update` and `uninstall` print, because all three
+        mutations are equally invisible to a registry that was already read.
+      * WHAT THAT MEANS FOR THE TWO KINDS WHOSE ENABLEMENT DIFFERS: placing a workflow into a project's
+        `.claude/workflows/` enables it, because that directory is the host's only name-discovery
+        surface, while hook bytes land inert since settings wiring is its own separate grant. This half
+        is install-specific -- it is about placing bytes -- so it is not in the shared note.
       * THAT A COMMITTED COPY IS DOUBLY RECOVERABLE (audit N4). The uninstall's own receipt records the
         removal, and for a git-tracked file `git status` shows the deletion and the index restores it.
         The root always admits as a git project -- the ladder refuses every other kind -- so this line
         is unconditional at project scope rather than guessing at the root's shape.
+
+    The W4 line naming a deferred kind is GONE with the deferral itself (W5): this scope now publishes
+    the whole selected agent's payload set, so there is nothing left to name as withheld.
     """
     if config.scope_kind != SCOPE_PROJECT:
         return []
+    # Unreachable rather than unlikely, and asserted rather than defaulted: a plane with no project
+    # collection is refused by name long before any report, and the plane table pins the note to exactly
+    # the planes that have one. An `or ""` here would print a blank line instead of failing loudly, and
+    # this function runs AFTER the effects, so a refusal raised here would misclassify a completed run.
+    note = config.plane.project_session_note
+    assert note is not None  # pinned to `project_collection` by the plane table's own test
     return [
         f"project root: {escape_display(str(config.configured_root))} (resolved; the plane is keyed by"
         " this root, so two worktrees of one repository are two independent planes)",
-        "enablement: a workflow placed in this repository's .claude/workflows/ is discovered at the"
-        " target's NEXT session, because that directory is the host's only name registry and it is read"
-        " once at session start; hook bytes land inert, since wiring one into settings is its own grant",
+        note,
+        "enablement: a workflow placed in this repository's .claude/workflows/ is discovered there and"
+        " nowhere else, so this activation enables it; hook bytes land inert, since wiring one into"
+        " settings is its own grant",
         "the project root is a git repository; a committed copy is restorable from its index, so an"
         " uninstall's removal is recorded twice -- by its own receipt, and by git status plus the index",
-        # NAMED, never dropped silently: the operator can see which kind this scope does not publish yet
-        # and which command still owns it.
-        f"deferred at this scope: {', '.join(load_sibling('install_skill_bundle').PROJECT_DEFERRED_KINDS)}"
-        " entries are not published here"
-        " while `claude:workflows:activate` remains the one path that owns a repository's"
-        " .claude/workflows/ destinations; exactly one path is authoritative per destination",
     ]
 
 

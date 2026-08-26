@@ -162,14 +162,17 @@ Approval of a diff is not authorization for any other effect.
    - Detect the forge/CI provider. If ambiguous, ask before creating a workflow. CI invokes
      the same `mise run check`; it does not reimplement the gate.
    - Optional workflow enablement: if this repository wants the shipped wave scout discoverable
-     by name, run `mise run claude:workflows:activate -- --workflow sdlc-wave-scout --target
-     <repo>` from the distribution checkout. The manager copies the owned installed bytes into
-     the target's `.claude/workflows/` and refuses an absent, unowned, or drifted installed
-     source and an occupied foreign destination — treat any refusal as a stop to inspect, never
-     as permission to clear the path by hand. Enablement takes effect at the target's next
-     Claude Code session (the Workflow name registry is read at session start). The placed file
-     is repo-visible: include it in the activation commit only with the same explicit approval
-     as every other enumerated activation file.
+     by name, that is the project-scope lifecycle verb — `ccodex install --scope project --agent
+     claude --project <repo>` — and it is its own explicit grant, reached by no gate and no other
+     install path. It places the whole Claude payload set into `<repo>/.claude/` as copies under
+     one activation receipt, so it is a bigger request than the retired per-file manager was:
+     confirm the operator wants the plane, not just the one workflow. It refuses an occupied
+     foreign or operator-drifted destination per entry and preserves it — treat any refusal as a
+     stop to inspect, never as permission to clear the path by hand. Enablement takes effect at
+     the target's next Claude Code session (the Workflow name registry is read at session start),
+     and the run prints that fact. The placed files are repo-visible: include them in the
+     activation commit only with the same explicit approval as every other enumerated activation
+     file.
 
 7. **Commit and evidence**
    - Re-run inventory and show exactly created, adopted, merged, skipped, and conflicted

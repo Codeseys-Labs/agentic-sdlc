@@ -463,10 +463,11 @@ class StatuslineCliFallbackTests(unittest.TestCase):
 )
 class SettingsIoAtomicBytesTests(unittest.TestCase):
     """settings_io unit level: this module is imported as the shared settings_io library by
-    manage_claude_hooks.py and manage_claude_workflows.py, whose planes ARE Windows-supported,
-    so atomic_bytes must complete without os.fchmod and without leaking its mkstemp staging
-    file (the leaked descriptor is what made Windows unlink the temp with WinError 32 and
-    killed 29 hooks/workflows tests at TemporaryDirectory cleanup)."""
+    manage_claude_hooks.py, whose plane IS Windows-supported, so atomic_bytes must complete
+    without os.fchmod and without leaking its mkstemp staging file (the leaked descriptor is
+    what made Windows unlink the temp with WinError 32 and killed 29 tests at
+    TemporaryDirectory cleanup -- measured when a second importer, the workflows manager
+    W5 deleted, shared this library too)."""
 
     def staging_siblings(self, path: Path) -> list[Path]:
         return sorted(path.parent.glob(f".{path.name}.*"))

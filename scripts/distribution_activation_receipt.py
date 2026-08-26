@@ -474,7 +474,7 @@ LEGACY_ACTIVE_POINTER_NAME = "active-receipt.json"
 USER_POINTER_NAME = "user.json"
 PROJECT_POINTER_PREFIX = "project-"
 POINTER_SUFFIX = ".json"
-#: `sha256(resolved_root)` truncated, generalising the key `manage_claude_workflows.py` already works
+#: `sha256(resolved_root)` truncated, generalising the key the deleted workflows manager already worked
 #: out for one entry kind. Truncation is a filename-length bound, never a security boundary: the
 #: authority is the AGREEMENT between this key and the pointed receipt's own `scope.root`.
 ROOT_KEY_CHARACTERS = 16

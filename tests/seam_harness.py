@@ -459,6 +459,36 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         stdout_absent=('"operator_tools"',),
         canonical_json_stdout=True,
     ),
+    # The SECOND deleted plane's leftover (agentic-sdlc-7a2b, W5): the per-file workflows enabler kept
+    # its receipts in a store of its own, and project-scope activation now owns those destinations under
+    # its own receipt. The documents are evidence with no reader left, so the promise driven here is the
+    # same one the row above drives for the PATH plane -- named, with its own remedy and its own
+    # component, and not resumed, migrated, or removed. `stdout_absent` carries the OTHER store's
+    # remedy phrase, because one component speaking for two directories is the defect this row exists
+    # to catch.
+    SeamCase(
+        identifier="doctor-names-the-orphaned-workflow-receipt-store-under-its-own-component",
+        argv=("doctor", "--json"),
+        expect_exit=0,
+        route_sensitive=True,
+        state="orphaned-workflow-receipts-store",
+        json_paths={
+            "command.verb": "doctor",
+            "overall.state": "absent",
+            "bundle.state": "absent",
+            **_ADMITTED_RUNTIME,
+        },
+        require_finding_codes=("foreign-state",),
+        forbid_finding_codes=("runtime-admission-refused", "pending-recovery"),
+        stdout_present=(
+            "agentic-sdlc-claude-workflows",
+            '"claude-workflows"',
+            "superseded by project-scope activation receipts",
+            "status --scope project",
+        ),
+        stdout_absent=("XDG_BIN_HOME",),
+        canonical_json_stdout=True,
+    ),
     SeamCase(
         identifier="recover-dry-run-offers-one-self-consistent-plan-digest-for-planted-state",
         argv=("recover", "--dry-run", "--json"),
@@ -1095,6 +1125,23 @@ def write_retired_operator_tools_store(state_root: Path) -> Path:
     return document
 
 
+#: The leftover the ``orphaned-workflow-receipts-store`` fixture plants (agentic-sdlc-7a2b, W5). The
+#: deleted per-file workflows enabler filed one receipt per (workflow, destination) here; the reader
+#: names the store and its manual remedy without reading a single document, which is why the CONTENT is
+#: deliberately a stub -- planting a schema-perfect receipt would suggest something still parses them.
+#: What an upgraded host has is the directory and one file per workflow it had enabled.
+def write_orphaned_workflow_receipts_store(state_root: Path) -> Path:
+    directory = state_root / "agentic-sdlc-claude-workflows"
+    directory.mkdir(parents=True, exist_ok=True)
+    document = directory / "sdlc-wave-scout.0123456789abcdef.json"
+    document.write_text(
+        json.dumps({"version": 1, "phase": "committed"}, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return document
+
+
 @dataclass(frozen=True)
 class Observation:
     case: SeamCase
@@ -1161,6 +1208,8 @@ class SeamRunner:
             write_bundle_pending(state, home)
         elif case.state == "retired-operator-tools-store":
             write_retired_operator_tools_store(state)
+        elif case.state == "orphaned-workflow-receipts-store":
+            write_orphaned_workflow_receipts_store(state)
         elif case.state != "clean":
             raise ValueError(f"{case.identifier} declares an unknown fixture state {case.state!r}")
         log = cell / "mise-argv.log"

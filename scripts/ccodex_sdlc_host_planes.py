@@ -67,6 +67,19 @@ class HostPlane:
     #: plane and belongs here beside its other properties, not as an inline agent comparison at a
     #: call site (agentic-sdlc-7a2b, W4).
     project_collection: str | None
+    #: What a COMPLETED project-scope mutation on this plane owes its operator about when the change
+    #: becomes visible, or ``None`` for a plane with no project layout to mutate.
+    #:
+    #: It is carried over from the ``SESSION_SNAPSHOT_NOTE`` of the per-file workflows enabler this
+    #: lifecycle subsumed and W5 deleted (agentic-sdlc-7a2b), and it lives HERE rather than in each verb
+    #: because all three mutating verbs owe one sentence: an install that places a workflow, one that
+    #: refreshes it,
+    #: and an uninstall that removes one are all invisible to a registry that was already read. Three
+    #: copies of one sentence would be three places to correct when the measurement moves.
+    #:
+    #: It is verb-NEUTRAL on purpose ("this change"), because the placement and the removal have the
+    #: same session boundary; only the install adds what is specific to placing bytes.
+    project_session_note: str | None
     #: The host application's own name, as its release-contract compatibility row declares it.
     contract_host: str
     #: Which ``compatibility`` member carries that row: Claude Code is the Core surface (ADR-0017),
@@ -116,6 +129,11 @@ HOST_PLANES: dict[str, HostPlane] = {
         # at session start (agentic-sdlc-4d2b), which is why project-scope activation is a grant of its
         # own rather than a placement detail.
         project_collection=".claude",
+        project_session_note=(
+            "session registry: this repository's own .claude/workflows/ is the host's only Workflow"
+            " name registry and it is read once at session start (measured 2026-08-24,"
+            " agentic-sdlc-4d2b), so this change takes effect at the target's NEXT Claude Code session"
+        ),
         contract_host="claude-code",
         contract_section=CONTRACT_SECTION_CORE,
         version_command=("claude", "--version"),
@@ -134,6 +152,9 @@ HOST_PLANES: dict[str, HostPlane] = {
         # this plane by name; if a repository-local Codex surface is ever measured, this field is where
         # it arrives, with its own evidence (agentic-sdlc-7a2b, W4).
         project_collection=None,
+        # No project layout, so no project mutation, so nothing to say about when one would surface.
+        # The pairing with `project_collection` is pinned by a test rather than left to inspection.
+        project_session_note=None,
         contract_host="codex-cli",
         contract_section=CONTRACT_SECTION_COMPANION,
         version_command=("codex", "--version"),
