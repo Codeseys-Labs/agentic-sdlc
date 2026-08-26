@@ -35,7 +35,7 @@ EXPECTED_CHECKOUT = {
     "plane": "checkout-development",
     "public_channel": None,
     "release_topology_adr_status": "proposed",
-    "version": "0.7.5",
+    "version": "0.7.6",
 }
 # The verbs that RENDER the read report. `inspect` is gone: the ratified front-door surface is six
 # top-level verbs (`install status update uninstall doctor recover`), and `inspect` was a fourth

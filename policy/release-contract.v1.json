@@ -5,7 +5,7 @@
     "plane": "checkout-development",
     "public_channel": null,
     "release_topology_adr_status": "proposed",
-    "version": "0.7.5"
+    "version": "0.7.6"
   },
   "compatibility": {
     "companion_hosts": {
