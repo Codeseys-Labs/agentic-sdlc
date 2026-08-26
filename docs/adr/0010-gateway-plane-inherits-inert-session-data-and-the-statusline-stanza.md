@@ -510,6 +510,57 @@ the planted value, `AWS_BEARER_TOKEN_BEDROCK`, `env`, `apiKeyHelper`, `AWS_REGIO
 `CLAUDE_CODE_USE_BEDROCK`, the global `model`, or `permissions`. It is a regular file at mode 600,
 neither a link nor a copy of the source.
 
+## Amendment — 2026-08-26: three present-tense claims about the deleted operator-tools plane are retired
+
+Filed as seed agentic-sdlc-cb77 by the demolition wave (gh #10 phases 3–4, `98e2cb7`) and executed
+here by the front-door train's decision-debt wave. This record's amendment section B was written on
+2026-08-07, when a rendered `ccodex` launcher on PATH was the dispatcher; that plane is deleted, and
+three of B's sentences kept describing it in the present tense. Each is retired below rather than
+edited in place, because the surrounding paragraphs are dated evidence about what was measured then.
+
+**RETIRED: `AGENTIC_SDLC_ROOT` overrides an install-time default (`:386`).** It does not, and setting
+it now does nothing at all. The variable's only consumer was `assets/launchers/ccodex.in`'s
+`${AGENTIC_SDLC_ROOT:-@CANONICAL_ROOT@}` template expansion, and gh #10 phase 4 deleted that template
+with the plane that rendered it. `bin/ccodex` self-locates from its own path
+(`root="$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd -P)"`, `bin/ccodex:45`) and reads no root
+override, so a moved checkout is selected by invoking the dispatcher inside it, never by exporting a
+variable. Verified 2026-08-26: `git grep AGENTIC_SDLC_ROOT` returns no hit in `scripts/`, `bin/`, or
+`mise.toml` — the surviving hits are this record's stale line, the dated research corpus, and two test
+comments that assert the variable is not read. **This retirement is the load-bearing one**, because a
+variable that silently does nothing misleads exactly the operator the sentence was written for: one
+whose clone has moved. What remains true in that paragraph is its first half — every route still
+executes code inside the distribution tree, and a moved or deleted tree still fails by name rather
+than misbehaving.
+
+**RETIRED, twice: "`operator-tools:status` now distinguishes `absent` from `unmanaged`"** — Decision
+item 9 (`:157`) and its restatement in section B (`:391`). There is no `operator-tools:status` task:
+`mise.toml` defines zero `operator-tools:*` tasks (measured 2026-08-26), and the five that existed
+were deleted with the plane. The distinction itself was not lost, it moved and changed vocabulary:
+the surviving read of that kind is `mise run claude:statusline:status`, whose five distinguishable
+states are `active`, `inactive`, `unmanaged`, `conflict`, and a pending recovery, reported in the
+returned **message** rather than in the exit code — so the two retired sentences' "Both still exit 1"
+and "Both still exit nonzero" do not describe it either. The whole-box read that replaced the plane's
+inventory is `ccodex doctor`, which since 2026-08-26 names every surviving state store by absolute
+path with a per-store verdict, and names the leftover `<state>/agentic-sdlc-operator-tools/` store as
+one `foreign-state` finding carrying the manual removal remedy. That finding is the deleted plane's
+whole surviving deliverable (ratified decision D3), and it is the only thing in this distribution that
+still says the word.
+
+**NOT retired, and deliberately kept: the 2026-08-10 alias-retirement amendment (`:363-367`).** It
+reads as dated history and is accurate as such — fresh operator-tools installs owned only `ccodex` and
+the packaged statusline command, and `operator-tools:retire-aliases` unlinked only an unchanged
+removable owned copy. Its task is as gone as the others, but the paragraph is a record of a decision
+taken on a date rather than a claim about the current tree, and rewriting it would destroy the
+evidence that the alias plane was retired deliberately and in stages. The same reading protects
+section B's dispatcher-shape decision: `ccodex <domain> <verb>` with bare-verb shorthand is what was
+decided in 2026-08-07, and the front-door train's move of the lifecycle verbs to the top level
+(ADR-0021, amended 2026-08-26) is recorded there, not by overwriting this one.
+
+**Scope of this amendment.** It touches only section B's claims about the retired PATH plane. Nothing
+here reopens or narrows the credential boundary, the inheritance set, the environment-variable policy
+of amendments A/A.1/A.2, or ADR-0014's scoping of this record to `scripts/muse-claude.sh` — and none
+of those depended on the deleted plane.
+
 ## Reversal condition
 
 Reopen this record if any of the following becomes true.

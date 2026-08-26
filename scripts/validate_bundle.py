@@ -276,8 +276,20 @@ CCODEX_SDLC_REPORT_POLICY_SHA256 = {
     # component rather than borrowing `operator-tools`. Same shape as gh #10 phase 4's leftover: the
     # plane is gone, its store is not, and a reader that could not distinguish the two leftovers would
     # print one remedy for two different directories.
-    "policy/ccodex-sdlc-read-report.v1.json": "d8b820e23b0fc27be0969574d459fb4edf90a7039a319596940e0a0cd43658bf",
-    "policy/ccodex-sdlc-read-report.v2.json": "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9",
+    # v1 moved a FOURTH time, at agentic-sdlc-7a2b W6: `state_stores` joined the exact-key top-level
+    # set, with its own `state_store` field vocabulary and `state_store_states` verdicts, so
+    # `doctor --json` can name every surviving store rather than the three a populated host used to
+    # show (gh #8 acceptance 9, the train's terminal check).
+    #
+    # THE MAP IS DOWN TO ONE ENTRY, and the dict stays a dict rather than collapsing to a scalar
+    # because a second descriptor is an ordinary addition here and a scalar would have to be widened
+    # back. `policy/ccodex-sdlc-read-report.v2.json` was DELETED in the same wave: it was read by
+    # nothing (`scripts/ccodex_sdlc.py` opens the v1 document alone), and by W6 it had drifted three
+    # reviewed v1 edits behind -- no `orphaned-root`, no `pointer-outlived-root`, no
+    # `claude-workflows`, and still carrying the `operator_tools` top-level field gh #10 phase 4
+    # deleted -- so wiring it would have refused every read verb. Deleting a dormant scaffold is
+    # smaller than maintaining a schema no reader admits (seed agentic-sdlc-32a2, phase-5 sweep).
+    "policy/ccodex-sdlc-read-report.v1.json": "c805b76f94c924a16472c916534fcdeea60d8034bdfa0a323d6fdea8b67f5cd6",
 }
 RELEASE_CONTRACT_TOP_LEVEL_KEYS = (
     "schema_version",
@@ -1845,12 +1857,18 @@ def validate_packaged_policy_copies(root: Path, result: Validation) -> None:
 
 
 def validate_ccodex_sdlc_report_policies(root: Path, result: Validation) -> None:
-    """Pin the two ccodex report descriptors by digest, and nothing else.
+    """Pin every ccodex report descriptor by digest, and nothing else.
 
-    `scripts/ccodex_sdlc.py` parses both documents on every invocation and refuses a malformed
+    `scripts/ccodex_sdlc.py` parses the pinned document on every invocation and refuses a malformed
     one there, which is where a runtime consumer must fail. This pass exists only so a reviewed
     descriptor cannot drift silently in the checkout; the digest is a strictly stronger predicate
     than the structural re-derivation it replaced.
+
+    The plural name and the loop both stay: this pinned a second descriptor until W6 deleted it, and
+    the next reviewed schema arrives as another map entry rather than as a rewrite of this function.
+    What this pass does NOT claim any more is that every pinned document has a runtime reader -- the
+    retired v2 descriptor was pinned for months with none, and this docstring said otherwise
+    (seed agentic-sdlc-32a2). A pin proves reviewed bytes, never a consumer.
     """
     for relative, digest in sorted(CCODEX_SDLC_REPORT_POLICY_SHA256.items()):
         path = root / relative

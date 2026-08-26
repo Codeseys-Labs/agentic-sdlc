@@ -24,6 +24,17 @@ CORE_COMMANDS = frozenset(
 # The exact `ccodex sdlc` namespace, in order. The brief (to-spec-handoff.md:174-181) enumerated
 # eight; the 2026-08-23 operator decision moved `rightsize` to the agent plane, so the re-issued
 # spec pins seven (Implementation Decision 91) and the seven remain a subset of the brief's block.
+#
+# THESE SEVEN ARE THE BRIEF-SOURCED LINES, and that is now a narrower claim than "the block"
+# (agentic-sdlc-a010, relaxed 2026-08-26). The predicates below used to require Implementation
+# Decision 91's fenced block to equal this tuple exactly AND every member of it to appear verbatim
+# in the immutable brief, which made the block subtractable but not extendable: the spec could drop
+# `ccodex sdlc inspect` and still pass, while a line recording the ratified top-level surface
+# (`ccodex install --scope user --agent claude`, gh #8 / gh #11) could not be added at all, because
+# a brief written before the ratification cannot be its source. Provenance is therefore asserted
+# over the `ccodex sdlc` lines, which the brief really is the source of, and the block may carry
+# lines whose source is the ratification record instead. Both teeth stay: no brief-sourced line may
+# vanish, and no EIGHTH `ccodex sdlc` verb may arrive.
 NAMESPACE_LINES = (
     "ccodex sdlc inspect",
     "ccodex sdlc doctor",
@@ -34,6 +45,7 @@ NAMESPACE_LINES = (
     "ccodex sdlc uninstall",
 )
 SDLC_VERBS = frozenset(line.split()[2] for line in NAMESPACE_LINES)
+NAMESPACE_PREFIX = "ccodex sdlc"
 
 # The spec's structure. Pinned so a reworded second gate cannot arrive as a new section.
 TOP_LEVEL_HEADINGS = (
@@ -157,15 +169,44 @@ def namespace_block(text: str) -> list[str]:
     return [line.strip() for line in match.group(1).strip().splitlines()] if match else []
 
 
+def command_spans(text: str) -> list[str]:
+    """Every span of this document that is a command spelling rather than prose.
+
+    Two shapes, which are the only two this document uses for a command: an inline code span, and a
+    fenced block's body. Fences are scanned deliberately — ID 91's ```text block is exactly where an
+    extra verb would be smuggled — and inline spans are scanned because that is the house style for
+    naming a verb in a sentence.
+
+    The fence pattern admits LEADING WHITESPACE, and that is load-bearing rather than tidy: ID 91 is
+    a numbered list item, so its fence is indented four spaces, and an anchored ``^```` skipped the
+    one block this closure exists to police. `test_smuggling_an_extra_verb_is_detected` is the case
+    that catches a regression here.
+    """
+    fences = re.findall(r"^[ \t]*```[a-z]*\n(.*?)^[ \t]*```", text, re.MULTILINE | re.DOTALL)
+    inline = re.findall(r"`([^`\n]+)`", text)
+    return [*fences, *inline]
+
+
 def stray_verbs(text: str) -> set[str]:
-    """Any `ccodex sdlc <verb>` outside the seven. Case- and wrap-tolerant, so a
-    verb smuggled in across a line break or capitalized is still visible.
-    ponytail: a generic mention must use backticked `ccodex sdlc` house style, or it
-    registers as a stray verb. Known, accepted tradeoff — the realistic trigger is a
-    descriptive caption, e.g. a Mermaid node label `[ccodex sdlc lifecycle]`. If the
-    spec gains a diagram, exclude ```mermaid fences specifically. Do NOT exclude all
-    fences: that would hide an extra verb smuggled into ID 91's ```text block."""
-    seen = {v.lower() for v in re.findall(r"(?i)ccodex\s+sdlc\s+([a-z][a-z-]*)", text)}
+    """Any `ccodex sdlc <verb>` outside the seven, in a COMMAND context. Case-tolerant.
+
+    Restricted to `command_spans` since agentic-sdlc-a010. What it used to do was scan the whole
+    document with a wrap-tolerant `\\s+`, which meant the token after the phrase was captured
+    wherever the phrase appeared — so the sentence this train has to be able to write, "`ccodex
+    sdlc` is retired", reported a stray verb `is`, and the same misfire waited for every prose
+    mention of the retired namespace.
+
+    The accepted tradeoff INVERTS rather than disappearing, and the new side is the better one: an
+    un-backticked bare-prose `ccodex sdlc rightsize` is now a false negative where a bare-prose
+    caption used to be a false positive. This document backticks or fences every command it names —
+    the assertion below on the seven brief-sourced lines is over a fenced block — so the shape that
+    is no longer covered is one the house style does not produce, while the shape that used to
+    misfire is one the retirement prose requires. Wrap tolerance goes with it: a command spelling
+    does not straddle a line break inside a code span.
+    """
+    seen: set[str] = set()
+    for span in command_spans(text):
+        seen |= {v.lower() for v in re.findall(r"(?i)ccodex sdlc ([a-z][a-z-]*)", span)}
     return seen - SDLC_VERBS
 
 
@@ -206,13 +247,20 @@ class ProductSpecContractTests(unittest.TestCase):
 
     def test_namespace_block_enumerates_the_seven_verbs_in_order(self) -> None:
         """Enumeration, not vocabulary: dropping a line from the block is a defect
-        even when the verb is still mentioned in prose elsewhere."""
-        self.assertEqual(list(NAMESPACE_LINES), namespace_block(self.spec))
+        even when the verb is still mentioned in prose elsewhere.
+
+        Scoped to the block's `ccodex sdlc` lines since agentic-sdlc-a010, so the block may also
+        record the ratified top-level surface that replaced the namespace. What is unchanged is the
+        part that has teeth: these seven, all of them, in this order, and no eighth."""
+        self.assertEqual(
+            list(NAMESPACE_LINES),
+            [line for line in namespace_block(self.spec) if line.startswith(NAMESPACE_PREFIX)],
+        )
 
     def test_no_verb_exists_outside_the_namespace(self) -> None:
-        """Closure: a smuggled extra verb fails even split across a line wrap
-        or capitalized. Since the 2026-08-23 decision this includes `rightsize`,
-        which lives on the agent plane and must not reappear under `ccodex sdlc`."""
+        """Closure: a smuggled extra verb fails even capitalized. Since the 2026-08-23
+        decision this includes `rightsize`, which lives on the agent plane and must not
+        reappear under `ccodex sdlc`."""
         self.assertEqual(set(), stray_verbs(self.spec))
 
     def test_structure_is_exactly_the_nine_sections(self) -> None:
@@ -273,12 +321,18 @@ class ProductSpecContractTests(unittest.TestCase):
         self.assertNotEqual("", item, "spec must carry Implementation Decision 61")
         self.assertEqual([], missing(item, WAVE_OUTCOMES))
 
-    def test_handoff_remains_the_cited_source_of_every_addition(self) -> None:
+    def test_handoff_remains_the_cited_source_of_the_brief_sourced_lines(self) -> None:
         self.assertTrue(HANDOFF.is_file())
         handoff = HANDOFF.read_text(encoding="utf-8")
         self.assertTrue(CORE_COMMANDS <= declared_commands(handoff))
         # A deliberate subset: the brief's block carries the eighth line the 2026-08-23
         # decision withdrew, so the seven pinned lines must all trace to it.
+        #
+        # PROVENANCE IS ASSERTED OVER THESE SEVEN, not over whatever the spec's block holds
+        # (agentic-sdlc-a010). The brief predates the front-door ratification, so a spec line naming
+        # the ratified top-level surface has the ratification record as its source and cannot trace
+        # here; requiring it to was what made the block unextendable. The direction that matters
+        # still holds: a `ccodex sdlc` line the spec declares without the brief behind it fails.
         self.assertEqual([], missing(handoff, NAMESPACE_LINES))
         # Closure is asserted on the spec only. The brief is an immutable source, and
         # its Mermaid node label `[ccodex sdlc lifecycle]` is a caption, not a verb.
@@ -315,14 +369,61 @@ class ProductSpecMutationTests(unittest.TestCase):
         self.assertNotEqual(set(), stray_verbs(mutated))
         self.assertNotEqual(list(NAMESPACE_LINES), namespace_block(mutated))
 
-    def test_a_wrap_split_stray_verb_is_detected(self) -> None:
-        """A verb hidden across a line break, which this document's wrapping invites."""
-        mutated = self.spec + "\nThe ccodex sdlc\npublish verb promotes a candidate.\n"
+    def test_a_capitalized_stray_verb_in_a_command_span_is_detected(self) -> None:
+        """Case tolerance, in the context the house style puts a command in."""
+        mutated = self.spec + "\nRun `ccodex sdlc Publish` to promote a candidate.\n"
         self.assertNotEqual(set(), stray_verbs(mutated))
 
-    def test_a_capitalized_stray_verb_is_detected(self) -> None:
-        mutated = self.spec + "\nccodex sdlc Publish promotes a candidate.\n"
-        self.assertNotEqual(set(), stray_verbs(mutated))
+    def test_a_stray_verb_in_an_indented_fence_is_detected(self) -> None:
+        """The indented-fence hole, pinned as its own case.
+
+        ID 91's fence is indented four spaces because the decision is a numbered list item. An
+        anchored fence pattern silently stopped scanning it, which would have made the closure
+        assertion above vacuous over exactly the block it is for.
+        """
+        mutated = self.spec + "\n1. A decision.\n\n    ```text\n    ccodex sdlc publish\n    ```\n"
+        self.assertEqual({"publish"}, stray_verbs(mutated))
+
+    def test_the_retirement_SENTENCE_is_not_a_verb_site(self) -> None:
+        """THE RELAXATION'S OWN CONTROL (agentic-sdlc-a010): prose about the retired namespace passes.
+
+        This is the sentence the front-door train has to be able to write, and the pre-relaxation
+        predicate reported a stray verb `is` for it. Asserting it here means a future retightening
+        that re-broke the sentence fails as a named case instead of blocking a doc wave again.
+        """
+        mutated = self.spec + "\nThe `ccodex sdlc` namespace is retired; the verbs are top-level.\n"
+        self.assertEqual(set(), stray_verbs(mutated))
+
+    def test_the_ratified_top_level_surface_may_join_the_block(self) -> None:
+        """The second half of the relaxation: the block is extendable, not just subtractable.
+
+        A line naming the ratified surface traces to gh #8 / gh #11 rather than to the pre-ratified
+        brief, so it must be addable without the provenance predicate rejecting it — while the seven
+        brief-sourced lines stay enumerated, in order, and closed against an eighth.
+        """
+        mutated = self.spec.replace(
+            "    ccodex sdlc uninstall",
+            "    ccodex sdlc uninstall\n    ccodex install --scope user --agent claude",
+            1,
+        )
+        self.assertEqual(set(), stray_verbs(mutated))
+        self.assertEqual(
+            list(NAMESPACE_LINES),
+            [line for line in namespace_block(mutated) if line.startswith(NAMESPACE_PREFIX)],
+        )
+        self.assertIn("ccodex install --scope user --agent claude", namespace_block(mutated))
+
+    def test_a_bare_prose_stray_verb_is_the_accepted_blind_spot(self) -> None:
+        """The tradeoff, asserted rather than left implicit.
+
+        Restricting the scan to command spans trades a false positive on prose for a false negative
+        on an un-backticked mention. The trade is only defensible if it is visible, so both halves
+        run here on ONE planting: the same text is missed as bare prose and caught the moment it is
+        spelled the way this document spells a command.
+        """
+        planting = "ccodex sdlc publish promotes a candidate."
+        self.assertEqual(set(), stray_verbs(f"{self.spec}\n{planting}\n"))
+        self.assertEqual({"publish"}, stray_verbs(f"{self.spec}\n`{planting}`\n"))
 
     def test_a_reworded_second_gate_is_detected(self) -> None:
         """Uniqueness by structure, not by phrase: a new section fails the heading list."""

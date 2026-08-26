@@ -262,10 +262,11 @@ plane and blocks only direct Claude installation, so a selected Codex plane stil
 Without the trust step every later `mise` command in the repository exits with `config files are not trusted`. Resolving the lock downloads
 roughly 1.3 GB across the 12 pinned tools in about 30 seconds; mise ships `auto_install` enabled,
 so skipping the explicit install step does not avoid the cost — the first `mise run <task>`
-installs all 12 without prompting. `mise run check` last measured 2186 tests in 400s with
-`OK (skipped=13)` on Linux, its `validate` and `secrets` leaves each under 2s, so budget about 10
-minutes and expect longer on a loaded host. Both figures go stale by design — the count grows
-with the suite and the clock varies by host — and the gate's verdict is the evidence.
+installs all 12 without prompting. `mise run check` last measured 2426 tests in 426s with
+`OK (skipped=13)` on Linux (2026-08-26), its `validate` and `self-test` leaves each under 5s and
+`secrets` scanning about 12 MB in 15s, so budget about 10 minutes and expect longer on a loaded
+host. Both figures go stale by design — the count grows with the suite and the clock varies by
+host — and the gate's verdict is the evidence.
 
 `scripts/bootstrap-agentic-sdlc.sh` replaces the clone step only, for an operator who would rather
 not choose or track a directory. It fetches into
@@ -534,6 +535,23 @@ are evidence with no reader, not payload — nothing breaks by their existence, 
 distribution reads, migrates, or removes them. The remedy names what to verify first
 (`ccodex status --scope project --agent claude` for each repository the store names) and then says
 to remove the directory by hand.
+
+**Every read verb also names EVERY state store, live and retired, present or absent** (gh #8
+acceptance 9, landed 2026-08-26 as the front-door train's terminal check). The report carries one
+`state_stores` row per store — component, a `live`/`retired` kind, the absolute path, and a
+`present`/`absent`/`unreadable` verdict — for the six this distribution can write:
+`agentic-sdlc-installer/` (the v4 ownership ledger), `agentic-sdlc/` (acquisition receipts, v2
+activation receipts, and the `(agent, scope, root)` pointers), `agentic-sdlc-claude-statusline/`,
+`agentic-sdlc-claude-hooks/`, and the two leftovers above. An ABSENT store is named too, because the
+count has to be a fact about the distribution rather than about the host: a roster that reported only
+what it found would answer "how many stores does this thing have" with zero on a clean machine.
+Naming is not a finding — a live store present on a healthy host is a fact, and only a retired one
+carries a remedy — and naming a store never creates it. The roster is one table in
+`scripts/ccodex_sdlc.py`, and `tests/test_ccodex_sdlc_state_stores.py` re-derives the same set from
+the owning modules' own source by AST walk, so a seventh store fails the gate until the reader names
+it. A store whose `lstat` fails for anything but `ENOENT` reads `unreadable` rather than `absent`,
+and a retired one in that state produces no remedy: a reader that could not establish the directory
+is there must not tell an operator to delete it.
 
 The packaged statusline is now one BUNDLE LEDGER ROW (gh #10 phase 2): `lifecycle:install -- --agent
 claude` publishes `assets/claude/statusline-command.sh` to

@@ -336,6 +336,7 @@ def validate_policy(policy: dict[str, Any]) -> None:
         "bundle",
         "recovery",
         "future_dimensions",
+        "state_stores",
         "findings",
         "overall",
     ]
@@ -353,6 +354,7 @@ def validate_policy(policy: dict[str, Any]) -> None:
         "recovery": ["effect", "proposals", "state"],
         "recovery_item": ["action", "component", "path", "state"],
         "runtime": ["interpreter", "isolated", "state", "version"],
+        "state_store": ["component", "kind", "path", "state"],
     }
     if field_vocabularies != expected_fields:
         raise ReportInvariantError("read-report policy field vocabulary is invalid")
@@ -370,6 +372,8 @@ def validate_policy(policy: dict[str, Any]) -> None:
         "recovery_states",
         "recovery_item_states",
         "runtime_states",
+        "state_store_kinds",
+        "state_store_states",
     }
     if not isinstance(vocabularies, dict) or set(vocabularies) != expected_vocabularies:
         raise ReportInvariantError("read-report policy value vocabulary is invalid")
@@ -2056,33 +2060,120 @@ ORPHANED_WORKFLOW_RECEIPTS_REMEDY = (
     "`ccodex status --scope project --agent claude` for each repository it names"
 )
 
-#: Every store a deleted plane left behind: the directory name, the report component that names it, and
-#: the manual remedy.  One table rather than one function per store, because the reading is identical and
-#: the only per-store facts are these three; a third leftover arrives as a row.
-RETIRED_STORES: tuple[tuple[str, str, str], ...] = (
-    (RETIRED_OPERATOR_TOOLS_STORE, "operator-tools", RETIRED_OPERATOR_TOOLS_REMEDY),
-    (ORPHANED_WORKFLOW_RECEIPTS_STORE, "claude-workflows", ORPHANED_WORKFLOW_RECEIPTS_REMEDY),
+#: EVERY store this distribution can write directly under the operator's state root, live and retired
+#: alike: the directory name, the report component that names it, its kind, and -- for a retired plane's
+#: leftover -- the manual remedy.  gh #8 acceptance 9 is the reason this is ONE table rather than a
+#: per-plane function: the acceptance asks that `doctor --json` name every remaining store and that the
+#: count equal the count the tree actually has, which is only answerable against a single roster.  Before
+#: this table a populated host read out THREE of the six (the ledger path plus the two leftover findings),
+#: and the receipts plane, the statusline receipt, and the hook receipts were named nowhere.
+#:
+#: `kind` is the honest split, not a severity: a `live` store is one a shipped verb writes and reads, and
+#: a `retired` store is evidence a deleted plane left behind that nothing here reads, migrates, or
+#: removes.  Only the retired rows carry a remedy, because only they name something for the operator to
+#: do; a live store present on a healthy host is a fact, never a finding.
+#:
+#: The roster's COMPLETENESS is not asserted here -- a comment cannot check itself.  It is checked by
+#: `tests/test_ccodex_sdlc_state_stores.py`, which re-derives the same set of directory names from the
+#: owning modules' own source and fails the gate when a store exists that this table does not name.
+STATE_STORES: tuple[tuple[str, str, str, str | None], ...] = (
+    #: The v4 ownership ledger. One document per machine, which is what lets `doctor` answer "what is
+    #: on this box" (`install_skill_bundle.Config.state_path`).
+    ("agentic-sdlc-installer", "bundle", "live", None),
+    #: The receipt and pointer plane: acquisition receipts, v2 activation receipts, and the
+    #: `(agent, scope, root)` pointers under `activation/active/` (`STATE_PLANE_DIRECTORY`).  The
+    #: component is `receipts` rather than `activation` because acquisition receipts live here too,
+    #: and a component named for one of the two halves would read as a claim about the whole.
+    (STATE_PLANE_DIRECTORY, "receipts", "live", None),
+    #: The statusline activation's own receipt (`manage_claude_statusline.receipt_path`). A separate
+    #: grant writes it, so it is a separate store rather than a row in the ledger.
+    ("agentic-sdlc-claude-statusline", "claude-statusline", "live", None),
+    #: One receipt per wired `hooks.<Event>` array element (`manage_claude_hooks.receipts_root`).
+    ("agentic-sdlc-claude-hooks", "claude-hooks", "live", None),
+    (RETIRED_OPERATOR_TOOLS_STORE, "operator-tools", "retired", RETIRED_OPERATOR_TOOLS_REMEDY),
+    (ORPHANED_WORKFLOW_RECEIPTS_STORE, "claude-workflows", "retired", ORPHANED_WORKFLOW_RECEIPTS_REMEDY),
 )
+
+#: The leftover half, DERIVED rather than written twice: a store is retired in exactly one place, so a
+#: row cannot be live in the roster and retired in the finding table.  Every retired row carries a
+#: remedy by construction of the filter, which is why the projection can read it without a None check.
+RETIRED_STORES: tuple[tuple[str, str, str], ...] = tuple(
+    (directory, component, remedy)
+    for directory, component, kind, remedy in STATE_STORES
+    if kind == "retired" and remedy is not None
+)
+
+
+def state_store_verdict(store: Path) -> str:
+    """One store's verdict from one ``lstat``: ``present``, ``absent``, or ``unreadable``.
+
+    ``lstat`` and not ``exists``: a store replaced by a symlink is still a store this reader reports,
+    and following the link to decide would be following it out of the state root.  ``ENOENT`` is the
+    ordinary absent case; any other ``OSError`` is `unreadable` rather than absent, because a reader
+    that cannot look must not report that there was nothing there.
+    """
+    try:
+        store.lstat()
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unreadable"
+    return "present"
+
+
+def state_store_projection(bundle: ModuleType | None = None) -> list[dict[str, str]]:
+    """Name EVERY store in the roster by absolute path with a verdict, present or not.
+
+    Absent rows are named too, and that is the point of the field: the acceptance is that the count
+    doctor names equals the count the tree has, so a roster row that vanished from the output on an
+    empty host would make the count a property of the host rather than of the distribution.
+
+    ``bundle`` is OPTIONAL because the runtime-admission refusal renders its report before any adapter
+    is loaded, and that ordering is deliberate.  Passing no adapter resolves the same paths rather
+    than approximating them: ``operational_path`` is exactly ``abspath(expanduser())``, which
+    ``state_root_for`` already applies to whatever root it derives, so the two spellings of this home
+    cannot disagree.  The roster is also the one dimension a refused runtime can still observe
+    honestly -- an ``lstat`` needs no ownership adapter and mutates nothing -- so a refused report
+    names the same six stores instead of dropping the field and making the count conditional.
+    """
+    home = bundle.operational_path(Path.home()) if bundle is not None else Path.home()
+    state_root = state_root_for(home)
+    return sorted(
+        (
+            {
+                "component": component,
+                "kind": kind,
+                "path": str(state_root / directory),
+                "state": state_store_verdict(state_root / directory),
+            }
+            for directory, component, kind, _remedy in STATE_STORES
+        ),
+        key=lambda row: (row["path"], row["component"]),
+    )
 
 
 def retired_store_findings(bundle: ModuleType) -> list[dict[str, str]]:
     """Name every leftover store a deleted plane left behind, or say nothing at all.
 
-    ``lstat`` and not ``exists``: a store replaced by a symlink is still a leftover this reader
-    reports, and following it to decide would be following a link out of the state root.  Absence is
-    the ordinary case and is not a finding -- a host that never ran either retired path must read
-    byte-identically to one on a tree that never shipped them.
+    This is the REMEDY half, and it stays separate from `state_store_projection`'s roster half:
+    absence is the ordinary case and is not a finding -- a host that never ran either retired path
+    must read byte-identically in `findings` to one on a tree that never shipped them -- while the
+    roster names an absent store precisely so the count stays a fact about the distribution.
 
     Each store gets its OWN component, so a host carrying both reads as two findings with two remedies
     rather than one component speaking for two unrelated directories.
+
+    ``present`` and not "anything but absent", deliberately: an ``lstat`` that fails for a reason other
+    than ``ENOENT`` means this reader could not establish that the directory is there at all -- an
+    unsearchable parent answers ``EACCES`` for a name that may be absent -- so a remedy telling the
+    operator to delete it would be advice about a store nobody observed.  The roster row still records
+    ``unreadable``, which is the honest half of the same reading.
     """
     state_root = state_root_for(bundle.operational_path(Path.home()))
     findings: list[dict[str, str]] = []
     for directory, component, remedy in RETIRED_STORES:
         store = state_root / directory
-        try:
-            store.lstat()
-        except OSError:
+        if state_store_verdict(store) != "present":
             continue
         findings.append(make_finding("foreign-state", component, bounded_message(remedy), store))
     return findings
@@ -2110,6 +2201,7 @@ def make_report(
     runtime: dict[str, Any],
     bundle: dict[str, Any],
     extra_findings: list[dict[str, str]],
+    state_stores: list[dict[str, str]],
     *,
     exit_class: str,
 ) -> dict[str, Any]:
@@ -2130,6 +2222,7 @@ def make_report(
         "bundle": bundle,
         "recovery": {"effect": "none", "proposals": proposals, "state": recovery_state},
         "future_dimensions": {"activation": "unsupported", "release": "not-selected", "waves": "unsupported"},
+        "state_stores": state_stores,
         "findings": findings,
         "overall": {
             "exit_class": exit_class,
@@ -2201,6 +2294,7 @@ def validate_report(report: dict[str, Any], policy: dict[str, Any]) -> None:
     future = _exact_keys(report["future_dimensions"], fields["future_dimensions"], "report.future_dimensions")
     if future != {"activation": "unsupported", "release": "not-selected", "waves": "unsupported"}:
         raise ReportInvariantError("report future dimensions are invalid")
+    validate_state_stores(report["state_stores"], fields, vocab)
     for finding in report["findings"]:
         validate_finding(finding, fields, vocab)
     overall = _exact_keys(report["overall"], fields["overall"], "report.overall")
@@ -2230,6 +2324,35 @@ def validate_recovery_item(item: object, fields: dict[str, Any], vocab: dict[str
         raise ReportInvariantError("report recovery proposal is invalid")
 
 
+def validate_state_stores(rows: object, fields: dict[str, Any], vocab: dict[str, Any]) -> None:
+    """The whole-box store roster: closed shape, closed vocabularies, and COMPLETE.
+
+    Completeness is asserted here rather than trusted from the producer, because the count is the
+    acceptance (gh #8 acceptance 9): a report that dropped a roster row would answer the acceptance's
+    question with a smaller number and still validate.  So the count and the component set are both
+    compared against `STATE_STORES`, and a report reaches stdout only if it named every store.
+
+    Determinism is asserted the same way `bundle.state_paths` asserts it -- the rows must already be
+    in the producer's sort order and must not repeat a path -- so two runs on one host are byte-equal.
+    """
+    if not isinstance(rows, list):
+        raise ReportInvariantError("report state stores must be a list")
+    seen: list[tuple[str, str]] = []
+    for row in rows:
+        row = _exact_keys(row, fields["state_store"], "report state store")
+        if row["kind"] not in vocab["state_store_kinds"] or row["state"] not in vocab["state_store_states"]:
+            raise ReportInvariantError("report state store vocabulary is invalid")
+        if not all(isinstance(row[field], str) and row[field] for field in ("component", "path")):
+            raise ReportInvariantError("report state store values are invalid")
+        seen.append((row["path"], row["component"]))
+    if seen != sorted(seen) or len(seen) != len(set(seen)):
+        raise ReportInvariantError("report state stores are not deterministic")
+    if len(rows) != len(STATE_STORES):
+        raise ReportInvariantError("report state stores must name every store in the roster")
+    if {row["component"] for row in rows} != {component for _d, component, _k, _r in STATE_STORES}:
+        raise ReportInvariantError("report state store components must be the roster's own")
+
+
 def validate_finding(finding: object, fields: dict[str, Any], vocab: dict[str, Any]) -> None:
     finding = _exact_keys(finding, fields["finding"], "report finding")
     if finding["code"] not in vocab["finding_codes"] or finding["component"] not in vocab["finding_components"]:
@@ -2249,6 +2372,13 @@ def render_human(report: dict[str, Any]) -> str:
         f"recovery: {report['recovery']['state']} (no effects)",
         "future dimensions: release=not-selected, activation=unsupported, waves=unsupported",
     ]
+    # One line per store, absent ones included: the text and JSON renderings must answer "how many
+    # stores does this distribution have" identically, and an operator reading the text form is
+    # exactly the reader who needs to know a store exists before deciding it is empty.
+    for store in report["state_stores"]:
+        lines.append(
+            f"state store [{store['component']}/{store['kind']}]: {store['state']} ({store['path']})"
+        )
     for finding in report["findings"]:
         lines.append(
             f"finding [{finding['component']}/{finding['code']}]: {finding['message']} ({finding['path']})"
@@ -2329,6 +2459,7 @@ def main(argv: list[str] | None = None) -> int:
                 runtime,
                 empty_projection(),
                 [make_finding("runtime-admission-refused", "runtime", reason or "runtime admission refused", Path(sys.executable))],
+                state_store_projection(),
                 exit_class="safe-refusal",
             )
             emit(report, json_output)
@@ -2389,6 +2520,7 @@ def main(argv: list[str] | None = None) -> int:
                 *readiness_findings(readiness),
                 *retired_store_findings(adapters[1]),
             ],
+            state_store_projection(adapters[1]),
             exit_class="ok",
         )
         emit(report, json_output)

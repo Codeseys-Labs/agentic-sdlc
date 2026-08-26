@@ -607,26 +607,31 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertEqual(admitted.returncode, 0, admitted.stderr)
             self.assertEqual(json.loads(admitted.stdout)["runtime"]["state"], "admitted")
 
-    def test_validator_pins_both_ccodex_report_policies_by_digest(self) -> None:
+    def test_validator_pins_every_ccodex_report_policy_by_digest(self) -> None:
         """The structural re-derivation collapsed to a digest; the predicate got stronger.
 
-        Both descriptors are parsed by `scripts/ccodex_sdlc.py` on every invocation, which is
+        The pinned descriptor is parsed by `scripts/ccodex_sdlc.py` on every invocation, which is
         where malformed input must fail. What this pass owes is drift detection in the checkout,
         so the mutations below are the ones the old 85-line structural walk covered — a widened
         vocabulary, a dropped field, a trailing byte — plus the two cases it could not express:
         an unrelated byte anywhere in the document, and a symlinked policy.
+
+        ONE descriptor since agentic-sdlc-7a2b W6, and the closed-set assertion is the reason the
+        deletion is checkable here: `policy/ccodex-sdlc-read-report.v2.json` had no runtime reader,
+        and re-adding it to the pin map without a reader now fails this equality instead of passing
+        as more coverage. The loop shape is kept so the next reviewed schema is one map entry.
         """
         clean = validator.Validation()
         validator.validate_ccodex_sdlc_report_policies(ROOT, clean)
         self.assertEqual(clean.errors, [])
 
-        relatives = (
-            "policy/ccodex-sdlc-read-report.v1.json",
-            "policy/ccodex-sdlc-read-report.v2.json",
-        )
+        relatives = ("policy/ccodex-sdlc-read-report.v1.json",)
         self.assertEqual(
             sorted(validator.CCODEX_SDLC_REPORT_POLICY_SHA256), sorted(relatives)
         )
+        # The retired descriptor is gone from the tree as well as from the pin map: a pin map that
+        # forgot it while the bytes stayed would leave an unreviewed policy in a released payload.
+        self.assertFalse((ROOT / "policy" / "ccodex-sdlc-read-report.v2.json").exists())
 
         for relative in relatives:
             original = json.loads((ROOT / relative).read_text())
@@ -671,8 +676,9 @@ class CcodexSdlcTests(unittest.TestCase):
                 policy_path.symlink_to(ROOT / relative)
                 linked = validator.Validation()
                 validator.validate_ccodex_sdlc_report_policies(root, linked)
-                # The absent sibling policy also reports "missing or linked", so the assertion
-                # must name THIS relative or it would pass with the is_symlink branch deleted.
+                # The assertion names THIS relative rather than matching the phrase anywhere: with
+                # the is_symlink branch deleted the link resolves to the reviewed bytes, the digest
+                # matches, and no error is raised at all — so this case dies on the mutation.
                 self.assertTrue(
                     any(
                         error.startswith(f"{relative}: ") and "missing or linked" in error

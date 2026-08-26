@@ -48,7 +48,7 @@ progress, never product completion or authority.
 | ADR-0018 | accepted | Sensitive state remains in its owning product plane. |
 | ADR-0019 | accepted | Every effect requires fresh operation-specific human authority. |
 | ADR-0020 | accepted | Readiness-dependent execution uses exact verified dependencies. |
-| ADR-0021 | proposed | A versioned mise release is the future primary distribution topology. |
+| ADR-0021 | proposed (amended 2026-08-26) | A versioned mise release is the future primary distribution topology; its lifecycle is one top-level verb family over (agent, scope, root), and the project-scope grant unit is a plane rather than a file. |
 | ADR-0022 | accepted (amended 2026-08-22) | Repository activation is a classify-then-shown-diff apply lifecycle; the transaction engine, plan digest, machine receipt, and terminal readiness vocabulary are retired. |
 | ADR-0023 | accepted | One evidence-preserving documentation profile governs product prose. |
 | ADR-0024 | accepted (amended 2026-08-23) | One approved wave is one bounded execution, today as worktree subagents; the Dynamic Workflow DAG substrate is aspirational pending live-host proof. |
@@ -117,3 +117,45 @@ release evidence exists.
 If the initiative has fewer than five non-superseded child decisions after later consolidation,
 the ADR owner re-examines whether pairwise relationships are sufficient and this rollup should be
 deprecated.
+
+## Amendment — 2026-08-26: the registry is reconciled with the front-door train, and no status moved
+
+The agentic-sdlc-7a2b wave train (gh #8, gh #11, gh #10) landed the top-level verb family, the v2
+activation-receipt body, and the (agent, scope, root) receipt-and-pointer plane, and ADR-0021 carries
+a dated amendment for the first and third. This section records the reconciliation, because the rule
+above — "Every child status transition rebuilds the registry and this rollup in the same change" —
+was written for transitions and left an amendment's registry visibility unstated, which is how
+ADR-0022's and ADR-0024's amendment dates came to appear in the registry by convention rather than by
+rule. The rule is now read as covering both: a child's registry row states its amendment date.
+
+**What changed:** ADR-0021's row alone, to `proposed (amended 2026-08-26)`, with its decision summary
+widened to name the verb family and the plane-sized grant unit. Nothing else.
+
+**What did NOT change, and was verified rather than assumed** (each read against the tree on
+2026-08-26, not inherited from the plan):
+
+- **The rollup is unaffected on the axis it measures.** ADR-0021 is still `proposed`, so the
+  initiative's closed lifecycle status is still `proposed`, and the "ADR-0021 therefore keeps this
+  initiative proposed until its release evidence exists" sentence stands verbatim. An amendment is
+  not a transition: the train changed what the child decides, not whether it is decided. ADR-0021's
+  own amendment records why `accepted` was not this train's to grant — ADR-0011's supersession
+  condition requires a **new** superseding ADR (`docs/adr/0011-...:163`), which no wave wrote.
+- **ADR-0022's row does not disagree with the live `recover` plan digest.** The row says the plan
+  digest is retired, and the digest the front-door train exercises is a different object: ADR-0022's
+  was an approve-then-write authorization over a repository activation, while `recover`'s resumes one
+  already-armed pending transaction and is re-derived from live state at apply time. The plan's §3.6
+  states the distinction as doctrine; the registry row needed no edit, and editing it would have
+  implied a supersession that did not happen.
+- **ADR-0027's row does not need widening for the Codex plane.** Wave WX added a codex compatibility
+  row to `policy/release-contract.v1.json` with its own capability evidence
+  (`docs/evidence/2026-08-25-codex-host-plane.md`), which is ADR-0027's rule being *applied* rather
+  than changed. The row states the rule.
+- **Every child still carries its `Part-Of: ADR-0028` edge**, ADR-0021's included, so the
+  Confirmation section's review remains runnable as written.
+
+**One thing this amendment does not do:** it does not reconcile the registry with the product spec.
+`docs/plans/claude-code-first-harness/agentic-sdlc-product-spec.md` Implementation Decision 91 still
+enumerates the retired `ccodex sdlc` namespace, and moving it is product-decision work the spec's own
+preamble routes back to its owner rather than to a documentation wave. The predicate that blocked
+even a compatible addition there was relaxed in the same wave (seed agentic-sdlc-a010), so the edit
+is unblocked and outstanding, not unblocked and done.
