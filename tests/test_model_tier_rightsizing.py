@@ -915,8 +915,14 @@ await agent(calibrationExample, { model: 'gpt-5.6-terra[1m]', effort: 'ultra' })
         # true here and now: a drifted mirror would be a divergent second active matrix, so it falls
         # back under the ban rather than out of it.
         self.assertEqual(PLUGIN_CALIBRATION.read_bytes(), CALIBRATION.read_bytes())
+        # Linked worktrees under the primary root are OTHER checkouts, each carrying its own
+        # canonical copy of the matrix; scanning them reports every live wave as a second active
+        # matrix while adding no protection to this tree's own content.
+        foreign_checkouts = (ROOT / ".worktrees", ROOT / ".claude" / "worktrees")
         for path in ROOT.rglob("*.md"):
             if path in (CALIBRATION, PLUGIN_CALIBRATION):
+                continue
+            if any(path.is_relative_to(checkout) for checkout in foreign_checkouts):
                 continue
             with self.subTest(path=path):
                 self.assertNotIn(ACTIVE_MATRIX_HEADER, path.read_text(encoding="utf-8"))
