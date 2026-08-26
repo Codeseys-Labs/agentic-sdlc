@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 import hashlib
 import importlib.util
 import io
@@ -87,6 +87,37 @@ reader = _load(READER_PATH, "ccodex_sdlc_install_reader")
 # document, so the closed key set, the constants, and the two layout strings are pinned against the
 # module that actually writes them rather than against a schema table with no producer.
 shim = _load(RECEIPT_PRODUCER_SHIM_PATH, "ccodex_sdlc_install_acquisition_shim")
+
+def as_reported(value: object) -> str:
+    """One path spelled the way a rendered REPORT LINE spells it, not the way `str` spells it.
+
+    Every filesystem-derived value reaches a rendered line through the receipt family's
+    `escape_display`, a rule that escapes the escape character itself, so `\\` becomes `\\\\`. On POSIX
+    that is the identity and the difference is invisible; on native Windows every path in every report
+    is doubled. Use this for `outcome.stdout`, which is rendered once.
+    """
+    return receipts.escape_display(str(value))
+
+
+def as_refused_through_main(value: object) -> str:
+    """One path spelled the way `main`'s refusal channel spells it, which is TWO escapes deep.
+
+    The value is escaped where the `Refusal` is RAISED, and `main` escapes the whole assembled message
+    AGAIN before printing it (this module's `except Refusal` handler), so one backslash reaches stderr
+    as four. Use this for `outcome.stderr`.
+
+    THE DOUBLE ESCAPE IS THE PRODUCT'S AND IS REPORTED RATHER THAN ENDORSED -- it renders a path an
+    operator cannot copy, and `ccodex_sdlc_update.py` and `ccodex_sdlc_recover.py` carry the same
+    composition, so retiring it is a reviewed change rather than a CI repair. This helper names the two
+    sites instead of hard-coding a backslash count, so the day the outer escape goes, it fails.
+
+    NEITHER HELPER'S ASSERTIONS WERE RED. The two classes that use them are `@WINDOWS_SKIP`-guarded, so
+    these six comparisons were armed rather than failing; they are the same class as the four that DID
+    fail in the uninstall and update suites at main@818bf09 (seed context `ci-red-818bf09`), measured
+    here by forcing a backslash into the fixture root on Linux.
+    """
+    return receipts.escape_display(receipts.escape_display(str(value)))
+
 
 INSTANT = "2026-08-20T12:13:14Z"
 LATER_INSTANT = "2026-08-20T12:15:00Z"
@@ -690,7 +721,7 @@ class EndToEndInstallTest(TemporaryRoot):
             "validated",
             receipts.derive("validate", pointed, "the active pointer")["verdict"],
         )
-        self.assertIn(f"active pointer {fixture.pointer}", outcome.stdout)
+        self.assertIn(f"active pointer {as_reported(fixture.pointer)}", outcome.stdout)
         self.assertIn("names this activation's receipt", outcome.stdout)
 
     def test_second_install_of_the_same_payload_writes_nothing_new(self) -> None:
@@ -1026,6 +1057,37 @@ class PlatformTest(TemporaryRoot):
         # Positive control: the SAME fixture with the certified observation injected admits the run,
         # regardless of what the real host this suite executes on happens to be.
         self.assertEqual(0, call_main(self.fixture(observed_system="Linux")).code)
+
+    def test_the_platform_refusal_names_the_scope_that_was_typed(self) -> None:
+        """The refusal that fires FIRST off Linux must not name a plane the operator did not select.
+
+        ``--scope user`` was a literal in this sentence, so a ``--scope project`` run on Darwin was
+        refused by a message about the user plane. It surfaced in the macOS CI seam transcript for
+        main@818bf09 (seed context ``ci-red-818bf09``), where the case had typed ``--scope project`` and
+        read back ``ccodex install --scope user --agent claude``. Two things make that worth pinning
+        rather than shrugging at: the gate runs BEFORE the project-root ladder, so this sentence is the
+        ONLY thing an off-Linux operator sees about their own request, and the seam suite now reads the
+        scope here as its off-Linux proof that the flag reached the module at all.
+
+        ``admit_platform`` is called directly because the subject is one sentence, not a run: a project
+        fixture would add a root, a ladder, and a plane to a test about a string.
+        """
+        base = self.fixture(observed_system="Darwin").config
+        for scope in ("user", "project"):
+            with self.subTest(scope=scope):
+                with self.assertRaises(install.Refusal) as raised:
+                    install.admit_platform(dataclass_replace(base, scope_kind=scope))
+                self.assertIn(
+                    f"ccodex install --scope {scope} --agent claude", str(raised.exception)
+                )
+        # POSITIVE CONTROL: the sentence is reached only because the platform is uncertified, so the
+        # certified observation raises nothing and there is no message to name a scope in.
+        self.assertEqual(
+            ("Linux", "x86_64"),
+            install.admit_platform(
+                dataclass_replace(base, observed_system="Linux", observed_machine="x86_64")
+            ),
+        )
 
     def test_unsupported_architecture_refuses_by_name(self) -> None:
         fixture = self.fixture(observed_machine="aarch64")
@@ -1441,7 +1503,7 @@ class KeyedPointerTest(TemporaryRoot):
         self.assertFalse(
             fixture.legacy_pointer.exists(), "the pre-keyed name is history, never freshly written"
         )
-        self.assertIn(str(fixture.pointer), outcome.stdout)
+        self.assertIn(as_reported(fixture.pointer), outcome.stdout)
         # The pointer's bytes ARE the receipt's, and its filename agrees with the scope inside it.
         document = json.loads(fixture.pointer.read_text(encoding="utf-8"))
         self.assertEqual([], receipts.pointer_disagreements(fixture.pointer, document["body"]))
@@ -1459,8 +1521,8 @@ class KeyedPointerTest(TemporaryRoot):
 
         self.assertEqual(0, outcome.code, outcome.stderr)
         self.assertIn("migrated the legacy active pointer", outcome.stdout)
-        self.assertIn(str(fixture.legacy_pointer), outcome.stdout)
-        self.assertIn(str(fixture.pointer), outcome.stdout)
+        self.assertIn(as_reported(fixture.legacy_pointer), outcome.stdout)
+        self.assertIn(as_reported(fixture.pointer), outcome.stdout)
         self.assertFalse(fixture.legacy_pointer.exists())
         self.assertTrue(fixture.pointer.is_file())
 
@@ -1477,8 +1539,8 @@ class KeyedPointerTest(TemporaryRoot):
 
         self.assertEqual(3, outcome.code, outcome.stdout)
         self.assertIn("legacy-pointer-ambiguity", outcome.stderr)
-        self.assertIn(str(fixture.legacy_pointer), outcome.stderr)
-        self.assertIn(str(fixture.pointer), outcome.stderr)
+        self.assertIn(as_refused_through_main(fixture.legacy_pointer), outcome.stderr)
+        self.assertIn(as_refused_through_main(fixture.pointer), outcome.stderr)
         self.assertIn("remove the one that is not current", outcome.stderr)
         self.assertEqual(before, {path: path.read_bytes() for path in before})
         # Positive control: removing the legacy copy lets the identical run complete.
@@ -2149,7 +2211,7 @@ class PreviewTest(TemporaryRoot):
         outcome = call_main(fixture, argv=["--host", "claude", "--dry-run"])
         self.assertEqual(0, outcome.code, outcome.stderr)
         self.assertIn("acquisition ticket: would REUSE", outcome.stdout)
-        self.assertIn(str(fixture.acquisition_receipt), outcome.stdout)
+        self.assertIn(as_reported(fixture.acquisition_receipt), outcome.stdout)
 
     def test_a_preview_refuses_exactly_what_a_real_run_refuses(self) -> None:
         """A preview that admitted more than the run it previews would be a different operation."""

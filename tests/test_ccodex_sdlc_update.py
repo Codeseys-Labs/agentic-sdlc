@@ -79,6 +79,45 @@ reader = _load(READER_PATH, "ccodex_sdlc_update_reader")
 # table: the contract this module re-expresses is now owned by the module that writes the document.
 shim = _load(RECEIPT_PRODUCER_SHIM_PATH, "ccodex_sdlc_update_acquisition_shim")
 
+#: Whether a project-scope receipt can be SEALED over a fixture root here, which is the schema's own
+#: question rather than a platform's: `distribution_activation_receipt.check_scope` admits a
+#: `scope.root` only when it starts with `/`, and a drive-letter root is declined by that rule exactly
+#: as a relative one is. That is why this module's project-scope fixture refused to seal on the native
+#: Windows CI leg at main@818bf09 (seed context `ci-red-818bf09`), and it is guarded rather than widened:
+#: a schema admitting `C:\...` would key a pointer on a path a POSIX reader resolves against its own
+#: working directory. The predicate MEASURES the temporary root the fixtures build under.
+_TEMPORARY_ROOT = tempfile.gettempdir()
+SEALABLE_PROJECT_ROOT = unittest.skipUnless(
+    Path(_TEMPORARY_ROOT).as_posix().startswith("/"),
+    f"a project-scope receipt records an absolute POSIX root and this host's temporary directory "
+    f"({_TEMPORARY_ROOT!r}) is not one, so no fixture here can seal one; the project-scope plane is "
+    "certified on Linux only",
+)
+
+
+def as_refused_through_main(value: object) -> str:
+    """One path spelled the way `main`'s refusal channel spells it, which is TWO escapes deep.
+
+    A filesystem-derived value is escaped where the `Refusal` is RAISED -- through `show` or
+    `escape_display`, a rule that escapes the escape character itself, so `\\` becomes `\\\\` -- and
+    `main` then escapes the whole assembled message AGAIN before printing it (this module's
+    `except Refusal` handler). Two applications at two sites, so one backslash in a path reaches stderr
+    as four.
+
+    ON POSIX EVERY STEP OF THAT IS THE IDENTITY, which is why two assertions here compared a refusal
+    against a bare `str(path)` and read as correct until the native Windows leg, where every path
+    carries several backslashes (main@818bf09, seed context `ci-red-818bf09`).
+
+    THE DOUBLE ESCAPE IS THE PRODUCT'S AND IS REPORTED RATHER THAN ENDORSED. It renders a path an
+    operator cannot copy, and the same composition exists in `ccodex_sdlc_install.py` and
+    `ccodex_sdlc_recover.py` -- a family-wide convention whose removal is a reviewed change rather than
+    a CI repair, because that outer escape is the only thing between an unescaped raise site and a
+    control character on a terminal. So this helper NAMES the two sites instead of hard-coding an
+    observed backslash count: the day the outer escape is retired, this composition is what fails.
+    """
+    return receipts.escape_display(receipts.escape_display(str(value)))
+
+
 PRIOR_INSTANT = "2026-08-19T09:10:11Z"
 INSTANT = "2026-08-20T12:13:14Z"
 LATER_INSTANT = "2026-08-20T12:45:00Z"
@@ -1167,13 +1206,14 @@ class GenerationMigrationTest(TemporaryRoot):
 
         self.assertEqual(3, outcome.code, outcome.stdout)
         self.assertIn("legacy-pointer-ambiguity", outcome.stderr)
-        self.assertIn(str(fixture.legacy_pointer), outcome.stderr)
-        self.assertIn(str(fixture.pointer), outcome.stderr)
+        self.assertIn(as_refused_through_main(fixture.legacy_pointer), outcome.stderr)
+        self.assertIn(as_refused_through_main(fixture.pointer), outcome.stderr)
         self.assertEqual(before, {path: path.read_bytes() for path in before})
         # Positive control: with the ambiguity resolved the identical plane refreshes.
         fixture.legacy_pointer.unlink()
         self.assertEqual(0, call_main(fixture).code)
 
+    @SEALABLE_PROJECT_ROOT
     def test_a_pointer_whose_receipt_names_another_scope_refuses_on_the_pointer_axis(self) -> None:
         fixture = self.fixture()
         self.repoint(

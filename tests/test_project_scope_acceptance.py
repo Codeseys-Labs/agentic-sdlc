@@ -46,6 +46,7 @@ from scripts import ccodex_sdlc_uninstall as uninstall  # noqa: E402
 from scripts import ccodex_sdlc_update as update  # noqa: E402
 from scripts import distribution_activation_receipt as receipts  # noqa: E402
 from scripts import install_skill_bundle as bundle  # noqa: E402
+from tests.support.no_noatime_host import requires_noatime  # noqa: E402
 
 
 def _load(path: Path, name: str) -> object:
@@ -113,8 +114,18 @@ def newer_than(root: Path, marker_ns: int) -> list[str]:
 
 @GIT_SKIP
 @WINDOWS_SKIP
+@requires_noatime()
 class ProjectScopeAcceptance(unittest.TestCase):
-    """One operator plane, one user activation, and two independent project activations."""
+    """One operator plane, one user activation, and two independent project activations.
+
+    THE `requires_noatime` GUARD IS ABOUT THE LADDER, NOT ABOUT THIS FILE. Every case here begins by
+    ADMITTING a real repository, and the shipped ladder reaches that verdict only where `os.O_NOATIME`
+    exists; on Darwin its absence made every one of this class's eight cases refuse `unsafe-node`
+    against repositories `git init` had just built -- ten reported failures, because two carry subtests
+    (main@818bf09, seed context `ci-red-818bf09`). The two
+    sibling classes below stay unguarded on purpose -- they never admit a root -- so this guard narrows
+    to the dependency rather than to the module.
+    """
 
     def setUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory(prefix="project-scope-acceptance-")

@@ -66,6 +66,10 @@ planes = _load(ROOT / "scripts" / "ccodex_sdlc_host_planes.py", "two_agent_host_
 # and one really sealed acquisition receipt. Reusing it is the point -- a second fabricator here could
 # drift from the shape the product admits and this file would then prove something about the copy.
 install_suite = _load(ROOT / "tests" / "test_ccodex_sdlc_install.py", "two_agent_install_suite")
+#: The one owner of "an absolute path a fixture may name on any host", loaded by path like every other
+#: sibling here. `Path("/fixture/home")` is not absolute on Windows, and comparing it against what the
+#: installer returned is what broke this module's derivation test there.
+platform_paths = _load(ROOT / "tests" / "support" / "platform_paths.py", "two_agent_platform_paths")
 
 WINDOWS_SKIP = unittest.skipIf(
     os.name == "nt",
@@ -500,9 +504,18 @@ class ClosedTableTest(unittest.TestCase):
         This is what makes ``collection`` a re-expression rather than a second opinion -- the installer
         decides where an agent's entries live, and a table that disagreed would bound a removal at a
         root the ownership rows are not under.
+
+        THE TWO HOMES ARE BUILT FROM THE HOST'S OWN ANCHOR, not from a ``/fixture/...`` literal. Such a
+        literal is absolute on POSIX and NOT on Windows, so the installer completed it against the
+        current drive while the table kept the incomplete spelling, and both subtests compared
+        ``C:/fixture/home/.claude`` against ``/fixture/home/.claude`` (main@818bf09, seed context
+        ``ci-red-818bf09``). Nothing about the derivation changed; the fixture stopped claiming to be
+        absolute without being so.
         """
-        home = Path("/fixture/home")
-        codex_home = Path("/fixture/codex")
+        home = platform_paths.absolute_fixture("fixture", "home")
+        codex_home = platform_paths.absolute_fixture("fixture", "codex")
+        self.assertTrue(home.is_absolute(), home)
+        self.assertTrue(codex_home.is_absolute(), codex_home)
         config = bundle.Config(ROOT, home, codex_home, "copy", False, "claude", None)
         for agent, configured in (("claude", home), ("codex", codex_home)):
             with self.subTest(agent=agent):

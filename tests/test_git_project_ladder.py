@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import stat
 import subprocess
@@ -32,6 +32,7 @@ ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts import install_skill_bundle as bundle  # noqa: E402
+from tests.support.platform_paths import ABSOLUTE_ANCHOR, absolute_fixture  # noqa: E402
 
 #: The reader under test, loaded exactly as the product loads it: through the substrate's one loader,
 #: from a named distribution root. A second loading rule here could pass while the product's failed.
@@ -499,11 +500,59 @@ class LoaderTest(unittest.TestCase):
         self.assertEqual(reader.name, "git_project_detector.py")
 
     def test_the_distribution_root_is_not_the_payload_root(self) -> None:
-        """The two roots this module keeps apart, pinned so a later edit cannot merge them."""
+        """The two roots this module keeps apart, pinned so a later edit cannot merge them.
+
+        THE THREE ROOTS COME FROM THE HOST'S OWN ANCHOR. `Path("/payload")` is absolute on POSIX and
+        not on Windows, where it carries a root and no drive, so the equality below compared
+        `WindowsPath('/payload')` against the `WindowsPath('C:/payload')` the config had completed
+        (main@818bf09, seed context `ci-red-818bf09`). The subject is which root the config keeps, not
+        how a fixture spells one.
+        """
+        payload = absolute_fixture("payload")
         self.assertEqual(ROOT, bundle.distribution_root())
-        config = bundle.Config(Path("/payload"), Path("/home"), Path("/codex"), "copy", False, "claude", None)
-        self.assertEqual(Path("/payload"), config.repo_root)
+        config = bundle.Config(
+            payload, absolute_fixture("home"), absolute_fixture("codex"), "copy", False, "claude", None
+        )
+        self.assertEqual(payload, config.repo_root)
         self.assertNotEqual(config.repo_root, bundle.distribution_root())
+
+
+class AnchoredFixturePathTest(unittest.TestCase):
+    """Why a fixture may not write `/payload` and call it absolute, decided here instead of on Windows.
+
+    Three modules compared a POSIX-absolute literal against what a product function returned, and all
+    three failed on the native Windows CI leg of main@818bf09 (seed context `ci-red-818bf09`). No
+    product function was wrong: `os.path.abspath` completes a path that carries a root but no drive,
+    which is what `/payload` is to Windows, so the fixture's spelling and the product's result were two
+    different paths.
+
+    THIS RUNS ON LINUX. `PureWindowsPath` decides the flavour question without a Windows host, and the
+    same completion is then driven through the real product function with a value that is incomplete
+    under THIS flavour -- so the mechanism is executed rather than described, and a later reader can see
+    the failure class without a six-minute cross-platform round trip.
+    """
+
+    def test_a_path_with_a_root_and_no_drive_is_not_absolute_to_windows(self) -> None:
+        self.assertTrue(PurePosixPath("/payload").is_absolute())
+        self.assertFalse(PureWindowsPath("/payload").is_absolute(), "the exact shape three fixtures wrote")
+        # POSITIVE CONTROL: adding the drive is the whole difference, so the assertion above is about
+        # the missing anchor and not about `PureWindowsPath` rejecting the name.
+        self.assertTrue(PureWindowsPath("C:/payload").is_absolute())
+
+    def test_the_product_completes_an_unanchored_path_against_the_working_directory(self) -> None:
+        # `payload` is to POSIX what `/payload` is to Windows: incomplete. The product treats both the
+        # same way, which is what turned a fixture literal into a different path on that host.
+        self.assertEqual(Path.cwd() / "payload", bundle.operational_path(Path("payload")))
+        # ... while an anchored fixture path survives the same call unchanged, which is the property
+        # every comparison in those three modules actually needs.
+        anchored = absolute_fixture("payload")
+        self.assertTrue(anchored.is_absolute(), anchored)
+        self.assertEqual(anchored, bundle.operational_path(anchored))
+
+    def test_the_anchor_is_derived_from_this_host_rather_than_written_down(self) -> None:
+        """A hard-coded `/` would be the same assumption in the other direction, so it is measured."""
+        self.assertEqual(ABSOLUTE_ANCHOR, Path(ABSOLUTE_ANCHOR.anchor), "the anchor carries no tail")
+        self.assertEqual(("payload",), absolute_fixture("payload").parts[1:])
 
 
 if __name__ == "__main__":

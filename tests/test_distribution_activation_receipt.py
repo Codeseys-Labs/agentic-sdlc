@@ -622,6 +622,18 @@ class HostAndScope(SealsClean):
             ({"agent": "claude", "kind": "user", "root_key": "0" * 16}, "does not admit"),
             ({"agent": "claude", "kind": "project"}, "carries no root"),
             ({"agent": "claude", "kind": "project", "root": "relative/repo"}, "not an absolute POSIX path"),
+            # A DRIVE-LETTER ROOT IS REFUSED BY THE SAME RULE, and it is a separate case because it is
+            # the one a real host produces: `C:\Users\...` is absolute to Windows and carries no leading
+            # `/`, so the schema declines it exactly as it declines `relative/repo`. That is why every
+            # project-scope fixture in `tests/test_ccodex_sdlc_uninstall.py` and
+            # `tests/test_ccodex_sdlc_update.py` refused to seal on the native Windows CI leg at
+            # main@818bf09 (seed context `ci-red-818bf09`) and is now guarded rather than widened -- a
+            # schema that admitted this shape would key a pointer, and bound a removal, on a path a
+            # POSIX reader of the same receipt resolves against its own working directory.
+            (
+                {"agent": "claude", "kind": "project", "root": "C:\\Users\\runner\\repo"},
+                "not an absolute POSIX path",
+            ),
             ({"agent": "claude", "kind": "all", "root": "/srv/repo"}, "closed vocabulary"),
             ("user", "not a closed scope object"),
         ):

@@ -268,6 +268,20 @@ LIFECYCLE_REASON_SOURCES = {
 #: grammar it drives.
 _USER_CLAUDE = ("--scope", "user", "--agent", "claude")
 
+#: Whether the LADDER a lifecycle module runs after its platform gate is reachable on this host.
+#:
+#: The gate comes FIRST, by design: `ccodex install` and `ccodex uninstall` refuse an uncertified
+#: operating system before they resolve a root or read an acquisition plane, because the candidate they
+#: would activate is linux-x64. So a case whose declared refusal comes from a later rung cannot observe
+#: that rung anywhere else, and three cases asserting Linux-only fragments unconditionally failed on the
+#: macOS leg of main@818bf09 for exactly that reason (seed context `ci-red-818bf09`) -- the modules were
+#: right and the declarations were platform-blind.
+#:
+#: `LIFECYCLE_OWN_REASON` already carries the alternation for the empty-host reasons; this flag is for
+#: the needles no alternation covers, so each case keeps its FULL Linux assertion and gains a real
+#: assertion elsewhere instead of being skipped.
+LADDER_REACHABLE = sys.platform.startswith("linux")
+
 
 def _reader_json_case(
     verb: str,
@@ -653,10 +667,17 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         # BEFORE it reads the acquisition plane -- which is why an empty host answers about the root
         # rather than about a missing candidate. The case fails if either flag is dropped, if the reader
         # refuses the scope itself, or if a user-scope plane is silently activated instead.
+        # OFF LINUX the ladder is unreachable -- the module's platform gate refuses the linux-x64
+        # candidate first -- so the root-shaped needles are Linux-only while the module's own prefix,
+        # the empty stdout, and the four forbidden tokens still hold. What the other branch asserts is
+        # that the refusal names the SCOPE THAT WAS TYPED, which is the same "the flag reached the
+        # module" property from the other side: a run that silently fell back to the user plane would
+        # be refused by a sentence about `--scope user`, and that is precisely what this branch reads
+        # as a failure.
         stderr_present=(
-            LIFECYCLE_OWN_PREFIX["install"],
-            "unresolvable-project-root",
-            "/nonexistent/project",
+            (LIFECYCLE_OWN_PREFIX["install"], "unresolvable-project-root", "/nonexistent/project")
+            if LADDER_REACHABLE
+            else (LIFECYCLE_OWN_PREFIX["install"], "--scope project", "certified only on")
         ),
         stderr_absent=(
             "project-scope-not-yet-wired",
@@ -747,7 +768,12 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         # An admitted mode changes nothing about WHY an empty host refuses: the module still reaches its
         # own payload admission and names it. What this case adds is that the vector carrying `--mode`
         # is one the module ADMITS -- a module that rejected the shape would answer "admits exactly".
-        stderr_present=(LIFECYCLE_OWN_PREFIX["install"], "no acquired candidate is available"),
+        # THE REASON IS THE PER-PLATFORM ALTERNATION, not the Linux half of it: off Linux the module's
+        # platform gate refuses before the payload admission, so this case asserted a fragment its own
+        # module cannot emit there (main@818bf09, seed context `ci-red-818bf09`). Both fragments are
+        # pinned against the module's source by `SeamInventoryTest`, so a reworded refusal still fails.
+        stderr_present=(LIFECYCLE_OWN_PREFIX["install"],),
+        stderr_present_any=LIFECYCLE_OWN_REASON["install"],
         stderr_absent=(
             "mode-not-yet-wired",
             "admits exactly",
@@ -765,7 +791,13 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         # it looked for -- the same refusal the flagless vector gets, which is correct: a preview of
         # nothing is still nothing. What this case owns is that the flag is FORWARDED and admitted
         # rather than refused by name, and that the retired token is gone.
-        stderr_present=(LIFECYCLE_OWN_PREFIX["uninstall"], "no installer ownership document"),
+        # THE REASON IS THE PER-PLATFORM ALTERNATION, not the Linux half of it: off Linux the module's
+        # platform gate refuses before the ladder runs, so the empty-host reason this case named is one
+        # its own module cannot emit there (main@818bf09, seed context `ci-red-818bf09`). Only that one
+        # needle moved -- the module's own prefix appears in BOTH refusals and stays asserted
+        # unconditionally, which is what keeps "the flag reached the module" proven on every platform.
+        stderr_present=(LIFECYCLE_OWN_PREFIX["uninstall"],),
+        stderr_present_any=LIFECYCLE_OWN_REASON["uninstall"],
         stderr_absent=(
             "dry-run-not-yet-wired",
             "admits exactly",

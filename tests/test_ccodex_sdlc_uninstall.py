@@ -63,6 +63,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,7 @@ sys.path.insert(0, str(ROOT))
 from scripts import ccodex_sdlc_uninstall as target  # noqa: E402
 from scripts import distribution_activation_receipt as dar  # noqa: E402
 from scripts import install_skill_bundle as bundle  # noqa: E402
+from tests.support.no_noatime_host import forced_no_noatime, requires_noatime  # noqa: E402
 
 #: The ONE reader of `.git` metadata, loaded the way the product loads it (agentic-sdlc-7a2b, W4).
 #: This module's own trio moved there, so the dirtiness tests below drive the shared reader directly
@@ -82,6 +84,40 @@ detector = bundle.load_git_project_detector(ROOT)
 
 MODULE = ROOT / "scripts" / "ccodex_sdlc_uninstall.py"
 READER = ROOT / "scripts" / "ccodex_sdlc.py"
+
+#: Whether a project-scope receipt can be SEALED over a fixture root on this host, which is not a
+#: platform question but the schema's own: `distribution_activation_receipt.check_scope` admits a
+#: `scope.root` only when it starts with `/`, because a root a later reader resolves against its own
+#: working directory would bound a removal somewhere else. A drive-letter root is declined by that
+#: rule exactly as `relative/repo` is (pinned as its own case in
+#: `tests/test_distribution_activation_receipt.py`), so every project-scope fixture below refused to
+#: seal on the native Windows CI leg at main@818bf09 (seed context `ci-red-818bf09`). The predicate
+#: MEASURES the temporary root these fixtures build under rather than naming an operating system, so it
+#: stays correct on any host whose temp paths are not POSIX-absolute.
+_TEMPORARY_ROOT = tempfile.gettempdir()
+SEALABLE_PROJECT_ROOT = unittest.skipUnless(
+    Path(_TEMPORARY_ROOT).as_posix().startswith("/"),
+    f"a project-scope receipt records an absolute POSIX root and this host's temporary directory "
+    f"({_TEMPORARY_ROOT!r}) is not one, so no fixture here can seal one; the project-scope plane is "
+    "certified on Linux only",
+)
+
+
+def as_reported(value: object) -> str:
+    """One path spelled the way a REPORT spells it, which is not the way `str` spells it.
+
+    Every filesystem- or artifact-derived value reaches a rendered line through the receipt family's
+    `escape_display` -- directly, through this module's `dar_escape`, or through `repr` for a quoted
+    one -- and that rule escapes the escape character too, so a `\\` becomes `\\\\`. On POSIX the
+    result is the input and the difference is invisible; on native Windows every path in every report
+    is doubled, and four assertions here looked for a spelling the product never emits (main@818bf09,
+    seed context `ci-red-818bf09`).
+
+    It returns the escaped BODY rather than a whole rendered token on purpose: that substring is common
+    to all three renderings, so one helper covers a `dar_escape` line and a `!r` line without the test
+    having to know which one it is reading.
+    """
+    return dar.escape_display(str(value))
 
 RECEIPT_KIND = "distribution-activation"
 BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@2"
@@ -1233,8 +1269,8 @@ class KeyedPointerPlane(Harness):
 
         self.assertEqual(code, EXIT_RETIRED, report)
         self.assertIn("migrated the legacy active pointer", report)
-        self.assertIn(str(self.plane.legacy_pointer), report)
-        self.assertIn(str(self.plane.pointer), report)
+        self.assertIn(as_reported(self.plane.legacy_pointer), report)
+        self.assertIn(as_reported(self.plane.pointer), report)
         self.assertFalse(self.plane.legacy_pointer.exists(), "the migration removes the old file")
         self.assertTrue(self.plane.pointer.is_file())
 
@@ -1250,8 +1286,8 @@ class KeyedPointerPlane(Harness):
 
         self.assertEqual(code, EXIT_REFUSED, report)
         self.assertIn("legacy-pointer-ambiguity", report)
-        self.assertIn(str(self.plane.legacy_pointer), report)
-        self.assertIn(str(self.plane.pointer), report)
+        self.assertIn(as_reported(self.plane.legacy_pointer), report)
+        self.assertIn(as_reported(self.plane.pointer), report)
         self.assertIn("remove the one that is not current", report)
         self.assertEqual(
             before,
@@ -1268,6 +1304,7 @@ class KeyedPointerPlane(Harness):
         code_two, report_two = self.plane.run()
         self.assertEqual(code_two, EXIT_RETIRED, report_two)
 
+    @SEALABLE_PROJECT_ROOT
     def test_a_pointer_whose_receipt_names_another_scope_refuses_on_the_kind_axis(self) -> None:
         """A hand-edited pointer must not redirect a removal at a plane it does not describe."""
         entries = self.plant_owned()
@@ -1297,6 +1334,7 @@ class KeyedPointerPlane(Harness):
         self.assertIn("project:", report_two)
         self.assertNotEqual(EXIT_REFUSED, code_two, report_two)
 
+    @SEALABLE_PROJECT_ROOT
     def test_a_pointer_moved_to_another_root_s_key_refuses_on_the_root_axis(self) -> None:
         entries = self.plant_owned()
         project_root = self.plane.home / "repo"
@@ -1533,6 +1571,7 @@ class LegacyUnreceipted(LedgerFixtures, Harness):
         self.assertEqual(shared["entries"], after["entries"], "another home's rows are retained")
         self.assertTrue((other.plane_root / "agents" / "sdlc-implementer.md").is_file())
 
+    @SEALABLE_PROJECT_ROOT
     def test_a_project_root_s_rows_are_retired_at_project_scope(self) -> None:
         """The W-f half: ``--claude-home <repo>`` wrote unreceipted rows under a repository root."""
         payload = self.payload("project-payload")
@@ -1650,12 +1689,21 @@ class LegacyUnreceipted(LedgerFixtures, Harness):
         self.assertIn("no readable git metadata", report_two)
 
 
+@requires_noatime()
 class CheckoutDirtiness(LedgerFixtures, Harness):
     """``checkout.dirty`` is COMPUTED, and both directions are proven on one fixture.
 
     It was unconditionally ``true`` for one wave. What makes the ``false`` direction admissible is that
     it is a comparison rather than an assumption, so this class runs the same plane twice: once on a
     genuinely clean single-commit tree, and once after planting one modified byte in a tracked file.
+
+    ONLY THE ``false`` DIRECTION NEEDS THE HOST, and that is what the guard is about. The detector
+    reaches ``dirty=false`` and a named commit by reading ``.git/index`` and ``.git/HEAD`` through
+    ``read_without_atime``, so where ``os.O_NOATIME`` is absent every tree reads dirty and every commit
+    reads ``unknown`` -- the documented fail-direction, and what both of these cases failed as on Darwin
+    and native Windows at main@818bf09 (seed context ``ci-red-818bf09``). The direction that survives
+    without the flag is proven separately and unguarded in ``CheckoutDirtinessWithoutNoatime``, so
+    skipping here removes no coverage of the refusing branch.
     """
 
     def seal_from(self, distribution: Path, payload: Path) -> dict[str, Any]:
@@ -1748,6 +1796,124 @@ class CheckoutDirtiness(LedgerFixtures, Harness):
         self.assertIn("no readable git metadata", reason)
 
 
+class ReportedPathEscaping(Harness):
+    r"""A plane whose own path carries a backslash, which is how this host reaches the Windows shape.
+
+    THE CLASS THIS PINS. Every path in every rendered line goes through the receipt family's
+    `escape_display`, which escapes the escape character, so `a\b` is reported as `a\\b`. On POSIX that
+    rule almost never fires, so four assertions comparing a report against a bare `str(path)` read as
+    correct for as long as no path held a backslash -- and then failed on every native Windows CI leg,
+    where every path holds several (main@818bf09, seed context `ci-red-818bf09`).
+
+    A BACKSLASH IS A LEGAL POSIX FILENAME CHARACTER, and that is the whole lever: one directory named
+    with one forces the identical divergence here, with no platform to wait for. The test asserts BOTH
+    halves -- the escaped spelling is present AND the raw one is absent -- because only the second half
+    would have caught the original defect, and only the first proves the report still names the path.
+    """
+
+    #: One directory whose NAME holds a literal backslash. Spelled as an escape in a raw-string-free
+    #: literal so the value is unambiguous: a single `\` between the two words.
+    BACKSLASH_CELL = "back\\slash"
+
+    def setUp(self) -> None:
+        super().setUp()
+        cell = self.temp / self.BACKSLASH_CELL
+        cell.mkdir()
+        self.plane = Plane(cell)
+        self.assertIn("\\", str(self.plane.pointer), "the lever is inert without a backslash in the path")
+
+    def test_a_report_names_a_path_in_the_escaped_spelling_and_not_the_raw_one(self) -> None:
+        entries = self.plant_owned()
+        receipt = self.plane.seal_active(entries)
+        self.plane.legacy_pointer.write_bytes(dar.canonical_bytes(receipt))
+
+        code, report = self.plane.run()
+
+        self.assertEqual(code, EXIT_REFUSED, report)
+        self.assertIn("legacy-pointer-ambiguity", report)
+        for path in (self.plane.legacy_pointer, self.plane.pointer):
+            with self.subTest(path=str(path)):
+                self.assertIn(as_reported(path), report)
+                # THE HALF THAT FAILS THE ORIGINAL DEFECT: the raw spelling is genuinely absent, so
+                # `assertIn(str(path), report)` is a comparison against a string the product never
+                # emits rather than a laxer version of the assertion above.
+                self.assertNotIn(str(path), report)
+        # POSITIVE CONTROL for the helper itself: it MOVES for this input. A helper that returned its
+        # argument would satisfy every assertion above while proving nothing.
+        self.assertNotEqual(str(self.plane.pointer), as_reported(self.plane.pointer))
+        self.assertIn("\\\\", as_reported(self.plane.pointer))
+
+
+class CheckoutDirtinessWithoutNoatime(LedgerFixtures, Harness):
+    """The OTHER host, and the branch a Linux-only suite could not reach: no ``os.O_NOATIME``.
+
+    ``CheckoutDirtiness`` above proves the comparison where the flag exists, and is skipped where it
+    does not. This class is the complement and is guarded by nothing: it FORCES the flag away, so the
+    verdicts Darwin and native Windows really produce are executed on every host including this one.
+
+    That gap was not theoretical. At main@818bf09 fourteen of the seventeen macOS failures and two of
+    the sixteen Windows ones were this one unreached branch (seed context ``ci-red-818bf09``): the flag
+    is always present on a Linux development host, so every consumer took the admitting path locally,
+    the documented fail-direction was defended only by the reader's own docstring, and a six-minute
+    cross-platform round trip was the only surface that ran it. ``tests/support/no_noatime_host.py``
+    forces the same condition across a whole suite; this class pins the four verdicts it produces.
+
+    IT IS ALSO THE GUARD AGAINST A FALLBACK. If a later edit lets ``read_without_atime`` retry without
+    the flag -- the change that would make the skipped suite above pass everywhere -- these assertions
+    are what fails, because the atime guarantee ``skills/agentic-sdlc/tools/offline-inspect.py`` rests
+    on would be gone with it.
+    """
+
+    def repository(self) -> Path:
+        if shutil.which("git") is None:
+            self.skipTest("this host has no git to build a real metadata fixture with")
+        root = self.distribution("noatime-shapes")
+        self.commit = self.commit_tree(root)
+        return root
+
+    def test_the_reader_refuses_by_capability_rather_than_retrying_without_the_flag(self) -> None:
+        root = self.repository()
+        head = root / ".git" / "HEAD"
+
+        with forced_no_noatime(require_flag=False):
+            with self.assertRaises(detector.MetadataUnreadable) as raised:
+                detector.read_without_atime(head)
+        self.assertEqual(detector.NO_ATIME, raised.exception.kind)
+        self.assertIn("no O_NOATIME", raised.exception.reason)
+
+        # POSITIVE CONTROL: the same file, on a host that HAS the flag, reads. So the refusal above is
+        # the capability and not an unreadable fixture. Skipped rather than asserted where the host
+        # genuinely lacks it, which is the one case where there is no second branch to compare against.
+        if hasattr(os, "O_NOATIME"):
+            self.assertIn(b"ref: refs/", detector.read_without_atime(head))
+
+    def test_no_root_admits_and_every_observation_fails_toward_not_asserted(self) -> None:
+        root = self.repository()
+
+        with forced_no_noatime(require_flag=False):
+            refused = detector.admit(root)
+            dirty, reason = detector.observe_dirty(root)
+            commit = detector.observe_commit(root)
+
+        # The EXACT verdict the macOS and Windows legs reported against repositories `git init` had
+        # just built, which is what makes this class a reproduction rather than a paraphrase.
+        self.assertEqual(detector.INVALID_METADATA, refused.verdict)
+        self.assertIn("no readable one-line HEAD with objects/ and refs/", refused.reason)
+        self.assertIsNone(refused.metadata, "a refusal hands back nothing a caller may go on to read")
+        self.assertTrue(dirty, "a tree that cannot be read may not be asserted equal to a commit")
+        self.assertIn("no O_NOATIME", reason)
+        self.assertEqual(detector.COMMIT_UNKNOWN, commit)
+
+        # POSITIVE CONTROL: one fixture, both directions. With the flag the same root admits, reads
+        # clean, and names its commit -- so the three fail-directions above are the flag's doing.
+        if hasattr(os, "O_NOATIME"):
+            admitted = detector.admit(root)
+            self.assertEqual(detector.ADMITTED, admitted.verdict)
+            self.assertEqual(root / ".git", admitted.metadata)
+            self.assertFalse(detector.observe_dirty(root)[0])
+            self.assertEqual(self.commit, detector.observe_commit(root))
+
+
 class LedgerPreview(LedgerFixtures, Harness):
     """``--dry-run`` on both admission rungs: the plan is rendered and nothing is touched."""
 
@@ -1775,7 +1941,7 @@ class LedgerPreview(LedgerFixtures, Harness):
         receipted_code, receipted_report = self.plane.run(dry_run=True)
         self.assertEqual(receipted_code, target.EXIT_PREVIEWED, receipted_report)
         self.assertIn("admission: activation-receipt", receipted_report)
-        self.assertIn(str(self.plane.pointer), receipted_report)
+        self.assertIn(as_reported(self.plane.pointer), receipted_report)
         self.assertTrue(implementer.is_file())
         self.assertFalse((self.plane.activation_root / "receipts").exists())
 

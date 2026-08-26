@@ -757,10 +757,14 @@ def admit_platform(config: Config) -> tuple[str, str]:
     """Refuse an uncertified platform BY NAME rather than attempting a linux-x64 payload on it.
 
     The message names the SELECTED plane rather than a hardcoded one: it read ``--host claude`` for
-    every agent until this wave, so a codex run on macOS was refused by a sentence about Claude.
+    every agent until this wave, so a codex run on macOS was refused by a sentence about Claude. The
+    SCOPE was the surviving half of that same defect -- ``--scope user`` was still a literal here, so a
+    ``--scope project`` run on Darwin was refused by a sentence naming a plane the operator had not
+    selected (observed in the macOS CI seam transcript for main@818bf09, seed context
+    ``ci-red-818bf09``). Both halves are now parameters of the run.
     """
     system, machine = observe_platform(config)
-    selected = f"{SURFACE} --scope user --agent {escape_display(config.agent)}"
+    selected = f"{SURFACE} --scope {escape_display(config.scope_kind)} --agent {escape_display(config.agent)}"
     if system != SUPPORTED_SYSTEM:
         raise Refusal(
             f"{selected} activates a {CANDIDATE_PLATFORM} candidate and is"

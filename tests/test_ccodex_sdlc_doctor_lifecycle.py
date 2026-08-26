@@ -68,6 +68,9 @@ receipts = _load("doctor_lifecycle_receipts", VALIDATOR_SCRIPT)
 #: builds an armed `pending` slot with the installer's own constructors so the planted
 #: document is its shape rather than a second hand-typed spelling of it.
 bundle = _load("doctor_lifecycle_bundle", ROOT / "scripts" / "install_skill_bundle.py")
+#: The one owner of this repository's `os.O_NOATIME` skip predicate, loaded by path like every other
+#: sibling here so this module needs no `sys.path` of its own.
+noatime = _load("doctor_lifecycle_noatime", ROOT / "tests" / "support" / "no_noatime_host.py")
 
 BODY_SCHEMA = "agentic-sdlc/distribution-activation-body@2"
 #: The read-only historical generation: admitted by `validate`, never sealed again.
@@ -461,6 +464,14 @@ class ReadinessHarness(unittest.TestCase):
             [sys.executable, "-I", "-B", str(READER_SCRIPT), *arguments],
             env={
                 "HOME": str(self.home),
+                # `USERPROFILE` is the SAME isolation as `HOME`, not a duplicate of it: `ntpath`'s
+                # `expanduser` consults `USERPROFILE` then `HOMEDRIVE`/`HOMEPATH` and never `HOME`, so
+                # with only the POSIX name set the reader's `Path.home()` had nothing to resolve on
+                # native Windows and raised `Could not determine home directory` from inside
+                # `recovery_configs` (main@818bf09, seed context `ci-red-818bf09`). The fixture failed
+                # CLOSED rather than leaking to the operator's real home, which is why this line
+                # completes the isolation instead of repairing a hole.
+                "USERPROFILE": str(self.home),
                 "LANG": "C",
                 "LC_ALL": "C",
                 "PATH": "",
@@ -1248,7 +1259,7 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
 
 
 @WINDOWS_SKIP
-@WINDOWS_SKIP
+@noatime.requires_noatime()
 class ProjectPointerRootTest(ReadinessHarness):
     """The two states a project pointer's ROOT can be in, and the rows a reader owes for each.
 
@@ -1260,6 +1271,14 @@ class ProjectPointerRootTest(ReadinessHarness):
     because a stub would prove this suite's idea of a git project rather than the product's. One test
     supplies none, which is the honest third state: a reader that could not look reports `unassessed` and
     emits no finding at all.
+
+    AND BECAUSE THE JUDGE IS THE REAL ONE, this class inherits its host requirement: the shipped judge
+    reads `.git` metadata through `read_without_atime`, so on a host with no `os.O_NOATIME` it answers
+    `not-a-project` for a live root and `pointer-outlived-root` for a healthy one. That is what both of
+    these cases failed as on Darwin at main@818bf09 (seed context `ci-red-818bf09`), and the guard names
+    the dependency rather than the platform. The Windows guard beside it is a different fact -- the
+    activation plane those pointers live in is POSIX-only -- and this decorator replaced a duplicate copy
+    of it that never widened the coverage it appeared to.
     """
 
     def project_pointer(self, root: Path, *, agent: str = "claude", **overrides: Any) -> Path:
@@ -1423,8 +1442,15 @@ class ProjectPointerRootTest(ReadinessHarness):
         self.assertNotIn("project-pointer-stranded", policy["vocabularies"]["finding_codes"])
 
 
+@WINDOWS_SKIP
 class SupersededActivationHistoryTest(ReadinessHarness):
     """A RETAINED prior receipt is history, not an ambiguity (agentic-sdlc-7b2e).
+
+    THE GUARD IS THE SAME ONE ITS SIBLINGS CARRY and its absence here was an omission, not a claim of
+    portability: this class reads the very acquisition/activation planes the POSIX-only durable-write
+    lifecycle produces, so on native Windows there is no such plane to read and no verb that would
+    have written one. At main@818bf09 it was the only class in this suite running there, and it failed
+    on the first reader verb (seed context `ci-red-818bf09`).
 
     ``ccodex update`` retains the receipt it replaced under its own id on purpose: a kill between
     the two writes must leave a readable prior statement.  So a healthy updated plane holds two filed

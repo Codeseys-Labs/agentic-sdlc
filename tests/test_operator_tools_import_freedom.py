@@ -55,6 +55,9 @@ def _load(name: str, path: Path):
 reader = _load("import_freedom_reader", ROOT / "scripts" / "ccodex_sdlc.py")
 recover = _load("import_freedom_recover", ROOT / "scripts" / "ccodex_sdlc_recover.py")
 statusline = _load("import_freedom_statusline", ROOT / "scripts" / "manage_claude_statusline.py")
+#: The one owner of "an absolute path a fixture may name on any host". `Path("/a/../b")` is absolute on
+#: POSIX only, and comparing it against a lexically collapsed result is what broke below on Windows.
+platform_paths = _load("import_freedom_platform_paths", ROOT / "tests" / "support" / "platform_paths.py")
 
 
 #: The module attribute every keeper reached `install_operator_tools` through, whether it arrived as
@@ -291,13 +294,19 @@ class ReplacementDerivationTests(unittest.TestCase):
         The retired original is gone, so what is pinned is the property D1's equality assertion was
         really about: every result is absolute, and `..` is collapsed LEXICALLY rather than by
         resolving the filesystem, which is what keeps a link in the path from being followed.
+
+        THE COLLAPSE CASE IS BUILT FROM THE HOST'S ANCHOR. `Path("/a/../b")` is absolute on POSIX and
+        not on Windows, so the helper completed it against the current drive and the equality compared
+        `WindowsPath('C:/b')` against `WindowsPath('/b')` (main@818bf09, seed context
+        `ci-red-818bf09`). The collapse is the subject; the anchor is not.
         """
         bundle = _load("import_freedom_bundle", ROOT / "scripts" / "install_skill_bundle.py")
-        for candidate in (*self.HOMES, Path("/a/../b"), Path("./c")):
+        uncollapsed = platform_paths.absolute_fixture("a", "..", "b")
+        for candidate in (*self.HOMES, uncollapsed, Path("./c")):
             with self.subTest(path=str(candidate)):
                 resolved = bundle.operational_path(candidate)
                 self.assertTrue(resolved.is_absolute(), resolved)
-        self.assertEqual(bundle.operational_path(Path("/a/../b")), Path("/b"))
+        self.assertEqual(bundle.operational_path(uncollapsed), platform_paths.absolute_fixture("b"))
 
 
 if __name__ == "__main__":
