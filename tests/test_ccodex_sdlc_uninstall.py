@@ -371,7 +371,13 @@ class EndToEnd(Harness):
         self.assertFalse((self.plane.plane_root / "skills" / "agentic-sdlc").exists())
         self.assertIn("removed: agents/sdlc-implementer.md", report)
         self.assertIn("removed: skills/agentic-sdlc", report)
-        self.assertIn("ccodex sdlc uninstall: retired", report)
+        # THE SUCCESS BANNER NAMES THE INVOCATION THE OPERATOR TYPED (seed agentic-sdlc-67c9). A
+        # clean-host run answered `ccodex sdlc uninstall: retired` to an operator who typed
+        # `ccodex uninstall --scope ... --agent ...` -- a completed operation reporting itself under a
+        # spelling the dispatcher refuses at exit 2
+        # (`docs/evidence/2026-08-26-project-scope-clean-host.md` defect 1).
+        self.assertIn("ccodex uninstall --scope user --agent claude: retired", report)
+        self.assertNotIn("ccodex sdlc uninstall", report)
 
         receipt = self.plane.terminal_receipt()
         result = dar.derive("validate", receipt, "the terminal receipt")
@@ -991,7 +997,7 @@ def owned_entry_conflicts(plane: Plane, payload_root: Path) -> list[dict[str, st
 
 
 def activate_with_ownership_rows(plane: Plane, payload_root: Path) -> list[dict[str, Any]]:
-    """Publish the standard two entries exactly as ``ccodex sdlc install`` does.
+    """Publish the standard two entries exactly as ``ccodex install`` does.
 
     The rows land in the shared installer state through the installer's own
     ``transactional_create`` -- the machinery the install verb reuses -- so what these tests
@@ -1022,7 +1028,7 @@ def activate_with_ownership_rows(plane: Plane, payload_root: Path) -> list[dict[
 class OwnershipRows(Harness):
     """The rows the activation wrote are retired with the bytes (agentic-sdlc-42ec).
 
-    Wave f194-w1's FINDING-1: after a complete receipted uninstall, ``ccodex sdlc status`` reported
+    Wave f194-w1's FINDING-1: after a complete receipted uninstall, ``ccodex status`` reported
     ``bundle.state degraded`` with one ``owned-entry-conflict`` per removed entry, because the
     install verb writes ownership rows into the shared installer state and the retirement removed
     only the bytes.  These tests pin the symmetric half: a retirement retires the rows it proved,

@@ -62,13 +62,15 @@ def absolute(path: Path) -> Path:
 def state_root_for(home: Path) -> Path:
     """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
 
-    Owned here rather than imported: both the statusline receipt and the bundle ledger this module
-    reads live under this root, and ``install_skill_bundle.state_directory()`` is not the
-    substitute, because it reads ``Path.home()`` and would ignore ``--home``.  ``--state-root``
-    still overrides this entirely; this is only the fallback.
+    DELEGATED, not owned (seed agentic-sdlc-4689).  Both the statusline receipt and the bundle ledger
+    this module reads live under this root, so the rule has to be the bundle's own or the two halves of
+    one read can land under two roots -- which is what happened on Windows while this was a local copy
+    carrying only the POSIX branch.  ``install_skill_bundle.state_directory()`` is still not the
+    substitute, because it reads ``Path.home()`` and would ignore ``--home``; ``state_root_for`` is that
+    same rule with the home as a parameter.  ``--state-root`` still overrides this entirely; this is
+    only the fallback.
     """
-    value = os.environ.get("XDG_STATE_HOME")
-    return absolute(Path(value)) if value else absolute(home / ".local" / "state")
+    return installer.state_root_for(home)
 
 
 def settings_path(home: Path, claude_config_dir: Path | None) -> Path:

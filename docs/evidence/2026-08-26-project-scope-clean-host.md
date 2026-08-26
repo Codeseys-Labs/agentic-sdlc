@@ -206,6 +206,10 @@ recorded this residual for the per-verb modules' **error** lines and had the sea
 *emitted* rather than as *correct*; the success path was not covered by that note, and a completed
 operation reporting itself under a spelling the dispatcher refuses is worse than a refusal doing it.
 Not fixed here: the banner is another wave's file, and changing it moves output that seam cases pin.
+FIXED 2026-08-26 by wave G6 (seed agentic-sdlc-67c9), after this transcript was recorded: the banner
+now reads `ccodex uninstall --scope <kind> --agent <agent>: <state>` from the module's own `SURFACE`
+constant, and the seam case's pinned prefix moved with it. The transcript above is left as the
+observation that produced the finding, not as a claim about current source.
 
 **2. Seven empty directories survive the retirement, and nothing names them.** `<repo>/.claude/` and
 its six collection directories are created by the install and are still there afterwards, because the

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""``ccodex sdlc update --host <claude|codex>``: refresh ONE activated distribution to ONE candidate.
+"""``ccodex update --scope <user|project> --agent <claude|codex>``: refresh ONE activation to ONE candidate.
 
 WHAT LOADS THIS FILE, AND WHAT IT MAY RETURN.  ``scripts/ccodex_sdlc.py`` owns the closed grammar of
 the three mutating lifecycle verbs.  It loads this file by absolute non-symlink path and calls
@@ -28,7 +28,7 @@ THE TWO ADMISSIONS, BOTH REQUIRED, BOTH BEFORE ANY EFFECT.
      and announced in the report; both present is a named refusal.  A ``@1`` receipt is admitted here
      exactly once, as the outgoing document this refresh supersedes -- the receipt this run seals is
      always ``@2``.  No active receipt is a named refusal: there is nothing to update over, and
-     ``ccodex sdlc install --host claude`` is the front door.
+     ``ccodex install --scope <kind> --agent <agent>`` is the front door.
   2. ONE EXACTLY ACQUIRED CANDIDATE PAYLOAD WHOSE IDENTITY DIFFERS.  Same admission posture as
      ``install``, re-expressed rather than imported: a sealed
      ``release-candidate-acquisition-receipt/v1`` under the acquisition layout, terminal phase
@@ -54,7 +54,7 @@ It is PRESERVED and NAMED.  The receipt family's own matrix is exact:
 ``removed``, so an update receipt cannot record a removal at all.  Removing the entry and recording
 it as ``preserved`` would be a false statement about the plane, and removing it while recording
 nothing would drop it from the only inventory that names this plane.  Removal is
-``ccodex sdlc uninstall``'s own verb, under its own receipt, and this module names the dropped entry
+``ccodex uninstall``'s own verb, under its own receipt, and this module names the dropped entry
 in its report, its journal, and its receipt inventory instead of quietly deleting it.
 
 THE PRIOR RECEIPT REMAINS AVAILABLE UNTIL THE NEW ACTIVATION COMPLETES DURABLY.  In order: the
@@ -148,6 +148,12 @@ EXIT_UNKNOWN = 4
 #: record per agent in ``ccodex_sdlc_host_planes``, so a plane cannot be widened in the collection and
 #: not in the contract row (agentic-sdlc-7a2b, WX).
 HOST_FLAG = "--host"
+#: The OPERATOR SURFACE this module's messages name, spelled once (seed agentic-sdlc-67c9). The
+#: retired `ccodex sdlc update` namespace refuses at the dispatcher, so a refusal that still named it
+#: would send an operator to a spelling the dispatcher itself rejects. The vector this module admits is
+#: still `--host <agent>`: that is the module ABI, built in exactly one place by the reader, and it is
+#: deliberately not the operator's spelling.
+SURFACE = "ccodex update"
 OPERATION = "update"
 #: Which part of the host plane this verb refreshes, as the receipt body's own closed union: the
 #: operator's user plane of one agent. A receipt about another scope describes a plane this module
@@ -445,7 +451,14 @@ def _absolute(path: Path) -> Path:
 
 
 def default_state_home() -> Path:
-    """``XDG_STATE_HOME`` or its documented default, without creating anything."""
+    """``XDG_STATE_HOME`` or its POSIX default, without creating anything.
+
+    The POSIX branch of ``install_skill_bundle.state_root_for`` alone, and unobservably so on both
+    ends: ``admit_platform`` refuses every non-Linux host before this verb reads anything, and this
+    default is evaluated while the ``Config`` is BUILT -- before ``load_sibling`` -- so the authority is
+    not in hand to delegate to (seed agentic-sdlc-4689, the same bound ``ccodex_sdlc.state_root_for``
+    carries).  Widening this verb past Linux means resolving this through that authority first.
+    """
     value = os.environ.get("XDG_STATE_HOME")
     if value and value.strip():
         return _absolute(Path(value))
@@ -613,19 +626,19 @@ def load_sibling(stem: str) -> ModuleType:
     path = Path(__file__).with_name(f"{stem}.py")
     if path.is_symlink() or not path.is_file():
         raise Refusal(
-            f"ccodex sdlc update requires the sibling module {show(str(path))}, which is absent or is"
+            f"{SURFACE} requires the sibling module {show(str(path))}, which is absent or is"
             " a link"
         )
     spec = importlib.util.spec_from_file_location(f"_ccodex_sdlc_update_{stem}", path)
     if spec is None or spec.loader is None:
-        raise Refusal(f"ccodex sdlc update cannot load the sibling module {show(str(path))}")
+        raise Refusal(f"{SURFACE} cannot load the sibling module {show(str(path))}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 - an import failure here is still pre-effect
         raise Refusal(
-            f"ccodex sdlc update cannot import the sibling module {show(str(path))}: {show(exc)}"
+            f"{SURFACE} cannot import the sibling module {show(str(path))}: {show(exc)}"
         ) from exc
     return module
 
@@ -660,7 +673,7 @@ def refuse_read_only_guard() -> None:
     guard = sys.modules.get("_ccodex_sdlc_readonly_guard")
     if guard is not None and getattr(guard, "_INSTALLED", False):
         raise Refusal(
-            "ccodex sdlc update refuses: this process already installed the read-only guard, whose"
+            f"{SURFACE} refuses: this process already installed the read-only guard, whose"
             " stdlib mutation blocks would fail this operation partway through"
         )
 
@@ -771,13 +784,13 @@ def admit_platform(config: Config) -> tuple[str, str]:
     system, machine = observe_platform(config)
     if system != SUPPORTED_SYSTEM:
         raise Refusal(
-            f"ccodex sdlc update refreshes a {CANDIDATE_PLATFORM} candidate and is certified only on"
+            f"{SURFACE} refreshes a {CANDIDATE_PLATFORM} candidate and is certified only on"
             f" {SUPPORTED_SYSTEM}; the observed operating system is {show(system)}. Another platform"
             " is refused by name rather than attempted"
         )
     if machine.lower() not in SUPPORTED_MACHINES:
         raise Refusal(
-            f"ccodex sdlc update refreshes a {CANDIDATE_PLATFORM} candidate; the observed"
+            f"{SURFACE} refreshes a {CANDIDATE_PLATFORM} candidate; the observed"
             f" architecture is {show(machine)}, not one of {list(SUPPORTED_MACHINES)}"
         )
     return system, machine
@@ -835,16 +848,17 @@ def admit_active_receipt(dar: ModuleType, config: Config) -> ActiveActivation:
         raw = read_exact_file(path, _MAX_RECEIPT_BYTES, "the active distribution-activation receipt")
     except Refusal as exc:
         raise Refusal(
-            f"ccodex sdlc update found no usable active distribution-activation receipt at"
+            f"{SURFACE} found no usable active distribution-activation receipt at"
             f" {show(str(path))}: {exc}. There is nothing to update over, and"
-            " `ccodex sdlc install --host claude` is the front door for a first activation"
+            f" `ccodex install {SCOPE_FLAG} {escape_display(config.scope_kind)}"
+            f" --agent {escape_display(config.agent)}` is the front door for a first activation"
         ) from exc
     document = parse_json_object(raw, f"the active distribution-activation receipt {show(str(path))}")
     result = dar.derive("validate", document, f"the active receipt {path}")
     if result["verdict"] != dar.VERDICT_VALIDATED or not isinstance(result.get("receipt"), dict):
         reasons = "; ".join(escape_display(str(reason)) for reason in result.get("reasons", [])[:4])
         raise Refusal(
-            f"ccodex sdlc update refuses: the active receipt {show(str(path))} does not validate as"
+            f"{SURFACE} refuses: the active receipt {show(str(path))} does not validate as"
             f" {dar.BODY_SCHEMA}, so it cannot state what this plane owns or authorize a refresh of"
             f" it: {reasons or 'no reason was reported'}"
         )
@@ -1168,7 +1182,7 @@ def select_new_acquisition(
     if not others:
         if active_path is not None:
             raise Refusal(
-                f"ccodex sdlc update refuses: the only acquired candidate in"
+                f"{SURFACE} refuses: the only acquired candidate in"
                 f" {show(str(receipts_dir))} is the one this plane already activated (archive"
                 f" {show(active_archive[:12])}, candidate {show(str(active.body['candidate_id'])[:12])})."
                 " There is nothing to update to, and a re-activation of the same identity is never"
@@ -1304,7 +1318,7 @@ def admit_new_payload(config: Config, active: ActiveActivation) -> Selection:
     manifest, candidate_id, version = admit_candidate_manifest(candidate_root)
     if candidate_id == str(active.body["candidate_id"]):
         raise Refusal(
-            f"ccodex sdlc update refuses: the acquired candidate {show(str(receipt_path))} carries the"
+            f"{SURFACE} refuses: the acquired candidate {show(str(receipt_path))} carries the"
             f" candidate identity {show(candidate_id[:12])}, which is the identity this plane already"
             " activated. There is nothing to update, and a re-activation of the same identity is"
             " never silent"
@@ -1900,7 +1914,7 @@ def classify_dropped(
     It is never written and never removed.  ``OPERATION_DISPOSITIONS['update']`` admits no ``removed``
     disposition at all, so a removal here could not be recorded in the receipt that reports it, and
     removing while recording ``preserved`` would be a false statement about the plane.  Removal is
-    ``ccodex sdlc uninstall``'s verb; this row exists so the entry is NAMED rather than dropped from
+    ``ccodex uninstall``'s verb; this row exists so the entry is NAMED rather than dropped from
     the only inventory that describes this plane.
     """
     row = active.inventory[name]
@@ -1960,7 +1974,7 @@ def refuse_blocked_entries(planned: list[PlannedEntry]) -> None:
         for item in blocked
     ]
     raise Refusal(
-        f"ccodex sdlc update refuses: {BLOCK_SENTENCE}. {len(blocked)} entr"
+        f"{SURFACE} refuses: {BLOCK_SENTENCE}. {len(blocked)} entr"
         f"{'y' if len(blocked) == 1 else 'ies'} the new payload would write cannot be proved unchanged"
         " against the active receipt's inventory, so the whole refresh stops before any effect and"
         " every one of them is preserved exactly as it is:\n" + "\n".join(lines)
@@ -2623,7 +2637,8 @@ def report(
     """One line per fact, every artifact-derived value escaped, and no claim beyond the evidence."""
     dropped = {item.name for item in planned if item.dropped}
     lines = [
-        f"ccodex sdlc update {HOST_FLAG} {escape_display(config.agent)}:"
+        f"{SURFACE} {SCOPE_FLAG} {escape_display(config.scope_kind)}"
+        f" --agent {escape_display(config.agent)}:"
         f" effect {escape_display(effect_state)}, terminal {escape_display(terminal_phase)}",
         f"candidate {escape_display(str(active.body['candidate_id'])[:12])} ->"
         f" {escape_display(payload.candidate_id[:12])}: resolved"
@@ -2707,7 +2722,7 @@ def parse_argv(argv: list[str]) -> tuple[str, str, Path | None]:
     )
     if not (len(argv) >= 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES):
         raise Refusal(
-            f"ccodex sdlc update admits exactly {admitted}; this module received"
+            f"{SURFACE} admits exactly {admitted}; this module received"
             f" {[escape_display(item) for item in argv]}"
         )
     rest = list(argv[2:])
@@ -2715,7 +2730,7 @@ def parse_argv(argv: list[str]) -> tuple[str, str, Path | None]:
     if len(rest) >= 2 and rest[0] == SCOPE_FLAG:
         if rest[1] not in SCOPE_KINDS:
             raise Refusal(
-                f"ccodex sdlc update {SCOPE_FLAG} admits {', '.join(SCOPE_KINDS)}; this module received"
+                f"{SURFACE} {SCOPE_FLAG} admits {', '.join(SCOPE_KINDS)}; this module received"
                 f" {show(rest[1])}"
             )
         scope_kind, rest = rest[1], rest[2:]
@@ -2723,15 +2738,15 @@ def parse_argv(argv: list[str]) -> tuple[str, str, Path | None]:
     if len(rest) >= 2 and rest[0] == PROJECT_FLAG:
         if scope_kind != SCOPE_PROJECT:
             raise Refusal(
-                f"ccodex sdlc update {PROJECT_FLAG} is admitted only with {SCOPE_FLAG} {SCOPE_PROJECT};"
+                f"{SURFACE} {PROJECT_FLAG} is admitted only with {SCOPE_FLAG} {SCOPE_PROJECT};"
                 " a user-scope run has no project root to name"
             )
         if not rest[1]:
-            raise Refusal(f"ccodex sdlc update {PROJECT_FLAG} was supplied with an empty path")
+            raise Refusal(f"{SURFACE} {PROJECT_FLAG} was supplied with an empty path")
         requested_project, rest = Path(rest[1]), rest[2:]
     if rest:
         raise Refusal(
-            f"ccodex sdlc update admits exactly {admitted}; this module received"
+            f"{SURFACE} admits exactly {admitted}; this module received"
             f" {[escape_display(item) for item in argv]}"
         )
     return argv[1], scope_kind, requested_project
@@ -2750,7 +2765,7 @@ def admit_scope(config: Config, requested: Path | None, bundle: ModuleType) -> C
     plane = config.plane
     if plane.project_collection is None:
         raise Refusal(
-            f"ccodex sdlc update {SCOPE_FLAG} {SCOPE_PROJECT} is not admissible for the"
+            f"{SURFACE} {SCOPE_FLAG} {SCOPE_PROJECT} is not admissible for the"
             f" {escape_display(plane.display)} plane (project-scope-unsupported-for-agent): its"
             " configured root IS its agent root, so it has no repository-local collection to refresh."
             f" Use {SCOPE_FLAG} {SCOPE_USER} for that plane; nothing was written"
@@ -2763,13 +2778,13 @@ def admit_scope(config: Config, requested: Path | None, bundle: ModuleType) -> C
     )
     if resolution.state == bundle.PROJECT_ABSENT:
         raise Refusal(
-            f"ccodex sdlc update {SCOPE_FLAG} {SCOPE_PROJECT} cannot refresh"
+            f"{SURFACE} {SCOPE_FLAG} {SCOPE_PROJECT} cannot refresh"
             f" {show(str(resolution.root))} (unresolvable-project-root): the path does not exist, so"
             " there is no activation there to refresh. Nothing was written"
         )
     if not resolution.admitted:
         raise Refusal(
-            f"ccodex sdlc update {SCOPE_FLAG} {SCOPE_PROJECT} refused this root"
+            f"{SURFACE} {SCOPE_FLAG} {SCOPE_PROJECT} refused this root"
             f" ({resolution.refusal}): {escape_display(resolution.detail)}. Nothing was written"
         )
     return dataclass_replace(config, project_root=resolution.root)
@@ -3011,28 +3026,28 @@ def main(argv: list[str] | None = None) -> int:
         if run.effect_started:
             # A refusal raised after an effect started is not a clean refusal; reporting it as one
             # would claim an absence of effect nobody observed.
-            print(f"error: ccodex sdlc update left an unknown effect: {escape_display(str(exc))}", file=sys.stderr)
+            print(f"error: {SURFACE} left an unknown effect: {escape_display(str(exc))}", file=sys.stderr)
             return EXIT_UNKNOWN
         print(
-            f"error: ccodex sdlc update refused before any effect: {escape_display(str(exc))}",
+            f"error: {SURFACE} refused before any effect: {escape_display(str(exc))}",
             file=sys.stderr,
         )
         return EXIT_REFUSED
     except UnknownEffect as exc:
-        print(f"error: ccodex sdlc update left an unknown effect: {escape_display(str(exc))}", file=sys.stderr)
+        print(f"error: {SURFACE} left an unknown effect: {escape_display(str(exc))}", file=sys.stderr)
         return EXIT_UNKNOWN
     except SystemExit:
         raise
     except BaseException as exc:  # noqa: BLE001 - includes the interrupt this walk must survive honestly
         if run.effect_started:
             print(
-                f"error: ccodex sdlc update stopped after an effect started, so its effect is unknown:"
+                f"error: {SURFACE} stopped after an effect started, so its effect is unknown:"
                 f" {escape_display(repr(exc))}",
                 file=sys.stderr,
             )
             return EXIT_UNKNOWN
         print(
-            f"error: ccodex sdlc update stopped before any effect: {escape_display(repr(exc))}",
+            f"error: {SURFACE} stopped before any effect: {escape_display(repr(exc))}",
             file=sys.stderr,
         )
         return EXIT_REFUSED

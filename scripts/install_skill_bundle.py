@@ -254,17 +254,35 @@ def path_present(path: Path) -> bool:
     return path.exists() or path.is_symlink() or is_junction(path)
 
 
-def state_directory() -> Path:
-    """Return the operator's user-local state root without creating it."""
+def state_root_for(home: Path) -> Path:
+    """Return the user-local state root of the GIVEN home without creating it.
+
+    THE ONE STATE-ROOT RULE, and it takes a home because two of its three consumers cannot use
+    ``Path.home()``: ``ccodex_sdlc_recover`` resolves the plane a plan was derived against through its
+    ``run(..., home=...)`` injection seam, and ``manage_claude_statusline`` honours an operator-selected
+    home.  ``state_directory`` below is this function applied to the process home, so a consumer that
+    reads the environment and one that is handed a home cannot resolve two different roots.
+
+    That was the defect (seed agentic-sdlc-4689): the home-parameterized copies carried only the POSIX
+    branch, so on Windows this bundle's ownership ledger sat under ``LOCALAPPDATA`` while the reader's
+    acquisition and activation planes sat under ``<home>/.local/state``, and one host's report spanned
+    two state roots.  ``AGENTS.md`` records this rule -- ``XDG_STATE_HOME`` on Unix, ``LOCALAPPDATA`` on
+    Windows -- so the copies were the diverging side and this is where it now lives.
+    """
     if platform_system() == "Windows":
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
             return operational_path(Path(local_app_data))
-        return operational_path(Path.home() / "AppData" / "Local")
+        return operational_path(home / "AppData" / "Local")
     xdg_state = os.environ.get("XDG_STATE_HOME")
     return operational_path(Path(xdg_state)) if xdg_state else operational_path(
-        Path.home() / ".local" / "state"
+        home / ".local" / "state"
     )
+
+
+def state_directory() -> Path:
+    """Return the operator's user-local state root without creating it."""
+    return state_root_for(Path.home())
 
 
 def empty_state() -> dict[str, Any]:

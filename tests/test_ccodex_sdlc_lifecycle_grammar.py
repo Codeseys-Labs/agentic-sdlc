@@ -12,8 +12,9 @@ an operator types it: ``ccodex install --scope user --agent claude``. Two conseq
 this file. First, ``--host`` left the OPERATOR grammar and was replaced by ``--agent``, while the
 vector this reader FORWARDS to a per-verb module is still ``['--host', <agent>]`` -- one fact with
 one operator spelling and one module ABI, asserted in both places rather than assumed to agree.
-Second, the per-verb modules are owned by other waves and still name themselves ``ccodex sdlc
-<verb>`` in their own refusals, so the assertions on their stderr state what the product emits.
+Second, all three per-verb modules now name THEMSELVES the same way -- ``ccodex <verb>``, from one
+``SURFACE`` constant each (seed agentic-sdlc-67c9) -- so the assertions on their stderr state one
+spelling per module rather than a split between a renamed `install` and two retired siblings.
 
 Every negative assertion here carries a positive control in the same test: an absence proves
 nothing unless the same harness is shown to detect the presence.
@@ -126,15 +127,16 @@ PLAN_DIGEST = "5" * 64
 # parsed `scope` and `agent` -- so an expected value is a six-tuple and a read's two trailing slots
 # are `None`. A NamedTuple compares equal to a plain tuple of the same length, which is what keeps
 # these expectations readable without importing the class.
-#: HOW EACH PER-VERB MODULE NAMES ITSELF, which is NOT one string across the family: `install` names
-#: the surviving top-level invocation (renamed in W3b of agentic-sdlc-7a2b, seed agentic-sdlc-67c9) and
-#: the other two still name the retired `ccodex sdlc <verb>` spelling because they are other waves'
-#: files. A shared f-string here asserted one spelling for all three and would have passed while
-#: proving the wrong thing about two of them.
+#: HOW EACH PER-VERB MODULE NAMES ITSELF. All three now name the surviving top-level invocation:
+#: `install` was renamed in W3b of agentic-sdlc-7a2b and `update`/`uninstall` followed in G6, each
+#: through its module's own `SURFACE` constant (seed agentic-sdlc-67c9). The map stays EXPLICIT rather
+#: than collapsing into one shared f-string: a per-module row is what fails and names the module the
+#: day one of them drifts, where a shared string would assert one spelling for all three and pass
+#: while proving nothing about two of them.
 MODULE_OWN_PREFIX = {
     "install": "error: ccodex install ",
-    "update": "error: ccodex sdlc update ",
-    "uninstall": "error: ccodex sdlc uninstall ",
+    "update": "error: ccodex update ",
+    "uninstall": "error: ccodex uninstall ",
 }
 
 
@@ -517,13 +519,12 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                         )
                         self.assertIn(str(ROOT / "scripts" / MUTATING_MODULES[verb]), completed.stderr)
                     else:
-                        # The shipped module itself refuses pre-effect, in its own name -- and that
-                        # name is still the RETIRED `ccodex sdlc <verb>`, deliberately: the per-verb
-                        # modules belong to other waves and keep the `--host` ABI this reader
-                        # forwards. The assertion states what the product emits rather than what the
-                        # front door is now called, so the day a module renames itself this is what
-                        # fails and names the rename. The loader's absence refusal appearing here
-                        # would instead mean dispatch never reached the module.
+                        # The shipped module itself refuses pre-effect, in its own name -- the
+                        # SURVIVING top-level spelling since G6 (seed agentic-sdlc-67c9), while the
+                        # vector this reader forwards is still the `--host` module ABI. Operator
+                        # spelling and module ABI are two facts, and only the first one moved. The
+                        # loader's absence refusal appearing here would instead mean dispatch never
+                        # reached the module.
                         self.assertIn(MODULE_OWN_PREFIX[verb], completed.stderr)
                         self.assertNotIn("is unavailable in this distribution", completed.stderr)
                     self.assertNotIn("Traceback", completed.stderr)

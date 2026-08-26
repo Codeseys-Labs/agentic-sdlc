@@ -244,17 +244,18 @@ LIFECYCLE_OWN_REASON = {
     "uninstall": ("no installer ownership document", "only and refuses on"),
     "recover-apply": ("found nothing to recover on this host", "resumes an activated"),
 }
-#: HOW EACH MODULE NAMES ITSELF in its own refusals, which is not one string across the family. The
-#: front-door wave made `ccodex install` the invocation and retired `ccodex sdlc install`; W3b renamed
-#: the install module's own messages to match (seed agentic-sdlc-67c9), and the other three modules
-#: still print the retired spelling because they are other waves' files. One shared f-string here would
-#: have hidden exactly that split, so the map is explicit and each row states what its module EMITS --
-#: the day a module is renamed, its row is what fails and names the rename.
+#: HOW EACH MODULE NAMES ITSELF in its own refusals. The front-door wave made the six verbs top-level
+#: and retired `ccodex sdlc <verb>`; W3b renamed the install module's own messages to match, and G6
+#: renamed `update`, `uninstall`, and `recover` (seed agentic-sdlc-67c9), so the split this map was
+#: written to expose is closed and every row now names a spelling the dispatcher actually admits. The
+#: map stays EXPLICIT rather than collapsing into one shared f-string: each row states what ITS module
+#: EMITS, so a single module drifting is what fails and names itself, where one shared string would
+#: assert one spelling for four modules and pass while proving nothing about three of them.
 LIFECYCLE_OWN_PREFIX = {
     "install": "error: ccodex install",
-    "update": "error: ccodex sdlc update",
-    "uninstall": "error: ccodex sdlc uninstall",
-    "recover-apply": "error: ccodex sdlc recover --apply",
+    "update": "error: ccodex update",
+    "uninstall": "error: ccodex uninstall",
+    "recover-apply": "error: ccodex recover --apply",
 }
 LIFECYCLE_REASON_SOURCES = {
     "install": "ccodex_sdlc_install.py",
@@ -334,12 +335,11 @@ def _lifecycle_case(identifier: str, argv: tuple[str, ...], verb: str) -> SeamCa
     refused before any effect, and did not touch the fixture.  The forbidden admission text is what
     makes the case fail the moment the route regresses.
 
-    THE EXPECTED PREFIX IS THE MODULE'S OWN, AND IT IS NOT ONE STRING ACROSS THE FAMILY: `install`
-    names the surviving invocation and the other three still name the retired `ccodex sdlc <verb>`
-    spelling, because they are other waves' files. `LIFECYCLE_OWN_PREFIX` carries the split per verb.
-    This assertion states what the product actually emits rather than what it should; the residual is
-    recorded rather than papered over, and the day a module renames itself this case is the thing that
-    fails and names the rename.
+    THE EXPECTED PREFIX IS THE MODULE'S OWN, carried per verb in `LIFECYCLE_OWN_PREFIX` rather than
+    built from one shared f-string. Since G6 (seed agentic-sdlc-67c9) all four rows name the surviving
+    top-level invocation, so the recorded residual -- three modules answering in a spelling the
+    dispatcher refuses -- is closed. The per-verb map stays anyway: it is what fails and names the one
+    module that drifts, where a shared string would pass on three modules it never checked.
     """
     return SeamCase(
         identifier=identifier,
@@ -697,12 +697,11 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         # anywhere above it -- and names the flag that would resolve one. A module that defaulted to the
         # user plane would answer about the operator's home instead, which is the substitution the
         # refusal exists to prevent.
-        # THE MODULE'S OWN PREFIX IS DELIBERATELY NOT ASSERTED HERE, and that is a finding rather than
-        # an omission: `LIFECYCLE_OWN_PREFIX["uninstall"]` is `error: ccodex sdlc uninstall`, the RETIRED
-        # namespace the dispatcher itself refuses (W3a residual 4 records that those modules still print
-        # it). This wave's own refusals name the surviving surface instead, so what proves the module
-        # produced this line is its own closing sentence -- the reader dispatches for `uninstall` and
-        # never resolves a root, and it has no "Nothing was removed" to print.
+        # The module's own prefix is asserted here through the FULL refusal sentence rather than
+        # through `LIFECYCLE_OWN_PREFIX["uninstall"]`: this rung's line carries the scope selector too,
+        # which the bare prefix does not. What additionally proves the MODULE produced it is the closing
+        # sentence -- the reader dispatches for `uninstall` and never resolves a root, and it has no
+        # "Nothing was removed" to print.
         stderr_present=(
             "error: ccodex uninstall --scope project refused this root",
             "unresolvable-project-root",

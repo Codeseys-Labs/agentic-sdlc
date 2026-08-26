@@ -2,12 +2,12 @@
 
 THE OPERATOR SPELLING AND THIS MODULE'S ABI ARE TWO DIFFERENT FACTS, and neither is a mistake.
 ``ccodex sdlc update`` is retired at exit 2 and the front door is the top-level ``update`` with
-``--scope``/``--agent``; this module is unchanged and still admits exactly ``['--host', <agent>]``,
-still naming itself ``ccodex sdlc update`` in its own stdout and refusals, because the reader builds
-that one vector in one place (``ccodex_sdlc.main``) and renaming the ABI would reach files this wave
-does not own. So the in-process tests below drive ``--host`` and the subprocess test that goes through
-the shipped reader drives ``--scope user --agent claude``; every message assertion quotes whichever of
-the two actually emitted it.
+``--scope``/``--agent``. The module's own VOICE now says so too -- every message names
+``ccodex update`` through one ``SURFACE`` constant (seed agentic-sdlc-67c9) -- while its ABI is
+unchanged and still admits exactly ``['--host', <agent>]``, because the reader builds that one vector
+in one place (``ccodex_sdlc.main``). So the in-process tests below drive ``--host`` and the subprocess
+test that goes through the shipped reader drives ``--scope user --agent claude``, and both see the
+same operator spelling in the module's output because the output no longer quotes the ABI.
 
 WHAT THIS MODULE PROVES, AND HOW IT AVOIDS PROVING NOTHING.  Every negative assertion here carries a
 POSITIVE CONTROL in the same test: an absence proves nothing unless the same harness is shown to
@@ -952,7 +952,7 @@ class EndToEndUpdateTest(TemporaryRoot):
 
         outcome = call_main(conflicting)
         self.assertEqual(3, outcome.code, outcome.stdout)
-        self.assertIn("error: ccodex sdlc update ", outcome.stderr)
+        self.assertIn("error: ccodex update ", outcome.stderr)
         self.assertIn("as a DIFFERENT document", outcome.stderr)
         # Neither document was overwritten and no entry moved.
         self.assertEqual(receipts.canonical_bytes(other), path.read_bytes())
@@ -960,8 +960,9 @@ class EndToEndUpdateTest(TemporaryRoot):
 
     #: The reader's OPERATOR grammar for this verb: top-level, both selectors required, no default and
     #: no wildcard. What the reader then forwards to this module is `['--host', 'claude']`, which is
-    #: why the in-process tests spell it that way and why the stdout assertion below still reads
-    #: `ccodex sdlc update --host claude` -- that line is the MODULE's, not the reader's.
+    #: why the in-process tests spell it that way; the stdout assertion below reads the OPERATOR
+    #: spelling because that line is the module's own banner, which names the invocation rather than
+    #: the ABI it was handed (seed agentic-sdlc-67c9).
     READER_ARGV = ["update", "--scope", "user", "--agent", "claude"]
 
     def test_the_real_dispatcher_runs_update_end_to_end(self) -> None:
@@ -990,7 +991,8 @@ class EndToEndUpdateTest(TemporaryRoot):
         skip_when_a_child_refused_this_host(self, completed)
         self.assertEqual(0, completed.returncode, completed.stderr)
         self.assertIn(
-            "ccodex sdlc update --host claude: effect complete, terminal activated", completed.stdout
+            "ccodex update --scope user --agent claude: effect complete, terminal activated",
+            completed.stdout,
         )
         self.assertNotIn("Traceback", completed.stderr)
         self.assertEqual("cartographer two\n", fixture.destination("agents/cartographer.md").read_text())
@@ -1019,7 +1021,7 @@ class EndToEndUpdateTest(TemporaryRoot):
             check=False,
         )
         self.assertEqual(3, again.returncode, again.stderr)
-        self.assertIn("error: ccodex sdlc update ", again.stderr)
+        self.assertIn("error: ccodex update ", again.stderr)
         self.assertNotIn("is unavailable in this distribution", again.stderr)
         self.assertEqual("", again.stdout)
 
@@ -1234,7 +1236,7 @@ class AdmissionRefusalTest(TemporaryRoot):
     def assert_clean_refusal(self, fixture: Fixture, outcome: Outcome, *fragments: str) -> None:
         self.assertEqual(3, outcome.code, outcome.stdout)
         self.assertEqual("", outcome.stdout)
-        self.assertIn("error: ccodex sdlc update ", outcome.stderr)
+        self.assertIn("error: ccodex update ", outcome.stderr)
         self.assertNotIn("Traceback", outcome.stderr)
         for fragment in fragments:
             self.assertIn(fragment, outcome.stderr)
@@ -1249,7 +1251,10 @@ class AdmissionRefusalTest(TemporaryRoot):
             fixture,
             outcome,
             "found no usable active distribution-activation receipt",
-            "install --host claude` is the front door",
+            # The front-door sentence names the OPERATOR's own selectors, both of them parameters of
+            # this run rather than literals: a `--scope project --agent codex` operator sent to
+            # `--scope user --agent claude` would be sent to a plane they never selected.
+            "`ccodex install --scope user --agent claude` is the front door",
         )
         self.assertEqual(before, plane_inventory(fixture.claude_root))
         # Positive control: the identical fixture with the pointer written completes.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""``ccodex sdlc recover --apply <plan-sha256>``: the one mutating form of the recover verb.
+"""``ccodex recover --apply <plan-sha256>``: the one mutating form of the recover verb.
 
 THE APPROVAL IS THE DIGEST.  ``recover --dry-run`` derives a canonical, digest-bound recovery plan
 from the same journal and receipt evidence this module reads, renders that digest to the operator,
@@ -63,6 +63,11 @@ EXIT_PARTIAL = 4
 EXIT_UNKNOWN = 4
 
 OPERATION = "recover"
+#: The OPERATOR SURFACE this module's messages name, spelled once (seed agentic-sdlc-67c9). The
+#: retired `ccodex sdlc recover` namespace refuses at the dispatcher, so a refusal that still named it
+#: would send an operator to a spelling the dispatcher itself rejects. The FLAG below is unchanged and
+#: is not renamed across the seam: `--apply` means the same thing to the operator and to this module.
+SURFACE = "ccodex recover"
 APPLY_FLAG = "--apply"
 
 #: The plan's own schema. The reader re-expresses this string and declines the digest dimension when
@@ -74,7 +79,7 @@ PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-recovery-plan@1"
 SUPPORTED_SYSTEM = "Linux"
 SUPPORTED_MACHINES = ("x86_64", "amd64")
 
-#: The activation receipts this host recorded, under the operator's own XDG state root: the same
+#: The activation receipts this host recorded, under the operator's own user-local state root: the same
 #: plane the reader observes, resolved from the same two segments.
 STATE_PLANE_DIRECTORY = "agentic-sdlc"
 ACTIVATION_RECEIPTS = ("activation", "receipts")
@@ -483,22 +488,6 @@ def _absolute(path: Path) -> Path:
     return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
 
 
-def _state_root_for(home: Path) -> Path:
-    """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
-
-    Re-expressed from ``ccodex_sdlc.state_root_for`` rather than imported from the deleted
-    ``install_operator_tools`` (gh #10 phase 4), whose PATH plane must not take a derivation the
-    recovery plane still needs with it.  ``install_skill_bundle.state_directory()`` is not the
-    substitute: it reads ``Path.home()`` itself, which would defeat ``run(..., home=...)`` -- the
-    test-injection seam every fixture host in this suite depends on -- and on Windows it prefers
-    ``LOCALAPPDATA``, so the reader and this module would resolve two different state roots and
-    derive two different digests for one host.  A test pins this against the reader's copy.
-    """
-    value = os.environ.get("XDG_STATE_HOME")
-    root = Path(value) if value else home / ".local" / "state"
-    return _absolute(root)
-
-
 def parse_argv(argv: list[str]) -> str:
     """Admit exactly the vector the dispatcher forwards, and return the approved plan digest.
 
@@ -508,26 +497,26 @@ def parse_argv(argv: list[str]) -> str:
     """
     if not argv:
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} admits exactly [{APPLY_FLAG!r}, '<plan-sha256>'];"
+            f"{SURFACE} {APPLY_FLAG} admits exactly [{APPLY_FLAG!r}, '<plan-sha256>'];"
             " this module received no argument at all"
         )
     if argv[0] != APPLY_FLAG:
         raise Refusal(
-            f"ccodex sdlc recover admits exactly {APPLY_FLAG} as its first argument; this module"
+            f"{SURFACE} admits exactly {APPLY_FLAG} as its first argument; this module"
             f" received {show(argv[0])}"
         )
     if len(argv) == 1:
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} was supplied without the plan digest it approves"
+            f"{SURFACE} {APPLY_FLAG} was supplied without the plan digest it approves"
         )
     if len(argv) > 2:
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} admits exactly one plan digest; this module also"
+            f"{SURFACE} {APPLY_FLAG} admits exactly one plan digest; this module also"
             f" received {show(argv[2])}"
         )
     if not is_plan_digest(argv[1]):
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} requires one 64-character lowercase hexadecimal plan"
+            f"{SURFACE} {APPLY_FLAG} requires one 64-character lowercase hexadecimal plan"
             f" digest; this module received {show(argv[1])}"
         )
     return argv[1]
@@ -545,7 +534,7 @@ def refuse_read_only_guard() -> None:
     guard = sys.modules.get("_ccodex_sdlc_readonly_guard")
     if guard is not None and getattr(guard, "_INSTALLED", False):
         raise Refusal(
-            "ccodex sdlc recover --apply refuses: this process already installed the read-only guard,"
+            f"{SURFACE} {APPLY_FLAG} refuses: this process already installed the read-only guard,"
             " whose stdlib mutation blocks would fail this operation partway through"
         )
 
@@ -556,13 +545,13 @@ def admit_platform(system: str | None = None, machine: str | None = None) -> Non
     observed_machine = platform.machine() if machine is None else machine
     if observed_system != SUPPORTED_SYSTEM:
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} resumes an activated {SUPPORTED_SYSTEM} plane and is"
+            f"{SURFACE} {APPLY_FLAG} resumes an activated {SUPPORTED_SYSTEM} plane and is"
             f" certified only there; the observed operating system is {show(observed_system)}."
             " Another platform is refused rather than attempted"
         )
     if observed_machine.lower() not in SUPPORTED_MACHINES:
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} resumes a linux-x64 plane; the observed architecture"
+            f"{SURFACE} {APPLY_FLAG} resumes a linux-x64 plane; the observed architecture"
             f" is {show(observed_machine)}, not one of {list(SUPPORTED_MACHINES)}"
         )
 
@@ -572,19 +561,19 @@ def load_sibling(stem: str) -> ModuleType:
     path = Path(__file__).with_name(f"{stem}.py")
     if path.is_symlink() or not path.is_file():
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} requires the sibling module {show(str(path))}, which"
+            f"{SURFACE} {APPLY_FLAG} requires the sibling module {show(str(path))}, which"
             " is absent or is a link"
         )
     spec = importlib.util.spec_from_file_location(f"_ccodex_sdlc_recover_{stem}", path)
     if spec is None or spec.loader is None:
-        raise Refusal(f"ccodex sdlc recover {APPLY_FLAG} cannot load {show(str(path))}")
+        raise Refusal(f"{SURFACE} {APPLY_FLAG} cannot load {show(str(path))}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 - an import failure here is still pre-effect
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} cannot import {show(str(path))}: {show(exc)}"
+            f"{SURFACE} {APPLY_FLAG} cannot import {show(str(path))}: {show(exc)}"
         ) from exc
     return module
 
@@ -666,9 +655,15 @@ def build_configs(bundle: ModuleType, *, home: Path | None = None) -> tuple[Any,
     Identity fields are resolved exactly as ``ccodex_sdlc.recovery_configs`` resolves them, because a
     plan derived against one selection and applied against another would compare two different
     hosts.  ``dry_run`` is the only difference, and it participates in no classification.
+
+    THE STATE ROOT COMES FROM THE SUBSTRATE THAT OWNS IT (seed agentic-sdlc-4689).  This module used to
+    re-express the rule locally with only its POSIX branch, so on Windows it resolved
+    ``<home>/.local/state`` while the ledger it then writes through sat under ``LOCALAPPDATA``.  The
+    adapter is already in hand here -- it is the very module whose journal the plan describes -- so the
+    derivation is taken from it rather than kept in step with it by hand.
     """
     resolved_home = bundle.operational_path(Path.home() if home is None else home)
-    state_root = _state_root_for(resolved_home)
+    state_root = bundle.state_root_for(resolved_home)
     root = _absolute(Path(__file__).parent.parent)
     codex_home_value = os.environ.get("CODEX_HOME")
     codex_home = (
@@ -751,7 +746,7 @@ def run(argv: list[str], ledger: dict[str, bool], *, home: Path | None = None) -
         )
     except PlanUnavailable as exc:
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} cannot re-derive a plan from this host's state:"
+            f"{SURFACE} {APPLY_FLAG} cannot re-derive a plan from this host's state:"
             f" {escape_display(str(exc))}. Nothing was touched"
         ) from exc
     admit_journals(plan)
@@ -759,19 +754,19 @@ def run(argv: list[str], ledger: dict[str, bool], *, home: Path | None = None) -
 
     if plan["counts"]["items"] == 0:
         raise Refusal(
-            f"ccodex sdlc recover {APPLY_FLAG} found nothing to recover on this host, so there is no"
+            f"{SURFACE} {APPLY_FLAG} found nothing to recover on this host, so there is no"
             " plan to apply and nothing was touched"
         )
     if digest != approved:
         raise Refusal(
             f"the approved plan {show(approved)} is not the plan this host's state derives"
             f" ({show(digest)}): the state moved after the approval, or the approval is stale."
-            " Re-run `ccodex sdlc recover --dry-run`, review the new plan, and approve that digest."
+            f" Re-run `{SURFACE} --dry-run`, review the new plan, and approve that digest."
             " Nothing was touched"
         )
 
     lines = [
-        f"ccodex sdlc recover {APPLY_FLAG} {escape_display(approved[:12])}: plan re-derived from"
+        f"{SURFACE} {APPLY_FLAG} {escape_display(approved[:12])}: plan re-derived from"
         f" verified journal and receipt state ({plan['counts']['items']} item(s),"
         f" {plan['counts']['conflicts']} classified conflict(s))",
     ]
@@ -803,20 +798,20 @@ def main(argv: list[str] | None = None) -> int:
     except Refusal as exc:
         if ledger["moved"]:
             print(
-                f"error: ccodex sdlc recover {APPLY_FLAG} left an unknown effect:"
+                f"error: {SURFACE} {APPLY_FLAG} left an unknown effect:"
                 f" {escape_display(str(exc))}",
                 file=sys.stderr,
             )
             return EXIT_UNKNOWN
         print(
-            f"error: ccodex sdlc recover {APPLY_FLAG} refused before any effect:"
+            f"error: {SURFACE} {APPLY_FLAG} refused before any effect:"
             f" {escape_display(str(exc))}",
             file=sys.stderr,
         )
         return EXIT_REFUSED
     except UnknownEffect as exc:
         print(
-            f"error: ccodex sdlc recover {APPLY_FLAG} left an unknown effect:"
+            f"error: {SURFACE} {APPLY_FLAG} left an unknown effect:"
             f" {escape_display(str(exc))}",
             file=sys.stderr,
         )
@@ -826,7 +821,7 @@ def main(argv: list[str] | None = None) -> int:
     except BaseException as exc:  # noqa: BLE001 - includes the interrupt this walk must survive
         moved = ledger["moved"]
         print(
-            f"error: ccodex sdlc recover {APPLY_FLAG} stopped and"
+            f"error: {SURFACE} {APPLY_FLAG} stopped and"
             f" {'cannot prove what it recovered' if moved else 'moved nothing'}:"
             f" {escape_display(repr(exc))}",
             file=sys.stderr,

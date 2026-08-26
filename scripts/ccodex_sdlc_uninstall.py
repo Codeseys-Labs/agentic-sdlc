@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""``ccodex sdlc uninstall --host <claude|codex>``: receipt-directed retirement of one activation.
+"""``ccodex uninstall --scope <user|project> --agent <claude|codex>``: retire one activation.
 
 WHAT THIS MODULE IS
 -------------------
@@ -51,10 +51,10 @@ child leaves one empty.
 
 THE OWNERSHIP ROWS THE ACTIVATION WROTE ARE RETIRED WITH THE BYTES
 ------------------------------------------------------------------
-``ccodex sdlc install`` records every activated entry as one row in the shared installer ownership
+``ccodex install`` records every activated entry as one row in the shared installer ownership
 document through ``install_skill_bundle``'s own transactions, and the read-only projection honestly
 reports an owned row whose destination is absent as ``owned-entry-conflict``.  A retirement that
-removed the bytes and left the rows therefore made the very next ``ccodex sdlc status`` contradict
+removed the bytes and left the rows therefore made the very next ``ccodex status`` contradict
 the terminal receipt it had just sealed (agentic-sdlc-42ec, wave f194-w1 FINDING-1).  So each
 removal that proves an entry owned ALSO retires the matching row, through the installer's own
 crash-consistent pending slot and never by a hand-edit of the document: the transition is armed
@@ -159,6 +159,15 @@ PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-plan@1"
 #: Every per-agent fact -- the collection beneath the configured root, the version-observation argv, the
 #: contract row -- lives in ONE record per agent in ``ccodex_sdlc_host_planes`` (agentic-sdlc-7a2b, WX).
 HOST_FLAG = "--host"
+#: The OPERATOR SURFACE this module's messages name, spelled once (seed agentic-sdlc-67c9). The
+#: retired `ccodex sdlc uninstall` namespace refuses at the dispatcher, so a message that still named
+#: it would answer an operator in a spelling the dispatcher itself rejects -- and on the SUCCESS banner
+#: that is worse than on a refusal, because a completed operation would be reporting itself under a
+#: verb the front door declines (observed on a clean host 2026-08-26,
+#: `docs/evidence/2026-08-26-project-scope-clean-host.md` defect 1). The vector this module admits is
+#: still `--host <agent>`: that is the module ABI, built in exactly one place by the reader, and it is
+#: deliberately not the operator's spelling.
+SURFACE = "ccodex uninstall"
 #: The ONE optional request the front door forwards to this verb, in the operator's own spelling.
 DRY_RUN_FLAG = "--dry-run"
 DEFAULT_HOST = "claude"
@@ -491,17 +500,17 @@ def load_sibling(scripts_dir: Path, stem: str) -> ModuleType:
     """
     candidate = scripts_dir / f"{stem}.py"
     if candidate.is_symlink() or not candidate.is_file():
-        raise Refusal(f"ccodex sdlc uninstall cannot load its adapter {str(candidate)!r}: it is absent or a link")
+        raise Refusal(f"{SURFACE} cannot load its adapter {str(candidate)!r}: it is absent or a link")
     name = f"_ccodex_sdlc_uninstall_{stem}"
     spec = importlib.util.spec_from_file_location(name, candidate)
     if spec is None or spec.loader is None:
-        raise Refusal(f"ccodex sdlc uninstall cannot load its adapter {str(candidate)!r}")
+        raise Refusal(f"{SURFACE} cannot load its adapter {str(candidate)!r}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 - an adapter that cannot import is a pre-effect refusal
-        raise Refusal(f"ccodex sdlc uninstall adapter {str(candidate)!r} failed to import: {exc!r}") from exc
+        raise Refusal(f"{SURFACE} adapter {str(candidate)!r} failed to import: {exc!r}") from exc
     return module
 
 
@@ -535,7 +544,7 @@ def refuse_read_only_guard() -> None:
     guard = sys.modules.get("_ccodex_sdlc_readonly_guard")
     if guard is not None and getattr(guard, "_INSTALLED", False):
         raise Refusal(
-            "ccodex sdlc uninstall refuses: this process already installed the read-only guard, whose "
+            f"{SURFACE} refuses: this process already installed the read-only guard, whose "
             "stdlib mutation blocks would fail this operation partway through"
         )
 
@@ -554,11 +563,11 @@ def read_receipt_document(dar: ModuleType, path: Path, label: str) -> dict[str, 
         item = path.lstat()
     except FileNotFoundError as exc:
         raise Refusal(
-            f"ccodex sdlc uninstall found no active {label} at {str(path)!r}; the receipt is the only "
+            f"{SURFACE} found no active {label} at {str(path)!r}; the receipt is the only "
             "statement of what this plane owns, and there is nothing to reconstruct it from"
         ) from exc
     except OSError as exc:
-        raise Refusal(f"ccodex sdlc uninstall cannot inspect the active {label} {str(path)!r}: {exc}") from exc
+        raise Refusal(f"{SURFACE} cannot inspect the active {label} {str(path)!r}: {exc}") from exc
     if stat.S_ISLNK(item.st_mode):
         raise Refusal(
             f"the active {label} {str(path)!r} is a link; a lifecycle plane resolves a fixed path, and "
@@ -972,9 +981,9 @@ class RowRetirement:
 def admit_ownership_state(bundle: ModuleType, installer_config: Any) -> dict[str, Any]:
     """Admit the shared installer ownership document whose rows this retirement must keep truthful.
 
-    ``ccodex sdlc install`` writes one row per activated entry into this document through the
+    ``ccodex install`` writes one row per activated entry into this document through the
     installer's own transactions, so removing the bytes while leaving the rows would make the very
-    next ``ccodex sdlc status`` contradict the terminal receipt this run seals: the projection
+    next ``ccodex status`` contradict the terminal receipt this run seals: the projection
     honestly reports an owned row whose destination is absent as a conflict (agentic-sdlc-42ec).
     Admission happens BEFORE any effect, with the same three named refusals the install verb
     applies: an unreadable document, an inadmissible one, and an outstanding armed transition --
@@ -1444,13 +1453,20 @@ def render_report(
 ) -> list[str]:
     """One offline report: removed, preserved, attention. Every artifact-derived value is escaped.
 
-    ``facts`` is what this run can SAY about the plane it retired -- host, scope, resolved version, the
+    ``facts`` is what this run can SAY about the plane it retired -- host, scope and its kind, resolved
+    version, the
     session note a project-scope retirement owes, the unknowns it inherited, and the announcement a
     legacy-unreceipted retirement owes.  It is passed explicitly rather than read out of a retired
     receipt body, because the ledger-directed path has no such body: its prestate evidence is the
     ownership rows themselves.
     """
-    lines = [f"ccodex sdlc uninstall: {state}"]
+    # THE BANNER NAMES THE INVOCATION THE OPERATOR TYPED, exactly as `install` and `update` do: an
+    # operator who reached this module through `ccodex uninstall --scope <kind> --agent <agent>` must
+    # not be answered by a spelling the dispatcher refuses (seed agentic-sdlc-67c9).
+    lines = [
+        f"{SURFACE} {SCOPE_FLAG} {dar_escape(facts['scope_kind'])}"
+        f" --agent {dar_escape(facts['host'])}: {state}"
+    ]
     for announcement in facts.get("announcements", []):
         lines.append(str(announcement))
     lines.append(
@@ -1543,7 +1559,7 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
     """
     if config.platform_system != SUPPORTED_PLATFORM:
         raise Refusal(
-            f"ccodex sdlc uninstall is certified on {SUPPORTED_PLATFORM} only and refuses on "
+            f"{SURFACE} is certified on {SUPPORTED_PLATFORM} only and refuses on "
             f"{dar_escape(config.platform_system)}; the candidate plane it retires is Linux x64 only"
         )
 
@@ -1883,6 +1899,7 @@ def run_receipt_directed(
             "host": config.host,
             "resolved_version": body["resolved_version"],
             "scope": scope_display(config),
+            "scope_kind": config.scope_kind,
             "session_note": session_note(config),
             "unknowns": body.get("unknowns", []),
         },
@@ -2122,7 +2139,7 @@ def run_ledger_directed(
     # refusal is the honest one.
     if not bundle.path_present(installer_config.state_path):
         raise Refusal(
-            f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
+            f"{SURFACE} found no activation receipt for {config.host}/{config.scope_kind}"
             f" at {str(config.active_receipt_path)!r} and no installer ownership document at"
             f" {str(installer_config.state_path)!r}; there is nothing to retire, and"
             f" `ccodex install --scope {config.scope_kind} --agent {config.host}` is the front door for a"
@@ -2145,7 +2162,7 @@ def run_ledger_directed(
         rows = ledger_rows(bundle, config, installer_config, state)
         if not rows:
             raise Refusal(
-                f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
+                f"{SURFACE} found no activation receipt for {config.host}/{config.scope_kind}"
                 f" at {str(config.active_receipt_path)!r} and no ownership rows under"
                 f" {str(config.plane_root)!r}; there is nothing to retire, and"
                 f" `ccodex install --scope {config.scope_kind} --agent {config.host}` is the front door for a"
@@ -2326,6 +2343,7 @@ def run_ledger_directed(
             "host": config.host,
             "resolved_version": resolved_version,
             "scope": scope_display(config),
+            "scope_kind": config.scope_kind,
             "session_note": session_note(config),
             "unknowns": [],
         },
@@ -2584,7 +2602,7 @@ def main(argv: list[str]) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     except Exception as exc:  # noqa: BLE001 - nothing has been touched yet, so this is a clean refusal
-        print(f"error: ccodex sdlc uninstall refused before any effect: {exc!r}", file=sys.stderr)
+        print(f"error: {SURFACE} refused before any effect: {exc!r}", file=sys.stderr)
         return EXIT_REFUSED
     return execute(bundle, dar, config)
 
@@ -2611,7 +2629,7 @@ def execute(bundle: ModuleType, dar: ModuleType, config: Config) -> int:
         raise
     except BaseException as exc:  # noqa: BLE001 - includes the interrupt this walk must survive honestly
         print(
-            f"error: ccodex sdlc uninstall stopped and "
+            f"error: {SURFACE} stopped and "
             f"{'cannot prove what it moved' if ledger['moved'] else 'moved nothing'}: {exc!r}",
             file=sys.stderr,
         )

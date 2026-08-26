@@ -6,13 +6,13 @@ journal and receipt state and either resumes, rolls back, or refuses BY NAME.  E
 assertion carries a positive control, because a refusal that would also fire on a healthy host
 proves nothing about the boundary it claims to defend.
 
-THE VERB IS TOP-LEVEL SINCE agentic-sdlc-7a2b W3a, and the spellings below are deliberately not
-uniform.  ``ccodex sdlc recover`` is retired at the dispatcher (exit 2, naming the replacement), so
-every argv here starts at ``recover`` and every assertion about what the READER printed drops the
-``sdlc`` word.  ``scripts/ccodex_sdlc_recover.py`` is unchanged and still names itself ``ccodex sdlc
-recover --apply`` in its own messages, so every assertion about what the MODULE printed keeps it.
-That asymmetry is the documented one -- one operator spelling, one module ABI -- and an assertion that
-"tidied" it would stop distinguishing which of the two answered.
+THE VERB IS TOP-LEVEL SINCE agentic-sdlc-7a2b W3a, and since G6 the module AGREES.
+``ccodex sdlc recover`` is retired at the dispatcher (exit 2, naming the replacement), so every argv
+here starts at ``recover``; ``scripts/ccodex_sdlc_recover.py`` now names itself ``ccodex recover`` too,
+through one ``SURFACE`` constant (seed agentic-sdlc-67c9).  One spelling across both sides means the
+prefix alone no longer says WHICH of the two answered, so every assertion that has to distinguish them
+quotes a phrase only one of them emits -- the module's ``refused before any effect``, which appears in
+no reader message -- rather than resting on a retired word.
 """
 
 from __future__ import annotations
@@ -320,14 +320,15 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
                     # opens on the top-level `install` form.
                     self.assertIn("usage: ccodex install", completed.stderr)
             # Positive control: the SAME dispatcher admits the well-formed spelling and reaches the
-            # module, which refuses on its own evidence (exit 3) rather than as a usage error. The
-            # module's own message still spells itself `ccodex sdlc recover --apply`, which is exactly
-            # what makes this line evidence that the MODULE answered rather than the reader.
+            # module, which refuses on its own evidence (exit 3) rather than as a usage error. Both
+            # sides now spell the verb `ccodex recover` (seed agentic-sdlc-67c9), so what makes this
+            # line evidence that the MODULE answered is `refused before any effect` -- a phrase the
+            # module owns and no reader refusal or usage line carries.
             control = self.run_dispatcher(
                 dispatcher, environment, "recover", "--apply", FOREIGN_DIGEST
             )
             self.assertEqual(control.returncode, 3, control.stderr)
-            self.assertIn("ccodex sdlc recover --apply refused before any effect", control.stderr)
+            self.assertIn("ccodex recover --apply refused before any effect", control.stderr)
             self.assertEqual(before, tree_hash(*self.observed_roots(environment)))
 
     def test_a_supplied_but_unusable_digest_is_named_and_never_echoed_unescaped(self) -> None:

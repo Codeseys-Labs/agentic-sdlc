@@ -273,15 +273,15 @@ WINDOWS_SKIP = unittest.skipIf(
 )
 
 
-#: HOW EACH PER-VERB MODULE NAMES ITSELF, which is NOT one string across the family: `install` names
-#: the surviving top-level invocation (renamed in W3b of agentic-sdlc-7a2b, seed agentic-sdlc-67c9) and
-#: the other two still name the retired `ccodex sdlc <verb>` spelling because they are other waves'
-#: files. A shared f-string here asserted one spelling for all three and would have passed while
-#: proving the wrong thing about two of them.
+#: HOW EACH PER-VERB MODULE NAMES ITSELF. All three now name the surviving top-level invocation:
+#: `install` was renamed in W3b of agentic-sdlc-7a2b and `update`/`uninstall` followed in G6, each
+#: through its module's own `SURFACE` constant (seed agentic-sdlc-67c9). The map stays EXPLICIT rather
+#: than collapsing into one shared f-string: a per-module row is what fails and names the module the
+#: day one of them drifts.
 MODULE_OWN_PREFIX = {
     "install": "error: ccodex install ",
-    "update": "error: ccodex sdlc update ",
-    "uninstall": "error: ccodex sdlc uninstall ",
+    "update": "error: ccodex update ",
+    "uninstall": "error: ccodex uninstall ",
 }
 
 class ReadinessHarness(unittest.TestCase):
@@ -1242,11 +1242,10 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
                 self.assertEqual(completed.returncode, 3, completed.stderr)
                 # All three per-verb modules ship, so each refuses pre-effect in its OWN name; the
                 # loader's absence message appearing here would mean dispatch never reached one.
-                # THE PREFIX IS THE MODULE'S OWN AND THE FAMILY IS SPLIT: `install` was renamed to
-                # the surviving top-level invocation in W3b, while `update` and `uninstall` still print
-                # `ccodex sdlc <verb>` because they are other waves' files. The map is what proves the
-                # MODULE answered rather than the reader -- neither reader refusal carries a prefix
-                # with a trailing verb -- and a rename lands here as one line.
+                # THE PREFIX IS THE MODULE'S OWN, and since G6 all three speak the surviving
+                # top-level invocation (seed agentic-sdlc-67c9). The map is what proves the MODULE
+                # answered rather than the reader -- neither reader refusal carries a prefix with a
+                # trailing verb -- and a drift lands here as one line.
                 self.assertIn(MODULE_OWN_PREFIX[vector[0]], completed.stderr)
                 self.assertNotIn("is unavailable in this distribution", completed.stderr)
                 self.assertEqual(completed.stdout, "")

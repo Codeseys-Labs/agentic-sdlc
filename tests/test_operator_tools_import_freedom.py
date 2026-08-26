@@ -13,16 +13,21 @@ resurrection of a module that is gone" -- and it is still a live claim, because 
 read off the SOURCE rather than off an import hook, so a `ModuleType` parameter or a guarded
 `load_sibling` would be seen exactly as a top-level import is.
 
-THE ORACLE LEFT, SO THE EQUALITY CLAIM WAS RE-ANCHORED FIRST (D1's recorded note, executed in this
-wave's first commit while `install_operator_tools.state_root_for` still existed). D1's replacement
-derivations were pinned EQUAL to that one original; there is no original now, so the surviving claim
-is the one that actually matters at run time and that the plane never supplied: the reader's
-`state_root_for` and `ccodex_sdlc_recover._state_root_for` must agree with EACH OTHER on every host,
-because they resolve the state root that decides which journal a plan is derived from. Two spellings
-that disagreed would derive two digests for one host, which is precisely the disagreement the digest
-exists to detect. `manage_claude_statusline.state_root_for` joins them as the third spelling of the
-same rule. The equality is asserted over the same input matrix D1 used, with the same positive
-control that the comparison can fail.
+THE ORACLE LEFT, SO THE EQUALITY CLAIM WAS RE-ANCHORED (D1's recorded note, executed while
+`install_operator_tools.state_root_for` still existed) AND THEN RE-ANCHORED AGAIN, onto a real one.
+D1 pinned its replacement derivations equal to that original; the original is gone, and the three
+survivors pinned only against EACH OTHER was a claim a family that was uniformly wrong could satisfy
+-- which it was. All three carried the POSIX branch alone, so on Windows they resolved
+`<home>/.local/state` while `install_skill_bundle.state_directory()`, the value this bundle actually
+writes its ownership ledger under, resolved `LOCALAPPDATA` (seed agentic-sdlc-4689). The rule now has
+ONE owner, `install_skill_bundle.state_root_for(home)`, of which `state_directory()` is the
+process-home specialization; `manage_claude_statusline` delegates to it and `ccodex_sdlc_recover`
+deleted its copy outright. What is asserted here is the surviving distance: the reader keeps one
+re-expression, because it resolves the store roster on the runtime-admission-refused path where that
+substrate is deliberately not loaded, so its agreement is a test rather than an import. The matrix is
+D1's inputs widened by the LOCALAPPDATA rows and run under BOTH mocked platforms, with a positive
+control that the mocked platform really moves the answer -- without it, every equality here would pass
+by comparing two identical POSIX results.
 """
 
 from __future__ import annotations
@@ -55,6 +60,13 @@ def _load(name: str, path: Path):
 reader = _load("import_freedom_reader", ROOT / "scripts" / "ccodex_sdlc.py")
 recover = _load("import_freedom_recover", ROOT / "scripts" / "ccodex_sdlc_recover.py")
 statusline = _load("import_freedom_statusline", ROOT / "scripts" / "manage_claude_statusline.py")
+#: The AUTHORITY for the state-root rule since seed agentic-sdlc-4689, reached through the keeper that
+#: imports it rather than loaded a second time. That identity is the point: the rule reads a
+#: `platform_system` seam, and a second module OBJECT of the same file carries a second seam, so mocking
+#: one and comparing against the other would fail on the mock rather than on the rule. One object means
+#: one seam, and the statusline row below then tests the DELEGATION -- a re-introduced local copy there
+#: stops tracking the mocked platform and fails.
+bundle = statusline.installer
 #: The one owner of "an absolute path a fixture may name on any host". `Path("/a/../b")` is absolute on
 #: POSIX only, and comparing it against a lexically collapsed result is what broke below on Windows.
 platform_paths = _load("import_freedom_platform_paths", ROOT / "tests" / "support" / "platform_paths.py")
@@ -231,7 +243,13 @@ class ImportFreedomTests(unittest.TestCase):
 
 
 class ReplacementDerivationTests(unittest.TestCase):
-    """The three surviving spellings of one state-root rule resolve one path per host."""
+    """Every spelling of one state-root rule resolves one path per host, on BOTH platforms.
+
+    THE AUTHORITY IS `install_skill_bundle.state_root_for` (seed agentic-sdlc-4689), and it is where
+    the rule lives because `AGENTS.md` states it as this bundle's own -- `XDG_STATE_HOME` on Unix,
+    `LOCALAPPDATA` on Windows. `state_directory()` is that function applied to the process home, so a
+    consumer handed a home and a consumer reading the environment cannot land under two roots.
+    """
 
     HOMES = (
         Path("/home/fixture"),
@@ -239,31 +257,131 @@ class ReplacementDerivationTests(unittest.TestCase):
         Path("~/fixture"),
         Path("relative-home"),
     )
+    #: Every environment shape that selects a different branch of the rule, per platform. The
+    #: LOCALAPPDATA-absent row is the one that makes the home a parameter on Windows at all: with the
+    #: variable set, the rule ignores the home entirely.
+    ENVIRONMENTS = (
+        {},
+        {"XDG_STATE_HOME": "/xdg/state"},
+        {"XDG_STATE_HOME": "~/xdg"},
+        {"LOCALAPPDATA": "/local/app/data"},
+        {"XDG_STATE_HOME": "/xdg/state", "LOCALAPPDATA": "/local/app/data"},
+    )
+    _CLEARED = ("XDG_STATE_HOME", "LOCALAPPDATA")
 
     def replacements(self):
         return (
             ("ccodex_sdlc.state_root_for", reader.state_root_for),
-            ("ccodex_sdlc_recover._state_root_for", recover._state_root_for),
             ("manage_claude_statusline.state_root_for", statusline.state_root_for),
         )
 
-    def test_every_state_root_spelling_agrees_with_every_other(self) -> None:
-        """Re-anchored from the deleted plane onto reader-versus-recover equality.
+    def environments(self, system: str):
+        """Each environment shape with the host platform forced to `system`.
 
-        The reader renders the plan digest and `ccodex_sdlc_recover` re-derives it at apply time. If
-        those two resolved different state roots they would read different journals and derive
-        different digests for one host, and `--apply` would refuse every approval the reader ever
-        printed. The reader is the reference spelling because it is the one the report is built from.
+        PATCHED AT THE STDLIB, not at a module seam, because there is exactly ONE predicate to move:
+        the authority reads it through `install_skill_bundle.platform_system` and the reader's one
+        surviving re-expression calls `platform.system()` directly, so `platform.system` is where the
+        two meet. Patching either module's own name would move one side and leave the other on the real
+        host, and the comparison would then fail on the mock rather than on the rule.
         """
-        for environment in ({}, {"XDG_STATE_HOME": "/xdg/state"}, {"XDG_STATE_HOME": "~/xdg"}):
-            for home in self.HOMES:
-                with mock.patch.dict("os.environ", environment, clear=False) as _patched:
-                    if "XDG_STATE_HOME" not in environment:
-                        _patched.pop("XDG_STATE_HOME", None)
-                    expected = reader.state_root_for(home)
+        for environment in self.ENVIRONMENTS:
+            with mock.patch.dict("os.environ", environment, clear=False) as patched:
+                for name in self._CLEARED:
+                    if name not in environment:
+                        patched.pop(name, None)
+                with mock.patch("platform.system", return_value=system):
+                    yield environment
+
+    def test_every_state_root_spelling_agrees_with_the_authority(self) -> None:
+        """Anchored on the authority, across both platforms and every branch of the rule.
+
+        The reader renders the plan digest and `ccodex_sdlc_recover` re-derives it at apply time
+        through this same authority. If two spellings resolved different state roots they would read
+        different journals and derive different digests for one host, and `--apply` would refuse every
+        approval the reader ever printed. On Windows they ALSO used to split the report itself: the
+        ownership ledger under `LOCALAPPDATA`, the acquisition and activation planes under
+        `<home>/.local/state`.
+        """
+        for system in ("Linux", "Windows"):
+            for environment in self.environments(system):
+                for home in self.HOMES:
+                    expected = bundle.state_root_for(home)
                     for label, replacement in self.replacements():
-                        with self.subTest(label=label, home=str(home), env=environment):
+                        with self.subTest(
+                            label=label, system=system, home=str(home), env=environment
+                        ):
                             self.assertEqual(replacement(home), expected)
+
+    def test_the_authority_and_its_process_home_specialization_agree(self) -> None:
+        """`state_directory()` is `state_root_for(Path.home())` and every keeper matches it.
+
+        THE AXIS THE DIVERGENCE NEEDED (seed agentic-sdlc-4689). The equality above pins the
+        home-parameterized spellings against each other, which a family that was uniformly wrong about
+        Windows would satisfy. This one compares them against the zero-argument function the installer
+        actually writes its ownership ledger under, which is the value `AGENTS.md` documents.
+        """
+        for system in ("Linux", "Windows"):
+            for environment in self.environments(system):
+                home = bundle.operational_path(Path.home())
+                directory = bundle.state_directory()
+                with self.subTest(system=system, env=environment, side="authority"):
+                    self.assertEqual(bundle.state_root_for(home), directory)
+                for label, replacement in self.replacements():
+                    with self.subTest(label=label, system=system, env=environment):
+                        self.assertEqual(replacement(home), directory)
+
+    def test_the_windows_branch_is_really_reached(self) -> None:
+        """Positive control for both tests above: the mocked platform MOVES the answer.
+
+        Without this, a platform predicate the equality tests failed to reach -- or a rule that had no
+        Windows branch at all -- would make every assertion above pass by comparing two identical POSIX
+        answers. So the same home and the same environment must resolve to two DIFFERENT roots under the
+        two systems, and the Windows one must be the `LOCALAPPDATA` value.
+        """
+        home = Path("/home/fixture")
+        resolved: dict[str, Path] = {}
+        for system in ("Linux", "Windows"):
+            with mock.patch.dict(
+                "os.environ",
+                {"XDG_STATE_HOME": "/xdg/state", "LOCALAPPDATA": "/local/app/data"},
+                clear=False,
+            ):
+                with mock.patch("platform.system", return_value=system):
+                    resolved[system] = bundle.state_root_for(home)
+                    self.assertEqual(reader.state_root_for(home), resolved[system], system)
+        self.assertNotEqual(resolved["Linux"], resolved["Windows"])
+        self.assertEqual(
+            resolved["Windows"], bundle.operational_path(Path("/local/app/data"))
+        )
+        self.assertEqual(resolved["Linux"], bundle.operational_path(Path("/xdg/state")))
+
+    def test_the_authority_is_the_repository_module_and_not_a_stand_in(self) -> None:
+        """The premise of every equality above: `bundle` really is `scripts/install_skill_bundle.py`."""
+        self.assertEqual(
+            Path(bundle.__file__).resolve(),
+            (ROOT / "scripts" / "install_skill_bundle.py").resolve(),
+        )
+        # The authority's own platform seam, whose delegation down to `platform.system` is what the
+        # stdlib patch in `environments` relies on to move BOTH sides of every equality.
+        self.assertTrue(hasattr(bundle, "platform_system"))
+        with mock.patch("platform.system", return_value="Plan9"):
+            self.assertEqual(bundle.platform_system(), "Plan9")
+
+    def test_the_recovery_plane_takes_the_authority_rather_than_a_copy(self) -> None:
+        """`ccodex_sdlc_recover` has no state-root spelling of its own left to diverge.
+
+        It is the one keeper that could delete its copy outright: the adapter it needs is already in
+        hand at the single call site (`build_configs`), so the derivation is TAKEN from the substrate
+        whose journal the plan describes instead of kept in step with it by hand. Asserted as an
+        absence plus the delegation, because either alone is satisfiable by the other's regression.
+        """
+        self.assertFalse(hasattr(recover, "_state_root_for"))
+        source = (ROOT / "scripts" / "ccodex_sdlc_recover.py").read_text(encoding="utf-8")
+        self.assertIn("bundle.state_root_for(resolved_home)", source)
+        # Positive control for both: the authority really carries the name being delegated to, and the
+        # module really was read.
+        self.assertTrue(callable(bundle.state_root_for))
+        self.assertIn("def build_configs(", source)
 
     def test_the_statusline_takes_no_bin_directory_at_all(self) -> None:
         """The retired half of the D1 equality pair, asserted as the absence D2 created.
@@ -281,11 +399,11 @@ class ReplacementDerivationTests(unittest.TestCase):
         self.assertTrue(hasattr(statusline, "state_root_for"))
 
     def test_the_equality_check_can_fail(self) -> None:
-        """Positive control: the comparison above is not comparing a value to itself."""
+        """Positive control: the comparisons above are not comparing a value to itself."""
         with mock.patch.dict("os.environ", {"XDG_STATE_HOME": "/xdg/state"}, clear=False):
             self.assertNotEqual(
                 reader.state_root_for(Path("/home/fixture")),
-                recover._state_root_for(Path("/home/other")) / "elsewhere",
+                bundle.state_root_for(Path("/home/other")) / "elsewhere",
             )
 
     def test_the_absolute_replacement_is_the_bundle_helper(self) -> None:
@@ -300,7 +418,6 @@ class ReplacementDerivationTests(unittest.TestCase):
         `WindowsPath('C:/b')` against `WindowsPath('/b')` (main@818bf09, seed context
         `ci-red-818bf09`). The collapse is the subject; the anchor is not.
         """
-        bundle = _load("import_freedom_bundle", ROOT / "scripts" / "install_skill_bundle.py")
         uncollapsed = platform_paths.absolute_fixture("a", "..", "b")
         for candidate in (*self.HOMES, uncollapsed, Path("./c")):
             with self.subTest(path=str(candidate)):

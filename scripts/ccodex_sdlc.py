@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Read-only checkout-development evidence behind ``ccodex sdlc``.
+"""Read-only checkout-development evidence behind ``ccodex status``, ``doctor``, and ``recover``.
 
 The installed dispatcher invokes this file with its install-bound, UV-managed Python 3.12.11 using
 ``-I -B``.  Its reader verbs are intentionally not a lifecycle surface: they read existing state,
 never create or repair it, and render one closed semantic report in either human or canonical JSON
 form.
 
-This file also owns the closed grammar of the three mutating lifecycle verbs (``install --host
-claude``, ``update``, ``uninstall``), and it owns nothing else about them.  It parses them, refuses
+This file also owns the closed grammar of the three mutating lifecycle verbs (``install``,
+``update``, ``uninstall``), and it owns nothing else about them.  It parses them, refuses
 them by name, or hands the admitted vector to one per-verb module loaded by absolute file path; it
 performs no lifecycle mutation and acquires no writer authority of its own.
 """
@@ -20,6 +20,7 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
 import stat
 import sys
 from types import ModuleType
@@ -1847,16 +1848,36 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
 def state_root_for(home: Path) -> Path:
     """Derive this host's user-local state root from the GIVEN home, never from ``Path.home()``.
 
-    This is the one path derivation the ownership planes share, and it lives here rather than in the
-    deleted ``install_operator_tools`` PATH plane (gh #10) because a helper the report still needs
-    must not be deleted with it.
-    ``install_skill_bundle.state_directory()`` is deliberately NOT the substitute: it reads
-    ``Path.home()`` itself, so it cannot honour a caller-supplied home, and on Windows it prefers
-    ``LOCALAPPDATA`` -- either difference would make this reader and
-    ``ccodex_sdlc_recover.build_configs`` resolve two different state roots and therefore derive two
-    different plan digests, which is precisely the disagreement the digest exists to detect.
-    ``ccodex_sdlc_recover`` carries the identical derivation, and a test pins the two as equal.
+    THE RULE IS ``install_skill_bundle.state_root_for``'S, RE-EXPRESSED, AND THAT IS THE ONE COPY LEFT
+    (seed agentic-sdlc-4689).  ``manage_claude_statusline`` and ``ccodex_sdlc_recover`` now DELEGATE to
+    that function; this reader cannot, and the reason is an ordering rather than a preference:
+    ``state_store_projection`` names every state store on the runtime-admission-REFUSED path, which
+    renders its report BEFORE ``load_read_only_adapters`` runs, precisely so an uncertified runtime is
+    not asked to import the ownership substrate.  A delegation here would either load that substrate on
+    a runtime this reader just declined, or make the store roster conditional on the runtime -- and the
+    roster's whole acceptance is that its count is a fact about the distribution rather than about the
+    host.
+
+    So the copy stays and the equality is a TEST, not an import:
+    ``tests/test_operator_tools_import_freedom.py`` pins this against the bundle's own
+    ``state_root_for`` and against ``state_directory()`` across the ``XDG_STATE_HOME``/``LOCALAPPDATA``
+    matrix on BOTH mocked platforms.  What that test caught is the divergence this docstring used to
+    describe as deliberate: the Windows branch was missing here, so on Windows this reader read the
+    acquisition and activation planes from ``<home>/.local/state`` while the ownership ledger it reports
+    beside them sat under ``LOCALAPPDATA``, and one host's report spanned two state roots.
+    ``install_skill_bundle.state_directory()`` is still not the substitute, because it reads
+    ``Path.home()`` and cannot honour a caller-supplied home.
+
+    THE PLATFORM TEST IS ``platform.system()`` DIRECTLY, not a second seam named after the bundle's own
+    ``platform_system``.  One predicate spelled twice is the shape this seed exists to remove, and the
+    stdlib call is already shared: the authority reaches it through its seam, this copy reaches it
+    directly, and a test that moves ``platform.system`` moves both at once -- which is what lets the
+    equality be asserted on Windows from a Linux host.
     """
+    if platform.system() == "Windows":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        root = Path(local_app_data) if local_app_data else home / "AppData" / "Local"
+        return Path(os.path.abspath(os.path.expanduser(os.fspath(root))))
     value = os.environ.get("XDG_STATE_HOME")
     root = Path(value) if value else home / ".local" / "state"
     return Path(os.path.abspath(os.path.expanduser(os.fspath(root))))
@@ -1867,7 +1888,7 @@ def observe_host_readiness(
 ) -> dict[str, Any]:
     """Resolve this host's two lifecycle planes and observe them, reusing the guarded adapters.
 
-    The planes live under the operator's own XDG state root beside the ownership documents the
+    The planes live under the operator's own user-local state root beside the ownership documents the
     projections already read (spec Decision 11), and the acquisition layout is the one
     ``write_acquisition_receipt`` seals into.  Resolution is separated from observation so a test
     can hand ``observe_readiness`` its own directories.

@@ -71,7 +71,7 @@ THE FOUR PHASES, IN ORDER, EACH REFUSING BY NAME BEFORE THE NEXT COULD MOVE ANYT
      earlier receipt.
   5. POINT THE PLANE AT THAT RECEIPT.  ``activation/active/<agent>/user.json`` is the only statement
      of what this (agent, scope, root) plane owns, and it is the admission every later verb reads:
-     ``ccodex sdlc update`` and ``ccodex sdlc uninstall`` admit the pointer for their OWN key and
+     ``ccodex update`` and ``ccodex uninstall`` admit the pointer for their OWN key and
      nothing else, so an install that sealed a receipt without writing it left a plane no later verb
      could act on.  THE FILENAME IS THE ADMISSION AUTHORITY: the agent segment, the filename shape,
      and -- for a project scope -- the root key are each compared against the pointed receipt's own
@@ -79,7 +79,7 @@ THE FOUR PHASES, IN ORDER, EACH REFUSING BY NAME BEFORE THE NEXT COULD MOVE ANYT
      root's bytes.  A pre-keyed ``activation/active-receipt.json`` is re-filed at the keyed path
      before this run's admission and announced in the report; both present is a named refusal.
      The order is fixed and is
-     the same order ``ccodex sdlc update`` uses: the receipt is written create-only and DURABLY
+     the same order ``ccodex update`` uses: the receipt is written create-only and DURABLY
      first, and only then is the pointer replaced atomically, so there is no window in which the
      pointer names a receipt no directory holds.  A partial or unknown effect files the receipt as
      evidence and leaves the pointer ALONE -- a pointer that claims an activation nobody completed
@@ -424,10 +424,16 @@ def show(value: object) -> str:
 
 
 def default_state_home() -> Path:
-    """``XDG_STATE_HOME`` or its documented default, without creating anything.
+    """``XDG_STATE_HOME`` or its POSIX default, without creating anything.
 
-    Same convention the shipped installer's ``state_directory`` uses and the acquisition plane's
-    ``--xdg-state-home`` names; this module invents no new location.
+    The acquisition plane's ``--xdg-state-home`` names the same location, and this module invents no new
+    one.  It is NOT the whole of ``install_skill_bundle.state_root_for``, which this once claimed:
+    that rule prefers ``LOCALAPPDATA`` on Windows and this is the POSIX branch alone (seed
+    agentic-sdlc-4689).  The difference is unobservable rather than corrected, and the bound is
+    deliberate on both ends: ``admit_platform`` refuses every non-Linux host before this verb reads
+    anything, so no certified run reaches the Windows branch, and this default is evaluated while the
+    ``Config`` is BUILT -- before ``load_sibling`` -- so the authority is not in hand here to delegate
+    to.  Anything that widened this verb past Linux has to resolve this through that authority first.
     """
     value = os.environ.get("XDG_STATE_HOME")
     if value and value.strip():
@@ -2444,8 +2450,8 @@ def replace_active_pointer(bundle: ModuleType, config: Config, raw: bytes) -> No
     """Point the plane at THIS receipt, atomically, only after it is durably filed.
 
     ``os.replace`` plus a parent fsync inside ``write_replaceable_document``: a kill before this call
-    leaves the plane with no pointer at all -- exactly the state ``ccodex sdlc update`` and
-    ``ccodex sdlc uninstall`` refuse by name -- and a kill after it leaves this receipt, which is
+    leaves the plane with no pointer at all -- exactly the state ``ccodex update`` and
+    ``ccodex uninstall`` refuse by name -- and a kill after it leaves this receipt, which is
     already durably filed under its own id.  There is no window in which the pointer names a receipt
     no directory holds.
 
