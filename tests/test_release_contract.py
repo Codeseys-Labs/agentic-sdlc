@@ -117,7 +117,12 @@ class ReleaseContractIdentityTests(unittest.TestCase):
 
         contract = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
         self.assertEqual(contract["schema_version"], "release-contract/v1")
-        self.assertEqual(contract["checkout"]["version"], "0.7.5")
+        # Keyed off the bump manifest, not a literal: the contract's reviewed version edit must
+        # agree with what bump-version.sh moved, and a literal here reddens every legitimate bump.
+        manifest_version = json.loads(
+            (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )["version"]
+        self.assertEqual(contract["checkout"]["version"], manifest_version)
         self.assertEqual(contract["checkout"]["plane"], "checkout-development")
         self.assertIsNone(contract["checkout"]["public_channel"])
         self.assertEqual(contract["checkout"]["certification_claim"], "none")

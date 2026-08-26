@@ -163,7 +163,10 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertEqual(report["schema_version"], "ccodex-sdlc-read-report/v1")
             self.assertEqual(report["command"]["verb"], "status")
             self.assertEqual(report["checkout"]["plane"], "checkout-development")
-            self.assertEqual(report["checkout"]["version"], "0.7.5")
+            manifest_version = json.loads(
+                (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+            )["version"]
+            self.assertEqual(report["checkout"]["version"], manifest_version)
             self.assertIsNone(report["checkout"]["public_channel"])
             self.assertEqual(report["checkout"]["certification_claim"], "none")
             self.assertTrue(report["runtime"]["isolated"])
