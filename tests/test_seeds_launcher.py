@@ -2082,6 +2082,163 @@ class SeedsRecordTests(LauncherFixture, unittest.TestCase):
         self.assertNotIn("effect is unknown", clean.stderr)
 
 
+# The exact upstream signatures agentic-sdlc-d208 is bound to, quoted from the windows-2025 leg of
+# CI run 32939751443 (job 98088112185, mise 2026.8.14 windows-x64). mise/aqua composes one refusal
+# line per tool and the two clauses arrive in EITHER order -- uv and gh lead with the workflow
+# mismatch, lefthook leads with the Sigstore error, and jq carries only the Sigstore error -- so each
+# clause is matched independently rather than as one fixed line.
+ATTESTATION_ENVELOPE = "GitHub artifact attestations verification failed: Verification failed:"
+SIGSTORE_CACHE_REFUSAL = "Sigstore error: TUF error: Could not determine cache directory"
+RELEASE_IDENTITY_MISMATCH = re.compile(
+    r"Workflow verification failed: expected '[^']+/\.github/workflows/[^']+',"
+    r' found certificate identity: "https://dotcom\.releases\.github\.com"'
+)
+FAILED_TOOLS_LINE = re.compile(r"^mise ERROR Failed to install tools: (.+)$", re.MULTILINE)
+
+
+def attestation_refusal_class(output: str) -> bool:
+    """True only when EVERY tool mise refused to install was refused for d208's upstream reasons.
+
+    The per-tool accounting is the whole tightness argument. `Failed to install tools:` is mise's
+    generic install-failure line, so matching it alone would swallow a download timeout or a
+    checksum mismatch; requiring each tool it names to carry its own attestation clause means one
+    genuinely broken tool in the same run re-reddens the test instead of riding the skip in.
+
+    Anchoring is exact rather than defensive on purpose: an upstream reword, an added indent, or
+    ANSI colour in the captured stream all make this return False, and False fails the test. The
+    fail-closed direction is a red leg, never a silent pass.
+    """
+    named = FAILED_TOOLS_LINE.search(output)
+    if named is None:
+        return False
+    # `.strip()` also drops the trailing "\r" a CRLF stream leaves on the captured line.
+    tools = [tool.strip() for tool in named.group(1).split(",")]
+    if not tools or not all(tools):
+        return False
+    lines = output.splitlines()
+    for tool in tools:
+        clause = next((line for line in lines if line.startswith(f"{tool}: {ATTESTATION_ENVELOPE}")), None)
+        if clause is None:
+            return False
+        if SIGSTORE_CACHE_REFUSAL not in clause and RELEASE_IDENTITY_MISMATCH.search(clause) is None:
+            return False
+    return True
+
+
+# Verbatim from the CI job named above, as the launcher re-emits it: `runMise` prefixes mise's
+# trimmed stderr with its own refusal text, and `text=True` translates the runner's CRLF to LF.
+OBSERVED_ATTESTATION_STDERR = """mise --locked install failed: mise WARN  mise-shim.exe not found next to C:\\Users\\runneradmin\\AppData\\Local\\mise\\bin\\mise.exe or on PATH, falling back to "file" shim mode
+mise ERROR Failed to install tools: aqua:astral-sh/uv@0.12.5, aqua:cli/cli@2.98.0, aqua:evilmartians/lefthook@2.1.10, aqua:jqlang/jq@1.8.2
+
+aqua:astral-sh/uv@0.12.5: GitHub artifact attestations verification failed: Verification failed: Workflow verification failed: expected 'astral-sh/uv/.github/workflows/release.yml', found certificate identity: "https://dotcom.releases.github.com"; Sigstore error: TUF error: Could not determine cache directory
+
+aqua:cli/cli@2.98.0: GitHub artifact attestations verification failed: Verification failed: Workflow verification failed: expected 'cli/cli/.github/workflows/deployment.yml', found certificate identity: "https://dotcom.releases.github.com"; Sigstore error: TUF error: Could not determine cache directory
+
+aqua:evilmartians/lefthook@2.1.10: GitHub artifact attestations verification failed: Verification failed: Sigstore error: TUF error: Could not determine cache directory; Workflow verification failed: expected 'evilmartians/lefthook/.github/workflows/release.yml', found certificate identity: "https://dotcom.releases.github.com"
+
+aqua:jqlang/jq@1.8.2: GitHub artifact attestations verification failed: Verification failed: Sigstore error: TUF error: Could not determine cache directory
+mise ERROR Version: 2026.8.14 windows-x64 (2026-08-25)
+mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
+"""
+
+
+class AttestationRefusalClassTests(unittest.TestCase):
+    """Linux-runnable unit tests for the d208 classifier; the native fixture it gates cannot run here."""
+
+    def test_the_observed_windows_attestation_stderr_is_classified(self) -> None:
+        self.assertTrue(attestation_refusal_class(OBSERVED_ATTESTATION_STDERR))
+
+    def test_a_crlf_stream_is_classified_the_same(self) -> None:
+        """A raw pipe read, or a reader that skips universal newlines, keeps the runner's CRLF."""
+        self.assertTrue(attestation_refusal_class(OBSERVED_ATTESTATION_STDERR.replace("\n", "\r\n")))
+
+    def test_a_download_failure_is_not_classified(self) -> None:
+        self.assertFalse(
+            attestation_refusal_class(
+                "mise --locked install failed: mise jq@1.8.2        [1/2] install\n"
+                "mise ERROR Failed to install tools: aqua:jqlang/jq@1.8.2\n"
+                "\n"
+                "aqua:jqlang/jq@1.8.2: failed to download jq-windows-amd64.exe: error sending"
+                " request for url (https://github.com/jqlang/jq/releases/download/jq-1.8.2/"
+                "jq-windows-amd64.exe): operation timed out\n"
+                "mise ERROR Version: 2026.8.14 windows-x64 (2026-08-25)\n"
+            )
+        )
+
+    def test_a_plain_launcher_refusal_is_not_classified(self) -> None:
+        self.assertFalse(
+            attestation_refusal_class("distribution root has untracked content: mise.toml\n")
+        )
+
+    def test_an_unrelated_mise_error_is_not_classified(self) -> None:
+        self.assertFalse(
+            attestation_refusal_class(
+                "mise --locked install failed: mise ERROR config files are not trusted:\n"
+                "mise ERROR C:\\fixture\\mise.toml\n"
+            )
+        )
+
+    def test_one_unexplained_tool_alongside_three_attestation_refusals_is_not_classified(self) -> None:
+        """The mixed run is the case the skip must never widen into.
+
+        Three tools refused upstream and a fourth refused for a reason nobody has classified is a
+        real Windows red wearing d208's clothes, so the whole output stays unclassified.
+        """
+        mixed = OBSERVED_ATTESTATION_STDERR.replace(
+            "aqua:jqlang/jq@1.8.2: GitHub artifact attestations verification failed:"
+            " Verification failed: Sigstore error: TUF error: Could not determine cache directory",
+            "aqua:jqlang/jq@1.8.2: checksum mismatch for jq-windows-amd64.exe",
+        )
+        self.assertIn("aqua:jqlang/jq@1.8.2: checksum mismatch", mixed)
+        self.assertFalse(attestation_refusal_class(mixed))
+
+    def test_a_foreign_certificate_identity_is_not_classified(self) -> None:
+        """Same envelope and same clause shape, different identity, and no Sigstore cache error.
+
+        Written out rather than derived from the observed stream: a chain of replacements over a
+        fixture whose four lines differ in clause order silently leaves one line untouched, which
+        is how this case first passed for the wrong reason.
+        """
+        foreign = (
+            "mise --locked install failed: mise uv@0.12.5       [1/3] install\n"
+            "mise ERROR Failed to install tools: aqua:astral-sh/uv@0.12.5, aqua:jqlang/jq@1.8.2\n"
+            "\n"
+            "aqua:astral-sh/uv@0.12.5: GitHub artifact attestations verification failed:"
+            " Verification failed: Workflow verification failed: expected"
+            " 'astral-sh/uv/.github/workflows/release.yml', found certificate identity:"
+            ' "https://attacker.example.invalid/impostor"\n'
+            "\n"
+            "aqua:jqlang/jq@1.8.2: GitHub artifact attestations verification failed:"
+            " Verification failed: Workflow verification failed: expected"
+            " 'jqlang/jq/.github/workflows/release.yml', found certificate identity:"
+            ' "https://attacker.example.invalid/impostor"\n'
+        )
+        self.assertNotIn(SIGSTORE_CACHE_REFUSAL, foreign)
+        self.assertNotIn("dotcom.releases.github.com", foreign)
+        self.assertFalse(attestation_refusal_class(foreign))
+
+    def test_the_same_fixture_with_the_real_identity_is_classified(self) -> None:
+        """Sensitivity control for the case above: only the identity host separates the two."""
+        genuine = (
+            "mise --locked install failed: mise uv@0.12.5       [1/3] install\n"
+            "mise ERROR Failed to install tools: aqua:astral-sh/uv@0.12.5, aqua:jqlang/jq@1.8.2\n"
+            "\n"
+            "aqua:astral-sh/uv@0.12.5: GitHub artifact attestations verification failed:"
+            " Verification failed: Workflow verification failed: expected"
+            " 'astral-sh/uv/.github/workflows/release.yml', found certificate identity:"
+            ' "https://dotcom.releases.github.com"\n'
+            "\n"
+            "aqua:jqlang/jq@1.8.2: GitHub artifact attestations verification failed:"
+            " Verification failed: Workflow verification failed: expected"
+            " 'jqlang/jq/.github/workflows/release.yml', found certificate identity:"
+            ' "https://dotcom.releases.github.com"\n'
+        )
+        self.assertTrue(attestation_refusal_class(genuine))
+
+    def test_an_empty_stream_is_not_classified(self) -> None:
+        self.assertFalse(attestation_refusal_class(""))
+
+
 @unittest.skipUnless(os.name == "nt", "native Windows launcher fixture")
 class NativeWindowsSeedsLauncherTests(unittest.TestCase):
     def test_real_locked_tuple_bootstraps_and_inspects_with_hostile_ambient_config(self) -> None:
@@ -2178,6 +2335,16 @@ class NativeWindowsSeedsLauncherTests(unittest.TestCase):
                 check=False,
                 timeout=300,
             )
+            if bootstrapped.returncode != 0 and attestation_refusal_class(bootstrapped.stderr):
+                self.skipTest(
+                    "agentic-sdlc-d208: every tool this mise --locked install refused failed GitHub"
+                    " artifact attestation upstream in mise/aqua, not in this repository -- Sigstore"
+                    " finds no cache directory inside the launcher's allowlisted child environment,"
+                    " and the release assets present certificate identity"
+                    ' "https://dotcom.releases.github.com" rather than their own release workflow.'
+                    " No change here fixes either; the operator ruled a named skip over a mise"
+                    " version bump on 2026-08-26."
+                )
             self.assertEqual(
                 bootstrapped.returncode,
                 0,
