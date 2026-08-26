@@ -1,4 +1,13 @@
-"""``ccodex sdlc update``: dual admission, a blocked refresh, one transactional refresh, one seal.
+"""``ccodex update --scope user --agent <agent>``: dual admission, a blocked refresh, one refresh, one seal.
+
+THE OPERATOR SPELLING AND THIS MODULE'S ABI ARE TWO DIFFERENT FACTS, and neither is a mistake.
+``ccodex sdlc update`` is retired at exit 2 and the front door is the top-level ``update`` with
+``--scope``/``--agent``; this module is unchanged and still admits exactly ``['--host', <agent>]``,
+still naming itself ``ccodex sdlc update`` in its own stdout and refusals, because the reader builds
+that one vector in one place (``ccodex_sdlc.main``) and renaming the ABI would reach files this wave
+does not own. So the in-process tests below drive ``--host`` and the subprocess test that goes through
+the shipped reader drives ``--scope user --agent claude``; every message assertion quotes whichever of
+the two actually emitted it.
 
 WHAT THIS MODULE PROVES, AND HOW IT AVOIDS PROVING NOTHING.  Every negative assertion here carries a
 POSITIVE CONTROL in the same test: an absence proves nothing unless the same harness is shown to
@@ -644,7 +653,7 @@ def plane_inventory(*roots: Path) -> dict[str, str]:
 # artifacts without touching that plane.
 WINDOWS_SKIP = unittest.skipIf(
     os.name == "nt",
-    "the ccodex sdlc lifecycle writes through the POSIX-only durable-write plane "
+    "the ccodex lifecycle writes through the POSIX-only durable-write plane "
     "(os.open O_DIRECTORY fsync barriers) and pins exact path identity that Windows 8.3 "
     "short-name roots break; native Windows fails closed by name at the CLI",
 )
@@ -910,6 +919,12 @@ class EndToEndUpdateTest(TemporaryRoot):
         self.assertEqual(receipts.canonical_bytes(other), path.read_bytes())
         self.assertEqual(before, plane_inventory(conflicting.claude_root))
 
+    #: The reader's OPERATOR grammar for this verb: top-level, both selectors required, no default and
+    #: no wildcard. What the reader then forwards to this module is `['--host', 'claude']`, which is
+    #: why the in-process tests spell it that way and why the stdout assertion below still reads
+    #: `ccodex sdlc update --host claude` -- that line is the MODULE's, not the reader's.
+    READER_ARGV = ["update", "--scope", "user", "--agent", "claude"]
+
     def test_the_real_dispatcher_runs_update_end_to_end(self) -> None:
         """The shipped reader loads this module by absolute path and honours its integer exit class."""
         fixture = self.fixture()
@@ -919,7 +934,7 @@ class EndToEndUpdateTest(TemporaryRoot):
         stub.write_text(f"#!/bin/sh\necho '{HOST_VERSION} (Claude Code)'\n", encoding="utf-8")
         stub.chmod(0o755)
         completed = subprocess.run(
-            [sys.executable, "-I", "-B", str(READER_PATH), "update", "--host", "claude"],
+            [sys.executable, "-I", "-B", str(READER_PATH), *self.READER_ARGV],
             env={
                 "HOME": str(fixture.home),
                 "LANG": "C",
@@ -950,7 +965,7 @@ class EndToEndUpdateTest(TemporaryRoot):
         # Positive control: the same dispatcher refuses the same plane once the pointer is gone.
         fixture.pointer.unlink()
         again = subprocess.run(
-            [sys.executable, "-I", "-B", str(READER_PATH), "update", "--host", "claude"],
+            [sys.executable, "-I", "-B", str(READER_PATH), *self.READER_ARGV],
             env={
                 "HOME": str(fixture.home),
                 "LANG": "C",

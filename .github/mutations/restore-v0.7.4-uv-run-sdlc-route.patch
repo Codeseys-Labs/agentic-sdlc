@@ -1,7 +1,7 @@
-Restore the v0.7.4 `ccodex sdlc` dispatch, so the tag gate's smoke run MUST go red.
+Restore the v0.7.4 lifecycle dispatch, so the tag gate's smoke run MUST go red.
 
 This is a MUTATION FIXTURE, never a change anyone should land. It reverts the one line
-`cd3fd3dec33e429fddb0a2acfe5a1d4bc2f01428` fixed, putting `ccodex sdlc` back on the shared
+`cd3fd3dec33e429fddb0a2acfe5a1d4bc2f01428` fixed, putting the reader back on the shared
 `uv run --script` route that `runtime_admission()` in scripts/ccodex_sdlc.py refuses by name
 ("expected direct -I -B execution"). That regression shipped in BOTH published prereleases,
 v0.7.3 and v0.7.4, because no gate executed the archive; issue #9 is the record.
@@ -16,27 +16,44 @@ ancient commit load-bearing CI history, which a later squash or re-root would tu
 error, and it would also revert that commit's tests. A patch that no longer applies also fails
 the job -- the right direction -- and names bin/ccodex as the file to re-derive it from.
 
+RE-ANCHORED 2026-08-25 (agentic-sdlc-7a2b W3a). The route it regresses did not change, but its
+CASE ARM did: `ccodex sdlc <verb>` is retired, and the six lifecycle verbs are top-level, so
+`run_sdlc_python` is now reached from TWO arms -- the `install|update|uninstall|doctor|recover`
+table and the `status` arm's selector branch. BOTH are mutated here, because a patch that left
+either intact would let a smoke case take the fixed route and report green on a regressed tree.
+
 Re-derive after an intended change to that route:
-  1. edit bin/ccodex's `sdlc)` case to call `run_python ccodex_sdlc.py "$@"`
+  1. edit EVERY `run_sdlc_python "$@"` call site in bin/ccodex to `run_python ccodex_sdlc.py "$@"`
   2. git diff -U6 -- bin/ccodex   (keep this preamble; `git apply` ignores it)
   3. git checkout -- bin/ccodex
 
 diff --git a/bin/ccodex b/bin/ccodex
-index 561f27c..8f0f1a0 100755
+index 957d0f7..399b13a 100755
 --- a/bin/ccodex
 +++ b/bin/ccodex
-@@ -313,13 +313,13 @@ case "$route" in
-     ;;
-   sdlc)
-     shift
-     # Readers and the mutating lifecycle verbs take one route on purpose: every verb decision --
-     # admit, refuse by name, or hand off to a per-verb module -- belongs to scripts/ccodex_sdlc.py,
-     # so the argument vector is forwarded unchanged.
+@@ -311,23 +311,23 @@ case "$route" in
+   # ---- the lifecycle verb table (ratified decision 1, agentic-sdlc-7a2b) --------------------
+   # Every verb decision -- admit, refuse by name, or hand off to a per-verb module -- belongs to
+   # scripts/ccodex_sdlc.py, so the argument vector INCLUDING the verb is forwarded unchanged and
+   # nothing is shifted here. `status` is the one collision with this command's existing surface and
+   # is resolved below rather than silently reassigned.
+   install|update|uninstall|doctor|recover)
 -    run_sdlc_python "$@"
 +    run_python ccodex_sdlc.py "$@"
      ;;
-   version)
-     printf 'ccodex (agentic-sdlc self-located dispatcher)\n'
-     printf '  distribution root : %s\n' "$root"
-     printf '  root source       : self-located (parent of this command'"'"'s own bin/)\n'
-     printf '  launcher          : %s%s\n' "$launcher" "$([ -f "$launcher" ] || printf ' (MISSING)')"
+   status)
+     # The ONLY name shared by the gateway plane and the lifecycle. Both survive, and neither is
+     # guessed at: the lifecycle read is selected by the presence of a selector flag the gateway route
+     # has never taken, and every other `ccodex status` is the gateway supervision verb it has always
+     # been. A selector-shaped argv whose selectors are incomplete reaches the reader and is refused
+     # there by name, so `ccodex status --agent claude` never silently forwards `--agent claude` to
+     # the gateway.
+     if has_lifecycle_selector "$@"; then
+-      run_sdlc_python "$@"
++      run_python ccodex_sdlc.py "$@"
+     fi
+     shift
+     dispatch_launcher_verb status "$@"
+     ;;
+   ensure|launch|ultracode|restart|configure)
+     shift

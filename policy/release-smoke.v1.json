@@ -3,133 +3,327 @@
   "cases": [
     {
       "id": "version-answers-tool-free-from-the-extracted-tree",
-      "argv": ["version"],
-      "platforms": ["Darwin", "Linux"],
+      "argv": [
+        "version"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "toolfree",
       "expect_exit": 0,
-      "expect_stdout_present": ["{tree}", "self-located"]
+      "expect_stdout_present": [
+        "{tree}",
+        "self-located"
+      ]
     },
     {
       "id": "help-answers-tool-free-from-the-extracted-tree",
-      "argv": ["--help"],
-      "platforms": ["Darwin", "Linux"],
+      "argv": [
+        "--help"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "toolfree",
       "expect_exit": 0,
-      "expect_stdout_present": ["usage: ccodex <command>"]
+      "expect_stdout_present": [
+        "usage: ccodex <command>"
+      ]
     },
     {
       "id": "an-unknown-dispatcher-command-is-a-tool-free-usage-error",
-      "argv": ["frobnicate"],
-      "platforms": ["Darwin", "Linux"],
+      "argv": [
+        "frobnicate"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "toolfree",
       "expect_exit": 2,
-      "expect_stderr_present": ["unknown command frobnicate"]
+      "expect_stderr_present": [
+        "unknown command frobnicate"
+      ]
     },
     {
-      "id": "sdlc-inspect-json-is-admitted",
-      "argv": ["sdlc", "inspect", "--json"],
-      "platforms": ["Darwin", "Linux"],
+      "id": "status-json-is-admitted",
+      "argv": [
+        "status",
+        "--scope",
+        "user",
+        "--agent",
+        "claude",
+        "--json"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "host",
       "expect_exit": 0,
       "expect_stdout_json": {
         "checkout.plane": "checkout-development",
-        "command.verb": "inspect",
-        "overall.exit_class": "ok",
-        "runtime.isolated": true,
-        "runtime.state": "admitted",
-        "runtime.version": "3.12.11"
-      },
-      "forbid_finding_codes": ["runtime-admission-refused"]
-    },
-    {
-      "id": "sdlc-status-json-is-admitted",
-      "argv": ["sdlc", "status", "--json"],
-      "platforms": ["Darwin", "Linux"],
-      "environment": "host",
-      "expect_exit": 0,
-      "expect_stdout_json": {
         "command.verb": "status",
-        "overall.exit_class": "ok",
         "runtime.isolated": true,
         "runtime.state": "admitted",
-        "runtime.version": "3.12.11"
+        "runtime.version": "3.12.11",
+        "overall.exit_class": "ok"
       },
-      "forbid_finding_codes": ["runtime-admission-refused"]
+      "forbid_finding_codes": [
+        "runtime-admission-refused"
+      ]
     },
     {
-      "id": "sdlc-doctor-json-is-admitted",
-      "argv": ["sdlc", "doctor", "--json"],
-      "platforms": ["Darwin", "Linux"],
+      "id": "doctor-json-is-admitted",
+      "argv": [
+        "doctor",
+        "--json"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "host",
       "expect_exit": 0,
       "expect_stdout_json": {
+        "checkout.plane": "checkout-development",
         "command.verb": "doctor",
-        "overall.exit_class": "ok",
         "runtime.isolated": true,
         "runtime.state": "admitted",
-        "runtime.version": "3.12.11"
+        "runtime.version": "3.12.11",
+        "overall.exit_class": "ok"
       },
-      "forbid_finding_codes": ["runtime-admission-refused"]
+      "forbid_finding_codes": [
+        "runtime-admission-refused"
+      ]
     },
     {
-      "id": "sdlc-recover-dry-run-json-is-admitted-and-proposal-only",
-      "argv": ["sdlc", "recover", "--dry-run", "--json"],
-      "platforms": ["Darwin", "Linux"],
+      "id": "recover-dry-run-json-is-admitted-and-proposal-only",
+      "argv": [
+        "recover",
+        "--dry-run",
+        "--json"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "host",
       "expect_exit": 0,
       "expect_stdout_json": {
-        "command.dry_run": true,
+        "checkout.plane": "checkout-development",
         "command.verb": "recover",
-        "recovery.effect": "none",
-        "runtime.state": "admitted"
+        "runtime.isolated": true,
+        "runtime.state": "admitted",
+        "runtime.version": "3.12.11",
+        "overall.exit_class": "ok",
+        "command.dry_run": true,
+        "recovery.effect": "none"
       },
-      "forbid_finding_codes": ["runtime-admission-refused"]
+      "forbid_finding_codes": [
+        "runtime-admission-refused"
+      ]
     },
     {
       "id": "the-human-render-names-the-admitted-runtime",
-      "argv": ["sdlc", "status"],
-      "platforms": ["Darwin", "Linux"],
+      "argv": [
+        "status",
+        "--scope",
+        "user",
+        "--agent",
+        "claude"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "host",
       "expect_exit": 0,
-      "expect_stdout_present": ["runtime: admitted (3.12.11, isolated=true)"],
-      "expect_stdout_absent": ["runtime: refused", "Traceback"]
+      "expect_stdout_present": [
+        "runtime: admitted (3.12.11, isolated=true)",
+        "ccodex status:"
+      ],
+      "expect_stdout_absent": [
+        "runtime: refused",
+        "Traceback"
+      ],
+      "expect_stderr_present": [
+        "selected plane: claude/user"
+      ]
     },
     {
-      "id": "an-unknown-sdlc-verb-is-a-usage-error-not-a-refusal",
-      "argv": ["sdlc", "frobnicate"],
-      "platforms": ["Darwin", "Linux"],
+      "id": "a-missing-scope-selector-is-a-usage-error-naming-the-flag",
+      "argv": [
+        "status",
+        "--agent",
+        "claude"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "host",
       "expect_exit": 2,
-      "expect_stderr_present": ["unknown ccodex sdlc verb: 'frobnicate'"],
-      "expect_stderr_absent": ["expected direct -I -B execution"]
+      "expect_stderr_present": [
+        "ccodex status requires an explicit --scope user|project",
+        "there is no default scope"
+      ],
+      "expect_stderr_absent": [
+        "expected direct -I -B execution",
+        "Traceback"
+      ]
     },
     {
-      "id": "bundle-status-reads-the-ledger-and-ends-with-its-terminal-line",
-      "argv": ["bundle", "status", "--agent", "claude"],
-      "platforms": ["Darwin", "Linux"],
+      "id": "an-unadmitted-agent-is-a-usage-error-naming-the-admitted-planes",
+      "argv": [
+        "install",
+        "--scope",
+        "user",
+        "--agent",
+        "gemini"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
+      "environment": "host",
+      "expect_exit": 2,
+      "expect_stderr_present": [
+        "unsupported ccodex install agent: 'gemini'",
+        "the admitted agents are claude, codex"
+      ],
+      "expect_stderr_absent": [
+        "expected direct -I -B execution",
+        "Traceback"
+      ]
+    },
+    {
+      "id": "project-scope-parses-and-is-refused-by-name-until-it-is-wired",
+      "argv": [
+        "install",
+        "--scope",
+        "project",
+        "--agent",
+        "claude"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
+      "environment": "host",
+      "expect_exit": 3,
+      "expect_stderr_present": [
+        "project-scope-not-yet-wired",
+        "wave W4 of agentic-sdlc-7a2b"
+      ],
+      "expect_stderr_absent": [
+        "expected direct -I -B execution",
+        "Traceback",
+        "usage: ccodex"
+      ]
+    },
+    {
+      "id": "the-retired-bundle-spelling-names-its-replacement-invocation",
+      "argv": [
+        "bundle",
+        "install",
+        "--agent",
+        "claude"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
+      "environment": "toolfree",
+      "expect_exit": 2,
+      "expect_stderr_present": [
+        "`ccodex bundle install` is retired",
+        "ccodex install --scope user --agent <claude|codex>"
+      ]
+    },
+    {
+      "id": "the-retired-sdlc-read-spelling-names-both-replacement-verbs",
+      "argv": [
+        "sdlc",
+        "status"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
+      "environment": "toolfree",
+      "expect_exit": 2,
+      "expect_stderr_present": [
+        "`ccodex sdlc status` is retired",
+        "ccodex status --scope user --agent <claude|codex>",
+        "ccodex doctor"
+      ]
+    },
+    {
+      "id": "libraries-list-still-reaches-the-shared-uv-runner",
+      "argv": [
+        "libraries",
+        "list"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
       "environment": "host",
       "expect_exit": 0,
-      "expect_stdout_matches": ["(?m)^(?:no owned entries for this host \\(run: mise run bundle:install\\)|[0-9]+ ok, [0-9]+ conflict, [0-9]+ absent)\\s*\\Z"],
-      "expect_stdout_absent": ["Traceback", "error:"],
-      "expect_stderr_absent": ["Traceback"]
+      "expect_stdout_present": [
+        "External skill libraries reachable through their own front doors."
+      ],
+      "expect_stdout_absent": [
+        "Traceback",
+        "error:"
+      ]
     },
     {
-      "id": "sdlc-install-refuses-before-effect-on-linux",
-      "argv": ["sdlc", "install", "--host", "claude"],
-      "platforms": ["Linux"],
+      "id": "install-refuses-before-effect-on-linux",
+      "argv": [
+        "install",
+        "--scope",
+        "user",
+        "--agent",
+        "claude"
+      ],
+      "platforms": [
+        "Linux"
+      ],
       "environment": "host",
       "expect_exit": 3,
-      "expect_stderr_present": ["refused before any effect", "no acquired candidate is available"],
-      "expect_stderr_absent": ["expected direct -I -B execution"]
+      "expect_stderr_present": [
+        "refused before any effect",
+        "no acquired candidate is available"
+      ],
+      "expect_stderr_absent": [
+        "expected direct -I -B execution"
+      ]
     },
     {
-      "id": "sdlc-install-refuses-by-name-off-linux",
-      "argv": ["sdlc", "install", "--host", "claude"],
-      "platforms": ["Darwin"],
+      "id": "install-refuses-by-name-off-linux",
+      "argv": [
+        "install",
+        "--scope",
+        "user",
+        "--agent",
+        "claude"
+      ],
+      "platforms": [
+        "Darwin"
+      ],
       "environment": "host",
       "expect_exit": 3,
-      "expect_stderr_present": ["refused before any effect", "certified only on Linux"],
-      "expect_stderr_absent": ["expected direct -I -B execution"]
+      "expect_stderr_present": [
+        "refused before any effect",
+        "certified only on Linux"
+      ],
+      "expect_stderr_absent": [
+        "expected direct -I -B execution"
+      ]
     }
   ]
 }

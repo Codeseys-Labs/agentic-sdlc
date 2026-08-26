@@ -271,7 +271,14 @@ class ToolFreeVerbsTest(ExtractedTreeFixture):
         self.assertIn("usage: ccodex launch", completed.stdout)
 
     def test_a_tool_needing_verb_without_mise_refuses_at_exit_three_naming_mise(self) -> None:
-        completed = self.run_ccodex(["sdlc", "status", "--json"], self.toolless_environment())
+        # `status` is the ONE name the gateway plane and the lifecycle share, and the selectors are
+        # what pick the lifecycle read: a bare `ccodex status` is still the gateway verb, so the argv
+        # here carries `--scope`/`--agent` to reach the Python-backed route whose toolchain boundary
+        # is the subject.
+        completed = self.run_ccodex(
+            ["status", "--scope", "user", "--agent", "claude", "--json"],
+            self.toolless_environment(),
+        )
         self.assertEqual(completed.returncode, 3, completed.stdout + completed.stderr)
         self.assertIn("mise is not on PATH", completed.stderr)
 
@@ -288,7 +295,9 @@ class UntrustedConfigRefusalTest(ExtractedTreeFixture):
 
     def test_a_python_backed_verb_on_an_untrusted_root_refuses_naming_the_remedy(self) -> None:
         environment = self.untrusted_mise_environment()
-        completed = self.run_ccodex(["sdlc", "status", "--json"], environment)
+        completed = self.run_ccodex(
+            ["status", "--scope", "user", "--agent", "claude", "--json"], environment
+        )
         self.assert_trust_refusal(completed)
         # Before any effect: the probe resolved no tool, so nothing was installed.
         self.assertFalse((Path(environment["MISE_DATA_DIR"]) / "installs").exists())
@@ -296,8 +305,44 @@ class UntrustedConfigRefusalTest(ExtractedTreeFixture):
     def test_a_launch_family_verb_on_an_untrusted_root_refuses_naming_the_remedy(self) -> None:
         self.assert_trust_refusal(self.run_ccodex(["ensure"], self.untrusted_mise_environment()))
 
-    def test_bundle_status_on_an_untrusted_root_refuses_naming_the_remedy(self) -> None:
-        self.assert_trust_refusal(self.run_ccodex(["bundle", "status"], self.untrusted_mise_environment()))
+    def test_a_shared_uv_runner_verb_on_an_untrusted_root_refuses_naming_the_remedy(self) -> None:
+        """RE-ANCHORED from `bundle status` (agentic-sdlc-7a2b W3a): same route, surviving verb.
+
+        The claim is that the SHARED `run_python` route -- the one every non-lifecycle Python verb
+        takes -- reaches the same trust boundary as the launch family and the lifecycle's own
+        interpreter route, so all three fail closed rather than one of them slipping past. `ccodex
+        bundle status` was the spelling that carried it, and `ccodex bundle` is now a refusal that
+        never reaches a tool, so the verb has to change for the route to still be observed.
+        `libraries list` is that verb: it is the surviving reader on `run_python`, and it is also what
+        `policy/release-smoke.v1.json` picked as its shared-uv-runner control for the same reason.
+        """
+        self.assert_trust_refusal(
+            self.run_ccodex(["libraries", "list"], self.untrusted_mise_environment())
+        )
+
+    def test_a_retired_namespace_never_reaches_the_toolchain_preflight(self) -> None:
+        """The negative control for the three tests above: these arms resolve no tool at all.
+
+        `bundle` and `sdlc` sit UPSTREAM of `require_toolchain`, so an untrusted root -- the exact
+        state that turns every verb above into an exit-3 refusal -- must not change what they say.
+        Without this, re-anchoring the shared-runner claim onto `libraries` would leave "the retired
+        spelling answers before the boundary" resting on nothing: an arm that fell through to the
+        preflight would print the trust remedy instead of the migration, and the operator would be
+        told to trust a config for a spelling that will never work again.
+        """
+        environment = self.untrusted_mise_environment()
+        for argv, replacement in (
+            (["bundle", "status"], "ccodex status --scope user --agent <claude|codex>"),
+            (["sdlc", "status"], "ccodex status --scope user --agent <claude|codex>"),
+        ):
+            with self.subTest(argv=argv):
+                completed = self.run_ccodex(argv, environment)
+                self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+                self.assertIn("is retired", completed.stderr)
+                self.assertIn(replacement, completed.stderr)
+                self.assertNotIn("not trusted", completed.stderr)
+                self.assertNotIn("mise is not on PATH", completed.stderr)
+        self.assertFalse((Path(environment["MISE_DATA_DIR"]) / "installs").exists())
 
 
 @unittest.skipIf(os.name == "nt", DISPATCHER_IS_POSIX_SHELL_SKIP_REASON)
@@ -307,7 +352,12 @@ class UntrustedConfigRefusalTest(ExtractedTreeFixture):
     " runtime admission demands exactly 3.12.11 (the repository gate runs the suite under it)",
 )
 class IsolatedSdlcExecTest(ExtractedTreeFixture):
-    """Post-trust shape of `ccodex sdlc`: resolve the pinned interpreter, exec it `-I -B`.
+    """Post-trust shape of the lifecycle verbs: resolve the pinned interpreter, exec it `-I -B`.
+
+    The verb is spelled top-level (`ccodex status --scope user --agent claude`) because `ccodex sdlc
+    <verb>` is retired at exit 2 upstream of the toolchain; the ROUTE under test is unchanged --
+    `run_sdlc_python`, reached now from the `install|update|uninstall|doctor|recover` table and from
+    this `status` selector branch rather than from one `sdlc)` arm.
 
     Real mise never appears here, on purpose twice over: the trust boundary itself is
     ``UntrustedConfigRefusalTest``'s subject and stays proven there, and granting real trust in a
@@ -320,6 +370,10 @@ class IsolatedSdlcExecTest(ExtractedTreeFixture):
     """
 
     real_payload_files = REAL_PAYLOAD_FILES + READER_PAYLOAD_FILES
+
+    #: The lifecycle read, spelled once. Its selectors are what route `ccodex status` to the reader
+    #: instead of to the gateway supervision verb of the same name.
+    LIFECYCLE_STATUS_ARGV = ["status", "--scope", "user", "--agent", "claude", "--json"]
 
     def stub_mise_environment(self, *, fresh_tree: bool) -> tuple[dict[str, str], Path]:
         """A PATH whose only ``mise`` records its argv and stands in for the resolution boundary.
@@ -374,9 +428,9 @@ class IsolatedSdlcExecTest(ExtractedTreeFixture):
         self.assertEqual(report["overall"]["exit_class"], "ok")
         return report
 
-    def test_sdlc_status_is_admitted_through_the_direct_isolated_exec(self) -> None:
+    def test_status_is_admitted_through_the_direct_isolated_exec(self) -> None:
         environment, log = self.stub_mise_environment(fresh_tree=False)
-        completed = self.run_ccodex(["sdlc", "status", "--json"], environment)
+        completed = self.run_ccodex(self.LIFECYCLE_STATUS_ARGV, environment)
         self.assert_admitted_report(completed)
         self.assertEqual(
             log.read_text(encoding="utf-8").splitlines(),
@@ -391,7 +445,7 @@ class IsolatedSdlcExecTest(ExtractedTreeFixture):
 
     def test_a_fresh_tree_installs_the_interpreter_once_then_execs_it(self) -> None:
         environment, log = self.stub_mise_environment(fresh_tree=True)
-        completed = self.run_ccodex(["sdlc", "status", "--json"], environment)
+        completed = self.run_ccodex(self.LIFECYCLE_STATUS_ARGV, environment)
         self.assert_admitted_report(completed)
         self.assertEqual(
             log.read_text(encoding="utf-8").splitlines(),

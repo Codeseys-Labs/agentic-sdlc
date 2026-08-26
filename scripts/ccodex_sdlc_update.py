@@ -2640,7 +2640,7 @@ def parse_argv(argv: list[str]) -> str:
 def installer_config(bundle: ModuleType, config: Config, payload: AdmittedPayload) -> Any:
     """The installer Config this module borrows: the NEW payload root is the source of every copy.
 
-    The same Config also carries the shared lifecycle lock, so this plane and ``bundle:install``
+    The same Config also carries the shared lifecycle lock, so this plane and ``lifecycle:install``
     serialize on one lock file rather than on two private ones.
     """
     return bundle.Config(

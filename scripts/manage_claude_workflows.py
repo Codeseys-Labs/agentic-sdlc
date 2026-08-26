@@ -5,7 +5,7 @@
 # ///
 """Inspect or explicitly enable installed Claude Code workflows for one target repository.
 
-This is the separately authorized ENABLE step for the `workflow` entry kind. `bundle:install`
+This is the separately authorized ENABLE step for the `workflow` entry kind. `lifecycle:install`
 lands workflow bytes in the home plane (`<claude-home>/.claude/workflows/`) as owned lifecycle
 entries, and the live host discovers workflows BY NAME only from a project's own
 `.claude/workflows/`, read once at session start (measured 2026-08-24, recorded on
@@ -281,10 +281,10 @@ def owned_workflow_content(name: str, workflows_dir: Path, state_path: Path) -> 
     """Return the installed workflow path and bytes, or refuse an absent/unowned/drifted file."""
     source = workflows_dir / f"{name}.js"
     if not os.path.lexists(source):
-        raise WorkflowsError(f"installed workflow is absent: {source} (run: mise run bundle:install -- --agent claude)")
+        raise WorkflowsError(f"installed workflow is absent: {source} (run: mise run lifecycle:install -- --agent claude)")
     record = installer.load_state(state_path)["entries"].get(str(source))
     if record is None or record.get("kind") != "workflow":
-        raise WorkflowsError(f"workflow is not owned by the bundle lifecycle: {source} (run: mise run bundle:install -- --agent claude)")
+        raise WorkflowsError(f"workflow is not owned by the bundle lifecycle: {source} (run: mise run lifecycle:install -- --agent claude)")
     try:
         content = source.read_bytes()
     except OSError as exc:
@@ -462,7 +462,7 @@ def status(target: Path, workflows_dir: Path, state_root: Path, only: str | None
         if record is None:
             installed_state = "unowned"
         elif not os.path.lexists(source):
-            installed_state = "absent (run: mise run bundle:install -- --agent claude)"
+            installed_state = "absent (run: mise run lifecycle:install -- --agent claude)"
         elif not installer.entry_matches_record(source, record):
             installed_state = "drifted from its ownership record"
         else:
@@ -489,11 +489,11 @@ def status(target: Path, workflows_dir: Path, state_root: Path, only: str | None
         foreign = sum(1 for path in sorted(directory.iterdir()) if path.name not in owned_files)
         if foreign:
             messages.append(f"foreign workflow files in {directory}: {foreign} (preserved)")
-    # bundle:status doctrine: always end with one terminal line, so a silent exit 0 is a defect.
+    # lifecycle:status doctrine: always end with one terminal line, so a silent exit 0 is a defect.
     if names:
         messages.append(f"{active} active, {inactive} inactive, {conflict} conflict")
     else:
-        messages.append("no owned workflows for this plane (run: mise run bundle:install -- --agent claude)")
+        messages.append("no owned workflows for this plane (run: mise run lifecycle:install -- --agent claude)")
     return EXIT_OK, messages
 
 

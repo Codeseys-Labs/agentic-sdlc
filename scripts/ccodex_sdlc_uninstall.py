@@ -2190,7 +2190,7 @@ def bundle_config(bundle: ModuleType, config: Config) -> Any:
     """The installer Config this module borrows for TWO purposes: the shared lifecycle lock, and
     the ownership rows the activation wrote.
 
-    Both this plane and ``bundle:install`` write into the same Claude collections and the same
+    Both this plane and ``lifecycle:install`` write into the same Claude collections and the same
     ownership document, so they must serialize on the same lock file and retire rows through the
     same pending slot rather than through two private spellings (agentic-sdlc-42ec).
     """

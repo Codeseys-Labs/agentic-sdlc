@@ -24,7 +24,7 @@ and each lifecycle module's refusal ladder.  Their dispatcher used to be the REN
 launcher, which is why the mutation patch to ``bin/ccodex`` left them green; that launcher is deleted
 (gh #10 phase 4), so they now reach the ONE committed dispatcher through this module's own recording
 stub ``mise``.  This module's distinctive subject is still what it always was: the committed
-``bin/ccodex`` in the tree it sits in, driven as a real process across the whole ``sdlc`` grammar.
+``bin/ccodex`` in the tree it sits in, driven as a real process across the whole lifecycle grammar.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -105,31 +106,67 @@ class SeamInventoryTest(unittest.TestCase):
         argv_by_case = {case.identifier: case.argv for case in harness.SEAM_CASES}
         vectors = list(argv_by_case.values())
         for verb in reader.READER_VERBS:
+            # `recover`'s render forms are its --dry-run pair; the --apply form is checked separately
+            # below, because it renders no report at all.
+            rendering = [
+                vector
+                for vector in vectors
+                if vector[0] == verb and reader.RECOVER_APPLY_FLAG not in vector
+            ]
             with self.subTest(verb=verb, form="json"):
                 self.assertTrue(
-                    any(vector[:2] == ("sdlc", verb) and "--json" in vector for vector in vectors),
-                    f"no seam case renders `sdlc {verb} --json`",
+                    any("--json" in vector for vector in rendering),
+                    f"no seam case renders `ccodex {verb} --json`",
                 )
             with self.subTest(verb=verb, form="human"):
                 self.assertTrue(
-                    any(
-                        vector[:2] == ("sdlc", verb) and "--json" not in vector for vector in vectors
-                    ),
-                    f"no seam case renders `sdlc {verb}` in its human form",
+                    any("--json" not in vector for vector in rendering),
+                    f"no seam case renders `ccodex {verb}` in its human form",
                 )
         for verb in reader.LIFECYCLE_VERBS:
             with self.subTest(verb=verb):
                 self.assertTrue(
-                    any(vector[:2] == ("sdlc", verb) for vector in vectors),
-                    f"no seam case drives the mutating verb `sdlc {verb}`",
+                    any(vector[0] == verb for vector in vectors),
+                    f"no seam case drives the mutating verb `ccodex {verb}`",
                 )
         self.assertTrue(
             any(
-                vector[:2] == ("sdlc", "recover") and reader.RECOVER_APPLY_FLAG in vector
+                vector[0] == "recover" and reader.RECOVER_APPLY_FLAG in vector
                 for vector in vectors
             ),
             "no seam case drives the one mutating recover form",
         )
+        # THE SELECTOR HALF OF THE GRAMMAR, read from the product's own vocabulary: every verb that
+        # requires a plane selector must be driven with one, and both admitted agents must appear, or
+        # a plane re-pinned shut would leave this suite green.
+        for verb in reader.SELECTOR_VERBS:
+            with self.subTest(verb=verb, form="selected"):
+                self.assertTrue(
+                    any(
+                        vector[0] == verb and reader.AGENT_FLAG in vector
+                        and reader.SCOPE_FLAG in vector
+                        for vector in vectors
+                    ),
+                    f"no seam case drives `ccodex {verb}` with both required selectors",
+                )
+        for agent in reader.LIFECYCLE_AGENTS:
+            with self.subTest(agent=agent):
+                self.assertTrue(
+                    any(
+                        reader.AGENT_FLAG in vector
+                        and vector[vector.index(reader.AGENT_FLAG) + 1] == agent
+                        for vector in vectors
+                    ),
+                    f"no seam case selects the {agent} plane",
+                )
+        # THE RETIRED SPELLINGS: both namespaces must be driven, or deleting a refusal arm would go
+        # unnoticed by this inventory.
+        for retired in ("bundle", "sdlc"):
+            with self.subTest(retired=retired):
+                self.assertTrue(
+                    any(vector[0] == retired for vector in vectors),
+                    f"no seam case drives the retired `ccodex {retired}` spelling",
+                )
 
     def test_every_lifecycle_refusal_fragment_is_a_literal_in_its_own_module(self) -> None:
         """A reworded refusal must fail here, not silently weaken the case to nothing.
@@ -177,13 +214,13 @@ class SeamCasesTest(unittest.TestCase):
                 failures = harness.assess(observation)
                 self.assertEqual(failures, [], f"{failures}\n{observation.transcript}")
 
-    def test_the_sdlc_route_resolves_the_managed_interpreter_and_never_the_shared_uv_runner(
+    def test_the_lifecycle_route_resolves_the_managed_interpreter_and_never_the_shared_uv_runner(
         self,
     ) -> None:
         """The route readout, generalized from one verb to the whole grammar.
 
         ``tests/test_bin_ccodex.py`` pins the exact resolution argv for one verb on a built archive.
-        What is asserted here is the property across every case: no invocation of the ``sdlc`` family
+        What is asserted here is the property across every case: no lifecycle invocation
         ever asked ``uv run --script`` to run the reader, and each one that reached a route resolved
         the managed interpreter exactly once.
         """
@@ -198,9 +235,9 @@ class SeamCasesTest(unittest.TestCase):
                 self.assertEqual(
                     reader_through_uv_run,
                     [],
-                    "the sdlc route reached the shared uv runner, which the reader refuses by name",
+                    "the lifecycle route reached the shared uv runner, which the reader refuses by name",
                 )
-                if case.argv[0] == "sdlc" and case.mise == "trusted":
+                if harness.is_lifecycle_route(case.argv) and case.mise == "trusted":
                     self.assertEqual(
                         observation.mise_argv,
                         (
@@ -221,7 +258,7 @@ class SeamCasesTest(unittest.TestCase):
                     observation.mise_argv, (f"-C {self.runner.root} tasks",), observation.transcript
                 )
 
-    def test_no_sdlc_invocation_creates_rewrites_or_removes_a_byte_of_the_fixture(self) -> None:
+    def test_no_lifecycle_invocation_creates_rewrites_or_removes_a_byte_of_the_fixture(self) -> None:
         """The other half of "receipt bytes out": what the plane looks like AFTER the invocation.
 
         Every case is covered, reader and mutating verb alike -- a pre-effect refusal that wrote
@@ -229,11 +266,30 @@ class SeamCasesTest(unittest.TestCase):
         document the report describes was read rather than repaired or rewritten.
         """
         for case in harness.SEAM_CASES:
-            if case.argv[0] != "sdlc":
+            if not harness.is_lifecycle_route(case.argv):
                 continue
             observation = self.observations[case.identifier]
             with self.subTest(case=case.identifier):
                 self.assertEqual(observation.effect, (), observation.transcript)
+
+    def test_a_retired_spelling_resolves_no_tool_at_all(self) -> None:
+        """A refusal must not pay for a toolchain it will never use.
+
+        Every retired-namespace arm and the unknown-command arm sit UPSTREAM of
+        ``require_toolchain``, so a correct refusal leaves the stub's argv log untouched. Without this
+        the arms could be moved below the preflight and nothing would notice: the message and the exit
+        code would both still be right, while a fresh host paid a mise probe -- and, on an untrusted
+        root, got a trust refusal instead of the migration text the operator needs.
+        """
+        witnessed = 0
+        for case in harness.SEAM_CASES:
+            if case.argv[0] not in ("bundle", "sdlc", "frobnicate", "--help"):
+                continue
+            observation = self.observations[case.identifier]
+            witnessed += 1
+            with self.subTest(case=case.identifier):
+                self.assertEqual(observation.mise_argv, (), observation.transcript)
+        self.assertGreater(witnessed, 0, "no retired-spelling case is in the inventory")
 
     def test_the_effect_detector_itself_reports_a_planted_change(self) -> None:
         """Positive control for the test above: the detector is not structurally silent.
@@ -263,6 +319,96 @@ class SeamCasesTest(unittest.TestCase):
 
 
 @executing
+class GatewayStatusRouteTest(unittest.TestCase):
+    """`ccodex status` is the ONE name the gateway plane and the lifecycle share, and both survive.
+
+    RESTORED, AND RE-ANCHORED. This claim had a test until gh #10 phase 4, which drove the rendered
+    operator-tools launcher through an `AGENTIC_SDLC_ROOT` override; both are deleted. The committed
+    dispatcher self-locates its root as the physical parent of its own `bin/`, so the way to observe
+    the gateway route now is to STAND UP a root: a copy of `bin/ccodex` over a `scripts/` directory
+    holding a recording stub launcher, with a stub `mise` rooted at that same tree. The real launcher
+    is never executed here -- it would start a gateway process.
+
+    What is asserted is the disambiguation in both directions, because only the pair is a control: a
+    selector-free `status` still reaches the gateway verb, and a `status` carrying a lifecycle selector
+    does not. Without the second half, moving `status` wholly onto either plane would keep one of the
+    two tests green.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._temporary = tempfile.TemporaryDirectory(prefix="ccodex-seam-gateway-")
+        base = Path(cls._temporary.name)
+        cls.tree = harness.build_stub_launcher_tree(base / "tree")
+        cls.utilities = harness.dispatcher_utilities_path(base / "utilities")
+        cls.home = base / "home"
+        cls.stub_bin = base / "stub-bin"
+        cls.work = base / "cwd"
+        for directory in (cls.home, cls.stub_bin, cls.work):
+            directory.mkdir(parents=True)
+        harness.write_stub_mise(
+            cls.stub_bin,
+            root=cls.tree,
+            interpreter=Path(sys.executable),
+            log=base / "mise-argv.log",
+            probe="trusted",
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._temporary.cleanup()
+
+    def run_dispatcher(self, *argv: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.tree / "bin" / "ccodex"), *argv],
+            env={
+                "PATH": os.pathsep.join([str(self.stub_bin), str(self.utilities)]),
+                "HOME": str(self.home),
+                "XDG_STATE_HOME": str(self.home / "state"),
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
+            cwd=str(self.work),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_top_level_gateway_status_route_remains_the_gateway_route(self) -> None:
+        completed = self.run_dispatcher("status")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(f"{harness.GATEWAY_STUB_MARKER}status", completed.stdout)
+
+    def test_gateway_status_forwards_its_own_arguments_verbatim(self) -> None:
+        """A non-selector argument is the gateway's, and it must arrive unchanged rather than be
+        re-read as a lifecycle flag the dispatcher does not recognise."""
+        completed = self.run_dispatcher("status", "--verbose")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(f"{harness.GATEWAY_STUB_MARKER}status", completed.stdout)
+        self.assertIn("GATEWAY-ARGV:--verbose", completed.stdout)
+
+    def test_a_lifecycle_selector_takes_status_off_the_gateway_route(self) -> None:
+        """The other half of the pair. This tree has no reader, so a lifecycle-routed `status` cannot
+        reach one -- which is exactly the observation: the dispatcher declined to hand it to the
+        launcher, and said so by name instead of forwarding `--scope` to the gateway."""
+        completed = self.run_dispatcher("status", "--scope", "user", "--agent", "claude")
+
+        self.assertNotIn(harness.GATEWAY_STUB_MARKER, completed.stdout)
+        self.assertEqual(completed.returncode, 3, completed.stderr)
+        self.assertIn("lifecycle entry is unavailable in this distribution", completed.stderr)
+
+    def test_the_other_gateway_short_forms_are_untouched_by_the_verb_table(self) -> None:
+        for verb, forwarded in (("ensure", "ensure"), ("restart", "restart"), ("ultracode", "launch-ultracode")):
+            with self.subTest(verb=verb):
+                completed = self.run_dispatcher(verb)
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn(f"{harness.GATEWAY_STUB_MARKER}{forwarded}", completed.stdout)
+
+
+@executing
 @unittest.skipUnless(shutil.which("git"), "git is required to apply the tracked mutation patch")
 class RouteRegressionLeverTest(unittest.TestCase):
     """Restore the v0.7.4 route and require the seam to notice.
@@ -285,10 +431,16 @@ class RouteRegressionLeverTest(unittest.TestCase):
         cls._temporary.cleanup()
 
     def test_the_fixture_really_carries_the_v074_route(self) -> None:
-        route = (self.tree / "bin" / "ccodex").read_text(encoding="utf-8").split("  sdlc)", 1)[1]
-        route = route.split(";;", 1)[0]
-        self.assertIn('run_python ccodex_sdlc.py "$@"', route)
-        self.assertNotIn("run_sdlc_python", route)
+        """BOTH call sites, not one. The verb table reaches `run_sdlc_python` from the six-verb arm and
+        from `status`'s selector branch, so a patch that mutated only one would let some smoke and seam
+        cases take the FIXED route and report green on a regressed tree."""
+        mutated = (self.tree / "bin" / "ccodex").read_text(encoding="utf-8")
+        self.assertEqual(mutated.count('run_python ccodex_sdlc.py "$@"'), 2)
+        self.assertEqual(mutated.count('run_sdlc_python "$@"'), 0)
+        # The intact tree is the positive control: the same two call sites, spelled the other way.
+        intact = harness.BIN_CCODEX.read_text(encoding="utf-8")
+        self.assertEqual(intact.count('run_sdlc_python "$@"'), 2)
+        self.assertEqual(intact.count('run_python ccodex_sdlc.py "$@"'), 0)
 
     def test_every_route_sensitive_case_goes_red_naming_the_release_gates_own_marker(self) -> None:
         for case in harness.SEAM_CASES:
@@ -326,11 +478,11 @@ class RouteRegressionLeverTest(unittest.TestCase):
                     harness.assess(observation), [], observation.transcript
                 )
 
-    def test_the_regressed_sdlc_route_really_reached_the_shared_uv_runner(self) -> None:
+    def test_the_regressed_lifecycle_route_really_reached_the_shared_uv_runner(self) -> None:
         """The mechanism, not just the symptom: the argv the dispatcher built is the v0.7.4 one."""
         witnessed = 0
         for case in harness.SEAM_CASES:
-            if case.argv[0] != "sdlc" or case.mise != "trusted":
+            if not harness.is_lifecycle_route(case.argv) or case.mise != "trusted":
                 continue
             observation = self.observations[case.identifier]
             with self.subTest(case=case.identifier):
@@ -339,12 +491,12 @@ class RouteRegressionLeverTest(unittest.TestCase):
                     (
                         f"-C {self.tree} tasks",
                         f"-C {self.tree} exec -- uv run --python 3.12.11 --script"
-                        f" {self.tree}/scripts/ccodex_sdlc.py {' '.join(case.argv[1:])}".rstrip(),
+                        f" {self.tree}/scripts/ccodex_sdlc.py {' '.join(case.argv)}".rstrip(),
                     ),
                     observation.transcript,
                 )
                 witnessed += 1
-        self.assertGreater(witnessed, 0, "no sdlc case was observed on the regressed route")
+        self.assertGreater(witnessed, 0, "no lifecycle case was observed on the regressed route")
 
     def test_the_regressed_reader_refuses_by_name_rather_than_crashing(self) -> None:
         """Every regressed reader verb renders a REPORT that names the refusal, never a traceback."""
@@ -364,7 +516,7 @@ class RouteRegressionLeverTest(unittest.TestCase):
         self.assertEqual(
             witnessed,
             len(reader.READER_VERBS) * 2 + 3,
-            "the reader-verb selection drifted from the inventory: four verbs in both render forms,"
+            "the reader-verb selection drifted from the inventory: three verbs in both render forms,"
             " plus the THREE planted-state cases (the armed bundle transition in both doctor and"
             " recover --dry-run, and the retired operator-tools store)",
         )

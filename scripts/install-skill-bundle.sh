@@ -9,7 +9,7 @@ set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v mise >/dev/null 2>&1; then
-  printf '%s\n' 'error: mise is required; install it, then run mise run bundle:install.' >&2
+  printf '%s\n' 'error: mise is required; install it, then run mise run lifecycle:install.' >&2
   exit 2
 fi
 
@@ -28,15 +28,15 @@ args+=("$@")
 
 case "$command" in
   install)
-    mise -C "$repo_root" run bundle:install -- ${args[@]+"${args[@]}"}
+    mise -C "$repo_root" run lifecycle:install -- ${args[@]+"${args[@]}"}
     core_exit=$?
     ;;
   status)
-    mise -C "$repo_root" run bundle:status -- ${args[@]+"${args[@]}"}
+    mise -C "$repo_root" run lifecycle:status -- ${args[@]+"${args[@]}"}
     core_exit=$?
     ;;
   uninstall)
-    mise -C "$repo_root" run bundle:uninstall -- ${args[@]+"${args[@]}"}
+    mise -C "$repo_root" run lifecycle:uninstall -- ${args[@]+"${args[@]}"}
     core_exit=$?
     ;;
   self-test)

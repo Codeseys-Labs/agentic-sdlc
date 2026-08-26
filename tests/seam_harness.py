@@ -7,8 +7,8 @@ refused itself at exit 3 from the only downloadable artifact, because the route 
 execution shape that is not a direct isolated ``-I -B`` invocation.  ``cd3fd3d`` fixed the route and
 added two tests; ``.github/workflows/release.yml`` now gates the shipped ARCHIVE.  This module is the
 CHECKOUT half of the same net (gh #13's G1, wave W0 of the front-door program): it drives the
-committed dispatcher over the whole ``sdlc`` grammar, so a language- or route-level refactor is a
-provable change rather than a bet.
+committed dispatcher over the whole lifecycle verb grammar, so a language- or route-level refactor is
+a provable change rather than a bet.
 
 WHAT IS UNDER TEST, AND WHAT IS NOT.  The subject is ``<tree>/bin/ccodex`` executed as a process,
 plus everything downstream of it inside the tree: the route it builds, the argv it forwards, the
@@ -40,9 +40,8 @@ archive, and this module deliberately does not restate it.
 
 HOST-STATE INDEPENDENCE.  Every case runs with an allowlist environment whose ``HOME``,
 ``XDG_STATE_HOME``, and ``XDG_DATA_HOME`` are fresh scratch directories, so the reader's projections
-describe the fixture rather than the developer's machine.  The one deliberately host-shaped
-assertion, ``bundle status``'s terminal line, is matched by the pattern that accepts BOTH shapes the
-product can emit.
+describe the fixture rather than the developer's machine.  The one case that reads a real store is
+``libraries list``, and what it asserts is a fixed heading line rather than any host-dependent count.
 
 WINDOWS.  ``bin/ccodex`` is a bash script and Windows resolves an interpreter from the PE header
 rather than a shebang, so ``CreateProcess`` on it raises ``[WinError 193] %1 is not a valid Win32
@@ -77,6 +76,29 @@ ROOT_TOKEN = "{root}"
 #: The base utilities the dispatcher itself may reach for. A positive isolation, not a stripped
 #: PATH: ``bash`` has to be findable because ``#!/usr/bin/env bash`` resolves it by name.
 DISPATCHER_UTILITIES = ("bash", "cat", "dirname", "realpath")
+
+#: The top-level verbs the dispatcher routes to the reader unconditionally.
+LIFECYCLE_ROUTE_VERBS = ("install", "update", "uninstall", "doctor", "recover")
+#: The flags whose PRESENCE selects the lifecycle read over the gateway ``status`` verb.
+LIFECYCLE_SELECTOR_FLAGS = ("--scope", "--agent", "--project")
+
+
+def is_lifecycle_route(argv: tuple[str, ...]) -> bool:
+    """Would ``bin/ccodex`` hand this argv to ``run_sdlc_python``?
+
+    ``status`` is the one conditional verb: it reaches the reader only when a lifecycle selector is
+    present, and is otherwise the gateway supervision verb this command has always had. The predicate
+    therefore reads the whole argv rather than only its head, and it lives here rather than in the
+    executing test module because both the intact-tree and regressed-tree assertions need the same
+    answer about the same case.
+    """
+    if not argv:
+        return False
+    if argv[0] in LIFECYCLE_ROUTE_VERBS:
+        return True
+    return argv[0] == "status" and any(
+        argument.split("=", 1)[0] in LIFECYCLE_SELECTOR_FLAGS for argument in argv
+    )
 
 #: The two strings the release workflow's mutation job requires (``--require-marker``). The first is
 #: the report's own ``findings[].code``; the second is ``runtime_admission()``'s refusal detail, and
@@ -230,6 +252,11 @@ LIFECYCLE_REASON_SOURCES = {
 }
 
 
+#: The selectors the four selector verbs require. Spelled once so a case cannot drift from the
+#: grammar it drives.
+_USER_CLAUDE = ("--scope", "user", "--agent", "claude")
+
+
 def _reader_json_case(
     verb: str,
     argv: tuple[str, ...],
@@ -237,7 +264,7 @@ def _reader_json_case(
     stderr_present: tuple[str, ...] = (),
 ) -> SeamCase:
     return SeamCase(
-        identifier=f"sdlc-{verb}-json-is-admitted-through-the-direct-isolated-route",
+        identifier=f"{verb}-json-is-admitted-through-the-direct-isolated-route",
         argv=argv,
         expect_exit=0,
         route_sensitive=True,
@@ -262,11 +289,11 @@ def _reader_human_case(
 ) -> SeamCase:
     rendered = "recover" if verb.startswith("recover") else verb
     return SeamCase(
-        identifier=f"sdlc-{verb}-human-render-names-the-admitted-runtime",
+        identifier=f"{verb}-human-render-names-the-admitted-runtime",
         argv=argv,
         expect_exit=0,
         route_sensitive=True,
-        stdout_present=(f"ccodex sdlc {rendered}:", _ADMITTED_HUMAN_LINE, "checkout: ") + extra_stdout,
+        stdout_present=(f"ccodex {rendered}:", _ADMITTED_HUMAN_LINE, "checkout: ") + extra_stdout,
         stdout_absent=_HUMAN_NEVER,
         stderr_present=stderr_present,
     )
@@ -280,6 +307,13 @@ def _lifecycle_case(identifier: str, argv: tuple[str, ...], verb: str, named: st
     artifact), while what this seam owns is that the verb reached its own module, named ITSELF,
     refused before any effect, and did not touch the fixture.  The forbidden admission text is what
     makes the case fail the moment the route regresses.
+
+    THE EXPECTED PREFIX IS THE MODULE'S OWN, AND IT NAMES A RETIRED SPELLING. The front-door wave
+    made ``ccodex install`` the invocation and retired ``ccodex sdlc install``, but the four per-verb
+    modules are owned by other waves and still print ``error: ccodex sdlc <verb> refused before any
+    effect``. This assertion states what the product actually emits rather than what it should; the
+    residual is recorded rather than papered over, and the day a module renames itself this case is
+    the thing that fails and names the rename.
     """
     return SeamCase(
         identifier=identifier,
@@ -301,15 +335,15 @@ def _plane_cases() -> tuple[SeamCase, ...]:
     plane drives every verb here. What each case proves is narrow and route-sensitive -- the vector
     reached its own module through the isolated route, that module named ITSELF and its own reason, and
     the fixture is untouched -- which is exactly what a plane that refused as a GRAMMAR error (exit 2,
-    ``unsupported ... host``) or fell through to another plane's module would fail.
+    ``unsupported ... agent``) or fell through to another plane's module would fail.
     """
     cases: list[SeamCase] = []
     for verb in ("install", "update", "uninstall"):
         for agent in ("claude", "codex"):
             cases.append(
                 _lifecycle_case(
-                    f"sdlc-{verb}-on-the-{agent}-plane-reaches-its-module-and-refuses-before-any-effect",
-                    ("sdlc", verb, "--host", agent),
+                    f"{verb}-on-the-{agent}-plane-reaches-its-module-and-refuses-before-any-effect",
+                    (verb, "--scope", "user", "--agent", agent),
                     verb,
                     verb,
                 )
@@ -317,31 +351,61 @@ def _plane_cases() -> tuple[SeamCase, ...]:
     return tuple(cases)
 
 
+def _retired_spelling_case(
+    identifier: str, argv: tuple[str, ...], present: tuple[str, ...]
+) -> SeamCase:
+    """A retired namespace refusing at exit 2 with the replacement invocation NAMED.
+
+    ``stderr_present`` carries the replacement, never the bare code: exit 2 is also what every other
+    usage error returns, so an exit-code assertion would keep passing if these arms fell through to
+    the dispatcher's generic unknown-command text and stopped carrying the migration. Deleting either
+    arm therefore fails HERE, on the message, which is the mutation this wave owes.
+    """
+    return SeamCase(
+        identifier=identifier,
+        argv=argv,
+        expect_exit=2,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "a retired spelling is refused by the dispatcher itself, upstream of every route and of"
+            " any interpreter, so the patch cannot change it; it is a control whose subject is the"
+            " migration message rather than the route"
+        ),
+        stdout_empty=True,
+        stderr_present=present,
+        stderr_absent=("expected direct -I -B execution", "Traceback"),
+    )
+
+
 SEAM_CASES: tuple[SeamCase, ...] = (
-    # ---- the four reader verbs, canonical JSON -------------------------------------------------
-    _reader_json_case("inspect", ("sdlc", "inspect", "--json")),
-    _reader_json_case("status", ("sdlc", "status", "--json")),
-    _reader_json_case("doctor", ("sdlc", "doctor", "--json")),
+    # ---- the three reader verbs, canonical JSON ------------------------------------------------
+    # `inspect` is gone with the front-door unification: `status` reads one selected plane and
+    # `doctor` reads the whole box, and a fourth spelling of that read was retired at the
+    # dispatcher. `status` carries the two required selectors here for the same reason the product
+    # requires them -- a selector-free read would be a default plane nobody typed.
+    _reader_json_case("status", ("status",) + _USER_CLAUDE + ("--json",),
+                      stderr_present=("selected plane: claude/user",)),
+    _reader_json_case("doctor", ("doctor", "--json")),
     _reader_json_case(
         "recover-dry-run",
-        ("sdlc", "recover", "--dry-run", "--json"),
+        ("recover", "--dry-run", "--json"),
         extra_json={"command.dry_run": True, "recovery.effect": "none"},
         stderr_present=("recovery plan",),
     ),
-    # ---- the same four verbs, human render -----------------------------------------------------
-    _reader_human_case("inspect", ("sdlc", "inspect")),
-    _reader_human_case("status", ("sdlc", "status")),
-    _reader_human_case("doctor", ("sdlc", "doctor")),
+    # ---- the same three verbs, human render ----------------------------------------------------
+    _reader_human_case("status", ("status",) + _USER_CLAUDE,
+                       stderr_present=("selected plane: claude/user",)),
+    _reader_human_case("doctor", ("doctor",)),
     _reader_human_case(
         "recover-dry-run",
-        ("sdlc", "recover", "--dry-run"),
+        ("recover", "--dry-run"),
         extra_stdout=("recovery: ",),
         stderr_present=("recovery plan",),
     ),
     # ---- planted state bytes reaching the report and the approval token -------------------------
     SeamCase(
-        identifier="sdlc-doctor-reports-planted-lifecycle-state-bytes-it-was-given",
-        argv=("sdlc", "doctor", "--json"),
+        identifier="doctor-reports-planted-lifecycle-state-bytes-it-was-given",
+        argv=("doctor", "--json"),
         expect_exit=0,
         route_sensitive=True,
         state="bundle-pending",
@@ -363,8 +427,8 @@ SEAM_CASES: tuple[SeamCase, ...] = (
     # dispatcher: a store the deleted installer left behind is NAMED with its manual remedy, and it
     # does not block -- an upgraded host is not a degraded host.
     SeamCase(
-        identifier="sdlc-doctor-names-the-retired-operator-tools-store-and-its-manual-remedy",
-        argv=("sdlc", "doctor", "--json"),
+        identifier="doctor-names-the-retired-operator-tools-store-and-its-manual-remedy",
+        argv=("doctor", "--json"),
         expect_exit=0,
         route_sensitive=True,
         state="retired-operator-tools-store",
@@ -385,8 +449,8 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         canonical_json_stdout=True,
     ),
     SeamCase(
-        identifier="sdlc-recover-dry-run-offers-one-self-consistent-plan-digest-for-planted-state",
-        argv=("sdlc", "recover", "--dry-run", "--json"),
+        identifier="recover-dry-run-offers-one-self-consistent-plan-digest-for-planted-state",
+        argv=("recover", "--dry-run", "--json"),
         expect_exit=0,
         route_sensitive=True,
         state="bundle-pending",
@@ -401,7 +465,7 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         # operator to approve another would fail rather than match a shape.
         stderr_matches=(
             r"recovery plan sha256 ([0-9a-f]{64}): approve exactly this plan with"
-            r" `ccodex sdlc recover --apply \1`",
+            r" `ccodex recover --apply \1`",
         ),
         forbid_finding_codes=("runtime-admission-refused",),
         canonical_json_stdout=True,
@@ -409,8 +473,8 @@ SEAM_CASES: tuple[SeamCase, ...] = (
     # ---- the three mutating verbs on both planes, refusing before any effect --------------------
     *_plane_cases(),
     _lifecycle_case(
-        "sdlc-recover-apply-reaches-its-module-and-refuses-before-any-effect",
-        ("sdlc", "recover", "--apply", _UNAPPROVED_DIGEST),
+        "recover-apply-reaches-its-module-and-refuses-before-any-effect",
+        ("recover", "--apply", _UNAPPROVED_DIGEST),
         "recover-apply",
         "recover --apply",
     ),
@@ -418,51 +482,46 @@ SEAM_CASES: tuple[SeamCase, ...] = (
     # These are the mutation lever's controls. The reader parses argv before it admits an
     # interpreter, so a usage error is the same document on either route; a suite where EVERY case
     # went red under the patch would not distinguish "the route regressed" from "the fixture broke".
+    #
+    # THE UNKNOWN-VERB CASE MOVED PLANES. With the six lifecycle verbs at the top level the
+    # dispatcher enumerates every one of them, so `ccodex frobnicate` is now decided by the
+    # dispatcher's own unknown-command arm and the reader's `unknown ccodex verb` arm is unreachable
+    # from this surface. What replaces it as the pre-admission control is a selector error: an argv
+    # that reaches the reader and is refused by its parser.
     SeamCase(
-        identifier="an-unknown-sdlc-verb-is-a-usage-error-not-a-refusal",
-        argv=("sdlc", "frobnicate"),
+        identifier="an-unknown-top-level-command-is-a-tool-free-usage-error",
+        argv=("frobnicate",),
         expect_exit=2,
         route_sensitive=False,
         insensitivity_reason=(
-            "the reader parses argv before it admits a runtime, so an unknown verb is decided on"
-            " either route; this case is the lever's control that the regression is scoped"
+            "the dispatcher decides an unknown command before it builds any route or consults mise,"
+            " so it is decided identically on both; this case is the lever's control that the"
+            " regression is scoped to the lifecycle route"
         ),
         stdout_empty=True,
-        stderr_present=("error: unknown ccodex sdlc verb: 'frobnicate'", "usage: ccodex sdlc inspect"),
+        stderr_present=("error: unknown command frobnicate", "usage: ccodex <command>"),
         stderr_absent=("expected direct -I -B execution", "Traceback"),
     ),
     SeamCase(
-        identifier="a-bare-sdlc-route-names-the-whole-closed-grammar",
-        argv=("sdlc",),
+        identifier="install-without-a-scope-is-a-usage-error-naming-the-missing-selector",
+        argv=("install", "--agent", "claude"),
         expect_exit=2,
         route_sensitive=False,
         insensitivity_reason="decided by the reader's parser before any runtime admission",
         stdout_empty=True,
         stderr_present=(
-            "error: ccodex sdlc needs inspect, status, doctor, recover --dry-run, or one of install,"
-            " update, uninstall with --host claude|codex",
+            "error: ccodex install requires an explicit --scope user|project; there is no default"
+            " scope",
         ),
         stderr_absent=("expected direct -I -B execution", "Traceback"),
     ),
     SeamCase(
-        identifier="sdlc-install-without-a-host-is-a-usage-error-naming-the-missing-selector",
-        argv=("sdlc", "install"),
-        expect_exit=2,
-        route_sensitive=False,
-        insensitivity_reason="decided by the reader's parser before any runtime admission",
-        stdout_empty=True,
-        stderr_present=(
-            "error: ccodex sdlc install requires an explicit --host claude|codex; there is no default"
-            " host",
-        ),
-        stderr_absent=("expected direct -I -B execution", "Traceback"),
-    ),
-    SeamCase(
-        # The selector is required on EVERY mutating verb, not only install: with two planes live a
+        # BOTH selectors are required on EVERY selector verb, not only install: with two planes live a
         # bare `uninstall` would have to pick one, and whichever it picked would remove that agent's
-        # bytes on the strength of an argument nobody typed.
-        identifier="sdlc-uninstall-without-a-host-is-a-usage-error-and-never-a-default-plane",
-        argv=("sdlc", "uninstall"),
+        # bytes on the strength of an argument nobody typed. The scope half is the same argument one
+        # level out -- a run that guessed its root would touch a repository nobody named.
+        identifier="uninstall-without-an-agent-is-a-usage-error-and-never-a-default-plane",
+        argv=("uninstall", "--scope", "user"),
         expect_exit=2,
         route_sensitive=False,
         insensitivity_reason=(
@@ -471,14 +530,14 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         ),
         stdout_empty=True,
         stderr_present=(
-            "error: ccodex sdlc uninstall requires an explicit --host claude|codex; there is no"
-            " default host",
+            "error: ccodex uninstall requires an explicit --agent claude|codex; there is no"
+            " default agent",
         ),
         stderr_absent=("expected direct -I -B execution", "Traceback", "no installer ownership document"),
     ),
     SeamCase(
-        identifier="an-unadmitted-sdlc-host-is-a-usage-error-naming-the-admitted-planes",
-        argv=("sdlc", "install", "--host", "gemini"),
+        identifier="an-unadmitted-agent-is-a-usage-error-naming-the-admitted-planes",
+        argv=("install", "--scope", "user", "--agent", "gemini"),
         expect_exit=2,
         route_sensitive=False,
         insensitivity_reason=(
@@ -488,29 +547,188 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         ),
         stdout_empty=True,
         stderr_present=(
-            "error: unsupported ccodex sdlc install host: 'gemini'; the admitted hosts are"
+            "error: unsupported ccodex install agent: 'gemini'; the admitted agents are"
             " claude, codex",
         ),
         stderr_absent=("expected direct -I -B execution", "Traceback"),
     ),
     SeamCase(
-        identifier="sdlc-help-is-answered-on-stdout-and-is-never-an-error",
-        argv=("sdlc", "--help"),
+        # A flag that contradicts its own scope is exit 2 BEFORE any filesystem resolution, and the
+        # refusal states the doctrine rather than citing it: project scope is copy-only, so `--mode`
+        # has no admissible value there.
+        identifier="a-mode-request-at-project-scope-is-a-grammar-refusal-carrying-the-three-reasons",
+        argv=("install", "--scope", "project", "--agent", "claude", "--mode", "link"),
+        expect_exit=2,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "a scope/flag contradiction is decided by the reader's parser before any runtime"
+            " admission and before any filesystem resolution, so it is identical on both routes"
+        ),
+        stdout_empty=True,
+        stderr_present=(
+            "error: ccodex install --mode is admitted only with --scope user",
+            "a link embeds a user-specific absolute path",
+        ),
+        stderr_absent=("expected direct -I -B execution", "Traceback"),
+    ),
+    SeamCase(
+        identifier="a-project-flag-at-user-scope-is-a-grammar-refusal",
+        argv=("status", "--scope", "user", "--agent", "claude", "--project", "/nonexistent"),
+        expect_exit=2,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "the other half of the scope/flag pair, decided by the same parser before any runtime"
+            " admission; it is the positive control that the pair is checked in both directions"
+        ),
+        stdout_empty=True,
+        stderr_present=(
+            "error: ccodex status --project is admitted only with --scope project",
+        ),
+        stderr_absent=("expected direct -I -B execution", "Traceback"),
+    ),
+    # ---- the ratified grammar this release parses but does not yet serve (exit 3, by name) -------
+    # Each of these three is the alternative to the two dishonest options: silently ignoring the flag
+    # (an operator who typed `--scope project` gets their user home) or refusing it as a usage error
+    # (telling them they mistyped what the ratified grammar contains). Deleting any one of them makes
+    # its case fail on the MESSAGE, which is where the refusal name lives.
+    SeamCase(
+        identifier="project-scope-parses-and-is-refused-by-name-until-the-wave-that-wires-it",
+        argv=("install", "--scope", "project", "--agent", "claude"),
+        expect_exit=3,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "the unwired-surface refusals fire inside the parser, before any runtime admission, so"
+            " they are decided identically on both routes; they are controls whose subject is the"
+            " honesty of the grammar rather than the route"
+        ),
+        stdout_empty=True,
+        stderr_present=(
+            "error: ccodex install --scope project is not served by this release",
+            "project-scope-not-yet-wired",
+            "wave W4 of agentic-sdlc-7a2b",
+        ),
+        # Exit 3 carries no usage block: the invocation IS in the grammar, so reprinting the grammar
+        # would tell the operator to type what they already typed.
+        stderr_absent=("usage: ccodex install", "expected direct -I -B execution", "Traceback"),
+    ),
+    SeamCase(
+        identifier="a-mode-request-at-user-scope-is-refused-by-name-rather-than-silently-dropped",
+        argv=("install",) + _USER_CLAUDE + ("--mode", "link"),
+        expect_exit=3,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "refused inside the parser before any runtime admission, so identical on both routes;"
+            " its subject is that an unserved flag is never silently discarded"
+        ),
+        stdout_empty=True,
+        stderr_present=("mode-not-yet-wired", "accepting one here would drop it silently"),
+        stderr_absent=("expected direct -I -B execution", "Traceback"),
+    ),
+    SeamCase(
+        identifier="a-dry-run-request-is-refused-by-name-and-changes-nothing",
+        argv=("uninstall",) + _USER_CLAUDE + ("--dry-run",),
+        expect_exit=3,
+        route_sensitive=False,
+        insensitivity_reason=(
+            "refused inside the parser before any runtime admission, so identical on both routes;"
+            " its subject is that a safety flag is refused rather than ignored"
+        ),
+        stdout_empty=True,
+        stderr_present=("dry-run-not-yet-wired", "nothing was previewed and nothing was changed"),
+        stderr_absent=("expected direct -I -B execution", "Traceback", "no installer ownership document"),
+    ),
+    # ---- the two retired namespaces ------------------------------------------------------------
+    _retired_spelling_case(
+        "the-retired-bundle-install-spelling-names-its-replacement-invocation",
+        ("bundle", "install", "--agent", "claude"),
+        (
+            "error: `ccodex bundle install` is retired. The lifecycle verb is now top-level:",
+            "ccodex install --scope user --agent <claude|codex>",
+        ),
+    ),
+    _retired_spelling_case(
+        "the-retired-bundle-status-spelling-names-its-replacement-invocation",
+        ("bundle", "status", "--agent", "claude"),
+        (
+            "error: `ccodex bundle status` is retired. The lifecycle verb is now top-level:",
+            "ccodex status --scope user --agent <claude|codex>",
+        ),
+    ),
+    _retired_spelling_case(
+        "a-bare-retired-bundle-namespace-names-all-three-replacements",
+        ("bundle",),
+        (
+            "error: `ccodex bundle` is retired. The lifecycle verbs are now top-level:",
+            "ccodex install   --scope user --agent <claude|codex>",
+            "ccodex uninstall --scope user --agent <claude|codex>",
+        ),
+    ),
+    _retired_spelling_case(
+        "the-retired-sdlc-read-spelling-names-both-replacement-verbs",
+        ("sdlc", "status"),
+        (
+            "error: `ccodex sdlc status` is retired. Read verbs are now top-level:",
+            "ccodex status --scope user --agent <claude|codex>   (per plane)",
+            "ccodex doctor                                       (whole box)",
+        ),
+    ),
+    _retired_spelling_case(
+        "the-retired-sdlc-inspect-spelling-maps-onto-the-two-surviving-read-verbs",
+        ("sdlc", "inspect", "--json"),
+        (
+            "error: `ccodex sdlc inspect` is retired. Read verbs are now top-level:",
+            "ccodex doctor",
+        ),
+    ),
+    _retired_spelling_case(
+        "the-retired-sdlc-mutating-spelling-names-its-replacement-invocation",
+        ("sdlc", "uninstall", "--host", "claude"),
+        (
+            "error: `ccodex sdlc uninstall` is retired. The lifecycle verb is now top-level:",
+            "ccodex uninstall --scope user --agent <claude|codex>",
+        ),
+    ),
+    _retired_spelling_case(
+        "the-retired-sdlc-recover-spelling-names-both-recover-forms",
+        ("sdlc", "recover", "--dry-run"),
+        (
+            "error: `ccodex sdlc recover` is retired. The recover verb is now top-level:",
+            "ccodex recover --dry-run [--json]",
+            "ccodex recover --apply <plan-sha256>",
+        ),
+    ),
+    _retired_spelling_case(
+        "a-bare-retired-sdlc-namespace-names-the-whole-new-surface",
+        ("sdlc",),
+        (
+            "error: `ccodex sdlc` is retired. Its verbs are now top-level:",
+            "ccodex install|status|update|uninstall --scope <user|project> --agent <claude|codex>",
+            "ccodex recover --dry-run [--json] | --apply <plan-sha256>",
+        ),
+    ),
+    SeamCase(
+        identifier="top-level-help-names-the-whole-new-verb-table-and-both-retired-spellings",
+        argv=("--help",),
         expect_exit=0,
         route_sensitive=False,
-        insensitivity_reason="help is answered by the reader's parser before any runtime admission",
-        stdout_present=(
-            "usage: ccodex sdlc inspect [--json]",
-            "ccodex sdlc install --host claude|codex",
-            "ccodex sdlc update --host claude|codex",
-            "ccodex sdlc uninstall --host claude|codex",
+        insensitivity_reason=(
+            "help is tool-free and answered by the dispatcher before mise, any trust step, and any"
+            " route, so the patch cannot reach it; it is a control"
         ),
-        stdout_absent=("Traceback",),
+        stdout_present=(
+            "usage: ccodex <command>",
+            "install --scope <user|project> --agent <claude|codex>",
+            "uninstall --scope <user|project> --agent <claude|codex>",
+            "doctor [--json]",
+            "recover --apply <plan-sha256>",
+            "`ccodex bundle <verb>` and `ccodex sdlc <verb>` are refused at exit 2",
+        ),
+        stdout_absent=("Traceback", "sdlc install --host", "profile", "refresh"),
     ),
     # ---- boundaries the dispatcher owns, upstream of any interpreter ---------------------------
     SeamCase(
-        identifier="an-untrusted-root-refuses-the-sdlc-route-naming-this-trees-own-remedy",
-        argv=("sdlc", "status", "--json"),
+        identifier="an-untrusted-root-refuses-the-lifecycle-route-naming-this-trees-own-remedy",
+        argv=("status",) + _USER_CLAUDE + ("--json",),
         expect_exit=3,
         route_sensitive=False,
         insensitivity_reason=(
@@ -527,9 +745,13 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         stderr_absent=("mise is not on PATH", "expected direct -I -B execution", "Traceback"),
     ),
     SeamCase(
-        identifier="a-probe-failure-that-is-not-a-trust-refusal-is-reported-as-unreadable",
-        argv=("sdlc", "status", "--json"),
-        expect_exit=1,
+        # RECLASSIFIED 1 -> 3 in the wave that landed the verb table (the W0 seam's own finding):
+        # nothing was attempted, no tool resolved, no route built, so this is a precondition boundary
+        # declining before any effect rather than a failure of the tool. Class 1 stays reserved for
+        # the dispatcher's OWN unexpected internal failures.
+        identifier="a-probe-failure-that-is-not-a-trust-refusal-refuses-as-unreadable",
+        argv=("status",) + _USER_CLAUDE + ("--json",),
+        expect_exit=3,
         route_sensitive=False,
         insensitivity_reason=(
             "the toolchain probe is upstream of both routes; this is the trust case's discriminator,"
@@ -537,27 +759,26 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         ),
         mise="unreadable",
         stdout_empty=True,
-        stderr_present=(f"error: mise cannot read {ROOT_TOKEN}:", "the fixture probe declined"),
+        stderr_present=(f"refused: mise cannot read {ROOT_TOKEN}:", "the fixture probe declined"),
         stderr_absent=("not trusted", "mise trust", "expected direct -I -B execution"),
     ),
     SeamCase(
-        identifier="bundle-status-still-reaches-the-shared-uv-runner-and-ends-with-its-terminal-line",
-        # The selector is REQUIRED as of the ledger-hygiene wave: `status` with no `--agent` now
-        # refuses at exit 2 naming both planes, so a selector-free case here would assert a
-        # deleted default instead of the route this case exists to observe.
-        argv=("bundle", "status", "--agent", "claude"),
+        identifier="libraries-list-still-reaches-the-shared-uv-runner",
+        # This case replaced `bundle status`, which was the lever's shared-uv-runner control until
+        # `ccodex bundle` became a refusal. `libraries` is the surviving read verb on that route, so
+        # the control's SUBJECT is unchanged: the stub's uv-run emulation works, and the regression is
+        # confined to the lifecycle route.
+        argv=("libraries", "list"),
         expect_exit=0,
         route_sensitive=False,
         insensitivity_reason=(
-            "the bundle route is ALREADY the shared uv runner, so the patch cannot change it; it is"
-            " the lever's positive control that the stub's uv-run emulation works and that the"
-            " regression is confined to the sdlc route"
+            "the libraries route is ALREADY the shared uv runner, so the patch cannot change it; it"
+            " is the lever's positive control that the stub's uv-run emulation works and that the"
+            " regression is confined to the lifecycle route"
         ),
-        # Both terminal lines the product can emit. The fixture's state is empty, so the first is
-        # what runs here; the alternation is what keeps the case honest on a populated host.
-        stdout_matches=(
-            r"(?m)^(?:no owned entries for this host \(run: mise run bundle:install\)"
-            r"|[0-9]+ ok, [0-9]+ conflict, [0-9]+ absent)\s*\Z",
+        stdout_present=(
+            "External skill libraries reachable through their own front doors.",
+            "Nothing below is installed by `lifecycle:install`",
         ),
         stdout_absent=("Traceback", "error:"),
         stderr_absent=("Traceback",),
@@ -638,6 +859,72 @@ def dispatcher_utilities_path(directory: Path) -> Path:
         if resolved and not (directory / tool).exists():
             os.symlink(resolved, directory / tool)
     return directory
+
+
+def stub_dispatcher_environment(
+    cell: Path,
+    *,
+    root: Path | None = None,
+    interpreter: Path | None = None,
+    probe: str = "trusted",
+    home: Path | None = None,
+    state: Path | None = None,
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """One allowlist environment in which the COMMITTED ``bin/ccodex`` can be driven as a process.
+
+    WHY THE IN-PROCESS SUITES NEED THIS. ``bin/ccodex`` refuses an untrusted root before any route,
+    and the trust it wants is scoped to the REAL operator ``HOME`` -- a fact an isolated test home can
+    never carry without a persistent operator mutation. Every suite that wanted the real dispatcher
+    therefore drove the reader directly under ``-I -B`` and documented the gap. This function closes
+    it: the recording stub ``mise`` stands at exactly that boundary, serving both routes the
+    dispatcher can build, so a suite gets the real argv-to-decision path instead of a hand-built
+    approximation of it.
+
+    Callers run ``[BIN_CCODEX, *argv]`` with the returned environment. The stub's argv log lands at
+    ``cell / "mise-argv.log"`` and is readable afterwards, which is what lets a caller assert WHICH
+    route the dispatcher built rather than only what came out of it.
+
+    ``extra`` is merged last, so a suite may add the one or two values its own fixture needs
+    (``CODEX_HOME``, a poisoned ``PYTHONPATH``) without reopening the allowlist to ``os.environ``.
+    """
+    cell = Path(cell)
+    resolved_home = Path(home) if home is not None else cell / "home"
+    resolved_state = Path(state) if state is not None else cell / "state"
+    stub_bin = cell / "stub-bin"
+    # The STATE ROOT is deliberately not created. Several callers assert that a read verb left it
+    # absent, which is a real no-effect observation this helper must not spend on their behalf; a
+    # caller that needs the directory plants it itself, as the fixture writers below do.
+    for directory in (resolved_home, stub_bin):
+        directory.mkdir(parents=True, exist_ok=True)
+    write_stub_mise(
+        stub_bin,
+        root=Path(os.path.realpath(root or ROOT)),
+        interpreter=Path(os.path.realpath(interpreter or Path(sys.executable))),
+        log=cell / "mise-argv.log",
+        probe=probe,
+    )
+    environment = {
+        "PATH": os.pathsep.join(
+            [str(stub_bin), str(dispatcher_utilities_path(cell / "utilities"))]
+        ),
+        "HOME": str(resolved_home),
+        "XDG_STATE_HOME": str(resolved_state),
+        "XDG_DATA_HOME": str(cell / "data"),
+        "LANG": "C",
+        "LC_ALL": "C",
+        # The regressed route runs the reader WITHOUT ``-B``, exactly as ``uv run`` does, so it writes
+        # bytecode; sending that cache into the fixture keeps the tree under test clean.
+        "PYTHONPYCACHEPREFIX": str(cell / "pycache"),
+    }
+    environment.update(extra or {})
+    return environment
+
+
+def stub_mise_argv(cell: Path) -> tuple[str, ...]:
+    """Every argv the stub ``mise`` in this cell was called with, in order."""
+    log = Path(cell) / "mise-argv.log"
+    return tuple(log.read_text(encoding="utf-8").splitlines()) if log.exists() else ()
 
 
 #: The interrupted bundle transition the ``bundle-pending`` fixture plants: the installer's own
@@ -833,6 +1120,41 @@ class SeamRunner:
                 continue
             observed[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
         return observed
+
+
+#: What the stub launcher prints, so the gateway assertion reads a verb rather than a health probe.
+GATEWAY_STUB_MARKER = "GATEWAY-VERB:"
+
+
+def build_stub_launcher_tree(destination: Path) -> Path:
+    """A distribution root whose ``scripts/opencodex-claude.sh`` is a recording stub.
+
+    THE DISPATCHER SELF-LOCATES ITS ROOT as the physical parent of its own ``bin/``, which is what
+    makes this possible without touching the checkout: a copy of ``bin/ccodex`` placed here resolves
+    ``$root/scripts/opencodex-claude.sh`` to the stub below, so the gateway route can be OBSERVED
+    instead of executed. Nothing under this tree is the real launcher, and the real one is never run
+    by any test -- it would start a gateway process.
+
+    ``scripts/`` is a real directory rather than a symlink to the checkout's, precisely because the
+    stub has to live inside it. The reader is unreachable from here on purpose: a case that needed
+    both the stub launcher and the real reader would be asserting two planes at once.
+    """
+    destination = Path(os.path.realpath(destination))
+    (destination / "bin").mkdir(parents=True, exist_ok=True)
+    (destination / "scripts").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(BIN_CCODEX, destination / "bin" / "ccodex")
+    (destination / "bin" / "ccodex").chmod(0o755)
+    launcher = destination / "scripts" / "opencodex-claude.sh"
+    launcher.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '{GATEWAY_STUB_MARKER}%s\\n' \"$1\"\n"
+        'shift\n'
+        "printf 'GATEWAY-ARGV:%s\\n' \"$*\"\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    launcher.chmod(0o755)
+    return destination
 
 
 def build_regressed_tree(destination: Path, patch: Path = MUTATION_PATCH) -> Path:

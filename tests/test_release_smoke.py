@@ -9,6 +9,13 @@ The reader's end-to-end verdicts run against a STUB ``bin/ccodex`` rather than a
 real-archive proof belongs to the workflow (and to ``tests/test_bin_ccodex.py``'s extract-and-run
 fixture), while what needs proving HERE is that the verdict logic distinguishes an admitted report
 from the v0.7.4 refusal, and that ``--expect-refusal`` cannot pass vacuously.
+
+THE SPELLING MOVED, THE REGRESSION DID NOT (agentic-sdlc-7a2b W3a). ``ccodex sdlc <verb>`` and
+``ccodex bundle <verb>`` are retired at exit 2, and the six lifecycle verbs are top-level, so every
+argv here -- shipped manifest and stub fixture alike -- carries the new spelling. What v0.7.3 and
+v0.7.4 shipped is unchanged history: the route they regressed is still ``run_sdlc_python``, still
+refused by name by ``runtime_admission()``, and now reachable from TWO case arms rather than one,
+which is what the mutation fixture had to be re-anchored onto.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ import importlib.util
 import json
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -53,6 +61,12 @@ def _load(path: Path, name: str) -> ModuleType:
 
 smoke = _load(SMOKE_SCRIPT, "smoke_release_under_test")
 validator = _load(VALIDATOR_PATH, "validate_bundle_for_release_smoke_test")
+#: The READER's own verb vocabulary, not a copy of it. The manifest-coverage predicate below asks the
+#: product which verbs render a report, so a fourth report-rendering verb added there without a smoke
+#: case reddens `mise run check` instead of shipping uncovered. `inspect` LEFT this tuple when the
+#: front door became six top-level verbs, and that deletion is exactly the kind of drift a
+#: hand-written list here would have hidden in the other direction.
+reader = _load(ROOT / "scripts" / "ccodex_sdlc.py", "ccodex_sdlc_for_release_smoke_test")
 
 #: Whether the reader will select any case on this host, asked of the READER's own allowlist rather
 #: than of `os.name`, so adding a platform there starts these running instead of leaving them
@@ -102,16 +116,28 @@ def report(*, admitted: bool) -> str:
 
 
 class StubTree:
-    """A directory shaped like an extracted archive, whose ``bin/ccodex`` is a canned responder."""
+    """A directory shaped like an extracted archive, whose ``bin/ccodex`` is a canned responder.
+
+    The canned bytes are written to SIBLING FILES and ``cat``-ed rather than interpolated into the
+    script body. A ``printf`` whose argument is a double-quoted literal lets bash expand a backtick or
+    a ``$(...)`` inside it, and these payloads are real product output: `libraries list` prints
+    ``  `lifecycle:install` `` among other backticked names, so the interpolating form answered with
+    something the product never printed AND ran the quoted words as commands on the host. Neither is
+    acceptable in a fixture whose whole job is to reproduce an artifact's stdout faithfully.
+    """
 
     def __init__(self, base: Path, *, stdout: str = "", stderr: str = "", exit_code: int = 0):
         self.root = base / "agentic-sdlc-stub"
         (self.root / "bin").mkdir(parents=True)
+        canned_stdout = self.root / "canned-stdout"
+        canned_stderr = self.root / "canned-stderr"
+        canned_stdout.write_text(stdout, encoding="utf-8")
+        canned_stderr.write_text(stderr, encoding="utf-8")
         dispatcher = self.root / "bin" / "ccodex"
         dispatcher.write_text(
             "#!/usr/bin/env bash\n"
-            f"printf '%s' {json.dumps(stdout)}\n"
-            f"printf '%s' {json.dumps(stderr)} >&2\n"
+            f"cat {shlex.quote(str(canned_stdout))}\n"
+            f"cat {shlex.quote(str(canned_stderr))} >&2\n"
             f"exit {exit_code}\n",
             encoding="utf-8",
         )
@@ -125,7 +151,11 @@ def manifest_document(cases: list[dict[str, object]]) -> dict[str, object]:
 def admitted_case(**overrides: object) -> dict[str, object]:
     case: dict[str, object] = {
         "id": "stub-status-is-admitted",
-        "argv": ["sdlc", "status", "--json"],
+        # The top-level lifecycle spelling, with the selectors that pick the reader over the gateway
+        # `status`. The stub dispatcher ignores its argv, so this is documentation of the invocation
+        # under test rather than a live parse -- which is exactly why a retired spelling must not be
+        # left sitting here.
+        "argv": ["status", "--scope", "user", "--agent", "claude", "--json"],
         "platforms": ["Darwin", "Linux"],
         "environment": "host",
         "expect_exit": 0,
@@ -155,21 +185,29 @@ class ShippedManifestTest(unittest.TestCase):
         self.assertTrue(self.cases)
 
     def test_every_reader_verb_has_a_case_asserting_it_is_admitted(self) -> None:
-        """Criterion 11's first half: inspect, status, and doctor each carry an admitted case."""
-        for verb in ("inspect", "status", "doctor"):
+        """Criterion 11's first half, asked of the reader's OWN verb list rather than a copy of it.
+
+        The verbs are top-level now, so the argv is matched at position 0 instead of behind a `sdlc`
+        namespace token, and `inspect` is gone from `READER_VERBS` -- `status` reads one plane and
+        `doctor` reads the whole box, which is what made a fourth read spelling redundant. Reading the
+        tuple from the product keeps the coverage claim honest in both directions: a verb added there
+        without a manifest case fails here, and a verb retired there stops being demanded.
+        """
+        self.assertTrue(reader.READER_VERBS, "the reader must declare which verbs render a report")
+        for verb in reader.READER_VERBS:
             with self.subTest(verb=verb):
                 matching = [
                     case
                     for case in self.cases
-                    if case["argv"][:2] == ["sdlc", verb]
+                    if case["argv"][:1] == [verb]
                     and case["expect_exit"] == 0
                     and case.get("expect_stdout_json", {}).get("runtime.state") == "admitted"
                     and REFUSAL_FINDING in case.get("forbid_finding_codes", [])
                 ]
                 self.assertTrue(
                     matching,
-                    f"no case asserts that `sdlc {verb}` is admitted and carries no {REFUSAL_FINDING}"
-                    " finding; that absence is the whole defect of issue #9",
+                    f"no case asserts that `ccodex {verb}` is admitted and carries no"
+                    f" {REFUSAL_FINDING} finding; that absence is the whole defect of issue #9",
                 )
 
     def test_a_refusal_case_forbids_the_admission_text_on_stderr(self) -> None:
@@ -209,66 +247,124 @@ class ShippedManifestTest(unittest.TestCase):
                 self.assertEqual([], [name for name in case["platforms"] if name not in ("Darwin", "Linux")])
 
 
-class BundleStatusTerminalLineTest(unittest.TestCase):
-    """The manifest's terminal-line pattern, bound to the PRODUCT that emits it.
+class SharedUvRunnerControlLineTest(unittest.TestCase):
+    """The shared-uv-runner case's expected line, bound to the PRODUCT that emits it.
 
-    This exists because the first version of that case asserted AGENTS.md's PARAPHRASE
-    (``no owned entries for this host``) instead of what ``status_summary`` actually returns
-    (``... (run: mise run bundle:install)``), and the local run passed anyway: this host HAS owned
-    entries, so only the OTHER alternative was ever exercised. Both CI runners are fresh, took the
-    branch nobody had run, and failed. The pattern is asserted here against
-    ``install_skill_bundle.status_summary`` itself, so the two cannot drift again -- a reworded
-    summary now reddens `mise run check` instead of surfacing as a release-gate failure.
+    RE-ANCHORED (agentic-sdlc-7a2b W3a) from ``bundle-status-reads-the-ledger-and-ends-with-its-
+    terminal-line``. That case is gone from the manifest because ``ccodex bundle status`` was the only
+    dispatcher route that could reach ``install_skill_bundle.py status``, and ``ccodex bundle`` is now
+    a refusal that resolves no tool; the re-authored manifest put ``libraries list`` in its place as
+    the shared-``run_python`` control, and ``tests/seam_harness.py`` records the same substitution for
+    the same reason. So this class pins THAT case's line instead.
+
+    THE CLAIM IS UNCHANGED, and it is worth restating because it cost two red CI runners: the first
+    version of the retired case asserted AGENTS.md's PARAPHRASE of a product line instead of the line
+    the product actually returns, and the local run passed anyway because this host only ever
+    exercised the other branch. Asserting the manifest's needle against the function that emits it is
+    what keeps a reworded product line reddening `mise run check` instead of surfacing as a
+    release-gate failure nobody can reproduce locally.
+
+    WHAT MOVED RATHER THAN VANISHED. The retired case carried a ``\\Z``-anchored
+    ``expect_stdout_matches`` regex, so it could also claim that ``status`` ends in exactly ONE
+    terminal line and never in silence. The re-authored manifest makes no positional claim anywhere --
+    no case uses ``expect_stdout_matches`` at all -- so that half is not re-anchored here. It is
+    pinned in-process, on BOTH branches, by ``tests/test_install_skill_bundle.py``'s ``messages[-1]``
+    assertions (``test_status_on_a_clean_host_names_the_empty_result_and_next_command``,
+    ``test_status_always_ends_with_a_counted_summary_line``, and
+    ``test_status_summary_is_terminal_for_every_counted_shape``), which this wave leaves untouched.
     """
 
-    CASE_ID = "bundle-status-reads-the-ledger-and-ends-with-its-terminal-line"
+    CASE_ID = "libraries-list-still-reaches-the-shared-uv-runner"
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.installer = _load(ROOT / "scripts" / "install_skill_bundle.py", "installer_for_release_smoke_test")
+        cls.libraries = _load(
+            ROOT / "scripts" / "install_external_libraries.py", "libraries_for_release_smoke_test"
+        )
         cases = {case["id"]: case for case in smoke.load_manifest(MANIFEST_PATH)}
-        patterns = cases[cls.CASE_ID]["expect_stdout_matches"]
-        assert len(patterns) == 1, patterns
-        cls.pattern = patterns[0]
+        cls.case = cases[cls.CASE_ID]
+        cls.present = list(cls.case["expect_stdout_present"])
+        cls.absent = list(cls.case["expect_stdout_absent"])
+        assert cls.present and cls.absent, cls.case
 
-    def summaries(self) -> list[str]:
-        """Both branches of the product's own terminal line, from the product itself."""
-        return [
-            self.installer.status_summary({"ok": 0, "conflict": 0, "absent": 0}),
-            self.installer.status_summary({"ok": 44, "conflict": 0, "absent": 0}),
-            self.installer.status_summary({"ok": 3, "conflict": 2, "absent": 1}),
-        ]
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        # The SHIPPED case document, alone in a fixture manifest, so the end-to-end verdicts below
+        # assess the real case's own fields rather than a restatement of them.
+        self.manifest = self.base / "manifest.json"
+        self.manifest.write_text(json.dumps(manifest_document([self.case])), encoding="utf-8")
 
-    def test_the_product_still_has_exactly_the_two_branches_this_case_covers(self) -> None:
-        empty, populated, mixed = self.summaries()
-        self.assertEqual(empty, "no owned entries for this host (run: mise run bundle:install)")
-        self.assertEqual(populated, "44 ok, 0 conflict, 0 absent")
-        self.assertEqual(mixed, "3 ok, 2 conflict, 1 absent")
+    def product_lines(self) -> list[str]:
+        """What `ccodex libraries list` really prints, from the product's own renderer.
 
-    def test_the_pattern_matches_every_terminal_line_the_product_can_emit(self) -> None:
-        """The blind spot closed: the no-entries branch is covered here even on a host that has some."""
-        for summary in self.summaries():
-            with self.subTest(summary=summary):
-                # A lone terminal line, as a fresh host prints it.
-                self.assertRegex(f"{summary}\n", self.pattern)
-                # And after the per-entry lines a populated host prints first.
-                self.assertRegex(f"ok: /somewhere/one\nok: /somewhere/two\n{summary}\n", self.pattern)
+        ISOLATED HOME, as every CLI-shaped test here must be: this renderer reads `config.home` and
+        the state root to report what already occupies the skills namespace, so pointing either at the
+        developer's real `~` would make the assertion about their machine.
+        """
+        home = self.base / "home"
+        (home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+        config = self.libraries.Config(
+            repo_root=ROOT, home=home, state_home=self.base / "state"
+        )
+        exit_code, lines = self.libraries.command_list(config)
+        self.assertEqual(0, exit_code, lines)
+        return lines
 
-    def test_the_documentation_paraphrase_does_not_satisfy_the_pattern(self) -> None:
-        """The exact regression: AGENTS.md and README quote the prefix, the product emits the hint."""
-        self.assertNotRegex("no owned entries for this host\n", self.pattern)
+    def stub_verdict(self, stdout: str) -> subprocess.CompletedProcess[str]:
+        directory = self.base / f"tree-{len(list(self.base.glob('tree-*')))}"
+        directory.mkdir()
+        return run_smoke(StubTree(directory, stdout=stdout).root, self.manifest)
 
-    def test_a_summary_that_is_not_the_last_line_does_not_satisfy_the_pattern(self) -> None:
-        """`\\Z` is load-bearing: `status` ends in ONE terminal line, so position is the contract."""
-        for summary in self.summaries():
-            with self.subTest(summary=summary):
-                self.assertNotRegex(f"{summary}\nok: /somewhere/trailing\n", self.pattern)
+    def test_the_case_asserts_lines_the_product_itself_emits(self) -> None:
+        """The binding, in-process, so it holds on hosts where the smoke CLI selects no case."""
+        lines = self.product_lines()
+        for needle in self.present:
+            with self.subTest(needle=needle):
+                self.assertTrue(
+                    [line for line in lines if needle in line],
+                    f"{needle!r} is not in `libraries list`'s own output; the manifest is quoting"
+                    " something other than the product",
+                )
 
-    def test_silent_output_does_not_satisfy_the_pattern(self) -> None:
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
+    def test_the_products_own_output_passes_this_case_end_to_end(self) -> None:
+        completed = self.stub_verdict("\n".join(self.product_lines()) + "\n")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn(f"pass {self.CASE_ID}", completed.stdout)
+
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
+    def test_a_reworded_product_line_fails_this_case_by_name(self) -> None:
+        """The exact regression, mutated: reword what the product prints and the gate must go red."""
+        needle = self.present[0]
+        reworded = [line.replace(needle, "External skill libraries.") for line in self.product_lines()]
+        self.assertNotIn(needle, "\n".join(reworded), "the line must be present to reword")
+        completed = self.stub_verdict("\n".join(reworded) + "\n")
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertIn(f"FAIL {self.CASE_ID}", completed.stdout)
+        self.assertIn(repr(needle), completed.stdout)
+
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
+    def test_silent_output_does_not_satisfy_this_case(self) -> None:
         """A silent exit 0 is a defect, not a clean host (AGENTS.md)."""
-        for stdout in ("", "\n", "ok: /somewhere/one\n"):
+        for stdout in ("", "\n"):
             with self.subTest(stdout=stdout):
-                self.assertNotRegex(stdout, self.pattern)
+                completed = self.stub_verdict(stdout)
+                self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+                self.assertIn(f"FAIL {self.CASE_ID}", completed.stdout)
+
+    @unittest.skipUnless(SMOKE_SELECTS_A_CASE_HERE, NO_CASE_FOR_THIS_PLATFORM_SKIP_REASON)
+    def test_the_case_still_forbids_the_failure_shapes_this_route_can_emit(self) -> None:
+        """Reaching the runner is not enough: the expected line plus a traceback is still a failure."""
+        for forbidden in self.absent:
+            with self.subTest(forbidden=forbidden):
+                completed = self.stub_verdict(
+                    "\n".join(self.product_lines()) + f"\n{forbidden} something\n"
+                )
+                self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+                self.assertIn(f"FAIL {self.CASE_ID}", completed.stdout)
+                self.assertIn(repr(forbidden), completed.stdout)
 
 
 class ManifestSchemaTest(unittest.TestCase):
@@ -441,19 +537,51 @@ class VerdictTest(unittest.TestCase):
 
 
 class MutationFixtureTest(unittest.TestCase):
-    """The patch the mutation job applies: it must exist, apply, and restore the v0.7.4 route."""
+    """The patch the mutation job applies: it must exist, apply, and restore the v0.7.4 route.
 
-    def test_the_patch_restores_the_uv_run_dispatch_at_the_sdlc_route(self) -> None:
+    RE-ANCHORED (agentic-sdlc-7a2b W3a) from a `  sdlc)`-delimited slice of the dispatcher onto a
+    COUNT of the route's call sites. The `sdlc)` arm these tests used to cut out is now a refusal that
+    calls nothing, and the fixed route is reached from TWO places -- the
+    `install|update|uninstall|doctor|recover` table and the `status` arm's selector branch -- so a
+    slice of one arm can no longer see the route at all, and a patch that mutated only one of the two
+    would leave a smoke case taking the fixed route and reporting green on a regressed tree. The
+    count is asserted in BOTH directions on purpose: an intact tree is (2 fixed, 0 regressed) and a
+    mutated one is exactly the reverse, so neither a missed call site nor a silently added one passes.
+    """
+
+    #: The two spellings the mutation swaps between, as they appear at a CALL SITE. `run_sdlc_python`
+    #: also appears as a function definition, and `run_python` also serves the libraries and
+    #: statusline verbs, so both forms carry their argument vector to keep the count exact.
+    FIXED_CALL = 'run_sdlc_python "$@"'
+    REGRESSED_CALL = 'run_python ccodex_sdlc.py "$@"'
+    #: How many places take that route. Ratified decision 1's verb table is one; `status`'s selector
+    #: branch is the other, because `status` is the one name the gateway plane and the lifecycle share.
+    CALL_SITES = 2
+
+    def test_the_patch_restores_the_uv_run_dispatch_at_every_lifecycle_call_site(self) -> None:
         text = MUTATION_PATCH.read_text(encoding="utf-8")
         self.assertIn("diff --git a/bin/ccodex b/bin/ccodex", text)
-        self.assertIn('-    run_sdlc_python "$@"', text)
-        self.assertIn('+    run_python ccodex_sdlc.py "$@"', text)
+        # Counted rather than merely present: the indentation differs between the two call sites (the
+        # `status` one sits inside an `if`), so a substring check on one spelling would pass on a
+        # patch that had quietly stopped touching the other.
+        removed = [
+            line
+            for line in text.splitlines()
+            if line.startswith("-") and line.endswith(self.FIXED_CALL)
+        ]
+        added = [
+            line
+            for line in text.splitlines()
+            if line.startswith("+") and line.endswith(self.REGRESSED_CALL)
+        ]
+        self.assertEqual(self.CALL_SITES, len(removed), text)
+        self.assertEqual(self.CALL_SITES, len(added), text)
         # The preamble must name the commit whose regression this reproduces, so a future reader
         # can find the history without the CI job depending on it.
         self.assertIn("cd3fd3dec33e429fddb0a2acfe5a1d4bc2f01428", text)
 
     @unittest.skipUnless(shutil.which("git"), "git is required to apply the mutation fixture")
-    def test_applying_the_patch_puts_the_route_back_on_the_shared_uv_runner(self) -> None:
+    def test_applying_the_patch_puts_every_call_site_back_on_the_shared_uv_runner(self) -> None:
         """Applied to a COPY of the shipped dispatcher, not to the checkout's own bytes."""
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -468,15 +596,14 @@ class MutationFixtureTest(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             mutated = (root / "bin" / "ccodex").read_text(encoding="utf-8")
-        route = mutated.split("  sdlc)", 1)[1].split(";;", 1)[0]
-        self.assertIn('run_python ccodex_sdlc.py "$@"', route)
-        self.assertNotIn("run_sdlc_python", route)
+        self.assertEqual(self.CALL_SITES, mutated.count(self.REGRESSED_CALL))
+        self.assertEqual(0, mutated.count(self.FIXED_CALL))
 
     def test_the_intact_dispatcher_takes_the_direct_isolated_route(self) -> None:
-        """Positive control for the test above: without the patch, the route is the fixed one."""
-        route = BIN_CCODEX.read_text(encoding="utf-8").split("  sdlc)", 1)[1].split(";;", 1)[0]
-        self.assertIn('run_sdlc_python "$@"', route)
-        self.assertNotIn("run_python ccodex_sdlc.py", route)
+        """Positive control for the test above: without the patch, every call site is the fixed one."""
+        intact = BIN_CCODEX.read_text(encoding="utf-8")
+        self.assertEqual(self.CALL_SITES, intact.count(self.FIXED_CALL))
+        self.assertEqual(0, intact.count(self.REGRESSED_CALL))
 
 
 class ReleaseWorkflowTest(unittest.TestCase):

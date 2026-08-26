@@ -1,4 +1,4 @@
-"""Effect-aware exit conformance for the whole `ccodex sdlc` lifecycle (spec Decision 9).
+"""Effect-aware exit conformance for the whole `ccodex` lifecycle surface (spec Decision 9).
 
 WHAT THIS MODULE IS FOR.  The per-verb modules -- ``test_ccodex_sdlc_install.py``,
 ``_update.py``, ``_uninstall.py``, ``_recover_apply.py`` -- each prove their own verb's behaviour.
@@ -23,27 +23,36 @@ test, so a table a module quietly renumbered fails here instead of agreeing with
     3  clean refusal BEFORE any effect
     4  an admitted partial or unknown effect
 
-HOW THE VERBS ARE DRIVEN.  Three levels, all real, chosen per claim:
+HOW THE VERBS ARE DRIVEN.  Four levels, all real, chosen per claim:
 
-* THE REAL READER, DRIVEN DIRECTLY.  gh #10 phase 4 deleted the rendered
-  ``assets/launchers/ccodex.in`` template and its install-time ``ocx``/``jq``/``uv``/interpreter
-  binding along with it: the committed ``bin/ccodex`` self-locates its root and resolves
-  ``sdlc``'s pinned interpreter at RUN time through ``mise -C <root> exec``, which requires this
-  exact root's ``mise.toml`` to be trusted under the REAL operator ``HOME`` -- a fact this suite's
-  isolated ``HOME`` can never carry without a persistent trust mutation.  ``Plane.dispatch`` drives
-  ``scripts/ccodex_sdlc.py`` directly instead, under the same ``-I -B`` isolation the installed
-  dispatcher's own ``run_sdlc_python`` route resolves and execs, over a private ``HOME``,
-  ``XDG_STATE_HOME``, and ``XDG_DATA_HOME``.  This is still the level the operator types once
-  ``bin/ccodex`` hands off, and it is the ONLY level that can prove the exit-2 grammar matrix,
-  because a malformed vector never reaches a per-verb module at all; the toolchain-resolution
-  boundary above it is proven elsewhere (``tests/test_bin_ccodex.py``,
-  ``tests/test_ccodex_seam.py``), not duplicated here.
+* THE COMMITTED DISPATCHER, DRIVEN AS A PROCESS.  ``Plane.dispatch`` runs the real
+  ``bin/ccodex <verb> ...`` -- byte for byte the argv an operator types -- inside the subprocess
+  seam's allowlist environment.  That level used to be unreachable from here, and the gap was
+  documented rather than hidden: ``bin/ccodex`` refuses an untrusted root before any route, and the
+  trust it wants is scoped to the REAL operator ``HOME``, which an isolated plane can never carry
+  without a persistent trust mutation, so this suite drove ``scripts/ccodex_sdlc.py`` directly
+  instead.  ``tests/seam_harness.py``'s recording stub ``mise`` now stands at exactly that
+  boundary and serves both routes the dispatcher can build, so the reader is reached through
+  ``run_sdlc_python``'s own resolution -- ``uv python find`` and then a direct ``-I -B`` exec of the
+  resolved interpreter -- rather than through a hand-built approximation of it.  This is the ONLY
+  level that can prove the exit-2 grammar matrices, because a malformed vector never reaches a
+  per-verb module at all, and it is now also the only level that can prove WHICH boundary refuses:
+  ``bin/ccodex`` owns the top-level verb vocabulary and the two retired namespaces (``sdlc``,
+  ``bundle``), and ``scripts/ccodex_sdlc.py`` owns every grammar decision inside a routed verb.
+  The toolchain-resolution boundary itself -- an untrusted or unreadable root, a poisoned ``PATH``,
+  a wrong interpreter -- is proven where it belongs (``tests/test_bin_ccodex.py``,
+  ``tests/test_ccodex_sdlc.py``, ``tests/test_ccodex_seam.py``) and is not duplicated here.
+* THE READER OF A SHADOW CHECKOUT, DRIVEN DIRECTLY.  ``InternalFailureExitOneTest`` is the one
+  class that cannot use the dispatcher: ``bin/ccodex`` self-locates its distribution root as the
+  parent of its own ``bin/``, so nothing can point it at the shadow tree whose mutated policy
+  document is that class's whole subject.  It execs the shadow's own copy of the reader under
+  ``-I -B``, which is what ``run_sdlc_python`` would exec if that tree had a ``bin/``.
 * THE REAL PER-VERB ENTRY POINT IN A SUBPROCESS.  ``driver.py`` loads one shipped module by absolute
   path exactly as ``scripts/ccodex_sdlc.py`` does, wraps ONE named shipped-installer primitive with
   a fault, and calls the module's own ``main(argv)``.  Configuration still comes from the
   environment through the module's own ``default_config()``; nothing is stubbed but the single
   injected primitive.  Every faulted run is paired with a fault-free run THROUGH THE SAME DRIVER and
-  with the installed dispatcher's own result, so the driver is shown to be faithful before any
+  with the committed dispatcher's own result, so the driver is shown to be faithful before any
   conclusion is drawn from it.
 * A REAL SIGKILL.  The crash-honesty chain kills the install process inside the shipped installer's
   own transaction, so the state the recovery verbs then read is the state a power loss leaves.
@@ -56,7 +65,7 @@ is paired with a run whose bytes the same comparison would have caught changing.
 A finding this suite cannot fix in production stays recorded at the class that hit it, prefixed
 FINDING, rather than being asserted as if it were the contract.
 
-THE ONE HOST CONDITION.  All three levels run the linux-x64-certified payload in a child under
+THE ONE HOST CONDITION.  Every level runs the linux-x64-certified payload in a child under
 ``-I``, so the per-verb modules' injected platform-observation seam cannot cross into them and off
 the certified platform every lifecycle verb refuses at exit 3 before any effect.  ``Plane`` reports
 that as a named skip (``payload_host_or_skip``) and only when the PRODUCT's own predicate refuses
@@ -108,8 +117,18 @@ def _load(path: Path, name: str) -> ModuleType:
 bundle = _load(ROOT / "scripts" / "install_skill_bundle.py", "exit_conformance_bundle")
 dar = _load(ROOT / "scripts" / "distribution_activation_receipt.py", "exit_conformance_receipts")
 recover = _load(ROOT / "scripts" / "ccodex_sdlc_recover.py", "exit_conformance_recover")
-#: The reader ``Plane.dispatch`` drives directly for every ``sdlc`` route (see the module docstring).
-READER_SCRIPT = ROOT / "scripts" / "ccodex_sdlc.py"
+#: The subprocess seam ``Plane.dispatch`` drives the COMMITTED dispatcher through (see the module
+#: docstring).  IMPORTED rather than re-implemented: a second copy of the stub toolchain here would be
+#: a second opinion about which routes ``bin/ccodex`` can build, and the two could disagree silently.
+seam = _load(ROOT / "tests" / "seam_harness.py", "exit_conformance_seam")
+#: The one file an operator runs.  There is no install step and no rendered template (gh #10 phase 4).
+DISPATCHER_SCRIPT = ROOT / "bin" / "ccodex"
+
+#: The two selectors every selector verb now requires, spelled once so no call site below can drift
+#: from another.  There is no default and no wildcard for either (ratified decision 1): with two
+#: planes live, a verb that defaulted would let one agent's uninstall reach the other agent's bytes on
+#: the strength of an argument nobody typed.
+SELECTED = ("--scope", "user", "--agent", "claude")
 
 #: The phrases a shipped verb's OWN platform refusal carries: install and update refuse to activate
 #: or refresh a linux-x64 CANDIDATE, recover refuses to resume a linux-x64 PLANE, and each names the
@@ -423,7 +442,7 @@ def document_authority_claims(document: Any) -> list[str]:
     return claims
 
 
-# ---- the installed dispatcher ---------------------------------------------------------------------
+# ---- the committed dispatcher --------------------------------------------------------------------
 
 
 class _InstalledDispatcher:
@@ -458,7 +477,7 @@ class _InstalledDispatcher:
         claude = stub_bin / "claude"
         claude.write_text(f"#!/bin/sh\nprintf '%s (Claude Code)\\n' '{HOST_VERSION}'\nexit 0\n")
         claude.chmod(0o755)
-        self.dispatcher = ROOT / "bin" / "ccodex"
+        self.dispatcher = DISPATCHER_SCRIPT
         self.stub_bin = stub_bin
         return self.dispatcher, self.stub_bin
 
@@ -541,6 +560,10 @@ class Plane:
             directory.mkdir(parents=True, exist_ok=True)
         self.driver = root / "driver.py"
         self.driver.write_text(DRIVER_SOURCE, encoding="utf-8")
+        # The seam's cell: the stub toolchain, its argv log, and the regressed route's bytecode cache.
+        # Deliberately OUTSIDE `observed_roots()`, because every exit-3 claim below hashes those roots
+        # and a stub that recorded its own argv inside one would make each refusal look like an effect.
+        self.dispatcher_cell = root / "dispatcher-cell"
 
     # ---- layout ---------------------------------------------------------------------------------
 
@@ -619,6 +642,13 @@ class Plane:
     # ---- running --------------------------------------------------------------------------------
 
     def environment(self) -> dict[str, str]:
+        """The DRIVER's environment: one shipped module's own ``main(argv)`` in a child process.
+
+        Not the dispatcher's -- ``dispatcher_environment`` builds that one from the seam's allowlist.
+        This one stays an inherited copy on purpose: the driver is not a dispatcher and resolves no
+        toolchain, so what it needs is the module's own ``default_config()`` reading the same plane the
+        dispatcher reads, plus a ``PATH`` on which the ``claude`` stub answers ``--version``.
+        """
         # Neither AGENTIC_SDLC_ROOT nor XDG_BIN_HOME is read anywhere in this product any more: the
         # committed bin/ccodex self-locates its root from its own physical path, and the operator-tools
         # PATH plane that once read XDG_BIN_HOME is gone (gh #10 phase 4). Carrying either here would
@@ -644,7 +674,7 @@ class Plane:
     ) -> subprocess.CompletedProcess[str]:
         """Pass the child's result through, or SKIP BY NAME when it refused THIS host's platform.
 
-        Every child below runs the real linux-x64-certified payload: the installed dispatcher execs
+        Every child below runs the real linux-x64-certified payload: the committed dispatcher execs
         the shipped reader under ``-I``, and the driver runs one shipped module's own ``main`` under
         ``-I`` as well, so no observation this harness could inject reaches either of them -- the
         per-verb modules take a ``Config.observed_system``/``observed_machine`` seam, and ``-I`` closes
@@ -677,29 +707,73 @@ class Plane:
             f" any effect: {named[0].strip()}"
         )
 
-    def dispatch(self, *arguments: str) -> subprocess.CompletedProcess[str]:
-        """Run one ``sdlc`` verb the way the installed dispatcher's own ``run_sdlc_python`` does.
+    def dispatcher_environment(self, *, probe: str = "trusted") -> dict[str, str]:
+        """The seam's allowlist environment, carrying every location this plane's fixtures inject.
 
-        Every call in this module starts with ``"sdlc"``: that argument is stripped and the rest is
-        handed straight to the real ``scripts/ccodex_sdlc.py`` under ``-I -B``, the exact isolation
-        ``bin/ccodex``'s ``run_sdlc_python`` route resolves and execs once it has trusted the
-        toolchain. Driving it directly is what lets this suite keep an isolated ``HOME`` -- the real
-        dispatcher's ``sdlc`` route requires this checkout's ``mise.toml`` to be trusted under the
-        REAL operator ``HOME``, which an isolated plane can never carry.
+        An ALLOWLIST built by ``seam.stub_dispatcher_environment``, not ``os.environ`` plus overrides:
+        no inherited tool root, state root, or ``PYTHONPATH`` can re-enter the route and make a report
+        describe the developer's machine.  Everything ``Plane.environment`` injects for the driver is
+        carried through ``extra`` so the two levels observe the SAME plane -- ``XDG_DATA_HOME`` for the
+        acquisition fixture, ``CODEX_HOME`` because the projection reads both agents' planes, and the
+        UTF-8 locale the fixtures' payload bytes are written in (the seam's own default is ``C``).
+
+        ``PATH`` is then extended, never replaced: the seam's own directories come first so ``mise``
+        resolves to the recording stub and ``bash``/``realpath``/``cat``/``dirname`` to the reviewed
+        allowlist, and the module-scoped ``claude`` stub is appended because ``install`` and ``update``
+        observe the host version through ``shutil.which("claude")`` inside the routed reader.  The
+        state root is deliberately NOT created here (the seam does not create it either): several
+        claims below are that a read verb left it absent, and this plane plants it itself.
+
+        ``probe`` is what the stub answers when the dispatcher probes the config, and it defaults to the
+        ordinary trusted host every claim below needs.  One test overrides it, to prove that the
+        precondition boundary above the reader refuses at class 3 rather than class 1.
         """
-        if not arguments or arguments[0] != "sdlc":
-            raise ValueError(f"Plane.dispatch only drives the sdlc route; received {arguments!r}")
-        _dispatcher, _stub = DISPATCHER.ensure()
+        _dispatcher, stub_bin = DISPATCHER.ensure()
+        environment = seam.stub_dispatcher_environment(
+            self.dispatcher_cell,
+            home=self.home,
+            state=self.state_home,
+            probe=probe,
+            extra={
+                "XDG_DATA_HOME": str(self.data_home),
+                "CODEX_HOME": str(self.codex_home),
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+            },
+        )
+        environment["PATH"] = os.pathsep.join([environment["PATH"], str(stub_bin)])
+        return environment
+
+    def dispatch(self, *arguments: str, probe: str = "trusted") -> subprocess.CompletedProcess[str]:
+        """Run the COMMITTED ``bin/ccodex`` on this argv, exactly as an operator invokes it.
+
+        The verbs are top-level (``install status update uninstall doctor recover``), so the argv here
+        is the operator's whole argv with nothing stripped and nothing prepended.  The dispatcher then
+        makes its own routing decision -- which is part of what is under test: ``status`` reaches the
+        reader only because a lifecycle selector is present, and a retired ``sdlc``/``bundle``
+        spelling never reaches it at all.
+
+        ``--host`` is refused here rather than forwarded, because it is not an operator spelling on
+        any surface any more: it survives only as the per-verb modules' ABI, which ``Plane.drive``
+        speaks directly.  A call site left un-migrated would otherwise become a retired-spelling or
+        unknown-argument refusal that some exit-2 assertion could absorb quietly.
+        """
+        if any(argument == "--host" or argument.startswith("--host=") for argument in arguments):
+            raise ValueError(
+                "--host is the per-verb modules' ABI, not an operator flag; the dispatcher takes"
+                f" --scope/--agent (use Plane.drive for the module ABI): {arguments!r}"
+            )
+        dispatcher, _stub = DISPATCHER.ensure()
         completed = subprocess.run(
-            [str(Path(sys.executable)), "-I", "-B", str(READER_SCRIPT), *arguments[1:]],
-            env=self.environment(),
+            [str(dispatcher), *arguments],
+            env=self.dispatcher_environment(probe=probe),
             capture_output=True,
             text=True,
             check=False,
             timeout=600,
         )
         return self.payload_host_or_skip(
-            completed, f"`ccodex {' '.join(arguments[:2])}` through the real reader"
+            completed, f"`ccodex {' '.join(arguments[:1])}` through the committed dispatcher"
         )
 
     def drive(
@@ -709,7 +783,14 @@ class Plane:
         *,
         fault: dict[str, Any] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Run one shipped module's own ``main(argv)`` with at most one injected primitive."""
+        """Run one shipped module's own ``main(argv)`` with at most one injected primitive.
+
+        ``argv`` here is the MODULE ABI rather than the operator grammar: the four per-verb modules
+        admit exactly ``['--host', <agent>]``, which is the vector the reader builds for them in exactly
+        one place and the reason ``--host`` survives nowhere an operator can type it.  This level is
+        deliberately NOT re-pointed at the dispatcher: it is the level that owns each module's own
+        refusal ladder, and it is the only one that can inject a fault into a named shipped primitive.
+        """
         environment = self.environment()
         environment.update(
             {
@@ -788,8 +869,8 @@ class Conformance(unittest.TestCase):
         return document
 
     def install_once(self, plane: Plane) -> subprocess.CompletedProcess[str]:
-        """One real activation through the installed dispatcher, asserted complete."""
-        completed = plane.dispatch("sdlc", "install", "--host", "claude")
+        """One real activation through the committed dispatcher, asserted complete."""
+        completed = plane.dispatch("install", *SELECTED)
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         self.assertTrue(plane.pointer.is_file(), completed.stdout)
         return completed
@@ -818,22 +899,30 @@ class SpecDecisionNineTest(Conformance):
         self.assertNotIn("5 for a sixth exit class", collapsed)
 
     def test_the_installed_launcher_documents_the_same_vocabulary(self) -> None:
-        """The operator reads the exit classes from ``ccodex --help``, so that text is pinned too."""
-        dispatcher, _stub = DISPATCHER.ensure()
-        completed = subprocess.run(
-            [str(dispatcher), "--help"], capture_output=True, text=True, check=False, timeout=120
-        )
+        """The operator reads the exit classes from ``ccodex --help``, so that text is pinned too.
+
+        Driven through ``Plane.dispatch`` like every other invocation here, which keeps even a
+        tool-free help request on an isolated ``HOME``: ``--help`` answers before ``mise``, before any
+        trust step, and before any download, so the seam's stub toolchain is never reached at all.
+        """
+        completed = self.plane().dispatch("--help")
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         collapsed = " ".join(completed.stdout.split())
         self.assertIn(
             "exit codes: 0 ok - 1 failure - 2 usage - 3 refused"
             " (a boundary declined the operation before any effect)"
-            " - 4 admitted partial or unknown effect (`sdlc` lifecycle verbs only)",
+            " - 4 admitted partial or unknown effect (the mutating lifecycle verbs only)",
             collapsed,
         )
         # Positive control: the help text is not empty of everything, so the absence of a sixth
-        # class below is a fact about the vocabulary rather than about a failed capture.
-        self.assertIn("sdlc install --host <claude|codex>", collapsed)
+        # class below is a fact about the vocabulary rather than about a failed capture.  The verbs are
+        # TOP-LEVEL and the selectors are `--scope`/`--agent` now, and the same help says the two
+        # retired namespaces refuse -- so this control pins the current surface, not a former one.
+        self.assertIn("install --scope <user|project> --agent <claude|codex>", collapsed)
+        self.assertIn(
+            "Retired spellings: `ccodex bundle <verb>` and `ccodex sdlc <verb>` are refused at exit 2",
+            collapsed,
+        )
         self.assertNotIn("5 ", collapsed.split("exit codes:")[1][:120])
 
     def test_this_module_pins_the_classes_as_literals_not_as_a_module_import(self) -> None:
@@ -885,51 +974,133 @@ class SpecDecisionNineTest(Conformance):
         self.assertEqual(EXIT_UNKNOWN, gate_receipt.EXIT_PARTIAL)
 
 
-# ---- (1a) exit 2: the closed grammar matrix --------------------------------------------------------
+# ---- (1a) exit 2: the two closed grammar matrices --------------------------------------------------
 
-#: Every grammar/input error the closed `ccodex sdlc` surface admits, spelled per verb.  A malformed
-#: vector never reaches a per-verb module, so this matrix can only be proved at the dispatcher.
+#: Every grammar/input error the READER decides once `bin/ccodex` has routed a verb to it.  A malformed
+#: vector never reaches a per-verb module, so this matrix can only be proved by driving the whole
+#: command.  The rows are spelled per verb rather than once for `install` and assumed for the rest, and
+#: that is not symmetry for its own sake: before the receipted plane carried two agents, `update` and
+#: `uninstall` took no arguments at all and each named its own single plane, so a matrix that proved
+#: `install`'s selector grammar and assumed theirs is exactly how that omission would survive twice.
+#:
+#: BOTH SELECTORS ARE REQUIRED, with no default and no wildcard for either, so the two axes get the
+#: same treatment per verb: missing, joined, valueless, unadmitted, and wildcard-spelled.  `--host`
+#: appears nowhere below, because it is no longer an operator spelling on any surface -- it survives
+#: only as the four per-verb modules' ABI, which the reader builds in exactly one place and which
+#: `Plane.drive` speaks directly.
 GRAMMAR_MATRIX: tuple[tuple[str, tuple[str, ...], str], ...] = (
-    ("no-verb", ("sdlc",), "needs inspect, status, doctor"),
-    ("unknown-verb", ("sdlc", "frobnicate"), "unknown ccodex sdlc verb: 'frobnicate'"),
-    # Every mutating verb, not just install: the selector is required on all three, so each one's
-    # missing, joined, valueless, unadmitted, wildcard, extra-argument, and unknown-flag spellings are
-    # proven per verb rather than once for install and assumed for the others.
     *(
         row
         for verb in ("install", "update", "uninstall")
         for row in (
-            (f"{verb}-no-host", ("sdlc", verb), f"ccodex sdlc {verb} requires an explicit --host claude|codex"),
-            (f"{verb}-joined-host", ("sdlc", verb, "--host=claude"), f"ccodex sdlc {verb} spells its host as two arguments"),
-            (f"{verb}-host-no-value", ("sdlc", verb, "--host"), f"ccodex sdlc {verb} --host was supplied without a host value"),
-            (f"{verb}-unadmitted-host", ("sdlc", verb, "--host", "gemini"), f"unsupported ccodex sdlc {verb} host: 'gemini'"),
-            (f"{verb}-wildcard-host", ("sdlc", verb, "--host", "all"), f"unsupported ccodex sdlc {verb} host: 'all'"),
-            # `[0-9]` never `\d` on the host axis too: a Unicode-digit lookalike is a DIFFERENT token.
-            (f"{verb}-unicode-host", ("sdlc", verb, "--host", "claude\u0669"), f"unsupported ccodex sdlc {verb} host"),
-            (f"{verb}-extra", ("sdlc", verb, "--host", "codex", "--force"), f"ccodex sdlc {verb} accepts exactly --host claude|codex"),
-            (f"{verb}-unknown-flag", ("sdlc", verb, "--yes"), f"unknown ccodex sdlc {verb} argument"),
-            (f"{verb}-positional", ("sdlc", verb, "latest"), f"unknown ccodex sdlc {verb} argument: 'latest'"),
+            (f"{verb}-no-selector", (verb,), f"ccodex {verb} requires an explicit --scope user|project"),
+            (f"{verb}-scope-without-agent", (verb, "--scope", "user"), f"ccodex {verb} requires an explicit --agent claude|codex"),
+            # The agent supplied and the scope missing: a vector that already carries ONE selector must
+            # not let the other default, which is the exact shape a defaulting parser lets through.
+            (f"{verb}-agent-without-scope", (verb, "--agent", "claude"), f"ccodex {verb} requires an explicit --scope user|project"),
+            (f"{verb}-joined-scope", (verb, "--scope=user", "--agent", "claude"), f"ccodex {verb} spells --scope as two arguments"),
+            (f"{verb}-joined-agent", (verb, "--scope", "user", "--agent=claude"), f"ccodex {verb} spells --agent as two arguments"),
+            (f"{verb}-scope-no-value", (verb, "--scope"), f"ccodex {verb} --scope was supplied without a value"),
+            (f"{verb}-agent-no-value", (verb, "--scope", "user", "--agent"), f"ccodex {verb} --agent was supplied without a value"),
+            (f"{verb}-unadmitted-scope", (verb, "--scope", "global", "--agent", "claude"), f"unsupported ccodex {verb} scope: 'global'"),
+            (f"{verb}-wildcard-scope", (verb, "--scope", "all", "--agent", "claude"), f"unsupported ccodex {verb} scope: 'all'"),
+            (f"{verb}-unadmitted-agent", (verb, "--scope", "user", "--agent", "gemini"), f"unsupported ccodex {verb} agent: 'gemini'"),
+            (f"{verb}-wildcard-agent", (verb, "--scope", "user", "--agent", "all"), f"unsupported ccodex {verb} agent: 'all'"),
+            # `[0-9]` never `\d` on the agent axis too: a Unicode-digit lookalike is a DIFFERENT token.
+            (f"{verb}-unicode-agent", (verb, "--scope", "user", "--agent", "claude\u0669"), f"unsupported ccodex {verb} agent"),
+            (f"{verb}-extra", (verb, "--scope", "user", "--agent", "codex", "--force"), f"unknown ccodex {verb} argument: '--force'"),
+            (f"{verb}-unknown-flag", (verb, "--yes"), f"unknown ccodex {verb} argument"),
+            (f"{verb}-positional", (verb, "latest"), f"unknown ccodex {verb} argument: 'latest'"),
         )
     ),
-    ("recover-bare", ("sdlc", "recover"), "requires exactly --dry-run"),
-    ("recover-json-only", ("sdlc", "recover", "--json"), "requires exactly --dry-run"),
-    ("recover-apply-no-digest", ("sdlc", "recover", "--apply"), "was supplied without the plan digest"),
-    ("recover-apply-empty", ("sdlc", "recover", "--apply", ""), "64-character lowercase hexadecimal digest"),
-    ("recover-apply-short", ("sdlc", "recover", "--apply", "5" * 63), "64-character lowercase hexadecimal digest"),
-    ("recover-apply-long", ("sdlc", "recover", "--apply", "5" * 65), "64-character lowercase hexadecimal digest"),
-    ("recover-apply-nonhex", ("sdlc", "recover", "--apply", "5" * 63 + "g"), "64-character lowercase hexadecimal digest"),
-    ("recover-apply-upper", ("sdlc", "recover", "--apply", "5" * 63 + "F"), "64-character lowercase hexadecimal digest"),
+    # The optional flags are CLOSED PER VERB rather than shared, so a flag one selector verb admits is a
+    # grammar error on a sibling that does not -- and the refusal lists what that verb does accept.
+    # These two rows are the only ones that reach that branch, so they are spelled once, not per verb.
+    ("install-unadmitted-json", ("install", *SELECTED, "--json"), "ccodex install does not take --json; it accepts"),
+    ("update-unadmitted-dry-run", ("update", *SELECTED, "--dry-run"), "ccodex update does not take --dry-run; it accepts"),
+    # `status` is a SELECTOR verb now, so both selectors are required on it exactly as on a mutating
+    # verb. Its BARE form is deliberately absent from this matrix: `ccodex status` with no selector is
+    # the GATEWAY supervision verb this command has always had, which is the dispatcher's routing
+    # decision rather than a lifecycle grammar error, and tests/test_bin_ccodex.py owns it.
+    ("status-scope-without-agent", ("status", "--scope", "user"), "ccodex status requires an explicit --agent claude|codex"),
+    ("status-agent-without-scope", ("status", "--agent", "claude"), "ccodex status requires an explicit --scope user|project"),
+    ("status-extra", ("status", *SELECTED, "--verbose"), "unknown ccodex status argument: '--verbose'"),
+    ("recover-bare", ("recover",), "requires exactly --dry-run"),
+    ("recover-json-only", ("recover", "--json"), "requires exactly --dry-run"),
+    ("recover-apply-no-digest", ("recover", "--apply"), "was supplied without the plan digest"),
+    ("recover-apply-empty", ("recover", "--apply", ""), "64-character lowercase hexadecimal digest"),
+    ("recover-apply-short", ("recover", "--apply", "5" * 63), "64-character lowercase hexadecimal digest"),
+    ("recover-apply-long", ("recover", "--apply", "5" * 65), "64-character lowercase hexadecimal digest"),
+    ("recover-apply-nonhex", ("recover", "--apply", "5" * 63 + "g"), "64-character lowercase hexadecimal digest"),
+    ("recover-apply-upper", ("recover", "--apply", "5" * 63 + "F"), "64-character lowercase hexadecimal digest"),
     # `[0-9]` never `\d`: the Arabic-Indic digest must be REFUSED, never read as the same value.
-    ("recover-apply-unicode-digits", ("sdlc", "recover", "--apply", "٩" * 64), "64-character lowercase hexadecimal digest"),
-    ("recover-apply-newline", ("sdlc", "recover", "--apply", "5" * 63 + "\n"), "64-character lowercase hexadecimal digest"),
-    ("recover-apply-joined", ("sdlc", "recover", f"--apply={'5' * 64}"), "spells its approval as two arguments"),
-    ("recover-apply-twice", ("sdlc", "recover", "--apply", "5" * 64, "5" * 64), "accepts exactly one plan digest"),
-    ("recover-apply-json", ("sdlc", "recover", "--apply", "5" * 64, "--json"), "accepts exactly one plan digest"),
-    ("recover-dry-run-and-apply", ("sdlc", "recover", "--dry-run", "--apply", "5" * 64), "requires exactly --dry-run"),
-    ("recover-apply-then-dry-run", ("sdlc", "recover", "--apply", "5" * 64, "--dry-run"), "accepts exactly one plan digest"),
-    ("inspect-extra", ("sdlc", "inspect", "--all"), "accepts only optional --json"),
-    ("status-extra", ("sdlc", "status", "--verbose"), "accepts only optional --json"),
-    ("doctor-extra", ("sdlc", "doctor", "--fix"), "accepts only optional --json"),
+    ("recover-apply-unicode-digits", ("recover", "--apply", "٩" * 64), "64-character lowercase hexadecimal digest"),
+    ("recover-apply-newline", ("recover", "--apply", "5" * 63 + "\n"), "64-character lowercase hexadecimal digest"),
+    ("recover-apply-joined", ("recover", f"--apply={'5' * 64}"), "spells its approval as two arguments"),
+    ("recover-apply-twice", ("recover", "--apply", "5" * 64, "5" * 64), "accepts exactly one plan digest"),
+    ("recover-apply-json", ("recover", "--apply", "5" * 64, "--json"), "accepts exactly one plan digest"),
+    ("recover-dry-run-and-apply", ("recover", "--dry-run", "--apply", "5" * 64), "requires exactly --dry-run"),
+    ("recover-apply-then-dry-run", ("recover", "--apply", "5" * 64, "--dry-run"), "accepts exactly one plan digest"),
+    ("doctor-extra", ("doctor", "--fix"), "ccodex doctor accepts only optional --json"),
+    # `doctor` and `recover` take NO selectors, and that is ratified rather than an omission: doctor is
+    # the whole-box read ("what is on this machine" spans every scope by definition), and recover
+    # resumes the one pending slot the substrate can carry, which is not a scoped object. A selector
+    # handed to either is therefore a grammar error, never a narrowing.
+    ("doctor-selector", ("doctor", *SELECTED), "ccodex doctor accepts only optional --json"),
+)
+
+#: The exit-2 vocabulary `bin/ccodex` ITSELF owns, which the reader can no longer be asked about.  The
+#: six lifecycle verbs are TOP-LEVEL, so the top-level name space is the dispatcher's: an empty argv and
+#: an unknown command are refused before any route is built, and each retired namespace has its own arm
+#: whose whole job is to name the replacement invocation.
+#:
+#: RE-ANCHORED HERE from three rows of the matrix above -- `no-verb`, `unknown-verb`, and
+#: `inspect-extra` -- whose subject moved with the surface rather than disappearing.  The reader's own
+#: `unknown ccodex verb` and empty-argv refusals still exist in `scripts/ccodex_sdlc.py`, but no argv
+#: can reach them through the dispatcher, which routes only the six names it knows; and `inspect` is
+#: retired outright, with a dispatcher arm naming both verbs that replaced it.  Decision 9 puts all of
+#: this at 2 rather than 3: a retired spelling is a vocabulary miss, not an operation the system
+#: declines to perform.
+#:
+#: Each row asserts SEVERAL fragments, because an exit code alone cannot tell a retired spelling from
+#: any other usage error -- the migration text is the whole contract.
+RETIRED_SURFACE_MATRIX: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("no-argv", (), ("usage: ccodex <command> [args...]", "install --scope <user|project> --agent <claude|codex>")),
+    ("unknown-verb", ("frobnicate",), ("unknown command frobnicate", "usage: ccodex <command> [args...]")),
+    (
+        "retired-sdlc-namespace",
+        ("sdlc",),
+        ("`ccodex sdlc` is retired", "ccodex install|status|update|uninstall --scope <user|project> --agent <claude|codex>"),
+    ),
+    (
+        "retired-sdlc-install",
+        ("sdlc", "install"),
+        ("`ccodex sdlc install` is retired", "ccodex install --scope user --agent <claude|codex>"),
+    ),
+    (
+        "retired-sdlc-inspect",
+        ("sdlc", "inspect"),
+        (
+            "`ccodex sdlc inspect` is retired",
+            "ccodex status --scope user --agent <claude|codex>   (per plane)",
+            "ccodex doctor                                       (whole box)",
+        ),
+    ),
+    (
+        "retired-sdlc-recover",
+        ("sdlc", "recover"),
+        ("`ccodex sdlc recover` is retired", "ccodex recover --dry-run [--json]", "ccodex recover --apply <plan-sha256>"),
+    ),
+    (
+        "retired-bundle-namespace",
+        ("bundle",),
+        ("`ccodex bundle` is retired", "ccodex install   --scope user --agent <claude|codex>"),
+    ),
+    (
+        "retired-bundle-uninstall",
+        ("bundle", "uninstall"),
+        ("`ccodex bundle uninstall` is retired", "ccodex uninstall --scope user --agent <claude|codex>"),
+    ),
 )
 
 
@@ -952,52 +1123,95 @@ class GrammarErrorExitTwoTest(Conformance):
                 self.assertEqual(EXIT_GRAMMAR, completed.returncode, completed.stderr)
                 self.assertEqual("", completed.stdout)
                 self.assertIn(fragment, completed.stderr)
-                self.assertIn("usage: ccodex sdlc inspect", completed.stderr)
+                # The READER refused, and its usage block is how that is visible on the stream: exit 2
+                # reprints the grammar, which is exactly what exit 3 must not do (Decision 9, and
+                # `UnwiredSurfaceExitThreeTest` asserts the other half of that distinction).
+                self.assertIn("usage: ccodex install", completed.stderr)
                 self.assertNotIn("Traceback", completed.stderr)
                 self.assertEqual(before, tree_hash(*plane.observed_roots()), label)
         # POSITIVE CONTROL, two halves. The same plane, the same harness: an admitted READ is 0 and
-        # not 2, and an admitted MUTATION does move the tree -- so the 34 refusals above are the
-        # parser declining, not a harness that cannot reach an effect at all.
-        read = plane.dispatch("sdlc", "status")
+        # not 2, and an admitted MUTATION does move the tree -- so every refusal above is the parser
+        # declining, not a harness that cannot reach an effect at all.
+        read = plane.dispatch("status", *SELECTED)
         self.assertEqual(EXIT_OK, read.returncode, read.stderr)
         self.assertEqual(before, tree_hash(*plane.observed_roots()))
-        mutation = plane.dispatch("sdlc", "update", "--host", "claude")
+        mutation = plane.dispatch("update", *SELECTED)
+        self.assertEqual(EXIT_OK, mutation.returncode, mutation.stderr)
+        self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
+
+    def test_every_retired_or_unknown_spelling_is_exit_two_and_moves_nothing(self) -> None:
+        """The dispatcher's own half of exit 2: it names the replacement instead of half-routing.
+
+        Same instrument as the reader matrix -- an ACTIVATED plane with a second candidate acquired, so
+        each refusal is refusing a host that had real work available -- and the same whole-tree hash.
+        What differs is WHICH boundary answers, and that difference is asserted rather than assumed: the
+        reader's usage block is absent from every row here, because nothing reached the reader at all.
+        """
+        plane = self.plane()
+        plane.acquire_a()
+        self.install_once(plane)
+        plane.acquire_b()
+        before = tree_hash(*plane.observed_roots())
+        for label, vector, fragments in RETIRED_SURFACE_MATRIX:
+            with self.subTest(case=label):
+                completed = plane.dispatch(*vector)
+                self.assert_admitted_class(completed)
+                self.assertEqual(EXIT_GRAMMAR, completed.returncode, completed.stderr)
+                self.assertEqual("", completed.stdout)
+                for fragment in fragments:
+                    self.assertIn(fragment, completed.stderr, label)
+                self.assertNotIn("usage: ccodex install ", completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertEqual(before, tree_hash(*plane.observed_roots()), label)
+        # POSITIVE CONTROL: the top-level spellings these rows name as replacements ARE served on the
+        # same plane, so the refusals above are the retired vocabulary and not a dispatcher that refuses
+        # whatever it is handed. The read is 0 and the mutation moves the tree.
+        read = plane.dispatch("doctor")
+        self.assertEqual(EXIT_OK, read.returncode, read.stderr)
+        self.assertEqual(before, tree_hash(*plane.observed_roots()))
+        mutation = plane.dispatch("update", *SELECTED)
         self.assertEqual(EXIT_OK, mutation.returncode, mutation.stderr)
         self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
 
     def test_a_control_character_in_a_refused_argument_never_forges_a_line(self) -> None:
         """A grammar refusal echoes the caller's token, so it must escape it (session defect class)."""
         plane = self.plane()
-        completed = plane.dispatch("sdlc", "install", "--host", "claude\nerror: activated")
+        completed = plane.dispatch("install", "--scope", "user", "--agent", "claude\nerror: activated")
         self.assertEqual(EXIT_GRAMMAR, completed.returncode, completed.stderr)
         self.assertNotIn("\nerror: activated", completed.stderr)
         self.assertIn("\\n", completed.stderr)
         # Positive control: the same channel does carry the surrounding refusal, so the absence
         # above is the escape and not a lost message.
-        self.assertIn("unsupported ccodex sdlc install host", completed.stderr)
+        self.assertIn("unsupported ccodex install agent", completed.stderr)
 
     def test_the_grammar_matrix_covers_every_verb_the_usage_text_offers(self) -> None:
         """A closed matrix that silently stopped covering a verb would prove exit 2 for the others."""
         plane = self.plane()
-        usage = plane.dispatch("sdlc").stderr
+        # A BARE SELECTOR VERB is the shortest vector that reaches the reader and makes it print its own
+        # usage. `ccodex` with no argument prints the DISPATCHER's usage instead, which also offers the
+        # gateway plane, so scanning that text would be scanning a different surface for these verbs.
+        usage = plane.dispatch("install").stderr
         offered = {
-            line.split()[2]
-            for line in usage.splitlines()
-            if line.strip().startswith(("usage: ccodex sdlc", "ccodex sdlc"))
-            and len(line.split()) > 2
-        }
-        offered |= {
             token.split()[0]
-            for token in usage.split("ccodex sdlc ")[1:]
+            for token in usage.split("ccodex ")[1:]
             if token.split() and token.split()[0].isalpha()
         }
-        covered = {vector[1] for _label, vector, _fragment in GRAMMAR_MATRIX if len(vector) > 1}
-        for verb in ("inspect", "status", "doctor", "recover", "install", "update", "uninstall"):
+        covered = {vector[0] for _label, vector, _fragment in GRAMMAR_MATRIX if vector}
+        for verb in ("status", "doctor", "recover", "install", "update", "uninstall"):
             with self.subTest(verb=verb):
                 self.assertIn(verb, offered)
                 self.assertIn(verb, covered)
+        # `inspect` is gone from BOTH sets, and that is the ratified surface rather than a coverage hole:
+        # it was a fourth spelling of a read that `status` (one selected plane) and `doctor` (the whole
+        # box) already divide between them, and it is retired at the dispatcher with a refusal naming
+        # both replacements -- which the matrix that owns retired spellings covers, so nothing dropped
+        # out of coverage when that row moved.
+        self.assertNotIn("inspect", offered)
+        self.assertNotIn("inspect", covered)
+        self.assertIn(("sdlc", "inspect"), {vector for _label, vector, _fragments in RETIRED_SURFACE_MATRIX})
         # Positive control: a verb the surface does NOT offer is absent from both sets.
         self.assertNotIn("frobnicate", offered)
+        self.assertNotIn("frobnicate", covered)
 
 
 # ---- (1b) exit 0: a durably complete effect --------------------------------------------------------
@@ -1037,7 +1251,7 @@ class DurableCompleteExitZeroTest(Conformance):
     def test_install_exits_zero_only_with_a_sealed_complete_receipt_and_a_landed_pointer(self) -> None:
         plane = self.plane()
         plane.acquire_a()
-        completed = plane.dispatch("sdlc", "install", "--host", "claude")
+        completed = plane.dispatch("install", *SELECTED)
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stderr)
         body = self.assert_complete_receipt(plane, "install")
@@ -1065,7 +1279,7 @@ class DurableCompleteExitZeroTest(Conformance):
         self.install_once(plane)
         prior = json.loads(plane.pointer.read_text(encoding="utf-8"))
         plane.acquire_b()
-        completed = plane.dispatch("sdlc", "update", "--host", "claude")
+        completed = plane.dispatch("update", *SELECTED)
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stderr)
         body = self.assert_complete_receipt(plane, "update")
@@ -1086,7 +1300,7 @@ class DurableCompleteExitZeroTest(Conformance):
         plane.acquire_a()
         self.install_once(plane)
         recorded = [entry["entry_name"] for entry in json.loads(plane.pointer.read_text())["body"]["entries"]]
-        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        completed = plane.dispatch("uninstall", *SELECTED)
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stderr)
         for relative in recorded:
@@ -1115,14 +1329,14 @@ class DurableCompleteExitZeroTest(Conformance):
         )
         self.assertEqual(-9, killed.returncode, killed.stderr)
         digest, assessment = self.plan_digest(plane)
-        applied = plane.dispatch("sdlc", "recover", "--apply", digest)
+        applied = plane.dispatch("recover", "--apply", digest)
         self.assertEqual(EXIT_OK, applied.returncode, applied.stderr)
         self.assertEqual("", applied.stderr)
         self.assertIn("plan re-derived from verified journal and receipt state", applied.stdout)
         # DURABLY TERMINAL: the interrupted transition is gone from the ownership journal and the
         # very next assessment offers no digest, so exit 0 named a state that stayed reached.
         self.assertIsNone(json.loads(plane.installer_state.read_text())["pending"])
-        again = plane.dispatch("sdlc", "recover", "--dry-run")
+        again = plane.dispatch("recover", "--dry-run")
         self.assertEqual(EXIT_OK, again.returncode, again.stderr)
         self.assertIn("nothing to recover, so no plan digest is offered", again.stderr)
         self.assert_no_authority_claim(applied.stdout, applied.stderr, assessment.stderr)
@@ -1131,7 +1345,7 @@ class DurableCompleteExitZeroTest(Conformance):
         self.assertTrue(recover.is_plan_digest(digest))
 
     def plan_digest(self, plane: Plane) -> tuple[str, subprocess.CompletedProcess[str]]:
-        completed = plane.dispatch("sdlc", "recover", "--dry-run")
+        completed = plane.dispatch("recover", "--dry-run")
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         prefix = "recovery plan sha256 "
         lines = [line for line in completed.stderr.splitlines() if line.startswith(prefix)]
@@ -1160,14 +1374,14 @@ class CleanRefusalExitThreeTest(Conformance):
     def test_install_refuses_an_absent_and_an_ambiguous_acquisition_differently(self) -> None:
         absent = self.plane()
         before = tree_hash(*absent.observed_roots())
-        completed = absent.dispatch("sdlc", "install", "--host", "claude")
+        completed = absent.dispatch("install", *SELECTED)
         self.assert_clean_refusal(absent, completed, before, "no acquired candidate is available")
 
         ambiguous = self.plane()
         ambiguous.acquire_a()
         ambiguous.acquire_b()
         before = tree_hash(*ambiguous.observed_roots())
-        completed = ambiguous.dispatch("sdlc", "install", "--host", "claude")
+        completed = ambiguous.dispatch("install", *SELECTED)
         self.assert_clean_refusal(
             ambiguous, completed, before, "exactly one exactly acquired local candidate is admissible"
         )
@@ -1184,9 +1398,9 @@ class CleanRefusalExitThreeTest(Conformance):
         plane.acquire_a()
         plane.acquire_b()
         before = tree_hash(*plane.observed_roots())
-        update = plane.dispatch("sdlc", "update", "--host", "claude")
+        update = plane.dispatch("update", *SELECTED)
         self.assert_clean_refusal(plane, update, before, "no usable active distribution-activation receipt")
-        uninstall = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        uninstall = plane.dispatch("uninstall", *SELECTED)
         self.assert_clean_refusal(plane, uninstall, before, "no installer ownership document")
 
     def test_update_refuses_a_pointer_that_is_a_link_rather_than_following_it(self) -> None:
@@ -1198,20 +1412,20 @@ class CleanRefusalExitThreeTest(Conformance):
         shutil.move(str(plane.pointer), str(real))
         plane.pointer.symlink_to(real)
         before = tree_hash(*plane.observed_roots())
-        completed = plane.dispatch("sdlc", "update", "--host", "claude")
+        completed = plane.dispatch("update", *SELECTED)
         self.assert_clean_refusal(plane, completed, before, "user.json")
         self.assertTrue(plane.pointer.is_symlink(), "the link itself is preserved, never resolved away")
         # Positive control: the same bytes at a PHYSICAL pointer are admitted, so the refusal is
         # about the link and not about the document it names.
         plane.pointer.unlink()
         shutil.move(str(real), str(plane.pointer))
-        admitted = plane.dispatch("sdlc", "update", "--host", "claude")
+        admitted = plane.dispatch("update", *SELECTED)
         self.assertEqual(EXIT_OK, admitted.returncode, admitted.stderr)
 
     def test_recover_apply_refuses_a_clean_host_and_a_foreign_digest_differently(self) -> None:
         clean = self.plane()
         before = tree_hash(*clean.observed_roots())
-        completed = clean.dispatch("sdlc", "recover", "--apply", FOREIGN_DIGEST)
+        completed = clean.dispatch("recover", "--apply", FOREIGN_DIGEST)
         self.assert_clean_refusal(clean, completed, before, "found nothing to recover on this host")
         self.assertEqual("", completed.stdout)
 
@@ -1226,7 +1440,7 @@ class CleanRefusalExitThreeTest(Conformance):
         )
         self.assertEqual(-9, killed.returncode)
         before = tree_hash(*interrupted.observed_roots())
-        completed = interrupted.dispatch("sdlc", "recover", "--apply", FOREIGN_DIGEST)
+        completed = interrupted.dispatch("recover", "--apply", FOREIGN_DIGEST)
         self.assert_clean_refusal(
             interrupted, completed, before, "is not the plan this host's state derives"
         )
@@ -1242,7 +1456,7 @@ class CleanRefusalExitThreeTest(Conformance):
         document["installed_at"] = "2026-08-19T10:00:01Z"
         receipt.write_bytes(canonical(document))
         before = tree_hash(*plane.observed_roots())
-        completed = plane.dispatch("sdlc", "install", "--host", "claude")
+        completed = plane.dispatch("install", *SELECTED)
         self.assert_clean_refusal(plane, completed, before, "record_sha256")
         self.assertFalse(plane.claude_root.exists(), "a tampered seal must not create the plane")
         # Positive control: the same field at its sealed value is admitted, so the refusal above is
@@ -1258,12 +1472,97 @@ class CleanRefusalExitThreeTest(Conformance):
         raw = receipt.read_text(encoding="utf-8")
         receipt.write_text(raw.replace('"effect_state":"complete"', '"effect_state":1e400'), encoding="utf-8")
         before = tree_hash(*plane.observed_roots())
-        completed = plane.dispatch("sdlc", "install", "--host", "claude")
+        completed = plane.dispatch("install", *SELECTED)
         self.assert_clean_refusal(plane, completed, before, "refused before any effect")
         # Positive control: the untampered fixture is admitted by the same reader.
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
+
+
+#: The parts of the ratified grammar this release PARSES and does not yet serve.  Each is a named exit-3
+#: refusal, and the three names are the tokens the product itself greps for.  This is a whole exit CLASS
+#: the surface gained: before the front door was ratified these spellings did not parse at all, so the
+#: only way to get them wrong was exit 2.  Both of the wrong answers are worse than a refusal and
+#: neither is hypothetical -- an operator who typed ``--scope project`` and got exit 0 would have their
+#: USER home activated, and one who typed ``--dry-run`` and got exit 0 would get a real effect from a
+#: preview -- while answering 2 would tell them they mistyped something that is in the grammar.
+UNWIRED_SURFACE_MATRIX: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("install-project-scope", ("install", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
+    ("update-project-scope", ("update", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
+    ("uninstall-project-scope", ("uninstall", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
+    # `status` too: a read that silently answered about the USER plane for an operator who named a
+    # repository would be the same substitution, in a report they would then act on.
+    ("status-project-scope", ("status", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
+    # A project ROOT parses too, and is refused by the scope it requires rather than by its own value:
+    # the path below is never resolved, because the refusal lands before any filesystem resolution.
+    (
+        "install-project-root",
+        ("install", "--scope", "project", "--agent", "claude", "--project", "/nonexistent/project-root"),
+        "project-scope-not-yet-wired",
+    ),
+    ("install-mode-copy", ("install", "--scope", "user", "--agent", "claude", "--mode", "copy"), "mode-not-yet-wired"),
+    ("install-mode-link", ("install", "--scope", "user", "--agent", "claude", "--mode", "link"), "mode-not-yet-wired"),
+    ("install-dry-run", ("install", "--scope", "user", "--agent", "claude", "--dry-run"), "dry-run-not-yet-wired"),
+    ("uninstall-dry-run", ("uninstall", "--scope", "user", "--agent", "claude", "--dry-run"), "dry-run-not-yet-wired"),
+)
+
+
+class UnwiredSurfaceExitThreeTest(Conformance):
+    """Decision 9's OTHER exit 3: a grammatically valid invocation this release declines to serve.
+
+    The distinction from exit 2 is the whole point of the class, so it is asserted in both directions on
+    one plane: an unwired surface refuses at 3 and prints NO usage block (reprinting the grammar would
+    tell the operator to type what they already typed), while a genuine grammar error on the same plane
+    refuses at 2 and DOES print it.  Every row is measured with the whole-tree hash, because
+    "before any effect" is a claim about the filesystem rather than about the interesting files in it.
+    """
+
+    def test_every_unwired_surface_refuses_at_three_by_name_and_moves_nothing(self) -> None:
+        plane = self.plane()
+        # An acquisition is available, so each refusal below is declining work this host could really
+        # have done. Without one, every row would refuse for the acquisition's absence instead.
+        plane.acquire_a()
+        before = tree_hash(*plane.observed_roots())
+        for label, vector, reason in UNWIRED_SURFACE_MATRIX:
+            with self.subTest(case=label):
+                completed = plane.dispatch(*vector)
+                self.assert_admitted_class(completed)
+                self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
+                self.assertEqual("", completed.stdout)
+                self.assertIn(reason, completed.stderr)
+                self.assertIn("is not served by this release", completed.stderr)
+                # NO USAGE BLOCK: this is the exit-2/exit-3 distinction on the stream, and the negative
+                # control at the end of this test shows the same assertion catching one when it is there.
+                self.assertNotIn("usage: ccodex install", completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertEqual(before, tree_hash(*plane.observed_roots()), label)
+                self.assert_no_authority_claim(completed.stdout, completed.stderr)
+        # NEGATIVE CONTROL for the missing usage block: the same plane, the same channel, one genuine
+        # grammar error -- and the usage block IS there. Without this, "no usage block" would be
+        # indistinguishable from a stderr this harness failed to capture.
+        grammar = plane.dispatch("install", "--scope", "user")
+        self.assertEqual(EXIT_GRAMMAR, grammar.returncode, grammar.stderr)
+        self.assertIn("usage: ccodex install", grammar.stderr)
+        # POSITIVE CONTROL: the served spelling of the same verb on the same plane installs, so every
+        # refusal above is the unwired surface and not a host that could not have been activated.
+        self.install_once(plane)
+        self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
+
+    def test_the_unwired_reasons_are_the_ones_the_reader_declares(self) -> None:
+        """A refusal token this harness invented would pin nothing, so the three are read back.
+
+        ``refuse_unwired_surface`` is the one place they are raised, and its wave references are what
+        tell an operator when each arrives; a row that stopped matching the shipped text would otherwise
+        keep passing on a substring the product no longer prints.
+        """
+        source = (ROOT / "scripts" / "ccodex_sdlc.py").read_text(encoding="utf-8")
+        for reason in {reason for _label, _vector, reason in UNWIRED_SURFACE_MATRIX}:
+            with self.subTest(reason=reason):
+                self.assertIn(reason, source)
+        # Positive control: the same lookup does NOT find a token the reader never declares, so the
+        # three above are findings about this file rather than a scan that passes over any text.
+        self.assertNotIn("wildcard-scope-not-yet-wired", source)
 
 
 # ---- (1d) exit 4: an admitted partial or unknown effect --------------------------------------------
@@ -1311,7 +1610,7 @@ class AdmittedEffectExitFourTest(Conformance):
         clean = control.drive("ccodex_sdlc_install", ["--host", "claude"], fault=None)
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
         self.assertEqual("complete", self.sealed(control, control.pointer)["body"]["effect_state"])
-        # And the installed dispatcher agrees with the driver on the fault-free result.
+        # And the committed dispatcher agrees with the driver on the fault-free result.
         dispatched = self.plane()
         dispatched.acquire_a()
         self.install_once(dispatched)
@@ -1436,7 +1735,7 @@ class AdmittedEffectExitFourTest(Conformance):
         self.assertIn(clean.returncode, (EXIT_OK, EXIT_INTERNAL), clean.stderr)
 
     def plan_digest(self, plane: Plane) -> str:
-        completed = plane.dispatch("sdlc", "recover", "--dry-run")
+        completed = plane.dispatch("recover", "--dry-run")
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         prefix = "recovery plan sha256 "
         lines = [line for line in completed.stderr.splitlines() if line.startswith(prefix)]
@@ -1462,6 +1761,12 @@ class InternalFailureExitOneTest(Conformance):
     an unexpected exception from a per-verb module as exit 4, because once the module was entered its
     effect is unknown, and "unknown effect" is a stronger statement than "internal failure".  That is
     asserted below by EXECUTION over all four verbs, not by reading the comment that says so.
+
+    THE ONE CLASS THAT KEEPS THE DIRECT READER INVOCATION, and the reason is the subject rather than a
+    limitation of the seam: the mutated policy document lives in a SHADOW tree, and ``bin/ccodex``
+    self-locates its distribution root as the parent of its own ``bin/``, so no argument and no
+    environment can point the committed dispatcher at that tree.  What ``run_shadow`` execs is exactly
+    what ``run_sdlc_python`` would exec if the shadow had a ``bin/`` -- the reader, under ``-I -B``.
     """
 
     def shadow_reader(self, *, break_contract: bool) -> Path:
@@ -1499,11 +1804,22 @@ class InternalFailureExitOneTest(Conformance):
             timeout=300,
         )
 
+    #: Every verb that RENDERS the read report, with the selectors that verb requires.  ``inspect`` is
+    #: retired, and the surviving three are the reader's whole ``READER_VERBS`` set: ``status`` per
+    #: selected plane, ``doctor`` for the whole box, and ``recover --dry-run``'s proposal-only
+    #: assessment.  All three construct the SAME report, which is what makes the invariant below one
+    #: claim about report construction rather than three claims about three verbs.
+    REPORT_VERBS = (
+        ("status", ("status", "--scope", "user", "--agent", "claude")),
+        ("doctor", ("doctor",)),
+        ("recover", ("recover", "--dry-run")),
+    )
+
     def test_a_broken_report_invariant_is_exit_one_on_every_reader_verb(self) -> None:
         broken = self.shadow_reader(break_contract=True)
-        for verb in ("inspect", "status", "doctor"):
+        for verb, vector in self.REPORT_VERBS:
             with self.subTest(verb=verb):
-                completed = self.run_shadow(broken, verb)
+                completed = self.run_shadow(broken, *vector)
                 self.assert_admitted_class(completed)
                 self.assertEqual(EXIT_INTERNAL, completed.returncode, completed.stderr)
                 self.assertIn("internal report construction invariant failure", completed.stderr)
@@ -1512,18 +1828,23 @@ class InternalFailureExitOneTest(Conformance):
         # POSITIVE CONTROL: the identical shadow with the SHIPPED contract answers 0, so exit 1 above
         # is the broken invariant and not a shadow checkout that cannot run at all.
         intact = self.shadow_reader(break_contract=False)
-        for verb in ("inspect", "status", "doctor"):
+        for verb, vector in self.REPORT_VERBS:
             with self.subTest(control=verb):
-                control = self.run_shadow(intact, verb)
+                control = self.run_shadow(intact, *vector)
                 self.assertEqual(EXIT_OK, control.returncode, control.stderr)
                 self.assertNotEqual("", control.stdout)
 
     def test_a_mutating_verb_maps_an_unexpected_exception_to_four_and_never_to_one(self) -> None:
-        """The dispatch contract, by EXECUTION: a module that raises leaves an unknown effect."""
+        """The dispatch contract, by EXECUTION: a module that raises leaves an unknown effect.
+
+        The vectors carry the OPERATOR grammar (``--scope``/``--agent``), because the reader is what is
+        driven here; what it then forwards to each planted module is its own ``['--host', <agent>]``
+        vector, and these plants ignore their argv entirely so neither spelling is under test.
+        """
         modules = {
-            "install": ("ccodex_sdlc_install", ("install", "--host", "claude")),
-            "update": ("ccodex_sdlc_update", ("update", "--host", "claude")),
-            "uninstall": ("ccodex_sdlc_uninstall", ("uninstall", "--host", "claude")),
+            "install": ("ccodex_sdlc_install", ("install", *SELECTED)),
+            "update": ("ccodex_sdlc_update", ("update", *SELECTED)),
+            "uninstall": ("ccodex_sdlc_uninstall", ("uninstall", *SELECTED)),
             "recover": ("ccodex_sdlc_recover", ("recover", "--apply", FOREIGN_DIGEST)),
         }
         for verb, (stem, vector) in modules.items():
@@ -1544,6 +1865,42 @@ class InternalFailureExitOneTest(Conformance):
                 planted.write_text("def main(argv):\n    return 0\n", encoding="utf-8")
                 control = self.run_shadow(shadow, *vector)
                 self.assertEqual(EXIT_OK, control.returncode, control.stderr)
+
+    def test_the_dispatchers_own_toolchain_boundary_refuses_at_three_and_never_at_one(self) -> None:
+        """The precondition boundary ABOVE the reader is class 3, and it used to be class 1.
+
+        ``bin/ccodex``'s toolchain probe answered ``error: mise cannot read <root>`` at exit 1 for a
+        config it could not parse.  Nothing had been attempted at that point -- no tool resolved, no
+        route built, no verb entered -- which is exactly what Decision 9's class 3 is for, and reporting
+        a state in which nothing happened as a FAILURE OF THE TOOL sent an operator looking in the wrong
+        place.  It is now ``refused:`` at 3, which is what leaves class 1 reserved for this command's own
+        unexpected internal failures and therefore what makes this class's claim -- exit 1 comes only
+        from the reader's report construction -- true of the whole surface rather than of the reader
+        alone.  Provable here only because the dispatcher is now driven as a process.
+
+        The unreadable arm is distinguished from the untrusted one by name: the seam's unreadable probe
+        deliberately does NOT print ``not trusted``, so a dispatcher that fell into the trust branch for
+        any unparseable config would be caught rather than counted as the same refusal.
+        """
+        plane = self.plane()
+        plane.acquire_a()
+        before = tree_hash(*plane.observed_roots())
+
+        refused = plane.dispatch("install", *SELECTED, probe="unreadable")
+
+        self.assert_admitted_class(refused)
+        self.assertEqual(EXIT_REFUSED, refused.returncode, refused.stderr)
+        self.assertNotEqual(EXIT_INTERNAL, refused.returncode)
+        self.assertIn("refused: mise cannot read", refused.stderr)
+        self.assertNotIn("error: mise cannot read", refused.stderr)
+        self.assertNotIn("not trusted", refused.stderr)
+        self.assertEqual("", refused.stdout)
+        self.assertEqual(before, tree_hash(*plane.observed_roots()), "a precondition refusal moves nothing")
+        # POSITIVE CONTROL: the identical plane and the identical argv, with the probe answering as a
+        # readable trusted config, activates -- so the refusal above is the probe and not a plane that
+        # could never have been activated at all.
+        self.install_once(plane)
+        self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
 
     def test_no_shipped_lifecycle_module_can_return_one_by_its_own_exit_table(self) -> None:
         """No mutating verb declares an exit-1 constant, so none of the four can return 1 by name.
@@ -1638,7 +1995,7 @@ class ForeignPreservationTest(Conformance):
 
     def test_install_preserves_and_names_the_foreign_entry_and_never_names_the_precious_one(self) -> None:
         plane = self.layout()
-        completed = plane.dispatch("sdlc", "install", "--host", "claude")
+        completed = plane.dispatch("install", *SELECTED)
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         self.assertEqual(FOREIGN_BYTES, plane.destination(FOREIGN_ENTRY).read_text(encoding="utf-8"))
         self.assertEqual(PRECIOUS_BYTES, (plane.claude_root / PRECIOUS_ENTRY).read_text(encoding="utf-8"))
@@ -1660,13 +2017,13 @@ class ForeignPreservationTest(Conformance):
 
     def test_update_blocks_on_both_the_foreign_and_the_modified_entry_and_moves_nothing(self) -> None:
         plane = self.layout()
-        self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "install", "--host", "claude").returncode)
+        self.assertEqual(EXIT_OK, plane.dispatch("install", *SELECTED).returncode)
         plane.destination(OWNED_ENTRY).write_text(MODIFIED_BYTES, encoding="utf-8")
         plane.acquire_b()
         before = plane_inventory(plane.claude_root)
         before_hash = tree_hash(*plane.observed_roots())
 
-        completed = plane.dispatch("sdlc", "update", "--host", "claude")
+        completed = plane.dispatch("update", *SELECTED)
 
         self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stdout)
@@ -1687,17 +2044,17 @@ class ForeignPreservationTest(Conformance):
         # foreign entry still blocks, which is why the control restores the modified one and asserts
         # the refusal now names exactly one entry.
         plane.destination(OWNED_ENTRY).write_text("cartographer one\n", encoding="utf-8")
-        narrowed = plane.dispatch("sdlc", "update", "--host", "claude")
+        narrowed = plane.dispatch("update", *SELECTED)
         self.assertEqual(EXIT_REFUSED, narrowed.returncode, narrowed.stderr)
         self.assertIn("1 entry the new payload would write cannot be proved unchanged", narrowed.stderr)
         self.assertNotIn("modified-content", narrowed.stderr)
 
     def test_uninstall_preserves_and_names_the_modified_entry_and_never_touches_the_precious_one(self) -> None:
         plane = self.layout()
-        self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "install", "--host", "claude").returncode)
+        self.assertEqual(EXIT_OK, plane.dispatch("install", *SELECTED).returncode)
         plane.destination(OWNED_ENTRY).write_text(MODIFIED_BYTES, encoding="utf-8")
 
-        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        completed = plane.dispatch("uninstall", *SELECTED)
 
         self.assert_admitted_class(completed)
         self.assertIn(f"preserved: {OWNED_ENTRY}", completed.stdout)
@@ -1733,7 +2090,7 @@ class ForeignPreservationTest(Conformance):
         ONLY from that record and not from any disk fact.
         """
         plane = self.layout()
-        self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "install", "--host", "claude").returncode)
+        self.assertEqual(EXIT_OK, plane.dispatch("install", *SELECTED).returncode)
         entries = {entry["entry_name"]: entry for entry in json.loads(plane.pointer.read_text())["body"]["entries"]}
         self.assertEqual("foreign", entries[FOREIGN_ENTRY]["prestate"])
         self.assertEqual("preserved", entries[FOREIGN_ENTRY]["disposition"])
@@ -1743,7 +2100,7 @@ class ForeignPreservationTest(Conformance):
             bundle.digest(plane.destination(FOREIGN_ENTRY)), entries[FOREIGN_ENTRY]["content_sha256"]
         )
 
-        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        completed = plane.dispatch("uninstall", *SELECTED)
 
         self.assert_admitted_class(completed)
         self.assertEqual(
@@ -1767,9 +2124,9 @@ class ForeignPreservationTest(Conformance):
         # the install, so ``current != recorded`` -- which is the case that already worked.  Keeping it
         # shows the record-based preservation did not replace the digest-based one.
         plane_two = self.layout()
-        self.assertEqual(EXIT_OK, plane_two.dispatch("sdlc", "install", "--host", "claude").returncode)
+        self.assertEqual(EXIT_OK, plane_two.dispatch("install", *SELECTED).returncode)
         plane_two.destination(FOREIGN_ENTRY).write_text("edited after the install\n", encoding="utf-8")
-        second = plane_two.dispatch("sdlc", "uninstall", "--host", "claude")
+        second = plane_two.dispatch("uninstall", *SELECTED)
         self.assertEqual(
             "edited after the install\n",
             plane_two.destination(FOREIGN_ENTRY).read_text(encoding="utf-8"),
@@ -1802,7 +2159,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         self.install_once(plane)
         plane.destination(OWNED_ENTRY).write_text(MODIFIED_BYTES, encoding="utf-8")
 
-        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        completed = plane.dispatch("uninstall", *SELECTED)
 
         self.assert_admitted_class(completed)
         self.assertEqual(EXIT_UNKNOWN, completed.returncode, completed.stdout)
@@ -1820,7 +2177,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
-        clean = control.dispatch("sdlc", "uninstall", "--host", "claude")
+        clean = control.dispatch("uninstall", *SELECTED)
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
 
     def test_a_plane_whose_entries_already_left_exits_four_and_its_receipt_records_none(self) -> None:
@@ -1844,7 +2201,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
                 destination.unlink()
         before = tree_hash(*plane.observed_roots())
 
-        completed = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        completed = plane.dispatch("uninstall", *SELECTED)
 
         self.assert_admitted_class(completed)
         self.assertEqual(EXIT_UNKNOWN, completed.returncode, completed.stdout + completed.stderr)
@@ -1859,7 +2216,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         # WHY NOT 3: this run is not repeatable, so it was not a refusal before effect.  Executed, not
         # asserted from the docstring -- and the tree DID change, by exactly the receipt it sealed.
         self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
-        repeat = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        repeat = plane.dispatch("uninstall", *SELECTED)
         self.assertEqual(EXIT_REFUSED, repeat.returncode, repeat.stdout + repeat.stderr)
         self.assertIn("a second retirement of one activation is refused rather than repeated", repeat.stderr)
         # POSITIVE CONTROL: the same harness reports 0 for a plane whose entries are all present, so
@@ -1867,7 +2224,7 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         control = self.plane()
         control.acquire_a()
         self.install_once(control)
-        clean = control.dispatch("sdlc", "uninstall", "--host", "claude")
+        clean = control.dispatch("uninstall", *SELECTED)
         self.assertEqual(EXIT_OK, clean.returncode, clean.stderr)
 
     def test_a_second_retirement_of_one_activation_is_a_clean_refusal_not_a_repeat(self) -> None:
@@ -1875,10 +2232,10 @@ class UninstallAdmittedEffectExitFourTest(Conformance):
         plane = self.plane()
         plane.acquire_a()
         self.install_once(plane)
-        self.assertEqual(EXIT_OK, plane.dispatch("sdlc", "uninstall", "--host", "claude").returncode)
+        self.assertEqual(EXIT_OK, plane.dispatch("uninstall", *SELECTED).returncode)
         before = tree_hash(*plane.observed_roots())
 
-        again = plane.dispatch("sdlc", "uninstall", "--host", "claude")
+        again = plane.dispatch("uninstall", *SELECTED)
 
         self.assert_admitted_class(again)
         self.assertEqual(EXIT_REFUSED, again.returncode, again.stdout + again.stderr)
@@ -1908,7 +2265,7 @@ class StalePrestateTest(Conformance):
         self.assertNotEqual(recorded[OWNED_ENTRY], bundle.digest(victim))
         before = tree_hash(*plane.observed_roots())
 
-        completed = plane.dispatch("sdlc", "update", "--host", "claude")
+        completed = plane.dispatch("update", *SELECTED)
 
         self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
         self.assertIn(OWNED_ENTRY, completed.stderr)
@@ -1927,7 +2284,7 @@ class StalePrestateTest(Conformance):
         # is the moved prestate and not a permanently blocked host.
         victim.write_text("cartographer one\n", encoding="utf-8")
         self.assertEqual(recorded[OWNED_ENTRY], bundle.digest(victim))
-        admitted = plane.dispatch("sdlc", "update", "--host", "claude")
+        admitted = plane.dispatch("update", *SELECTED)
         self.assertEqual(EXIT_OK, admitted.returncode, admitted.stderr)
 
     def test_recover_refuses_a_digest_whose_state_moved_between_the_dry_run_and_the_apply(self) -> None:
@@ -1939,7 +2296,7 @@ class StalePrestateTest(Conformance):
             fault={"function": "commit_pending", "after": 0, "kind": "sigkill", "message": "killed"},
         )
         self.assertEqual(-9, killed.returncode)
-        assessment = plane.dispatch("sdlc", "recover", "--dry-run")
+        assessment = plane.dispatch("recover", "--dry-run")
         self.assertEqual(EXIT_OK, assessment.returncode, assessment.stderr)
         prefix = "recovery plan sha256 "
         approved = [line for line in assessment.stderr.splitlines() if line.startswith(prefix)][0][
@@ -1952,7 +2309,7 @@ class StalePrestateTest(Conformance):
         (plane.destination("skills/alpha-skill") / "SKILL.md").write_text("operator edit\n", encoding="utf-8")
         before = tree_hash(*plane.observed_roots())
 
-        completed = plane.dispatch("sdlc", "recover", "--apply", approved)
+        completed = plane.dispatch("recover", "--apply", approved)
 
         self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
         self.assertEqual("", completed.stdout)
@@ -1962,12 +2319,12 @@ class StalePrestateTest(Conformance):
         self.assertEqual(before, tree_hash(*plane.observed_roots()))
         # POSITIVE CONTROL: the digest the MOVED state derives is a different value, and it is
         # admitted, so the refusal above is staleness and not an unrecoverable host.
-        fresh_assessment = plane.dispatch("sdlc", "recover", "--dry-run")
+        fresh_assessment = plane.dispatch("recover", "--dry-run")
         fresh = [line for line in fresh_assessment.stderr.splitlines() if line.startswith(prefix)][0][
             len(prefix) : len(prefix) + 64
         ]
         self.assertNotEqual(approved, fresh)
-        applied = plane.dispatch("sdlc", "recover", "--apply", fresh)
+        applied = plane.dispatch("recover", "--apply", fresh)
         # 0 if every selected transition settled, 4 if something was preserved and named: either way
         # the plan was ADMITTED rather than refused as stale.  Never 1 -- exit 1 is "unexpected
         # internal failure" and a named preservation is not one (agentic-sdlc-d7b3).
@@ -2003,7 +2360,7 @@ class CrashHonestyTest(Conformance):
         return killed
 
     def plan_digest(self, plane: Plane) -> tuple[str, subprocess.CompletedProcess[str]]:
-        completed = plane.dispatch("sdlc", "recover", "--dry-run")
+        completed = plane.dispatch("recover", "--dry-run")
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         prefix = "recovery plan sha256 "
         lines = [line for line in completed.stderr.splitlines() if line.startswith(prefix)]
@@ -2035,7 +2392,7 @@ class CrashHonestyTest(Conformance):
         # 2. THE NEIGHBOURING VERBS REFUSE, because the plane states no active receipt.
         for verb in ("update", "uninstall"):
             with self.subTest(verb=verb):
-                refused = plane.dispatch("sdlc", verb, "--host", "claude")
+                refused = plane.dispatch(verb, *SELECTED)
                 self.assertEqual(EXIT_REFUSED, refused.returncode, refused.stderr)
 
         # 3. THE ASSESSMENT PLANS IT, read-only, and offers exactly one digest.
@@ -2044,10 +2401,10 @@ class CrashHonestyTest(Conformance):
         repeat, _again = self.plan_digest(plane)
         self.assertEqual(digest, repeat, "a read-only assessment is stable")
         self.assertEqual(before_assessment, tree_hash(*plane.observed_roots()), "and it changes nothing")
-        self.assertIn(f"ccodex sdlc recover --apply {digest}", assessment.stderr)
+        self.assertIn(f"ccodex recover --apply {digest}", assessment.stderr)
 
         # 4. THE APPLY COMPLETES IT.
-        applied = plane.dispatch("sdlc", "recover", "--apply", digest)
+        applied = plane.dispatch("recover", "--apply", digest)
         self.assertEqual(EXIT_OK, applied.returncode, applied.stderr)
         self.assertIn("recovered", applied.stdout)
         self.assertIn(str(published), applied.stdout)
@@ -2057,11 +2414,11 @@ class CrashHonestyTest(Conformance):
         self.assertIsNone(json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"])
         self.assertIn(
             "nothing to recover, so no plan digest is offered",
-            plane.dispatch("sdlc", "recover", "--dry-run").stderr,
+            plane.dispatch("recover", "--dry-run").stderr,
         )
         self.assertFalse(plane.pointer.exists(), "recovery completes a transaction, never an activation")
-        self.assertEqual(EXIT_REFUSED, plane.dispatch("sdlc", "update", "--host", "claude").returncode)
-        reinstalled = plane.dispatch("sdlc", "install", "--host", "claude")
+        self.assertEqual(EXIT_REFUSED, plane.dispatch("update", *SELECTED).returncode)
+        reinstalled = plane.dispatch("install", *SELECTED)
         self.assertEqual(EXIT_OK, reinstalled.returncode, reinstalled.stderr)
         body = self.sealed(plane, plane.pointer)["body"]
         self.assertEqual("complete", body["effect_state"])
@@ -2137,10 +2494,10 @@ class CrashHonestyTest(Conformance):
         # its own evidence.
         digest, assessment = self.plan_digest(plane)
         self.assertNotIn("unrecognised", assessment.stderr)
-        self.assertIn(f"ccodex sdlc recover --apply {digest}", assessment.stderr)
+        self.assertIn(f"ccodex recover --apply {digest}", assessment.stderr)
 
         # 2. THE APPLY COMPLETES IT.
-        applied = plane.dispatch("sdlc", "recover", "--apply", digest)
+        applied = plane.dispatch("recover", "--apply", digest)
 
         self.assert_admitted_class(applied)
         self.assertEqual(EXIT_OK, applied.returncode, applied.stdout + applied.stderr)
@@ -2152,7 +2509,7 @@ class CrashHonestyTest(Conformance):
         self.assertIsNone(json.loads(plane.installer_state.read_text(encoding="utf-8"))["pending"])
         self.assertIn(
             "nothing to recover, so no plan digest is offered",
-            plane.dispatch("sdlc", "recover", "--dry-run").stderr,
+            plane.dispatch("recover", "--dry-run").stderr,
         )
         self.assertEqual([filed[0]], plane.receipts())
         self.assertEqual(receipt_bytes, filed[0].read_bytes())
@@ -2165,7 +2522,7 @@ class CrashHonestyTest(Conformance):
         self.kill_an_install(control)
         self.assertEqual([], control.receipts())
         control_digest, _assessment = self.plan_digest(control)
-        recovered = control.dispatch("sdlc", "recover", "--apply", control_digest)
+        recovered = control.dispatch("recover", "--apply", control_digest)
         self.assertEqual(EXIT_OK, recovered.returncode, recovered.stderr)
         self.assertNotIn("unrecognised", recovered.stderr)
         # NEGATIVE CONTROL: a genuinely alien neighbour in the same plane still refuses the whole
@@ -2178,7 +2535,7 @@ class CrashHonestyTest(Conformance):
         alien.parent.mkdir(parents=True, exist_ok=True)
         alien.write_text("{}\n", encoding="utf-8")
         alien_digest, alien_assessment = self.plan_digest(alien_plane)
-        blocked = alien_plane.dispatch("sdlc", "recover", "--apply", alien_digest)
+        blocked = alien_plane.dispatch("recover", "--apply", alien_digest)
         self.assertEqual(EXIT_REFUSED, blocked.returncode, blocked.stdout + blocked.stderr)
         self.assertIn("activation-receipt://unrecognised-", blocked.stderr)
         self.assertIn("a document this plane cannot name", blocked.stderr)
@@ -2231,12 +2588,12 @@ class CrashHonestyTest(Conformance):
 
         digest, assessment = self.plan_digest(plane)
         self.assertNotIn("unrecognised", assessment.stderr)
-        self.assertIn(f"ccodex sdlc recover --apply {digest}", assessment.stderr)
+        self.assertIn(f"ccodex recover --apply {digest}", assessment.stderr)
         before_apply = tree_hash(*plane.observed_roots())
 
         # THE REFUSAL: the corrupted receipt is named by its own recognised locator, never treated as
         # verified, and nothing moves.
-        applied = plane.dispatch("sdlc", "recover", "--apply", digest)
+        applied = plane.dispatch("recover", "--apply", digest)
         self.assertEqual(EXIT_REFUSED, applied.returncode, applied.stdout + applied.stderr)
         self.assertIn(f"activation-receipt://{stem}", applied.stderr)
         self.assertNotIn("unrecognised", applied.stderr)
@@ -2252,7 +2609,7 @@ class CrashHonestyTest(Conformance):
         self.assertEqual(original_bytes, receipt_path.read_bytes())
         restored_digest, restored_assessment = self.plan_digest(plane)
         self.assertNotIn("unrecognised", restored_assessment.stderr)
-        restored = plane.dispatch("sdlc", "recover", "--apply", restored_digest)
+        restored = plane.dispatch("recover", "--apply", restored_digest)
         self.assert_admitted_class(restored)
         self.assertEqual(EXIT_OK, restored.returncode, restored.stdout + restored.stderr)
         self.assertIn("recovered", restored.stdout)
@@ -2314,7 +2671,7 @@ class OwnershipSchemaTest(Conformance):
         keys_before = set(produced["entries"])
 
         plane.acquire_b()
-        completed = plane.dispatch("sdlc", "update", "--host", "claude")
+        completed = plane.dispatch("update", *SELECTED)
 
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         persisted = json.loads(plane.installer_state.read_text(encoding="utf-8"))
@@ -2336,7 +2693,7 @@ class OwnershipSchemaTest(Conformance):
                 before = plane.installer_state.read_bytes()
 
                 plane.acquire_b()
-                refused = plane.dispatch("sdlc", "update", "--host", "claude")
+                refused = plane.dispatch("update", *SELECTED)
 
                 self.assertEqual(EXIT_REFUSED, refused.returncode, refused.stderr)
                 self.assertIn("different installer schema", refused.stderr)
@@ -2392,17 +2749,21 @@ class NonAuthorityTest(Conformance):
         documents: list[str] = []
         plane = self.plane()
         plane.acquire_a()
-        runs = [plane.dispatch("sdlc", "install", "--host", "claude")]
+        runs = [plane.dispatch("install", *SELECTED)]
         plane.acquire_b()
-        runs.append(plane.dispatch("sdlc", "update", "--host", "claude"))
-        runs.append(plane.dispatch("sdlc", "inspect"))
-        runs.append(plane.dispatch("sdlc", "status"))
-        runs.append(plane.dispatch("sdlc", "doctor"))
-        runs.append(plane.dispatch("sdlc", "recover", "--dry-run"))
-        runs.append(plane.dispatch("sdlc", "uninstall", "--host", "claude"))
+        runs.append(plane.dispatch("update", *SELECTED))
+        # `inspect` is retired; its canonical-JSON neighbour takes the row instead. `status --json` is
+        # the one read whose stdout is a machine document rather than prose, and it is scanned both as
+        # raw text and leaf by leaf below -- so replacing the retired verb with it keeps every surviving
+        # reader verb driven AND adds the render a whole-text scan alone would let a `null` launder.
+        runs.append(plane.dispatch("status", *SELECTED, "--json"))
+        runs.append(plane.dispatch("status", *SELECTED))
+        runs.append(plane.dispatch("doctor"))
+        runs.append(plane.dispatch("recover", "--dry-run"))
+        runs.append(plane.dispatch("uninstall", *SELECTED))
         # Refusals and admitted-effect paths speak to the operator too.
-        runs.append(plane.dispatch("sdlc", "update", "--host", "claude"))
-        runs.append(plane.dispatch("sdlc", "recover", "--apply", FOREIGN_DIGEST))
+        runs.append(plane.dispatch("update", *SELECTED))
+        runs.append(plane.dispatch("recover", "--apply", FOREIGN_DIGEST))
         faulted = self.plane()
         faulted.acquire_a()
         runs.append(
@@ -2492,7 +2853,7 @@ class NonAuthorityTest(Conformance):
         """The denial markers must be doing real work, not clearing lines that never had a token."""
         plane = self.plane()
         plane.acquire_a()
-        completed = plane.dispatch("sdlc", "install", "--host", "claude")
+        completed = plane.dispatch("install", *SELECTED)
         self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
         carriers = [
             line

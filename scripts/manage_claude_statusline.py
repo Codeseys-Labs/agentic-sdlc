@@ -14,7 +14,7 @@ Exit vocabulary (Implementation Decision 9), one derivation point via the EXIT_*
      settings/receipt file, a settings change detected mid-write, a statusline the bundle
      lifecycle does not currently own, or any other `StatuslineError`/`InstallerError`.
 
-The command this activates is one BUNDLE LEDGER ROW (gh #10 phase 2): `bundle:install` publishes
+The command this activates is one BUNDLE LEDGER ROW (gh #10 phase 2): `lifecycle:install` publishes
 `assets/claude/statusline-command.sh` to `<claude-home>/.claude/statusline/agentic-sdlc-statusline`
 at mode 0o755, and `install_skill_bundle.exact_owned_statusline` is the only place this module gets
 a command path from. Nothing here derives a path of its own, so a statusline that is absent,
@@ -571,14 +571,14 @@ def ledger_config(home: Path, state_root: Path) -> installer.Config:
     """The installer configuration this module borrows, for the ledger row and the shared lock.
 
     ``--home`` is the one input that selects the row, exactly as it selects it for
-    ``bundle:install``: the destination is ``<home>/.claude/statusline/agentic-sdlc-statusline``.
+    ``lifecycle:install``: the destination is ``<home>/.claude/statusline/agentic-sdlc-statusline``.
     ``--claude-config-dir`` deliberately does NOT move it -- that option relocates the settings
     document this module writes, and the installer has no such option, so honouring it here would
     look for a row at a path no install ever wrote.
 
     ``dry_run`` is False even under ``--dry-run``: it governs the installer's own writes, none of
     which this module performs, and passing True would skip the shared lock and let a
-    ``bundle:uninstall`` remove the command between resolving it and reporting it. Taking the lock
+    ``lifecycle:uninstall`` remove the command between resolving it and reporting it. Taking the lock
     creates the lock file and its parent directory, which ``_status`` names as the one real effect
     its read path admits. ``codex_home`` is unused on this path and is the Claude home rather than
     a second invented root; ``mode`` is unused too, because this module publishes nothing.

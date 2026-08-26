@@ -23,7 +23,7 @@ from pathlib import Path
 import stat
 import sys
 from types import ModuleType
-from typing import Any
+from typing import Any, NamedTuple
 
 
 REPORT_SCHEMA_VERSION = "ccodex-sdlc-read-report/v1"
@@ -36,7 +36,14 @@ EXPECTED_CHECKOUT = {
     "release_topology_adr_status": "proposed",
     "version": "0.7.5",
 }
-READER_VERBS = ("inspect", "status", "doctor", "recover")
+# The verbs that RENDER the read report. `inspect` is gone: the ratified front-door surface is six
+# top-level verbs (`install status update uninstall doctor recover`), and `inspect` was a fourth
+# spelling of a read that `status` and `doctor` already divide between them -- `status` per selected
+# plane, `doctor` for the whole box. `ccodex sdlc inspect` is retired at the dispatcher with a
+# refusal naming both replacements. The report policy's `command_verbs` vocabulary is a membership
+# check over an admitted SET, so a member this reader can no longer emit costs nothing and the
+# digest-pinned policy is untouched.
+READER_VERBS = ("status", "doctor", "recover")
 # The three mutating lifecycle verbs. This file stays a reader: it parses the closed grammar and
 # then either refuses or hands the admitted vector to ONE named per-verb module loaded by absolute
 # file path.  It performs no lifecycle mutation itself and acquires no writer authority.  The
@@ -48,7 +55,12 @@ LIFECYCLE_VERBS = {
     "update": "ccodex_sdlc_update",
     "uninstall": "ccodex_sdlc_uninstall",
 }
-# Every mutating lifecycle verb requires an explicit host. There is no default and no wildcard, and a
+#: The four verbs that carry a plane selector: the three mutating ones plus `status`, which reads ONE
+#: plane. `doctor` and `recover` take none and that is ratified rather than an omission -- `doctor` is
+#: the whole-box read ("what is on this machine" spans every scope by definition) and `recover`
+#: resumes the one pending slot the substrate can carry, which is not a scoped object.
+SELECTOR_VERBS = ("install", "status", "update", "uninstall")
+# Every selector verb requires an explicit agent. There is no default and no wildcard, and a
 # wildcard is deliberately absent rather than refused-if-supplied: with two planes live, a verb that
 # defaulted would let a codex uninstall remove claude bytes on the strength of an argument nobody
 # typed. Re-expressed from `ccodex_sdlc_host_planes.AGENTS` -- and from
@@ -57,10 +69,44 @@ LIFECYCLE_VERBS = {
 # module-level load here would move a sibling's absence into this file's grammar errors. A test pins
 # all three against each other, which is what makes the re-expression a checked copy and not a second
 # opinion.
-LIFECYCLE_HOSTS = ("claude", "codex")
-#: How the admitted set is NAMED in every grammar refusal and in the help, spelled once so two
+#
+# THE FLAG IS `--agent`, and the vector this file FORWARDS is still `--host`. That is one fact with
+# one operator spelling and one module ABI, not two operator spellings: the four per-verb modules
+# admit exactly `['--host', <agent>]` and are owned by other waves, so renaming their ABI here would
+# reach five files this wave does not own. The asymmetry is named rather than hidden, and the
+# forwarded vector is built in exactly one place (`main`).
+LIFECYCLE_AGENTS = ("claude", "codex")
+#: How the admitted agent set is NAMED in every grammar refusal and in the help, spelled once so two
 #: messages cannot disagree about what the grammar admits.
-LIFECYCLE_HOST_CHOICE = "|".join(LIFECYCLE_HOSTS)
+LIFECYCLE_AGENT_CHOICE = "|".join(LIFECYCLE_AGENTS)
+#: The two scopes of ratified decision 1. `project` PARSES here and is refused by name until the wave
+#: that wires resolution: a grammar that rejected the token would make the eventual wiring a grammar
+#: change, and a grammar that accepted it silently would activate the user plane for an operator who
+#: asked for a repository.
+LIFECYCLE_SCOPES = ("user", "project")
+LIFECYCLE_SCOPE_CHOICE = "|".join(LIFECYCLE_SCOPES)
+#: `install --mode`'s closed set, re-expressed from the installer's own three modes. Admitted only
+#: with `--scope user`: project scope is copy-only by ratified decision 3.
+INSTALL_MODES = ("auto", "link", "copy")
+INSTALL_MODE_CHOICE = "|".join(INSTALL_MODES)
+SCOPE_FLAG = "--scope"
+AGENT_FLAG = "--agent"
+PROJECT_FLAG = "--project"
+MODE_FLAG = "--mode"
+DRY_RUN_FLAG = "--dry-run"
+JSON_FLAG = "--json"
+#: The ABI the per-verb modules admit. Named here because `main` builds exactly one vector with it.
+FORWARDED_AGENT_FLAG = "--host"
+#: The wave that wires each parsed-but-not-yet-served part of the ratified grammar. Spelled once so a
+#: refusal cannot name a different wave than its sibling refusal.
+FRONT_DOOR_SEED = "agentic-sdlc-7a2b"
+#: The three reasons project scope is copy-only, carried verbatim from
+#: `manage_claude_workflows.py`'s own header so the refusal states the doctrine rather than citing it.
+PROJECT_SCOPE_IS_COPY_ONLY = (
+    "a committed entry must be self-contained; a link embeds a user-specific absolute path; and a"
+    " later bundle refresh must not silently change what a target's sessions execute without new"
+    " per-repo authorization"
+)
 # `recover` keeps its reader form AND gains exactly one mutating form (Decision 91: recovery stays
 # inside this closed namespace rather than becoming a fifth verb).  THE APPROVAL IS THE DIGEST:
 # `recover --dry-run` derives a digest-bound plan and renders that digest, and `recover --apply
@@ -114,7 +160,7 @@ ACTIVE_TERMINAL_PHASES = ("activated", "activated-partial")
 # back" -- a defect finding about a payload class the design admits.
 PROVEN_VERSION_SOURCES = ("adapter-readback", "archive-manifest", "checkout-tree")
 # THE PLANE'S ONE ACTIVE STATEMENT, and the two facts that keep a healthy history from reading as a
-# defect. `ccodex sdlc install` writes this pointer and `ccodex sdlc update` replaces it, while the
+# defect. `ccodex install` writes this pointer and `ccodex update` replaces it, while the
 # receipt the update replaced is RETAINED under its own id -- deliberately, so a kill mid-update
 # leaves a readable prior statement. Both documents therefore coexist on a healthy plane, and a
 # reader that counted every filed receipt as a current activation would report the retention as an
@@ -172,6 +218,16 @@ _DISPLAY_ESCAPES = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 class UsageError(ValueError):
     pass
+
+
+class SurfaceRefusal(RuntimeError):
+    """A grammatically valid invocation this release's verb surface declines (exit class 3).
+
+    The distinction from ``UsageError`` is Decision 9's, not a style choice: 2 is an input that is not
+    in the grammar, 3 is an operation the system declines to perform before any effect.
+    ``--scope project`` is in the ratified grammar, so refusing it as a usage error would tell the
+    operator they mistyped when what is true is that this release does not serve it yet.
+    """
 
 
 class LifecycleRefusal(RuntimeError):
@@ -365,41 +421,145 @@ def checkout_identity(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_lifecycle_host(verb: str, rest: list[str]) -> str:
-    """Resolve the host of one mutating lifecycle verb, or refuse the spelling as a grammar error.
+#: Which optional flags each selector verb admits, beyond the two required selectors. Closed per verb
+#: rather than shared, so an operator cannot ask `update` for a preview it does not have.
+SELECTOR_VERB_OPTIONS: dict[str, tuple[str, ...]] = {
+    "install": (PROJECT_FLAG, MODE_FLAG, DRY_RUN_FLAG),
+    "status": (PROJECT_FLAG, JSON_FLAG),
+    "update": (PROJECT_FLAG,),
+    "uninstall": (PROJECT_FLAG, DRY_RUN_FLAG),
+}
+#: Which of those take a value. Everything else is a bare switch.
+_VALUE_FLAGS = (SCOPE_FLAG, AGENT_FLAG, PROJECT_FLAG, MODE_FLAG)
 
-    ALL THREE mutating verbs require it, not only ``install``. Before the receipted plane had a second
-    agent, ``update`` and ``uninstall`` took no arguments and each module named its own single plane;
-    with two planes live that omission is the critique-a cross-agent defect at the grammar layer -- a
-    bare ``uninstall`` would have to pick a plane, and whichever it picked would remove one agent's
-    bytes on the strength of a selector the operator never typed. So the selector is required, with no
-    default and no wildcard, and a bare mutating verb is exit 2 rather than a guess.
 
-    Every echoed caller token is rendered with ``!r`` so a control character, an escape sequence,
-    or a bidirectional override in an argument cannot forge a line of this command's own output.
-    Not-supplied, supplied-without-a-value, and supplied-with-an-unsupported-value are three
-    distinct refusals, because collapsing them hides which half of the invocation was wrong.
+def parse_selector_verb(verb: str, rest: list[str]) -> dict[str, Any]:
+    """Resolve one selector verb's flags, or refuse the spelling as a grammar error (exit 2).
+
+    ALL FOUR selector verbs require ``--scope`` and ``--agent``, not only ``install``. Before the
+    receipted plane had a second agent, ``update`` and ``uninstall`` took no arguments and each module
+    named its own single plane; with two planes live that omission is the critique-a cross-agent defect
+    at the grammar layer -- a bare ``uninstall`` would have to pick a plane, and whichever it picked
+    would remove one agent's bytes on the strength of a selector the operator never typed. So both
+    selectors are required, with no default and no wildcard, and a bare selector verb is exit 2 rather
+    than a guess.
+
+    Every echoed caller token is rendered with ``!r`` so a control character, an escape sequence, or a
+    bidirectional override in an argument cannot forge a line of this command's own output.
+    Not-supplied, supplied-without-a-value, and supplied-with-an-unsupported-value stay three distinct
+    refusals, because collapsing them hides which half of the invocation was wrong.
+
+    THE COMBINATION RULES ARE DECIDED HERE AND BEFORE ANY FILESYSTEM RESOLUTION (§2.1): ``--mode`` is
+    admitted only with ``--scope user`` and ``--project`` only with ``--scope project``. Both are exit
+    2 -- a flag that contradicts its own scope is not an operation to decline, it is an invocation that
+    does not exist.
     """
-    spelling = f"--host {LIFECYCLE_HOST_CHOICE}"
-    if not rest:
+    admitted = (SCOPE_FLAG, AGENT_FLAG) + SELECTOR_VERB_OPTIONS[verb]
+    parsed: dict[str, Any] = {}
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        head = token.split("=", 1)[0]
+        if "=" in token and head in _VALUE_FLAGS:
+            raise UsageError(
+                f"ccodex {verb} spells {head} as two arguments: {head} <value>"
+            )
+        if token not in admitted:
+            if token in _VALUE_FLAGS or token in (DRY_RUN_FLAG, JSON_FLAG):
+                raise UsageError(
+                    f"ccodex {verb} does not take {token}; it accepts"
+                    f" {' '.join(admitted)}"
+                )
+            raise UsageError(f"unknown ccodex {verb} argument: {token!r}")
+        if token in parsed:
+            raise UsageError(f"ccodex {verb} accepts one {token}: {rest[index]!r}")
+        if token in _VALUE_FLAGS:
+            if index + 1 >= len(rest):
+                raise UsageError(f"ccodex {verb} {token} was supplied without a value")
+            parsed[token] = rest[index + 1]
+            index += 2
+            continue
+        parsed[token] = True
+        index += 1
+
+    if SCOPE_FLAG not in parsed:
         raise UsageError(
-            f"ccodex sdlc {verb} requires an explicit {spelling}; there is no default host"
+            f"ccodex {verb} requires an explicit {SCOPE_FLAG} {LIFECYCLE_SCOPE_CHOICE};"
+            " there is no default scope"
         )
-    if rest[0] != "--host":
-        if rest[0].startswith("--host="):
-            raise UsageError(f"ccodex sdlc {verb} spells its host as two arguments: {spelling}")
-        raise UsageError(f"unknown ccodex sdlc {verb} argument: {rest[0]!r}")
-    if len(rest) == 1:
-        raise UsageError(f"ccodex sdlc {verb} --host was supplied without a host value")
-    if len(rest) > 2:
-        raise UsageError(f"ccodex sdlc {verb} accepts exactly {spelling}: {rest[2]!r}")
-    host = rest[1]
-    if host not in LIFECYCLE_HOSTS:
+    scope = parsed[SCOPE_FLAG]
+    if scope not in LIFECYCLE_SCOPES:
         raise UsageError(
-            f"unsupported ccodex sdlc {verb} host: {host!r}; the admitted hosts are"
-            f" {', '.join(LIFECYCLE_HOSTS)}"
+            f"unsupported ccodex {verb} scope: {scope!r}; the admitted scopes are"
+            f" {', '.join(LIFECYCLE_SCOPES)}"
         )
-    return host
+    if AGENT_FLAG not in parsed:
+        raise UsageError(
+            f"ccodex {verb} requires an explicit {AGENT_FLAG} {LIFECYCLE_AGENT_CHOICE};"
+            " there is no default agent"
+        )
+    agent = parsed[AGENT_FLAG]
+    if agent not in LIFECYCLE_AGENTS:
+        raise UsageError(
+            f"unsupported ccodex {verb} agent: {agent!r}; the admitted agents are"
+            f" {', '.join(LIFECYCLE_AGENTS)}"
+        )
+    mode = parsed.get(MODE_FLAG)
+    if mode is not None:
+        if scope != "user":
+            raise UsageError(
+                f"ccodex {verb} {MODE_FLAG} is admitted only with {SCOPE_FLAG} user, because"
+                f" project scope is copy-only: {PROJECT_SCOPE_IS_COPY_ONLY}"
+            )
+        if mode not in INSTALL_MODES:
+            raise UsageError(
+                f"unsupported ccodex {verb} mode: {mode!r}; the admitted modes are"
+                f" {', '.join(INSTALL_MODES)}"
+            )
+    if PROJECT_FLAG in parsed and scope != "project":
+        raise UsageError(
+            f"ccodex {verb} {PROJECT_FLAG} is admitted only with {SCOPE_FLAG} project; a user-scope"
+            " run has no project root to name"
+        )
+    return {
+        "scope": scope,
+        "agent": agent,
+        "project": parsed.get(PROJECT_FLAG),
+        "mode": mode,
+        "dry_run": DRY_RUN_FLAG in parsed,
+        "json_output": JSON_FLAG in parsed,
+    }
+
+
+def refuse_unwired_surface(verb: str, parsed: dict[str, Any]) -> None:
+    """Decline, by name and before any effect, the parts of the ratified grammar this release parses
+    but does not yet serve (exit 3).
+
+    Each refusal names the token the harness greps for, the wave that wires it, and what to run
+    instead. Silently ignoring any of the three would be worse than refusing: an operator who typed
+    ``--scope project`` would get their user home activated, and one who typed ``--dry-run`` would get
+    a real effect.
+    """
+    if parsed["scope"] == "project":
+        raise SurfaceRefusal(
+            f"ccodex {verb} {SCOPE_FLAG} project is not served by this release"
+            " (project-scope-not-yet-wired): the project-root resolution ladder, copy forcing, and"
+            f" the (agent, scope, root) pointer arrive with wave W4 of {FRONT_DOOR_SEED}. Use"
+            f" {SCOPE_FLAG} user until then."
+        )
+    if parsed["mode"] is not None:
+        raise SurfaceRefusal(
+            f"ccodex {verb} {MODE_FLAG} {parsed['mode']} is not served by this release"
+            " (mode-not-yet-wired): the receipted lifecycle records a per-entry mode but takes no mode"
+            f" request yet, and accepting one here would drop it silently. It arrives with wave W3b of"
+            f" {FRONT_DOOR_SEED}; omit {MODE_FLAG} to take the plane's own mode."
+        )
+    if parsed["dry_run"]:
+        raise SurfaceRefusal(
+            f"ccodex {verb} {DRY_RUN_FLAG} is not served by this release (dry-run-not-yet-wired):"
+            " nothing was previewed and nothing was changed. It arrives with wave W3b of"
+            f" {FRONT_DOOR_SEED}; `ccodex doctor` reads this host's state without one."
+        )
 
 
 def parse_recover_apply(rest: list[str]) -> str:
@@ -413,74 +573,94 @@ def parse_recover_apply(rest: list[str]) -> str:
     """
     if len(rest) == 1:
         raise UsageError(
-            f"ccodex sdlc recover {RECOVER_APPLY_FLAG} was supplied without the plan digest it approves"
+            f"ccodex recover {RECOVER_APPLY_FLAG} was supplied without the plan digest it approves"
         )
     if len(rest) > 2:
         raise UsageError(
-            f"ccodex sdlc recover {RECOVER_APPLY_FLAG} accepts exactly one plan digest: {rest[2]!r}"
+            f"ccodex recover {RECOVER_APPLY_FLAG} accepts exactly one plan digest: {rest[2]!r}"
         )
     digest = rest[1]
     if len(digest) != 64 or any(character not in _HEX_CHARACTERS for character in digest):
         raise UsageError(
-            f"ccodex sdlc recover {RECOVER_APPLY_FLAG} requires the 64-character lowercase"
+            f"ccodex recover {RECOVER_APPLY_FLAG} requires the 64-character lowercase"
             f" hexadecimal digest of one derived plan: {digest!r}"
         )
     return digest
 
 
-def parse_command(argv: list[str]) -> tuple[str, bool, bool, str | None]:
+class Invocation(NamedTuple):
+    """One parsed, admitted invocation. A NamedTuple so a test can compare it whole."""
+
+    verb: str
+    dry_run: bool
+    json_output: bool
+    #: The ONE argument an admitted mutating vector forwards to a per-verb module: the agent for
+    #: install/update/uninstall, and the approved plan digest for `recover --apply`. A read forwards
+    #: nothing and carries None, which is what keeps the two forms distinct.
+    forwarded_value: str | None
+    scope: str | None = None
+    agent: str | None = None
+
+
+def parse_command(argv: list[str]) -> Invocation:
     if argv in (["-h"], ["--help"], ["help"]):
         raise UsageError("help")
     if not argv:
         raise UsageError(
-            "ccodex sdlc needs inspect, status, doctor, recover --dry-run, or one of install, update,"
-            f" uninstall with --host {LIFECYCLE_HOST_CHOICE}"
+            "ccodex needs doctor, recover --dry-run, or one of install, status, update, uninstall"
+            f" with {SCOPE_FLAG} {LIFECYCLE_SCOPE_CHOICE} {AGENT_FLAG} {LIFECYCLE_AGENT_CHOICE}"
         )
     verb = argv[0]
     rest = argv[1:]
-    if verb in LIFECYCLE_VERBS:
-        # A mutating verb carries no reader flag: it is never a dry run and never renders a report.
-        return verb, False, False, parse_lifecycle_host(verb, rest)
+    if verb in SELECTOR_VERBS:
+        parsed = parse_selector_verb(verb, rest)
+        refuse_unwired_surface(verb, parsed)
+        return Invocation(
+            verb=verb,
+            dry_run=False,
+            json_output=parsed["json_output"],
+            # A mutating verb forwards its agent; `status` reads and forwards nothing.
+            forwarded_value=parsed["agent"] if verb in LIFECYCLE_VERBS else None,
+            scope=parsed["scope"],
+            agent=parsed["agent"],
+        )
     if verb not in READER_VERBS:
-        raise UsageError(f"unknown ccodex sdlc verb: {verb!r}")
+        raise UsageError(f"unknown ccodex verb: {verb!r}")
     if verb == "recover":
         if rest == ["--dry-run"]:
-            return verb, True, False, None
+            return Invocation(verb, True, False, None)
         if rest == ["--dry-run", "--json"]:
-            return verb, True, True, None
-        # The fourth element carries the ONE argument an admitted vector forwards to a per-verb
-        # module: the install host for `install`, and the approved plan digest here.  A dry run
-        # forwards nothing and therefore carries None, which is what keeps the two forms distinct.
+            return Invocation(verb, True, True, None)
         if rest and rest[0] == RECOVER_APPLY_FLAG:
-            return verb, False, False, parse_recover_apply(rest)
+            return Invocation(verb, False, False, parse_recover_apply(rest))
         if rest and rest[0].startswith(f"{RECOVER_APPLY_FLAG}="):
             raise UsageError(
-                "ccodex sdlc recover spells its approval as two arguments:"
+                "ccodex recover spells its approval as two arguments:"
                 f" {RECOVER_APPLY_FLAG} <plan-sha256>"
             )
         raise UsageError(
-            "ccodex sdlc recover requires exactly --dry-run, optionally followed by --json, or"
+            "ccodex recover requires exactly --dry-run, optionally followed by --json, or"
             f" {RECOVER_APPLY_FLAG} <plan-sha256>"
         )
     if rest == []:
-        return verb, False, False, None
+        return Invocation(verb, False, False, None)
     if rest == ["--json"]:
-        return verb, False, True, None
-    raise UsageError(f"ccodex sdlc {verb} accepts only optional --json")
+        return Invocation(verb, False, True, None)
+    raise UsageError(f"ccodex {verb} accepts only optional --json")
 
 
 def usage() -> str:
+    selectors = f"{SCOPE_FLAG} {LIFECYCLE_SCOPE_CHOICE} {AGENT_FLAG} {LIFECYCLE_AGENT_CHOICE}"
     return (
-        "usage: ccodex sdlc inspect [--json]\n"
-        "       ccodex sdlc status [--json]\n"
-        "       ccodex sdlc doctor [--json]\n"
-        "       ccodex sdlc recover --dry-run [--json]\n"
-        "       ccodex sdlc recover --apply <plan-sha256>\n"
-        f"       ccodex sdlc install --host {LIFECYCLE_HOST_CHOICE}\n"
-        f"       ccodex sdlc update --host {LIFECYCLE_HOST_CHOICE}\n"
-        f"       ccodex sdlc uninstall --host {LIFECYCLE_HOST_CHOICE}\n\n"
-        "inspect, status, doctor, and recover --dry-run read checkout-development ownership and\n"
-        "recovery evidence without installing, updating, uninstalling, following, or changing state.\n"
+        f"usage: ccodex install   {selectors} [{PROJECT_FLAG} PATH]"
+        f" [{MODE_FLAG} {INSTALL_MODE_CHOICE}] [{DRY_RUN_FLAG}]\n"
+        f"       ccodex status    {selectors} [{PROJECT_FLAG} PATH] [{JSON_FLAG}]\n"
+        f"       ccodex update    {selectors} [{PROJECT_FLAG} PATH]\n"
+        f"       ccodex uninstall {selectors} [{PROJECT_FLAG} PATH] [{DRY_RUN_FLAG}]\n"
+        f"       ccodex doctor    [{JSON_FLAG}]\n"
+        f"       ccodex recover   {DRY_RUN_FLAG} [{JSON_FLAG}] | {RECOVER_APPLY_FLAG} <plan-sha256>\n\n"
+        "status, doctor, and recover --dry-run read checkout-development ownership and recovery\n"
+        "evidence without installing, updating, uninstalling, following, or changing state.\n"
         "`recover --dry-run` is proposal-only, requires the literal --dry-run safeguard, and renders\n"
         "the sha256 of the exact plan it derived. `recover --apply <plan-sha256>` is the one mutating\n"
         "recover form: the approval IS the digest, so it re-derives that plan from verified journal\n"
@@ -489,8 +669,13 @@ def usage() -> str:
         "install, update, and uninstall are the mutating lifecycle verbs. This reader performs no\n"
         "lifecycle mutation itself: it parses the closed grammar above and hands an admitted vector\n"
         "to one named per-verb module, refusing by name before any effect when that module is not\n"
-        "present in this distribution. Each of the three takes an explicit --host; there is no default\n"
-        "host and no wildcard, so one agent's removal can never reach another agent's bytes.\n"
+        "present in this distribution.\n\n"
+        f"install, status, update, and uninstall each take an explicit {SCOPE_FLAG} and\n"
+        f"{AGENT_FLAG}; there is no default and no wildcard for either, so one agent's removal can\n"
+        f"never reach another agent's bytes. doctor and recover take neither: doctor is the whole-box\n"
+        "read, and recover resumes the one pending slot the substrate can carry, which is not a\n"
+        f"scoped object. {SCOPE_FLAG} project, {MODE_FLAG}, and {DRY_RUN_FLAG} parse and are refused\n"
+        "by name at exit 3 until the waves that wire them; nothing is silently ignored.\n"
     )
 
 
@@ -547,18 +732,18 @@ def load_lifecycle_module(verb: str, label: str | None = None) -> ModuleType:
     path = lifecycle_module_path(verb)
     if path.is_symlink() or not path.is_file():
         raise LifecycleRefusal(
-            f"ccodex sdlc {named} is unavailable in this distribution: {str(path)!r} is absent"
+            f"ccodex {named} is unavailable in this distribution: {str(path)!r} is absent"
         )
     spec = importlib.util.spec_from_file_location(f"_ccodex_sdlc_lifecycle_{verb}", path)
     if spec is None or spec.loader is None:
-        raise LifecycleRefusal(f"ccodex sdlc {named} module cannot be loaded: {str(path)!r}")
+        raise LifecycleRefusal(f"ccodex {named} module cannot be loaded: {str(path)!r}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 - any import-time failure leaves the effect unknown
         raise LifecycleUnknownEffect(
-            f"ccodex sdlc {named} module failed while loading, so its effect is unknown: {exc!r}"
+            f"ccodex {named} module failed while loading, so its effect is unknown: {exc!r}"
         ) from exc
     return module
 
@@ -579,7 +764,7 @@ def dispatch_lifecycle(verb: str, forwarded: list[str], *, label: str | None = N
         admitted, _runtime, reason = runtime_admission()
         if not admitted:
             raise LifecycleRefusal(
-                f"ccodex sdlc {named} requires its bound isolated Python 3.12.11: {reason or 'runtime admission refused'}"
+                f"ccodex {named} requires its bound isolated Python 3.12.11: {reason or 'runtime admission refused'}"
             )
         module = load_lifecycle_module(verb, named)
     except LifecycleRefusal as exc:
@@ -591,7 +776,7 @@ def dispatch_lifecycle(verb: str, forwarded: list[str], *, label: str | None = N
     entry = getattr(module, "main", None)
     if not callable(entry):
         print(
-            f"error: ccodex sdlc {named} module exposes no callable main(argv), and its top-level code"
+            f"error: ccodex {named} module exposes no callable main(argv), and its top-level code"
             f" already ran, so its effect is unknown: {str(lifecycle_module_path(verb))!r}",
             file=sys.stderr,
         )
@@ -600,13 +785,13 @@ def dispatch_lifecycle(verb: str, forwarded: list[str], *, label: str | None = N
         result = entry(list(forwarded))
     except Exception as exc:  # noqa: BLE001 - the module was entered; the effect is unknown
         print(
-            f"error: ccodex sdlc {named} failed inside its module, so its effect is unknown: {exc!r}",
+            f"error: ccodex {named} failed inside its module, so its effect is unknown: {exc!r}",
             file=sys.stderr,
         )
         return 4
     if isinstance(result, bool) or not isinstance(result, int) or not 0 <= result <= 4:
         print(
-            f"error: ccodex sdlc {named} returned no admitted exit class ({result!r}),"
+            f"error: ccodex {named} returned no admitted exit class ({result!r}),"
             " so its effect is unknown",
             file=sys.stderr,
         )
@@ -1380,11 +1565,11 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
     report policy carries no `distribution` dimension and no code for a version delta, and widening
     a byte-pinned policy is not this surface's authority.
 
-    DISCLOSURE (agentic-sdlc-7c7d): these findings render verb-uniformly -- `inspect`, `status`,
-    `doctor`, and `recover --dry-run` all call this same function and see the same list, including
-    `inspect`, by the pre-existing design the call site documents (every reader verb renders ONE
-    semantic report, so a finding one verb hid would make another verb's identical-looking report a
-    differently-shaped truth about the same host).  That is a decision already made, not a gap.  A
+    DISCLOSURE (agentic-sdlc-7c7d): these findings render verb-uniformly -- `status`, `doctor`, and
+    `recover --dry-run` all call this same function and see the same list, by the pre-existing design
+    the call site documents (every reader verb renders ONE semantic report, so a finding one verb hid
+    would make another verb's identical-looking report a differently-shaped truth about the same
+    host).  That is a decision already made, not a gap.  A
     FUTURE distribution dimension -- one that, unlike the values above, needs to say something only
     some verbs should show -- must decide per-verb rendering explicitly in its own policy seed rather
     than assume this function's uniform call site will do it silently.
@@ -1683,7 +1868,7 @@ def recovery_plan_line(root: Path, adapters: tuple[ModuleType, ModuleType]) -> s
         return f"recovery plan: unavailable ({bounded_message(str(exc) or repr(exc))})\n"
     return (
         f"recovery plan sha256 {digest}: approve exactly this plan with"
-        f" `ccodex sdlc recover {RECOVER_APPLY_FLAG} {digest}`\n"
+        f" `ccodex recover {RECOVER_APPLY_FLAG} {digest}`\n"
     )
 
 
@@ -1882,7 +2067,7 @@ def render_human(report: dict[str, Any]) -> str:
     checkout = report["checkout"]
     runtime = report["runtime"]
     lines = [
-        f"ccodex sdlc {report['command']['verb']}: {report['overall']['state']}",
+        f"ccodex {report['command']['verb']}: {report['overall']['state']}",
         f"checkout: {checkout['version']} {checkout['plane']}; public channel: {checkout['public_channel'] or 'not-selected'}; public release: not-selected; certification: {checkout['certification_claim']}",
         f"runtime: {runtime['state']} ({runtime['version']}, isolated={str(runtime['isolated']).lower()})",
         f"bundle: {report['bundle']['state']}",
@@ -1905,23 +2090,31 @@ def emit(report: dict[str, Any], json_output: bool) -> None:
 def main(argv: list[str] | None = None) -> int:
     selected = sys.argv[1:] if argv is None else argv
     try:
-        # The fourth element is the ONE argument an admitted mutating vector forwards: the install
-        # host, or the plan digest `recover --apply` approves.
-        command, dry_run, json_output, forwarded_value = parse_command(selected)
+        invocation = parse_command(selected)
     except UsageError as exc:
         if str(exc) == "help":
             sys.stdout.write(usage())
             return 0
         print(f"error: {exc}\n\n{usage()}", file=sys.stderr, end="")
         return 2
+    except SurfaceRefusal as exc:
+        # Exit 3, not 2, and no usage block: the invocation IS in the ratified grammar, so reprinting
+        # the grammar would tell the operator to type what they already typed.
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    command, dry_run, json_output = invocation.verb, invocation.dry_run, invocation.json_output
+    forwarded_value = invocation.forwarded_value
 
     if command in LIFECYCLE_VERBS:
         # Handed off before any report policy, release contract, or projection is read: a mutating
         # verb neither renders nor depends on the read report, and refusing early keeps the refusal
         # attributable to the missing module rather than to unrelated reader state.
-        # Every mutating verb now carries its host, so the vector is unconditional: the earlier
-        # empty-argv branch existed only while `update` and `uninstall` named their own single plane.
-        return dispatch_lifecycle(command, ["--host", str(forwarded_value)], label=command)
+        # THE FORWARDED FLAG IS THE MODULE ABI, not the operator's spelling: the four per-verb modules
+        # admit exactly `['--host', <agent>]` and this is the one place that vector is built, so the
+        # `--agent` grammar above and the `--host` ABI here cannot drift into two operator spellings.
+        return dispatch_lifecycle(
+            command, [FORWARDED_AGENT_FLAG, str(forwarded_value)], label=command
+        )
     if command == "recover" and forwarded_value is not None:
         # The one mutating recover form, handed off on the same early path and for the same reason.
         # The dry-run form never reaches here, so it still acquires no writer authority.
@@ -1953,8 +2146,8 @@ def main(argv: list[str] | None = None) -> int:
         adapters = load_read_only_adapters()
         bundle = observe_projections(root, adapters)
         # The host-level readiness dimensions are read for every reader verb rather than for
-        # `doctor` alone: the four verbs render ONE semantic report, and a verb that hid a
-        # malformed activation receipt the neighbouring verb reported would make `inspect --json`
+        # `doctor` alone: the three verbs render ONE semantic report, and a verb that hid a
+        # malformed activation receipt the neighbouring verb reported would make `status --json`
         # a differently-shaped truth about the same host.
         readiness = observe_host_readiness(contract, adapters)
         report = make_report(
@@ -1975,6 +2168,20 @@ def main(argv: list[str] | None = None) -> int:
             # After the assessment, never instead of it: the operator sees what the plan covers and
             # then the digest that approves exactly that plan.
             sys.stderr.write(recovery_plan_line(root, adapters))
+        if command == "status":
+            # A SELECTOR THIS RELEASE READS BUT DOES NOT YET NARROW BY, said out loud. `status`
+            # requires --scope/--agent by ratified decision 1, and the per-(agent, scope, root)
+            # projection §2.3 describes lands with project scope; until then the body is the same
+            # whole-host read `doctor` renders, so `--agent claude` and `--agent codex` produce the
+            # same document. Saying nothing would make the selector look like a filter it is not, and
+            # the report's `command` field is a closed two-key set in a digest-pinned policy, so the
+            # honest place for this is stderr -- exactly where `recover` already puts its plan line.
+            # stdout stays byte-identical, which is what keeps the canonical-JSON contract intact.
+            sys.stderr.write(
+                f"selected plane: {invocation.agent}/{invocation.scope}. This release's `status` body"
+                " is the whole-host read; the per-(agent, scope, root) projection arrives with"
+                f" project scope (wave W4 of {FRONT_DOOR_SEED}).\n"
+            )
         return 0
     except (ReportInvariantError, OSError, ValueError) as exc:
         print(f"internal report construction invariant failure: {exc}", file=sys.stderr)

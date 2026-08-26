@@ -1,4 +1,13 @@
-"""``ccodex sdlc install --host claude``: admission, compatibility, copy-activation, and one seal.
+"""``ccodex install --scope user --agent claude``: admission, compatibility, copy-activation, one seal.
+
+THE OPERATOR SPELLING AND THIS MODULE'S ABI ARE TWO DIFFERENT FACTS, and neither is a mistake.
+``ccodex sdlc install`` is retired at exit 2 and the front door is the top-level ``install`` with
+``--scope``/``--agent``; this module is unchanged and still admits exactly ``['--host', <agent>]``,
+still naming itself ``ccodex sdlc install`` in its own messages, because the reader builds that one
+vector in one place (``ccodex_sdlc.main``) and renaming the ABI would reach files this wave does not
+own. So the in-process tests below drive ``--host`` and the subprocess test that goes through the
+shipped reader drives ``--scope user --agent claude``; every message assertion quotes whichever of
+the two actually emitted it.
 
 WHAT THIS MODULE PROVES, AND HOW IT AVOIDS PROVING NOTHING. Every negative assertion here carries a
 POSITIVE CONTROL in the same test: an absence proves nothing unless the same harness is shown to
@@ -426,7 +435,7 @@ def sealed_receipt(fixture: Fixture) -> dict[str, Any]:
 # ConfigSeamTest) compare constants, source, and config seams without touching it.
 WINDOWS_SKIP = unittest.skipIf(
     os.name == "nt",
-    "the ccodex sdlc lifecycle writes through the POSIX-only durable-write plane "
+    "the ccodex lifecycle writes through the POSIX-only durable-write plane "
     "(os.open O_DIRECTORY fsync barriers) and pins exact path identity that Windows 8.3 "
     "short-name roots break; native Windows fails closed by name at the CLI",
 )
@@ -699,7 +708,7 @@ class UninstallStatusSymmetryTest(TemporaryRoot):
     """A real install then a real uninstall leaves zero owned-entry conflicts (agentic-sdlc-42ec).
 
     Wave f194-w1's FINDING-1: the install writes one installer ownership row per activated entry,
-    and a retirement that removed only the bytes left ``ccodex sdlc status`` reporting
+    and a retirement that removed only the bytes left the reader's ``status`` read reporting
     ``bundle.state degraded`` with one ``owned-entry-conflict`` per entry, contradicting the
     terminal receipt the same plane had just sealed.  This drives the real neighbouring verb
     against a real activation -- the same posture as the install-then-update tests above -- and
@@ -1457,7 +1466,7 @@ class KeyedPointerTest(TemporaryRoot):
 class InstallThenUpdateTest(TemporaryRoot):
     """The two verbs meet at ONE document, and this test drives both of them for real.
 
-    ``ccodex sdlc update`` admits this plane's keyed pointer and nothing else.  Before
+    The ``update`` module admits this plane's keyed pointer and nothing else.  Before
     agentic-sdlc-7b2e this module never wrote it, so a real install at exit 0 followed by a real
     update refused at exit 3 with no usable active receipt: the front door of the plane the install
     had just built did not exist.  Nothing here is a fixture receipt -- the install writes the
@@ -1622,7 +1631,20 @@ class DispatchContractTest(TemporaryRoot):
             shutil.copy2(ROOT / relative, shadow / relative)
         fixture = self.fixture()
         completed = subprocess.run(
-            [str(Path(sys.executable)), "-I", "-B", str(shadow / "scripts" / "ccodex_sdlc.py"), "install", "--host", "claude"],
+            # The reader's OPERATOR grammar: `install` is top-level and both selectors are required,
+            # with no default and no wildcard. What it forwards to this module is still
+            # `['--host', 'claude']`, which is why the in-process tests above spell it that way.
+            [
+                str(Path(sys.executable)),
+                "-I",
+                "-B",
+                str(shadow / "scripts" / "ccodex_sdlc.py"),
+                "install",
+                "--scope",
+                "user",
+                "--agent",
+                "claude",
+            ],
             capture_output=True,
             text=True,
             env={
@@ -1649,14 +1671,27 @@ class DispatchContractTest(TemporaryRoot):
         # so the exit 0 above is this plane's own activation and not the dispatcher admitting anything
         # that arrives. `codex` is no longer that control -- it is an admitted plane of its own.
         refused = subprocess.run(
-            [str(Path(sys.executable)), "-I", "-B", str(shadow / "scripts" / "ccodex_sdlc.py"), "install", "--host", "gemini"],
+            [
+                str(Path(sys.executable)),
+                "-I",
+                "-B",
+                str(shadow / "scripts" / "ccodex_sdlc.py"),
+                "install",
+                "--scope",
+                "user",
+                "--agent",
+                "gemini",
+            ],
             capture_output=True,
             text=True,
             check=False,
             timeout=600,
         )
         self.assertEqual(2, refused.returncode)
-        self.assertIn("unsupported ccodex sdlc install host: 'gemini'", refused.stderr)
+        # The READER's grammar error, in the reader's own vocabulary: the operator flag is `--agent`
+        # and the refusal names the admitted planes. This module's own `--host` refusal is a different
+        # message from a different layer, and the in-process tests above are where that one is pinned.
+        self.assertIn("unsupported ccodex install agent: 'gemini'", refused.stderr)
 
 
 class GuardInteractionTest(unittest.TestCase):

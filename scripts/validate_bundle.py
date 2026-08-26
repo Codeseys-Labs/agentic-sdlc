@@ -27,7 +27,7 @@ existed only to be validated: `agents/` is the source of truth, its roster is cl
 every one of its 33 files is digest-pinned by the normative runtime contract and scanned for
 authority-granting prose. The measured evidence for that class of deletion: setting
 `counts.delivery_roles = 99` in the role manifest failed the gate loudly while
-`mise run bundle:status` still reported `43 ok` — no operator-visible failure existed to prevent.
+`mise run lifecycle:status` still reported `43 ok` — no operator-visible failure existed to prevent.
 
 Two things this file is not. It is not a review substitute: a policy bump that loses an encoded
 checklist is caught by reading the diff. And a passing run is evidence only — it authorizes no
@@ -126,13 +126,13 @@ HOOK_EVENT_MATCHERS = {
 # justify raising this cap in review.
 HOOK_MAX_BYTES = 4096
 REQUIRED_TASKS = {
-    "bundle:install",
-    "bundle:status",
-    "bundle:uninstall",
-    "bundle:install:claude",
-    "bundle:install:codex",
-    "bundle:install:all-hosts",
-    "bundle:status:all-hosts",
+    "lifecycle:install",
+    "lifecycle:status",
+    "lifecycle:uninstall",
+    "lifecycle:install:claude",
+    "lifecycle:install:codex",
+    "lifecycle:install:all-hosts",
+    "lifecycle:status:all-hosts",
     "release:build",
     "research-os:install",
     "claude:statusline:status",

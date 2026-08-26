@@ -36,7 +36,7 @@ mise run libraries:migrate   # retire another channel's copies of the SAME upstr
 
 `install`, `migrate`, and `uninstall` take **explicitly named libraries only**. There is
 deliberately no verb that installs everything, and none of these verbs is reachable from
-`bundle:install`, `bundle:install:claude`, `bundle:install:codex`, `contributor:setup`, its
+`lifecycle:install`, `lifecycle:install:claude`, `lifecycle:install:codex`, `contributor:setup`, its
 deprecated `setup` forwarder, or any gate leaf.
 
 Every library is reachable. `list` prints a `reach it by:` line per library with the exact

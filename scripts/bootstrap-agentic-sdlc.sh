@@ -269,10 +269,10 @@ note "  3. Resolve the locked toolchain:"
 note "       mise -C $managed_home --locked install"
 note "  4. Inspect the install surface and choose a plane:"
 note "       mise -C $managed_home tasks"
-note "       mise -C $managed_home run bundle:install -- --agent claude"
-note "       mise -C $managed_home run bundle:install -- --agent codex"
+note "       mise -C $managed_home run lifecycle:install -- --agent claude"
+note "       mise -C $managed_home run lifecycle:install -- --agent codex"
 note "  5. Verify the selected plane after installation:"
-note "       mise -C $managed_home run bundle:status"
+note "       mise -C $managed_home run lifecycle:status"
 note ''
 note 'To remove everything this script created:'
 note "  rm -rf $managed_home $state_home"

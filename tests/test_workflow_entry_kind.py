@@ -226,7 +226,7 @@ class WorkflowLifecycleTests(unittest.TestCase):
         config = self.config()
         destination = self.destination(config)
 
-        self.assertEqual(installer.status(config).messages[-1], "no owned entries for this host (run: mise run bundle:install)")
+        self.assertEqual(installer.status(config).messages[-1], "no owned entries for this host (run: mise run lifecycle:install)")
         self.assertEqual(installer.install(config).exit_code, 0)
 
         healthy = installer.status(config)

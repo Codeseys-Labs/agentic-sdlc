@@ -24,7 +24,7 @@ ownership, migrate, or remove them. Invoking a supported third party's installer
 here: the bytes land in the operator's home,
 written by the library's own code, under its own name and licence. No donor obligation attaches,
 because this bundle is not a donee. The tasks are opt-in, collision-checked, and reached by no
-gate leaf and no `contributor:setup`, deprecated `setup`, or `bundle:install` path, so installing
+gate leaf and no `contributor:setup`, deprecated `setup`, or `lifecycle:install` path, so installing
 is a deliberate choice and never a side effect. The installer's ownership model keeps the two
 coexisting: an entry this bundle does not own is classified `foreign` and preserved rather than
 replaced. See
@@ -110,7 +110,7 @@ rule 0009 refines), `skills/external-skill-libraries/`, and
   `<claude-home>/.claude/hooks/` by the same lifecycle and under the same preservation rules as
   workflows; Codex owns no record of them. That directory is not an auto-discovery surface —
   hooks run only from settings configuration — so installing, refreshing, adopting, or removing
-  one never runs it and never enables it, and no `bundle:*` path ever touches `settings.json`.
+  one never runs it and never enables it, and no `lifecycle:*` path ever touches `settings.json`.
   Wiring one in is the separately authorized, operation-specific `claude:hooks:activate`
   (`scripts/manage_claude_hooks.py`), whose ownership unit is ONE `hooks.<Event>` array element
   recorded in a receipt: activate appends exactly that element and refuses an absent, unowned, or
@@ -200,10 +200,16 @@ resolves the published prerelease, and the installed tree's `bin/ccodex` is the 
 command — `ccodex version`/`--help` answer tool-free, the first tool-needing verb refuses at
 exit 3 naming the `mise trust <tree>/mise.toml` remedy, and after that explicit reviewed step
 `ccodex bundle install --agent claude` activates the plugin (proven: 27 entries, five commands
-digest-matched, receipted uninstall reading clean). The UNVERSIONED
+digest-matched, receipted uninstall reading clean). **That spelling is RETIRED** as of the
+front-door unification and now refuses at exit 2 naming `ccodex install --scope user --agent
+<claude|codex>`; the sentence keeps the verb it executed because it is dated evidence about
+v0.7.4, not an instruction. Until the acquisition half lands (agentic-sdlc-7a2b W3b) the working
+equivalent on a release tree is `mise run lifecycle:install -- --agent claude`, because the
+top-level `install` is the RECEIPTED activation and refuses without an acquired candidate. The
+UNVERSIONED
 `mise use -g github:Codeseys-Labs/agentic-sdlc` does not resolve a prerelease (prerelease listing
 exclusion plus mise's built-in `minimum_release_age` filter while a release is young) and stays
-unclaimed. The release tree carries no `.git`, so gates, Seeds bootstrap, and `ccodex sdlc`
+unclaimed. The release tree carries no `.git`, so gates, Seeds bootstrap, and the lifecycle verbs'
 copy-activation stay on the managed checkout. Payload, activation
 boundary, and limits are recorded in `docs/plans/2026-08-14T163833Z-Install-UX.md`; ADR-0011 as
 amended 2026-08-24 carries the executed evidence.
@@ -222,8 +228,8 @@ without persisting trust. Never make permanent Windows environment/trust/config 
 
 From a clean clone the order is: clone, review `mise.toml` and `mise.lock`, obtain explicit
 operation-specific approval and run `mise trust ./mise.toml` for that exact reviewed config path,
-`mise --locked install`, then choose a plane with `mise run bundle:install -- --agent claude` or
-`mise run bundle:install -- --agent codex` (or install both). Claude's configured root is the
+`mise --locked install`, then choose a plane with `mise run lifecycle:install -- --agent claude` or
+`mise run lifecycle:install -- --agent codex` (or install both). Claude's configured root is the
 selected `--claude-home` plus `.claude`; Codex's is `--codex-home` or `CODEX_HOME`. Status,
 `--dry-run`, and `--help` are read-only. A Claude marketplace overlap is reported once per Claude
 plane and blocks only direct Claude installation, so a selected Codex plane still proceeds.
@@ -308,20 +314,20 @@ SeedProposal, not a dispatch. Prompt prose does not enforce a Codex model or eff
 Provider-neutral roles contain no static model or effort pin and never recommend host-default
 model selection as policy.
 
-- `bundle:install`, `bundle:status`, `bundle:uninstall`
-- `bundle:install:claude`, `bundle:install:codex`
-- `bundle:install:all-hosts`, `bundle:status:all-hosts`
+- `lifecycle:install`, `lifecycle:status`, `lifecycle:uninstall`
+- `lifecycle:install:claude`, `lifecycle:install:codex`
+- `lifecycle:install:all-hosts`, `lifecycle:status:all-hosts`
 - `claude:statusline:status`, `claude:statusline:activate`, `claude:statusline:deactivate`
 - `claude:hooks:status`, `claude:hooks:activate`, `claude:hooks:deactivate` — inspect or
   explicitly wire installed agent hooks into the operator's Claude settings, one hook and one
   owned array element at a time (`-- --hook <name>`, never "all"); never gate leaves, unreachable
-  from `bundle:install`, and each activation is its own operation-specific settings mutation
+  from `lifecycle:install`, and each activation is its own operation-specific settings mutation
 - `claude:workflows:status`, `claude:workflows:activate`, `claude:workflows:deactivate` —
   inspect or explicitly enable installed workflows for one target repository, one owned copied
   file at a time (`-- --workflow <name> --target <repo>`, never "all"); activation copies the
   owned installed bytes into the target's `.claude/workflows/`, refuses foreign or drifted
   state, and states that the change takes effect at the target's next session; never gate
-  leaves, unreachable from `bundle:install`, and each activation is its own operation-specific
+  leaves, unreachable from `lifecycle:install`, and each activation is its own operation-specific
   per-repo mutation
 - `ocx:launch`, `ocx:ultracode`, `ocx:status`, `ocx:restart`, `ocx:configure`
 - `rightsize:evaluate` — explicit model-rightsizing discovery/plan/evaluate/render surface; never a
@@ -442,13 +448,13 @@ model selection as policy.
   absent from `check`, `lefthook.yml`, and CI, and a report authorizes nothing
 - `release:build` — build the deterministic unpublished-candidate archive of the committed HEAD
   tree into `dist/` (`scripts/build_release.py`). `scripts/write_acquisition_receipt.py` is the
-  sole producer of the acquisition receipt `ccodex sdlc install`/`update` admit; placement of a
+  sole producer of the acquisition receipt `ccodex install`/`update` admit; placement of a
   built archive under `$XDG_DATA_HOME/agentic-sdlc/acquisition/candidates` is documented in
   `docs/plans/2026-08-14T163833Z-Install-UX.md`. A built archive is evidence of what was archived,
   never a release or a publication
 - `release:smoke` — run `policy/release-smoke.v1.json` against an EXTRACTED archive
   (`-- --tree <extracted-root>`, `scripts/smoke_release.py`). It exists because v0.7.3 and v0.7.4
-  both shipped a `ccodex sdlc` plane that refused itself at exit 3 while no gate executed the
+  both shipped a lifecycle-reader plane that refused itself at exit 3 while no gate executed the
   archive, so every case asserts report CONTENT and no case may assert a bare exit code: exit 3 is
   a legitimate status here, and only the body separates "the host is not certified" from "the
   dispatcher built the wrong interpreter invocation". A tree inside this checkout is refused rather
@@ -462,7 +468,7 @@ model selection as policy.
   libraries through their own front doors, opt-in and dry-run without `--yes`; `migrate` retires
   another channel's copies of the same upstream through that channel's own removal path before
   installing. Never gate leaves, and reached by no `contributor:setup`, deprecated `setup`, or
-  `bundle:install` path
+  `lifecycle:install` path
 - `research-os:install` (`--target` required, no implicit current-directory scaffold), `validate`,
   `test`, `self-test`, `secrets`, `check`, `hooks:install`, `contributor:setup`, `setup` (the
   one-release deprecated forwarder)
@@ -475,10 +481,10 @@ PARENT checkout's, and a task correctly deleted in the worktree still appears (m
 agentic-sdlc-7a2b — five deleted `operator-tools:*` rows were still listed while the worktree's own
 `mise.toml` had none, and `mise config` names both files). Diff against the `[tasks.*]` blocks in the
 `mise.toml` you actually edited, or run `mise tasks` from a standalone clone.
-`mise run bundle:status` always ends with one
+`mise run lifecycle:status` always ends with one
 terminal line — either `no owned entries for this host` or an `N ok, M conflict, K absent`
 summary — so a silent exit 0 is a defect, not a clean host. Status inventories lifecycle-owned
-records, not every unowned name in a configured collection. Use `bundle:install -- --agent
+records, not every unowned name in a configured collection. Use `lifecycle:install -- --agent
 <claude|codex> --dry-run` to detect an occupied unowned destination without adopting, overwriting,
 or deleting it.
 
@@ -491,7 +497,7 @@ existed only to be placed on PATH by a lifecycle that would not edit PATH. Gone 
 `operator-tools:*` tasks, the `<state_root>/agentic-sdlc-operator-tools/` store, and the interactive
 `set-fast-model` selector (refused by name, not ported). `mise run operator-tools:uninstall` is gone
 TOO, which is the obligation: an operator who ran that installer still owns those files and nothing
-here removes them. `ccodex sdlc doctor` names the leftover store as one `foreign-state` finding with
+here removes them. `ccodex doctor` names the leftover store as one `foreign-state` finding with
 the manual remedy — that finding is the collapsed deprecation release's whole surviving deliverable
 (ratified decision D3) — and README's retirement section carries the same recipe. Historical
 `ocx-launch` and `ocx-ultracode` copies are removed the same manual way. An ARMED `pending` slot
@@ -500,7 +506,7 @@ is deleted, and `recover` does not guess at a half-finished transition. Nothing 
 `$AGENTIC_SDLC_OCX`, `$AGENTIC_SDLC_JQ`, or `$AGENTIC_SDLC_NODE` any more; they remain
 caller-supplied exact-absolute overrides.
 
-The packaged statusline is now one BUNDLE LEDGER ROW (gh #10 phase 2): `bundle:install -- --agent
+The packaged statusline is now one BUNDLE LEDGER ROW (gh #10 phase 2): `lifecycle:install -- --agent
 claude` publishes `assets/claude/statusline-command.sh` to
 `<claude-home>/.claude/statusline/agentic-sdlc-statusline` at mode 0o755, and
 `install_skill_bundle.exact_owned_statusline` is the only place `manage_claude_statusline` takes a

@@ -5,7 +5,7 @@
 # ///
 """Inspect or explicitly wire installed Claude Code agent hooks into settings.
 
-This is the separately authorized ENABLE step for the `hook` entry kind. `bundle:install` lands
+This is the separately authorized ENABLE step for the `hook` entry kind. `lifecycle:install` lands
 hook bytes as owned lifecycle entries and never touches settings; nothing here is reachable from
 any install, gate, or `contributor:setup` path. The ownership unit is ONE ELEMENT of a settings
 `hooks.<Event>` array (the platform merges those arrays across scopes and a user's own entries
@@ -271,10 +271,10 @@ def owned_hook_content(name: str, hooks_dir: Path, state_path: Path) -> tuple[Pa
     """Return the installed hook path and bytes, or refuse an absent/unowned/drifted file."""
     destination = hooks_dir / f"{name}.sh"
     if not os.path.lexists(destination):
-        raise HooksError(f"installed hook is absent: {destination} (run: mise run bundle:install -- --agent claude)")
+        raise HooksError(f"installed hook is absent: {destination} (run: mise run lifecycle:install -- --agent claude)")
     record = installer.load_state(state_path)["entries"].get(str(destination))
     if record is None or record.get("kind") != "hook":
-        raise HooksError(f"hook is not owned by the bundle lifecycle: {destination} (run: mise run bundle:install -- --agent claude)")
+        raise HooksError(f"hook is not owned by the bundle lifecycle: {destination} (run: mise run lifecycle:install -- --agent claude)")
     try:
         content = destination.read_bytes()
     except OSError as exc:
@@ -445,7 +445,7 @@ def status(settings_path: Path, hooks_dir: Path, state_root: Path, only: str | N
         if record is None:
             installed_state = "unowned"
         elif not os.path.lexists(destination):
-            installed_state = "absent (run: mise run bundle:install -- --agent claude)"
+            installed_state = "absent (run: mise run lifecycle:install -- --agent claude)"
         elif not installer.entry_matches_record(destination, record):
             installed_state = "drifted from its ownership record"
         else:
@@ -474,11 +474,11 @@ def status(settings_path: Path, hooks_dir: Path, state_root: Path, only: str | N
         foreign = sum(1 for existing in event_value if not any(existing == owned for owned in owned_elements))
         if foreign:
             messages.append(f"foreign hooks.{event} elements: {foreign} (preserved)")
-    # bundle:status doctrine: always end with one terminal line, so a silent exit 0 is a defect.
+    # lifecycle:status doctrine: always end with one terminal line, so a silent exit 0 is a defect.
     if names:
         messages.append(f"{active} active, {inactive} inactive, {conflict} conflict")
     else:
-        messages.append("no owned hooks for this plane (run: mise run bundle:install -- --agent claude)")
+        messages.append("no owned hooks for this plane (run: mise run lifecycle:install -- --agent claude)")
     return EXIT_OK, messages
 
 

@@ -126,7 +126,7 @@ CLAIM_OPENCODEX_SUPERVISION_TOKENS = (
 # two-shape terminal line; scripts/install_skill_bundle.py's status_summary().
 CLAIM_BUNDLE_STATUS_NO_OWNED_ENTRIES = (
     "`no owned entries for this host`",
-    r'''return "no owned entries for this host (run: mise run bundle:install)"''',
+    r'''return "no owned entries for this host (run: mise run lifecycle:install)"''',
 )
 
 # Same runbook sentence, its "N ok, M conflict, K absent" half; status_summary()'s other branch.

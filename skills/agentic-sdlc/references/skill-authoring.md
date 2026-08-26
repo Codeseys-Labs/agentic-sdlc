@@ -153,7 +153,7 @@ that from becoming vendoring by another route, and each is load-bearing:
 
 - **Explicit and opt-in.** The `libraries:*` tasks are invoked deliberately and dry-run
   without `--yes`. No gate leaf and no `contributor:setup`, deprecated `setup`, or
-  `bundle:install` path reaches them, so an install is never a side effect of setting up this
+  `lifecycle:install` path reaches them, so an install is never a side effect of setting up this
   repository.
 - **No new prerequisite.** A front door invoked by a separate task that nothing in the
   gate's dependency closure depends on adds no bootstrap prerequisite. That is the

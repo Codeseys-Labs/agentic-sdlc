@@ -1071,13 +1071,13 @@ def exact_owned_statusline(config: Config) -> Path:
     if state.get("pending") is not None:
         raise InstallerError(
             "the bundle lifecycle holds an interrupted pending operation; resolve it"
-            " (mise run bundle:install -- --agent claude) before activating the statusline"
+            " (mise run lifecycle:install -- --agent claude) before activating the statusline"
         )
     record = state["entries"].get(str(destination))
     if not isinstance(record, dict) or record.get("kind") != "statusline":
         raise InstallerError(
             f"the packaged statusline is not an installed bundle entry: {destination}"
-            " (run: mise run bundle:install -- --agent claude)"
+            " (run: mise run lifecycle:install -- --agent claude)"
         )
     if not entry_matches_record(destination, record):
         raise InstallerError(
@@ -1087,7 +1087,7 @@ def exact_owned_statusline(config: Config) -> Path:
     if not os.access(destination, os.X_OK):
         raise InstallerError(
             f"the installed statusline is not executable: {destination}; reinstall it"
-            " (mise run bundle:install -- --agent claude) rather than naming a file Claude Code"
+            " (mise run lifecycle:install -- --agent claude) rather than naming a file Claude Code"
             " cannot run as statusLine.command"
         )
     return destination
@@ -1599,7 +1599,7 @@ def install(config: Config) -> Result:
 def status_summary(counts: dict[str, int]) -> str:
     """Render the terminal status line so status is never silent."""
     if not any(counts.values()):
-        return "no owned entries for this host (run: mise run bundle:install)"
+        return "no owned entries for this host (run: mise run lifecycle:install)"
     return f"{counts['ok']} ok, {counts['conflict']} conflict, {counts['absent']} absent"
 
 

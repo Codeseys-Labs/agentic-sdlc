@@ -1,4 +1,4 @@
-"""The host-level lifecycle readiness that ``ccodex sdlc doctor`` and ``status`` now READ.
+"""The host-level lifecycle readiness that ``ccodex doctor`` and ``ccodex status`` now READ.
 
 Four dimensions are under test: the selected payload against the activated version, the
 distribution-activation receipt's presence and seal validity, an interrupted transition, and the
@@ -83,33 +83,64 @@ SUPERSEDES_RELATION = "supersedes"
 #: as its own state.  Both are spelled out here and pinned against the reader's own constants below.
 ACTIVE_POINTER_SEGMENTS = ("active", "claude", "user.json")
 LEGACY_ACTIVE_POINTER_NAME = "active-receipt.json"
-# The five reader usage lines and the reader forms, pinned as literals: this ticket touches the
-# projection and must leave the f894 grammar surface byte-for-byte alone. The fifth line and the
-# `--apply` form are `recover`'s one mutating spelling (agentic-sdlc-baaa); the four read lines above
-# it are unchanged, because the dry-run assessment stays byte-for-byte what it already was.
+# The SIX reader usage lines and the reader forms, pinned as literals: this ticket touches the
+# projection and must leave the ratified front-door grammar byte-for-byte alone. The surface itself
+# MOVED with agentic-sdlc-7a2b W3a -- `ccodex sdlc <verb>` is retired at the dispatcher and all six
+# verbs are top-level -- so what is pinned here is the new surface, and the pin is what makes a later
+# drift in it a named failure rather than a silent widening. `inspect` is gone: `status` reads one
+# selected plane and `doctor` reads the whole box, so a fourth spelling of a read had nothing left to
+# say.
 READER_USAGE_LINES = (
-    "usage: ccodex sdlc inspect [--json]",
-    "       ccodex sdlc status [--json]",
-    "       ccodex sdlc doctor [--json]",
-    "       ccodex sdlc recover --dry-run [--json]",
-    "       ccodex sdlc recover --apply <plan-sha256>",
+    "usage: ccodex install   --scope user|project --agent claude|codex [--project PATH]"
+    " [--mode auto|link|copy] [--dry-run]",
+    "       ccodex status    --scope user|project --agent claude|codex [--project PATH] [--json]",
+    "       ccodex update    --scope user|project --agent claude|codex [--project PATH]",
+    "       ccodex uninstall --scope user|project --agent claude|codex [--project PATH] [--dry-run]",
+    "       ccodex doctor    [--json]",
+    "       ccodex recover   --dry-run [--json] | --apply <plan-sha256>",
 )
 PLAN_DIGEST = "5" * 64
+#: The two selectors EVERY selector verb requires, spelled once so a vector here cannot drift from the
+#: grammar it drives. There is no default and no wildcard for either, so nothing below omits one.
+SELECTED = ("--scope", "user", "--agent", "claude")
+# Each admitted form beside the whole ``Invocation`` it parses to. The expected side is a SIX-field
+# tuple now rather than four: the invocation carries the parsed `scope` and `agent` as well, so a
+# parser that silently dropped a selector would compare unequal here instead of passing on a
+# shortened tuple. THE FORWARDED VALUE IS STILL THE AGENT, and for `install`/`update`/`uninstall` it
+# is what `main` wraps in the modules' own `['--host', <agent>]` ABI -- one operator spelling
+# (`--agent`) and one module ABI (`--host`), which is why the operator flag below is `--agent` while
+# the module-facing assertions further down still read `--host`.
 READER_FORMS = (
-    (("inspect",), ("inspect", False, False, None)),
-    (("status",), ("status", False, False, None)),
-    (("doctor",), ("doctor", False, False, None)),
-    (("doctor", "--json"), ("doctor", False, True, None)),
-    (("recover", "--dry-run"), ("recover", True, False, None)),
-    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST)),
-    (("install", "--host", "claude"), ("install", False, False, "claude")),
-    (("install", "--host", "codex"), ("install", False, False, "codex")),
-    (("update", "--host", "claude"), ("update", False, False, "claude")),
-    (("update", "--host", "codex"), ("update", False, False, "codex")),
-    (("uninstall", "--host", "claude"), ("uninstall", False, False, "claude")),
-    (("uninstall", "--host", "codex"), ("uninstall", False, False, "codex")),
+    (("status", *SELECTED), ("status", False, False, None, "user", "claude")),
+    (("status", *SELECTED, "--json"), ("status", False, True, None, "user", "claude")),
+    (
+        ("status", "--scope", "user", "--agent", "codex"),
+        ("status", False, False, None, "user", "codex"),
+    ),
+    (("doctor",), ("doctor", False, False, None, None, None)),
+    (("doctor", "--json"), ("doctor", False, True, None, None, None)),
+    (("recover", "--dry-run"), ("recover", True, False, None, None, None)),
+    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None)),
+    (("install", *SELECTED), ("install", False, False, "claude", "user", "claude")),
+    (
+        ("install", "--scope", "user", "--agent", "codex"),
+        ("install", False, False, "codex", "user", "codex"),
+    ),
+    (("update", *SELECTED), ("update", False, False, "claude", "user", "claude")),
+    (
+        ("update", "--scope", "user", "--agent", "codex"),
+        ("update", False, False, "codex", "user", "codex"),
+    ),
+    (("uninstall", *SELECTED), ("uninstall", False, False, "claude", "user", "claude")),
+    (
+        ("uninstall", "--scope", "user", "--agent", "codex"),
+        ("uninstall", False, False, "codex", "user", "codex"),
+    ),
 )
-READER_VERBS = (("inspect", ()), ("status", ()), ("doctor", ()), ("recover", ("--dry-run",)))
+#: The three reader verbs and the argument tail each one needs. `status` carries the two required
+#: selectors, `doctor` and `recover` take neither -- `doctor` is the whole-box read and `recover`
+#: resumes the one pending slot the substrate can carry, which is not a scoped object.
+READER_VERBS = (("status", SELECTED), ("doctor", ()), ("recover", ("--dry-run",)))
 
 
 def hexof(seed: str) -> str:
@@ -231,7 +262,7 @@ def inventory(*roots: Path) -> dict[str, str]:
 WINDOWS_SKIP = unittest.skipIf(
     os.name == "nt",
     "this suite observes the acquisition/activation planes only the POSIX-only "
-    "durable-write ccodex sdlc lifecycle produces; native Windows fails closed by name "
+    "durable-write ccodex lifecycle produces; native Windows fails closed by name "
     "at the CLI, so no such plane exists there",
 )
 
@@ -291,7 +322,7 @@ class ReadinessHarness(unittest.TestCase):
         return self.state / "agentic-sdlc" / "activation" / LEGACY_ACTIVE_POINTER_NAME
 
     def write_pointer(self, receipt: dict[str, Any]) -> Path:
-        """Write the pointer exactly as ``ccodex sdlc install``/``update`` do: the receipt's own bytes."""
+        """Write the pointer exactly as ``ccodex install``/``update`` do: the receipt's own bytes."""
         self.pointer.parent.mkdir(parents=True, exist_ok=True)
         self.pointer.write_bytes(receipts.canonical_bytes(receipt))
         return self.pointer
@@ -319,7 +350,7 @@ class ReadinessHarness(unittest.TestCase):
         return root
 
     def write_updated_plane(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        """The plane a HEALTHY ``ccodex sdlc update`` leaves behind, in the shape it really leaves it.
+        """The plane a HEALTHY ``ccodex update`` leaves behind, in the shape it really leaves it.
 
         Two acquired payloads, the prior receipt RETAINED under its own id, the new receipt filed
         under its own id with one ``supersedes`` ancestor naming the prior one, and the pointer
@@ -1102,9 +1133,17 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         (self.state / "agentic-sdlc" / "activation" / "receipts" / f"{hexof('probe')}.json").write_bytes(b"{}")
         self.assertNotEqual(before, inventory(self.home, self.state, self.candidate.parent))
 
-    # ---- the f894 pins ---------------------------------------------------------------------------------
+    # ---- the front-door grammar pins -------------------------------------------------------------------
 
-    def test_the_reader_grammar_and_usage_surface_are_byte_for_byte_unchanged(self) -> None:
+    def test_the_reader_grammar_and_usage_surface_are_pinned_byte_for_byte(self) -> None:
+        """The reader's whole operator surface, held as literals rather than described.
+
+        RE-ANCHORED, not weakened, by agentic-sdlc-7a2b W3a: the pin used to hold the f894 `ccodex
+        sdlc <verb>` surface, and the ratified front door moved every verb to the top level. The
+        SUBJECT is unchanged -- one byte-for-byte pin of `usage()` plus the whole admitted/refused
+        grammar -- so what moved is the pinned text and the shape of an `Invocation`, and the assertions
+        stayed exact.
+        """
         rendered = reader.usage()
         self.assertEqual(rendered.splitlines()[: len(READER_USAGE_LINES)], list(READER_USAGE_LINES))
         self.assertEqual(rendered, EXPECTED_USAGE)
@@ -1112,19 +1151,42 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
             with self.subTest(arguments=arguments):
                 self.assertEqual(reader.parse_command(list(arguments)), expected)
         for invalid in (
+            # A RETIRED verb is not a verb: `inspect` is gone from `READER_VERBS`, so the reader itself
+            # no longer knows the name and the dispatcher refuses the old `ccodex sdlc inspect` spelling
+            # with both replacements named.
+            ("inspect",),
             ("inspect", "--dry-run"),
+            ("doctor", "--dry-run"),
             ("recover",),
+            # Each selector verb needs BOTH selectors: neither has a default and neither has a
+            # wildcard, so a bare verb, a lone `--scope`, and a lone `--agent` are three refusals.
             ("install",),
+            ("status",),
             ("update",),
             ("uninstall",),
+            ("install", "--scope", "user"),
+            ("install", "--agent", "claude"),
             ("update", "--json"),
-            ("install", "--host", "gemini"),
+            # `--host` is GONE from the operator grammar -- it survives only as the per-verb modules'
+            # own ABI, which no operator types -- and an unadmitted agent is refused by name.
+            ("install", "--host", "claude"),
+            ("install", "--scope", "user", "--agent", "gemini"),
+            ("install", "--scope", "everywhere", "--agent", "claude"),
+            # A value flag spelled with `=` is one argument where the grammar takes two.
+            ("install", "--scope=user", "--agent", "claude"),
         ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(reader.UsageError):
                     reader.parse_command(list(invalid))
         self.assertEqual(sorted(reader.LIFECYCLE_VERBS), ["install", "uninstall", "update"])
-        self.assertEqual(reader.LIFECYCLE_HOSTS, ("claude", "codex"))
+        self.assertEqual(reader.READER_VERBS, ("status", "doctor", "recover"))
+        self.assertEqual(reader.SELECTOR_VERBS, ("install", "status", "update", "uninstall"))
+        self.assertEqual(reader.LIFECYCLE_AGENTS, ("claude", "codex"))
+        self.assertEqual(reader.LIFECYCLE_SCOPES, ("user", "project"))
+        # The one asymmetry this file must NOT "fix": the operator flag and the module ABI are
+        # different strings on purpose, and both are pinned so neither can drift into the other.
+        self.assertEqual(reader.AGENT_FLAG, "--agent")
+        self.assertEqual(reader.FORWARDED_AGENT_FLAG, "--host")
 
     def test_a_mutating_verb_still_refuses_by_name_with_a_readiness_plane_present(self) -> None:
         self.write_candidate()
@@ -1133,18 +1195,22 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
         before = inventory(self.home, self.state)
 
         for vector in (
-            ("install", "--host", "claude"),
-            ("install", "--host", "codex"),
-            ("update", "--host", "claude"),
-            ("update", "--host", "codex"),
-            ("uninstall", "--host", "claude"),
-            ("uninstall", "--host", "codex"),
+            ("install", "--scope", "user", "--agent", "claude"),
+            ("install", "--scope", "user", "--agent", "codex"),
+            ("update", "--scope", "user", "--agent", "claude"),
+            ("update", "--scope", "user", "--agent", "codex"),
+            ("uninstall", "--scope", "user", "--agent", "claude"),
+            ("uninstall", "--scope", "user", "--agent", "codex"),
         ):
-            with self.subTest(verb=vector[0], agent=vector[2]):
+            with self.subTest(verb=vector[0], agent=vector[4]):
                 completed = self.run_reader(*vector)
                 self.assertEqual(completed.returncode, 3, completed.stderr)
                 # All three per-verb modules ship, so each refuses pre-effect in its OWN name; the
                 # loader's absence message appearing here would mean dispatch never reached one.
+                # THE `sdlc` WORD IS THE MODULE'S OWN and is asserted deliberately: the operator verb
+                # moved to the top level, the three modules did not, and they still print `ccodex sdlc
+                # <verb>`. Dropping it here would stop proving that the module answered rather than
+                # the reader -- the reader's own refusals no longer carry the word at all.
                 self.assertIn(f"error: ccodex sdlc {vector[0]} ", completed.stderr)
                 self.assertNotIn("is unavailable in this distribution", completed.stderr)
                 self.assertEqual(completed.stdout, "")
@@ -1160,7 +1226,7 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
 class SupersededActivationHistoryTest(ReadinessHarness):
     """A RETAINED prior receipt is history, not an ambiguity (agentic-sdlc-7b2e).
 
-    ``ccodex sdlc update`` retains the receipt it replaced under its own id on purpose: a kill between
+    ``ccodex update`` retains the receipt it replaced under its own id on purpose: a kill between
     the two writes must leave a readable prior statement.  So a healthy updated plane holds two filed
     activation receipts, and a reader that counted every filed receipt as a current activation
     reported that retention as ``state-ambiguous`` naming both versions -- a defect this reader
@@ -1591,17 +1657,20 @@ def incompatible_contract(contract: dict[str, Any], *, host: str = "claude-code"
     return changed
 
 
+#: ``reader.usage()`` byte for byte. Held as literals rather than assembled from the reader's own
+#: constants on purpose: a pin built out of the values it is pinning would follow every rename it is
+#: supposed to catch. So every word of the paragraph below is transcribed from
+#: ``scripts/ccodex_sdlc.py``, including the line breaks, and a reflow there fails here by design.
 EXPECTED_USAGE = (
-    "usage: ccodex sdlc inspect [--json]\n"
-    "       ccodex sdlc status [--json]\n"
-    "       ccodex sdlc doctor [--json]\n"
-    "       ccodex sdlc recover --dry-run [--json]\n"
-    "       ccodex sdlc recover --apply <plan-sha256>\n"
-    "       ccodex sdlc install --host claude|codex\n"
-    "       ccodex sdlc update --host claude|codex\n"
-    "       ccodex sdlc uninstall --host claude|codex\n\n"
-    "inspect, status, doctor, and recover --dry-run read checkout-development ownership and\n"
-    "recovery evidence without installing, updating, uninstalling, following, or changing state.\n"
+    "usage: ccodex install   --scope user|project --agent claude|codex [--project PATH]"
+    " [--mode auto|link|copy] [--dry-run]\n"
+    "       ccodex status    --scope user|project --agent claude|codex [--project PATH] [--json]\n"
+    "       ccodex update    --scope user|project --agent claude|codex [--project PATH]\n"
+    "       ccodex uninstall --scope user|project --agent claude|codex [--project PATH] [--dry-run]\n"
+    "       ccodex doctor    [--json]\n"
+    "       ccodex recover   --dry-run [--json] | --apply <plan-sha256>\n\n"
+    "status, doctor, and recover --dry-run read checkout-development ownership and recovery\n"
+    "evidence without installing, updating, uninstalling, following, or changing state.\n"
     "`recover --dry-run` is proposal-only, requires the literal --dry-run safeguard, and renders\n"
     "the sha256 of the exact plan it derived. `recover --apply <plan-sha256>` is the one mutating\n"
     "recover form: the approval IS the digest, so it re-derives that plan from verified journal\n"
@@ -1610,8 +1679,13 @@ EXPECTED_USAGE = (
     "install, update, and uninstall are the mutating lifecycle verbs. This reader performs no\n"
     "lifecycle mutation itself: it parses the closed grammar above and hands an admitted vector\n"
     "to one named per-verb module, refusing by name before any effect when that module is not\n"
-    "present in this distribution. Each of the three takes an explicit --host; there is no default\n"
-    "host and no wildcard, so one agent's removal can never reach another agent's bytes.\n"
+    "present in this distribution.\n\n"
+    "install, status, update, and uninstall each take an explicit --scope and\n"
+    "--agent; there is no default and no wildcard for either, so one agent's removal can\n"
+    "never reach another agent's bytes. doctor and recover take neither: doctor is the whole-box\n"
+    "read, and recover resumes the one pending slot the substrate can carry, which is not a\n"
+    "scoped object. --scope project, --mode, and --dry-run parse and are refused\n"
+    "by name at exit 3 until the waves that wire them; nothing is silently ignored.\n"
 )
 
 

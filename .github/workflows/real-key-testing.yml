@@ -31,8 +31,8 @@ jobs:
       - name: Install the bundle onto a fresh Claude plane
         shell: bash
         run: |
-          mise run bundle:install -- --agent claude
-          STATUS=$(mise run bundle:status -- --agent claude 2>&1)
+          mise run lifecycle:install -- --agent claude
+          STATUS=$(mise run lifecycle:status -- --agent claude 2>&1)
           echo "$STATUS" | tail -3
           echo "$STATUS" | grep -E " 0 conflict"
 

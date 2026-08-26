@@ -77,39 +77,42 @@ run_windows = "uv.exe run --python 3.12.11 --script scripts/validate_bundle.py"
 
 # The three general lifecycle tasks carry no plane of their own: the installer requires
 # `-- --agent claude` or `-- --agent codex` and refuses a selector-free run at exit 2, so a task
-# that named both planes by omission cannot exist here. `bundle:install:claude` and
-# `bundle:install:codex` below are the fixed-selector shortcuts.
-[tasks."bundle:install"]
+# that named both planes by omission cannot exist here. `lifecycle:install:claude` and
+# `lifecycle:install:codex` below are the fixed-selector shortcuts. The family was spelled
+# `bundle:*` until the front-door unification retired `ccodex bundle` as an operator spelling
+# (agentic-sdlc-7a2b W3a); these tasks are the checkout-development plane and still run the
+# installer entrypoint directly.
+[tasks."lifecycle:install"]
 description = "Install bundle entries for one plane (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 
-[tasks."bundle:status"]
+[tasks."lifecycle:status"]
 description = "Inspect one plane's bundle ownership, writing nothing (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
 
-[tasks."bundle:uninstall"]
+[tasks."lifecycle:uninstall"]
 description = "Remove unchanged owned entries from one plane (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py uninstall"
 
-[tasks."bundle:install:claude"]
+[tasks."lifecycle:install:claude"]
 description = "Install the skill bundle for Claude on this host"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent claude"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent claude"
 
-[tasks."bundle:install:codex"]
+[tasks."lifecycle:install:codex"]
 description = "Install the skill bundle for Codex on this host"
 run = "uv run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent codex"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install --agent codex"
 
-[tasks."bundle:install:all-hosts"]
+[tasks."lifecycle:install:all-hosts"]
 description = "Install on WSL and the paired native Windows host (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py install"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py install"
 
-[tasks."bundle:status:all-hosts"]
+[tasks."lifecycle:status:all-hosts"]
 description = "Report both hosts' state for one plane (requires -- --agent claude|codex)"
 run = "uv run --python 3.12.11 --script scripts/run_all_hosts.py status"
 run_windows = "uv.exe run --python 3.12.11 --script scripts/install_skill_bundle.py status"
@@ -168,7 +171,7 @@ description = "Run validation, installer tests, lifecycle self-test, and the sec
 depends = ["validate", "test", "self-test", "secrets"]
 
 # Opt-in third-party skill library installs (docs/adr/0009). Explicit and separate from
-# `bundle:install`: no task here is a dependency of `setup`, `check`, or any gate leaf, and
+# `lifecycle:install`: no task here is a dependency of `setup`, `check`, or any gate leaf, and
 # `install` refuses without an explicitly named library. Front doors are each library's own
 # installer, so no bytes enter this repository and no bootstrap prerequisite is added.
 [tasks."libraries:list"]
@@ -290,7 +293,7 @@ run = "lefthook install"
 
 [tasks."contributor:setup"]
 description = "Install this host's bundle and contributor Git hooks"
-depends = ["bundle:install", "hooks:install"]
+depends = ["lifecycle:install", "hooks:install"]
 
 [tasks.setup]
 description = "Deprecated: use contributor:setup"

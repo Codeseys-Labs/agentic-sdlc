@@ -818,12 +818,12 @@ class InstallSkillBundleTests(LifecycleTestCase):
         if not BASH:
             self.skipTest("Bash is required for the compatibility wrapper test")
         cases = {
-            (): "run bundle:install --",
-            ("status",): "run bundle:status --",
-            ("uninstall",): "run bundle:uninstall --",
+            (): "run lifecycle:install --",
+            ("status",): "run lifecycle:status --",
+            ("uninstall",): "run lifecycle:uninstall --",
             ("self-test",): "run self-test --",
-            ("--copy",): "run bundle:install -- --mode copy",
-            ("status", "-n", ":::", "escaped"): "run bundle:status -- -n ::: escaped",
+            ("--copy",): "run lifecycle:install -- --mode copy",
+            ("status", "-n", ":::", "escaped"): "run lifecycle:status -- -n ::: escaped",
         }
         for args, expected in cases.items():
             with self.subTest(args=args), tempfile.TemporaryDirectory() as temp:
@@ -1180,7 +1180,7 @@ class InstallSkillBundleTests(LifecycleTestCase):
             self.assertEqual(checked.exit_code, 0)
             self.assertEqual(
                 checked.messages[-1],
-                "no owned entries for this host (run: mise run bundle:install)",
+                "no owned entries for this host (run: mise run lifecycle:install)",
             )
 
     def test_unmanaged_codex_skill_is_found_by_install_dry_run_not_owned_status(self) -> None:
@@ -1209,7 +1209,7 @@ class InstallSkillBundleTests(LifecycleTestCase):
             self.assertEqual(checked.exit_code, 0)
             self.assertEqual(
                 checked.messages[-1],
-                "no owned entries for this host (run: mise run bundle:install)",
+                "no owned entries for this host (run: mise run lifecycle:install)",
             )
             self.assertEqual(previewed.exit_code, 1)
             self.assertIn(f"conflict: {destination}", previewed.messages)
@@ -1267,7 +1267,7 @@ class InstallSkillBundleTests(LifecycleTestCase):
     def test_status_summary_is_terminal_for_every_counted_shape(self) -> None:
         self.assertEqual(
             installer.status_summary({"ok": 0, "conflict": 0, "absent": 0}),
-            "no owned entries for this host (run: mise run bundle:install)",
+            "no owned entries for this host (run: mise run lifecycle:install)",
         )
         self.assertEqual(
             installer.status_summary({"ok": 3, "conflict": 2, "absent": 1}),

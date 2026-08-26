@@ -14,7 +14,7 @@
 #     launch-family verbs exec scripts/opencodex-claude.sh with AGENTIC_SDLC_OCX and
 #     AGENTIC_SDLC_JQ left unset, so the launcher's own direct-checkout branches take the pinned
 #     `mise -C <root> exec` routes, and the Python-backed lifecycle verbs run
-#     `mise -C <root> exec -- uv run --python 3.12.11 --script`. The sdlc family alone resolves
+#     `mise -C <root> exec -- uv run --python 3.12.11 --script`. The lifecycle family alone resolves
 #     the same pinned uv's managed CPython 3.12.11 and execs it directly with `-I -B`, because
 #     the reader's runtime admission refuses every other execution shape by name.
 #   * Bare `set-fast-model` is refused by name — pass an exact id from `ccodex models`, a Claude
@@ -24,7 +24,7 @@
 # RETIRED PLANE, and the remedy an operator still needs. Deleting the installer also deleted
 # `mise run operator-tools:uninstall`, so anyone who ran that installer still owns real files at
 # ${XDG_BIN_HOME:-~/.local/bin}/{ccodex,agentic-sdlc-statusline} plus a state store, and a stale
-# copy earlier on PATH than mise's shim keeps answering. `ccodex sdlc doctor` names the store and
+# copy earlier on PATH than mise's shim keeps answering. `ccodex doctor` names the store and
 # the manual removal whenever it is present; README's retirement section carries the same recipe.
 # Nothing removes those bytes on the operator's behalf: they are the operator's own.
 #
@@ -72,24 +72,32 @@ Providers and models (what a launched session can actually pick):
                               is no interactive selector; the bare form is refused by name.
   configure [args...]         Reviewed provider configuration.
 
-Installed-bundle lifecycle:
-  bundle <install|status|uninstall> --agent <claude|codex> [args...]
-                              --agent is required on every bundle verb: no default and no
-                              wildcard, so one agent's plane is never reached by accident.
+Lifecycle (ONE verb family; each verb is admitted or refused by its own module):
+  install --scope <user|project> --agent <claude|codex> [--project PATH]
+          [--mode <auto|link|copy>] [--dry-run]
+  status --scope <user|project> --agent <claude|codex> [--project PATH] [--json]
+  update --scope <user|project> --agent <claude|codex> [--project PATH]
+  uninstall --scope <user|project> --agent <claude|codex> [--project PATH] [--dry-run]
+                              --scope and --agent are BOTH required on these four: no default
+                              and no wildcard, so one agent's plane is never reached by
+                              accident and no run guesses which root it touches.
+  doctor [--json]             The whole-box read: every surviving state store, by path, with a
+                              verdict each. No selectors, because "what is on this machine"
+                              spans every scope by definition.
+  recover --dry-run [--json]  Propose the one pending transition this host can carry, and
+                              render the sha256 that approves exactly that plan.
+  recover --apply <plan-sha256>
+
+Other explicit planes:
   libraries <list|status|install|migrate|uninstall> [args...]
   statusline <status|activate|deactivate> [args...]
 
-Checkout-development evidence (read-only, no gateway or lifecycle effects):
-  sdlc <inspect|status|doctor> [--json]
-  sdlc recover --dry-run [--json]
-
-Checkout-development lifecycle (mutating verbs; each is admitted or refused by its own module):
-  sdlc install --host <claude|codex>     Explicit host, no default and no wildcard.
-  sdlc update --host <claude|codex>
-  sdlc uninstall --host <claude|codex>
-  sdlc recover --apply <plan-sha256>
-
   version                     Report this command's self-located root and how tools resolve.
+
+Retired spellings: \`ccodex bundle <verb>\` and \`ccodex sdlc <verb>\` are refused at exit 2 with
+the replacement invocation named. \`ccodex status\` with none of --scope/--agent/--project is
+still the GATEWAY status above; the lifecycle read is selected by those flags, whose absence
+the reader itself refuses rather than defaulting.
 
 This copy locates its distribution root as the parent of its own bin/ and resolves every tool
 through that root's reviewed mise.toml + mise.lock. \`version\` and \`--help\` need no tools; the
@@ -106,7 +114,7 @@ Maintenance tasks (test, validate, check, secrets, mermaid, hooks) are deliberat
 they belong to working ON the repository, not to using what it installed.
 
 exit codes: 0 ok - 1 failure - 2 usage - 3 refused (a boundary declined the operation before any
-effect) - 4 admitted partial or unknown effect (\`sdlc\` lifecycle verbs only)
+effect) - 4 admitted partial or unknown effect (the mutating lifecycle verbs only)
 EOF
 }
 
@@ -138,9 +146,14 @@ require_toolchain() {
         printf 'first tool-needing verb auto-installs the pinned toolset from the tree'"'"'s lock.\n' >&2
         exit 3
         ;;
+      # RECLASSIFIED from 1 to 3 (agentic-sdlc-7a2b W3a, the W0 seam's finding). An unreadable
+      # operator config is a precondition boundary declining before any effect -- nothing was
+      # attempted, no tool resolved, no route built -- which is exactly what class 3 is for. Class 1
+      # stays reserved for this command's OWN unexpected internal failures, and reporting a state in
+      # which nothing happened as a failure of the tool sent an operator looking in the wrong place.
       *)
-        printf 'error: mise cannot read %s:\n%s\n' "$root" "$probe" >&2
-        exit 1
+        printf 'refused: mise cannot read %s:\n%s\n' "$root" "$probe" >&2
+        exit 3
         ;;
     esac
   fi
@@ -164,7 +177,7 @@ run_ocx() {
   exec mise -C "$root" exec -- ocx "$@"
 }
 
-# `ccodex sdlc` intentionally does not share run_python: the reader's runtime admission refuses
+# The lifecycle family intentionally does not share run_python: the reader's runtime admission refuses
 # any interpreter that is not an isolated, bytecode-free Python 3.12.11 ("expected direct -I -B
 # execution"), and `uv run --script` cannot carry those flags. This route mirrors the rendered
 # plane's run_sdlc_python with the one divergence this file declares at the top: no install-time
@@ -178,14 +191,14 @@ run_ocx() {
 # resolution, and excluding the global config would silently change which settings govern).
 run_sdlc_python() {
   [ -f "$root/scripts/ccodex_sdlc.py" ] || {
-    printf 'error: the checkout-development sdlc entry is unavailable in this distribution\n' >&2
+    printf 'error: the checkout-development lifecycle entry is unavailable in this distribution\n' >&2
     exit 3
   }
   require_toolchain
   local interpreter
   if ! interpreter="$(mise -C "$root" exec -- uv python find --managed-python 3.12.11 2>/dev/null)"; then
     mise -C "$root" exec -- uv python install 3.12.11 1>&2 || {
-      printf 'error: uv could not provision the pinned CPython 3.12.11 that ccodex sdlc requires\n' >&2
+      printf 'error: uv could not provision the pinned CPython 3.12.11 that the lifecycle verbs require\n' >&2
       exit 1
     }
     interpreter="$(mise -C "$root" exec -- uv python find --managed-python 3.12.11)" || {
@@ -228,16 +241,97 @@ sub_dispatch_help() {
   exit 0
 }
 
+# The lifecycle selectors, spelled once. Their PRESENCE is what selects the lifecycle read over the
+# gateway `status` this command has always had; their VALUES are the reader's business, and their
+# absence is a refusal the reader itself issues rather than a default anything guesses here.
+has_lifecycle_selector() {
+  local argument
+  for argument in "$@"; do
+    case "$argument" in
+      --scope|--scope=*|--agent|--agent=*|--project|--project=*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+dispatch_launcher_verb() {
+  local route="$1"
+  shift
+  require_launcher
+  local verb
+  verb="$(launcher_verb "$route")"
+  # Verb-level help is the launcher's decision and prints tool-free, so a help-shaped first
+  # argument skips the toolchain preflight rather than refusing a question.
+  case "${1:-}" in -h|--help) ;; *) require_toolchain ;; esac
+  exec "$launcher" "$verb" "$@"
+}
+
+# The two retired namespaces. Each refuses at exit 2 -- Decision 9 reserves 3 for an operation the
+# system declines to perform and 2 for an input that is not in the grammar, and a retired spelling is
+# a vocabulary miss exactly like the unknown-command arm below, distinguished only by a message that
+# carries the migration. The MESSAGE is the contract every test asserts on: an exit code alone cannot
+# tell a retired spelling from any other usage error, so the replacement invocation is what is named
+# and what is checked. The agent is left as a choice rather than echoed from the caller's own argv:
+# it must be typed either way, and echoing a caller token into this command's output is a line-forging
+# surface the reader escapes for and a bash printf does not.
+retired_lifecycle_verb() {
+  printf 'error: `ccodex %s %s` is retired. The lifecycle verb is now top-level:\n' "$1" "$2" >&2
+  printf '  ccodex %s --scope user --agent <claude|codex>\n' "$2" >&2
+  exit 2
+}
+
+retired_read_verb() {
+  printf 'error: `ccodex sdlc %s` is retired. Read verbs are now top-level:\n' "$1" >&2
+  printf '  ccodex status --scope user --agent <claude|codex>   (per plane)\n' >&2
+  printf '  ccodex doctor                                       (whole box)\n' >&2
+  exit 2
+}
+
+retired_namespace() {
+  case "$1" in
+    bundle)
+      printf 'error: `ccodex bundle` is retired. The lifecycle verbs are now top-level:\n' >&2
+      printf '  ccodex install   --scope user --agent <claude|codex>\n' >&2
+      printf '  ccodex status    --scope user --agent <claude|codex>\n' >&2
+      printf '  ccodex uninstall --scope user --agent <claude|codex>\n' >&2
+      ;;
+    sdlc)
+      printf 'error: `ccodex sdlc` is retired. Its verbs are now top-level:\n' >&2
+      printf '  ccodex install|status|update|uninstall --scope <user|project> --agent <claude|codex>\n' >&2
+      printf '  ccodex doctor [--json]\n' >&2
+      printf '  ccodex recover --dry-run [--json] | --apply <plan-sha256>\n' >&2
+      ;;
+  esac
+  printf 'Run `ccodex --help` for the whole surface.\n' >&2
+  exit 2
+}
+
 route="${1:-}"
 case "$route" in
-  ensure|launch|ultracode|status|restart|configure)
-    require_launcher
-    verb="$(launcher_verb "$route")"
+  # ---- the lifecycle verb table (ratified decision 1, agentic-sdlc-7a2b) --------------------
+  # Every verb decision -- admit, refuse by name, or hand off to a per-verb module -- belongs to
+  # scripts/ccodex_sdlc.py, so the argument vector INCLUDING the verb is forwarded unchanged and
+  # nothing is shifted here. `status` is the one collision with this command's existing surface and
+  # is resolved below rather than silently reassigned.
+  install|update|uninstall|doctor|recover)
+    run_sdlc_python "$@"
+    ;;
+  status)
+    # The ONLY name shared by the gateway plane and the lifecycle. Both survive, and neither is
+    # guessed at: the lifecycle read is selected by the presence of a selector flag the gateway route
+    # has never taken, and every other `ccodex status` is the gateway supervision verb it has always
+    # been. A selector-shaped argv whose selectors are incomplete reaches the reader and is refused
+    # there by name, so `ccodex status --agent claude` never silently forwards `--agent claude` to
+    # the gateway.
+    if has_lifecycle_selector "$@"; then
+      run_sdlc_python "$@"
+    fi
     shift
-    # Verb-level help is the launcher's decision and prints tool-free, so a help-shaped first
-    # argument skips the toolchain preflight rather than refusing a question.
-    case "${1:-}" in -h|--help) ;; *) require_toolchain ;; esac
-    exec "$launcher" "$verb" "$@"
+    dispatch_launcher_verb status "$@"
+    ;;
+  ensure|launch|ultracode|restart|configure)
+    shift
+    dispatch_launcher_verb "$route" "$@"
     ;;
   ocx)
     require_launcher
@@ -295,13 +389,17 @@ case "$route" in
     printf 'muse is one row in `ccodex providers`, never a separate plane or launcher.\n'
     printf '\nThis is reachability, not authorization, and it is not a capability claim.\n'
     ;;
+  # ---- the two retired namespaces -----------------------------------------------------------
+  # These arms exist ONLY to refuse, and they are explicit rather than left to the unknown-command
+  # arm below for one reason: an operator whose muscle memory or whose script carries the old
+  # spelling gets the new invocation, not a bare "unknown command". The checkout tasks that used to
+  # share the `bundle` name are `lifecycle:*` now, and nothing here forwards to them: routing a
+  # retired operator spelling into a working task would keep it alive under a different label.
   bundle)
     shift
-    verb="${1:-}"
-    case "$verb" in
-      install|status|uninstall) shift; run_python install_skill_bundle.py "$verb" "$@" ;;
-      -h|--help|help) sub_dispatch_help bundle 'install|status|uninstall' ;;
-      *) printf 'error: ccodex bundle needs install|status|uninstall\n' >&2; exit 2 ;;
+    case "${1:-}" in
+      install|status|uninstall) retired_lifecycle_verb bundle "$1" ;;
+      *) retired_namespace bundle ;;
     esac
     ;;
   libraries)
@@ -324,10 +422,17 @@ case "$route" in
     ;;
   sdlc)
     shift
-    # Readers and the mutating lifecycle verbs take one route on purpose: every verb decision --
-    # admit, refuse by name, or hand off to a per-verb module -- belongs to scripts/ccodex_sdlc.py,
-    # so the argument vector is forwarded unchanged.
-    run_sdlc_python "$@"
+    case "${1:-}" in
+      install|update|uninstall) retired_lifecycle_verb sdlc "$1" ;;
+      inspect|status|doctor) retired_read_verb "$1" ;;
+      recover)
+        printf 'error: `ccodex sdlc recover` is retired. The recover verb is now top-level:\n' >&2
+        printf '  ccodex recover --dry-run [--json]\n' >&2
+        printf '  ccodex recover --apply <plan-sha256>\n' >&2
+        exit 2
+        ;;
+      *) retired_namespace sdlc ;;
+    esac
     ;;
   version)
     printf 'ccodex (agentic-sdlc self-located dispatcher)\n'

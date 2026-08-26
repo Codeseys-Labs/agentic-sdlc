@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("native Windows PowerShell and wslpath are required")
 
     repo = Path(__file__).resolve().parents[1]
-    task = f"bundle:{operation}"
+    task = f"lifecycle:{operation}"
     wsl_exit = run_host(
         f"WSL host: {operation}",
         ["mise", "--cd", str(repo), "run", task, "--", *forwarded],

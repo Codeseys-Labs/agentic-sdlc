@@ -34,11 +34,11 @@ itself guarantees — never a count, version, or wall time pulled from a specifi
    exits 0. AGENTS.md records this as roughly 1.3 GB across twelve pinned tools; that figure and
    any wall time are point-in-time and belong to the progress record, not to a repeatable
    assertion here.
-5. **`mise run bundle:install -- --agent claude`** and/or **`-- --agent codex`**. Each plane
+5. **`mise run lifecycle:install -- --agent claude`** and/or **`-- --agent codex`**. Each plane
    installs independently; a Claude marketplace overlap blocks only the Claude plane, so a
    selected Codex plane still proceeds. `--dry-run` and `--help` are read-only and safe to run
    first.
-6. **`mise run bundle:status`**. This task's guaranteed terminal line is always one of exactly
+6. **`mise run lifecycle:status`**. This task's guaranteed terminal line is always one of exactly
    two shapes: `no owned entries for this host`, or `N ok, M conflict, K absent` (a silent exit 0
    with neither line is a defect in the tool, not a clean host). Example captured today in the
    `asdlc-fresh` container, after both planes were installed — a snapshot, not a standing count:
@@ -198,7 +198,7 @@ does not mean the request failed to route — do not treat its presence as a rou
 ## 4. External libraries
 
 External libraries install through their own front doors (`libraries:list`, `libraries:install`,
-`libraries:status`) — never through `bundle:install` or any gate — and every install below is
+`libraries:status`) — never through `lifecycle:install` or any gate — and every install below is
 dry-run by default; the tool requires an explicit `--yes` to actually invoke a front door.
 
 **Dry-run first.** `mise run libraries:install -- <library>` with no `--yes` prints the same

@@ -7,7 +7,7 @@ Initialize the current directory (or the path in $ARGUMENTS) as an Agentic SDLC 
 this **reviewed runbook**. It is a host procedure, not a deterministic activation engine:
 inspect, propose, apply only approved changes, verify the result, and stop on ambiguity.
 This is the **project activation plane**. Global skills, commands, agents, and scripts are
-installed separately by `mise run bundle:install`; do not install or mutate global agent
+installed separately by `mise run lifecycle:install`; do not install or mutate global agent
 homes here.
 
 Idempotency is a claim requiring observed evidence, not an implementation assumption: inspect,

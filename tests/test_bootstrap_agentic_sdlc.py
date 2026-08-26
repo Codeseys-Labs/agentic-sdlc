@@ -141,9 +141,9 @@ class BootstrapAgenticSdlcTests(unittest.TestCase):
             self.assertIn("Verify this managed fetch before first use:", result.stdout)
             self.assertIn(f"remote/commit receipt: {receipt}", result.stdout)
             self.assertIn("First-use handoff, each command needs its own approval", result.stdout)
-            self.assertIn("bundle:install -- --agent claude", result.stdout)
-            self.assertIn("bundle:install -- --agent codex", result.stdout)
-            self.assertIn("run bundle:status", result.stdout)
+            self.assertIn("lifecycle:install -- --agent claude", result.stdout)
+            self.assertIn("lifecycle:install -- --agent codex", result.stdout)
+            self.assertIn("run lifecycle:status", result.stdout)
 
     @unittest.skipUnless(shutil.which("git"), "Git is required for real bootstrap update tests")
     def test_shallow_managed_clone_fast_forwards_after_remote_advances(self) -> None:

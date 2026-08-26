@@ -1,10 +1,18 @@
-"""``ccodex sdlc recover --apply <plan-sha256>``: the one mutating recover form (agentic-sdlc-baaa).
+"""``ccodex recover --apply <plan-sha256>``: the one mutating recover form (agentic-sdlc-baaa).
 
 THE APPROVAL IS THE DIGEST, so these tests measure exactly that: the dry-run assessment renders the
 digest of the plan it derived and writes nothing; the apply form re-derives that plan from verified
 journal and receipt state and either resumes, rolls back, or refuses BY NAME.  Every negative
 assertion carries a positive control, because a refusal that would also fire on a healthy host
 proves nothing about the boundary it claims to defend.
+
+THE VERB IS TOP-LEVEL SINCE agentic-sdlc-7a2b W3a, and the spellings below are deliberately not
+uniform.  ``ccodex sdlc recover`` is retired at the dispatcher (exit 2, naming the replacement), so
+every argv here starts at ``recover`` and every assertion about what the READER printed drops the
+``sdlc`` word.  ``scripts/ccodex_sdlc_recover.py`` is unchanged and still names itself ``ccodex sdlc
+recover --apply`` in its own messages, so every assertion about what the MODULE printed keeps it.
+That asymmetry is the documented one -- one operator spelling, one module ABI -- and an assertion that
+"tidied" it would stop distinguishing which of the two answered.
 """
 
 from __future__ import annotations
@@ -113,7 +121,11 @@ WINDOWS_SKIP = unittest.skipIf(
 
 
 class RecoverApplyHarness(unittest.TestCase):
-    """One installed dispatcher over a private home, plus planted interrupted journal state."""
+    """The committed dispatcher over a private home, plus planted interrupted journal state.
+
+    "Committed", not "installed": gh #10 phase 4 deleted the plane that rendered a per-operator copy,
+    so ``make_dispatcher`` points at the tree's own ``bin/ccodex`` and installs nothing.
+    """
 
     def make_dispatcher(self, root: Path) -> tuple[Path, dict[str, str]]:
         """Point the harness at the tree's ONLY dispatcher, ``bin/ccodex``.
@@ -261,7 +273,7 @@ class RecoverApplyHarness(unittest.TestCase):
     def plan_digest_from_dry_run(
         self, dispatcher: Path, environment: dict[str, str]
     ) -> tuple[str, subprocess.CompletedProcess[str]]:
-        completed = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run")
+        completed = self.run_dispatcher(dispatcher, environment, "recover", "--dry-run")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         lines = [line for line in completed.stderr.splitlines() if line.startswith("recovery plan ")]
         self.assertEqual(len(lines), 1, completed.stderr)
@@ -269,7 +281,9 @@ class RecoverApplyHarness(unittest.TestCase):
         self.assertTrue(lines[0].startswith(prefix), lines[0])
         digest = lines[0][len(prefix) : len(prefix) + 64]
         self.assertTrue(recover.is_plan_digest(digest), lines[0])
-        self.assertIn(f"ccodex sdlc recover --apply {digest}", lines[0])
+        # The READER renders this approval line, so it carries the top-level invocation an operator
+        # actually types.
+        self.assertIn(f"ccodex recover --apply {digest}", lines[0])
         return digest, completed
 
 
@@ -283,7 +297,7 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
             for value in MALFORMED_DIGESTS:
                 with self.subTest(digest=value):
                     completed = self.run_dispatcher(
-                        dispatcher, environment, "sdlc", "recover", "--apply", value
+                        dispatcher, environment, "recover", "--apply", value
                     )
                     self.assertEqual(completed.returncode, 2, completed.stderr)
                     self.assertIn("64-character lowercase hexadecimal", completed.stderr)
@@ -299,14 +313,18 @@ class RecoverApplyGrammarTests(RecoverApplyHarness):
                 ("recover", "--apply", FOREIGN_DIGEST, "--dry-run"),
             ):
                 with self.subTest(vector=vector):
-                    completed = self.run_dispatcher(dispatcher, environment, "sdlc", *vector)
+                    completed = self.run_dispatcher(dispatcher, environment, *vector)
                     self.assertEqual(completed.returncode, 2, completed.stderr)
                     self.assertEqual(completed.stdout, "")
-                    self.assertIn("usage: ccodex sdlc", completed.stderr)
+                    # The reader reprints its whole grammar on a usage error, and that grammar now
+                    # opens on the top-level `install` form.
+                    self.assertIn("usage: ccodex install", completed.stderr)
             # Positive control: the SAME dispatcher admits the well-formed spelling and reaches the
-            # module, which refuses on its own evidence (exit 3) rather than as a usage error.
+            # module, which refuses on its own evidence (exit 3) rather than as a usage error. The
+            # module's own message still spells itself `ccodex sdlc recover --apply`, which is exactly
+            # what makes this line evidence that the MODULE answered rather than the reader.
             control = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", FOREIGN_DIGEST
+                dispatcher, environment, "recover", "--apply", FOREIGN_DIGEST
             )
             self.assertEqual(control.returncode, 3, control.stderr)
             self.assertIn("ccodex sdlc recover --apply refused before any effect", control.stderr)
@@ -455,7 +473,7 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
 
             digest, human = self.plan_digest_from_dry_run(dispatcher, environment)
             machine = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--dry-run", "--json"
+                dispatcher, environment, "recover", "--dry-run", "--json"
             )
 
             self.assertEqual(machine.returncode, 0, machine.stderr)
@@ -506,7 +524,7 @@ class RecoverPlanDerivationTests(RecoverApplyHarness):
             root = Path(temp)
             dispatcher, environment = self.make_dispatcher(root)
 
-            completed = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run")
+            completed = self.run_dispatcher(dispatcher, environment, "recover", "--dry-run")
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn(
@@ -687,7 +705,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
     ) -> subprocess.CompletedProcess[str]:
         completed = super().run_dispatcher(dispatcher, environment, *arguments)
         return self.payload_host_or_skip(
-            completed, f"`ccodex {' '.join(arguments[:2])}` through the installed dispatcher"
+            completed, f"`ccodex {' '.join(arguments[:2])}` through the committed dispatcher"
         )
 
     def payload_host_or_skip(
@@ -717,7 +735,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
 
             applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
 
             self.assertEqual(applied.returncode, 0, applied.stderr)
@@ -730,11 +748,11 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             self.assertTrue((destination / "SKILL.md").is_file())
             # The plan is spent: the same digest no longer describes this host.
             replay = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
             self.assertEqual(replay.returncode, 3, replay.stderr)
             self.assertIn("found nothing to recover", replay.stderr)
-            after = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run")
+            after = self.run_dispatcher(dispatcher, environment, "recover", "--dry-run")
             self.assertEqual(after.returncode, 0, after.stderr)
             self.assertIn("nothing to recover", after.stderr)
 
@@ -747,7 +765,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
 
             applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
 
             self.assertEqual(applied.returncode, 0, applied.stderr)
@@ -777,7 +795,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             before = tree_hash(*self.observed_roots(environment))
 
             refused = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
 
             self.assertEqual(refused.returncode, 3, refused.stderr)
@@ -791,7 +809,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             fresh, _ = self.plan_digest_from_dry_run(dispatcher, environment)
             self.assertNotEqual(fresh, digest)
             applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", fresh
+                dispatcher, environment, "recover", "--apply", fresh
             )
             # 0 if every selected transition settled, 4 if something was preserved and named -- either
             # way the plan was ADMITTED.  4 rather than 1 since agentic-sdlc-d7b3: Decision 9 assigns 1
@@ -807,7 +825,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             before = tree_hash(*self.observed_roots(environment))
 
             refused = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", FOREIGN_DIGEST
+                dispatcher, environment, "recover", "--apply", FOREIGN_DIGEST
             )
 
             self.assertEqual(refused.returncode, 3, refused.stderr)
@@ -821,7 +839,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             before = tree_hash(*self.observed_roots(environment))
 
             refused = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", FOREIGN_DIGEST
+                dispatcher, environment, "recover", "--apply", FOREIGN_DIGEST
             )
 
             self.assertEqual(refused.returncode, 3, refused.stderr)
@@ -840,7 +858,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             payload_before = foreign.read_bytes()
 
             applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
 
             # Decision 9's class 4: an admitted partial effect, named and preserved.  It was 1 --
@@ -878,7 +896,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             before = tree_hash(*self.observed_roots(environment))
 
             refused = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", stale
+                dispatcher, environment, "recover", "--apply", stale
             )
 
             self.assertEqual(refused.returncode, 3, refused.stderr)
@@ -892,7 +910,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             fresh, _ = self.plan_digest_from_dry_run(dispatcher, environment)
             self.assertNotEqual(fresh, stale)
             applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", fresh
+                dispatcher, environment, "recover", "--apply", fresh
             )
             self.assertIn(applied.returncode, (0, 4), applied.stderr)
             self.assertNotIn("is not the plan this host's state derives", applied.stderr)
@@ -913,7 +931,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             before = tree_hash(*self.observed_roots(environment))
 
             refused = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
 
             self.assertEqual(refused.returncode, 3, refused.stderr)
@@ -926,7 +944,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             receipt.unlink()
             fresh, _ = self.plan_digest_from_dry_run(dispatcher, environment)
             applied = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", fresh
+                dispatcher, environment, "recover", "--apply", fresh
             )
             self.assertEqual(applied.returncode, 0, applied.stderr)
 
@@ -943,7 +961,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             digest, _ = self.plan_digest_from_dry_run(dispatcher, environment)
 
             refused = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
 
             self.assertEqual(refused.returncode, 3, refused.stderr)
@@ -964,7 +982,7 @@ class RecoverApplyExecutionTests(RecoverApplyHarness):
             journal.symlink_to(elsewhere)
 
             refused = self.run_dispatcher(
-                dispatcher, environment, "sdlc", "recover", "--apply", digest
+                dispatcher, environment, "recover", "--apply", digest
             )
 
             self.assertEqual(refused.returncode, 3, refused.stderr)
@@ -1064,8 +1082,9 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
                 check=False,
             )
             self.assertEqual(completed.returncode, 4, completed.stderr)
+            # The READER's own dispatch refusal, so it names the top-level invocation.
             self.assertIn(
-                "ccodex sdlc recover --apply returned no admitted exit class", completed.stderr
+                "ccodex recover --apply returned no admitted exit class", completed.stderr
             )
 
     def test_an_absent_module_refuses_the_apply_form_by_its_own_name(self) -> None:
@@ -1098,8 +1117,11 @@ class RecoverApplyBoundaryTests(RecoverApplyHarness):
                 check=False,
             )
             self.assertEqual(completed.returncode, 3, completed.stderr)
+            # The reader's loader refusal, not the absent module's: it necessarily carries the
+            # reader's own top-level spelling, because the module that would have named itself is
+            # exactly what is missing.
             self.assertIn(
-                "ccodex sdlc recover --apply is unavailable in this distribution", completed.stderr
+                "ccodex recover --apply is unavailable in this distribution", completed.stderr
             )
             self.assertIn("ccodex_sdlc_recover.py", completed.stderr)
             self.assertEqual(completed.stdout, "")
@@ -1195,7 +1217,7 @@ class RecoveryPlanLineTests(RecoverApplyHarness):
             )
             self.assertEqual(
                 f"recovery plan sha256 {honest_digest}: approve exactly this plan with"
-                f" `ccodex sdlc recover {reader.RECOVER_APPLY_FLAG} {honest_digest}`\n",
+                f" `ccodex recover {reader.RECOVER_APPLY_FLAG} {honest_digest}`\n",
                 line,
             )
 

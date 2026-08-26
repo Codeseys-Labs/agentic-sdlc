@@ -11,14 +11,14 @@ tmux is never a baseline requirement.
 git clone https://github.com/Codeseys-Labs/agentic-sdlc.git && cd agentic-sdlc
 mise trust ./mise.toml          # persistent, per-path, and needs your explicit approval
 mise --locked install           # 12 pinned tools, ~1.3 GB
-mise run bundle:install -- --agent claude   # or --agent codex; one plane per run, no default
+mise run lifecycle:install -- --agent claude   # or --agent codex; one plane per run, no default
 ```
 
 The dispatcher is `bin/ccodex` in the tree you just cloned; run it from there, or let mise expose
 it (see [`ccodex` — the operator dispatcher](#ccodex-the-operator-dispatcher)). There is no
 separate step that copies it into `~/.local/bin`.
 
-Then `mise run bundle:status -- --agent claude` should report `N ok, 0 conflict, 0 absent`. Full walkthrough with
+Then `mise run lifecycle:status -- --agent claude` should report `N ok, 0 conflict, 0 absent`. Full walkthrough with
 the reasoning behind each step: [Quickstart from a clean clone](#quickstart-from-a-clean-clone).
 Every command with what it does: [`ccodex` — the operator dispatcher](#ccodex-the-operator-dispatcher)
 and [the task table](#install-and-run-the-bundle). Verified from nothing on a fresh
@@ -86,8 +86,8 @@ library's own installer on explicit request.**
   operator's home, written by the library's own code, under its own name and licence, exactly
   as if the operator had typed the command. So no donor obligation attaches. These tasks are
   opt-in and collision-checked, and **no gate leaf, `contributor:setup`, deprecated `setup`,
-  or `bundle:install` path reaches them** — `check`'s dependency closure is `validate`, `test`,
-  `self-test`, `secrets`, and `contributor:setup` contains only `bundle:install` plus
+  or `lifecycle:install` path reaches them** — `check`'s dependency closure is `validate`, `test`,
+  `self-test`, `secrets`, and `contributor:setup` contains only `lifecycle:install` plus
   `hooks:install`. Installation is therefore a deliberate choice, never a side effect.
 
 The installer's ownership model is what makes the two coexist: an entry this bundle does not
@@ -287,7 +287,12 @@ and is container-proven (2026-08-24, v0.7.4), EXACT-VERSION ONLY: declare
 run `mise install`, and the installed tree exposes exactly one command, `ccodex`. Running
 `mise trust` on that tree's reviewed `mise.toml` is a persistent mutation needing your explicit
 operation-specific approval; after it, `ccodex bundle install --agent claude`
-activates the plugin. The unversioned `mise use -g github:Codeseys-Labs/agentic-sdlc` does not
+activates the plugin. **That spelling is retired now** — it refuses at exit 2 naming
+`ccodex install --scope user --agent <claude|codex>` — and the sentence keeps the verb it
+executed because it records what the container proved, not what to type. Until the acquisition
+half lands, `mise run lifecycle:install -- --agent claude` is the working equivalent on a release
+tree: the top-level `install` is the receipted activation and refuses without an acquired
+candidate. The unversioned `mise use -g github:Codeseys-Labs/agentic-sdlc` does not
 resolve a prerelease and is not claimed to work. The release tree carries no `.git`; gates and
 Seeds stay on the managed checkout. Contract, payload split, and boundaries:
 [`docs/plans/2026-08-14T163833Z-Install-UX.md`](docs/plans/2026-08-14T163833Z-Install-UX.md) and
@@ -376,9 +381,9 @@ replaces step 1 only.
    non-default roots, pass `--claude-home <path>` and `--codex-home <path>` after `--`.
 
    ```bash
-   mise run bundle:install -- --agent claude
-   # or: mise run bundle:install -- --agent codex
-   # inspect one plane without writing: mise run bundle:status -- --agent claude
+   mise run lifecycle:install -- --agent claude
+   # or: mise run lifecycle:install -- --agent codex
+   # inspect one plane without writing: mise run lifecycle:status -- --agent claude
    ```
 
    A detected Claude marketplace install is reported once as a Claude-plane conflict and blocks
@@ -393,12 +398,12 @@ replaces step 1 only.
    — see [the dispatcher section](#ccodex-the-operator-dispatcher) and, if you ran the retired
    installer on an earlier release, [Retired: the operator-tools PATH plane](#retired-the-operator-tools-path-plane).
 
-Each bundle lifecycle action ends in a terminal summary. `mise run bundle:status -- --agent
+Each bundle lifecycle action ends in a terminal summary. `mise run lifecycle:status -- --agent
 <claude|codex>` reports only
 entries already present in the lifecycle ownership record: either `no owned entries for this host`
 or an `N ok, M conflict, K absent` summary. It does not inventory unowned names in a configured
 collection. Before installation, or when a path may have been installed through another checkout,
-use `mise run bundle:install -- --agent <claude|codex> --dry-run`; that read-only preview discovers
+use `mise run lifecycle:install -- --agent <claude|codex> --dry-run`; that read-only preview discovers
 an occupied unowned destination, reports it as preserved, and never adopts, overwrites, or removes
 it. Install and uninstall summaries separately name installed/removed, preserved, planned, and
 conflict counts. `mise run check` runs the authoritative gate. Each command's exit code and output
@@ -482,11 +487,11 @@ Every task this repository defines, so `mise tasks` never reveals an undocumente
 
 | Task | Purpose |
 |---|---|
-| `bundle:install` / `bundle:status` / `bundle:uninstall` | Install, inspect, or remove entries for one plane on the current host. Each requires `-- --agent claude` or `-- --agent codex`; a selector-free run refuses at exit 2. |
-| `bundle:install:claude` | Install only the Claude Code plane on the current host. |
-| `bundle:install:codex` | Install only the Codex plane on the current host. |
-| `bundle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
-| `bundle:status:all-hosts` | Report current-host and native-Windows state when run from WSL. |
+| `lifecycle:install` / `lifecycle:status` / `lifecycle:uninstall` | Install, inspect, or remove entries for one plane on the current host. Each requires `-- --agent claude` or `-- --agent codex`; a selector-free run refuses at exit 2. |
+| `lifecycle:install:claude` | Install only the Claude Code plane on the current host. |
+| `lifecycle:install:codex` | Install only the Codex plane on the current host. |
+| `lifecycle:install:all-hosts` | Install the current host and, from WSL, the native Windows host too. |
+| `lifecycle:status:all-hosts` | Report current-host and native-Windows state when run from WSL. |
 | `research-os:install` | Scaffold the repo-scoped research OS through pinned uv/Python; pass installer arguments after `--`. `--target` is required, so there is no implicit current-directory scaffold. |
 | `claude:statusline:status` / `claude:statusline:activate` / `claude:statusline:deactivate` | Inspect or explicitly manage only Claude Code's `statusLine` fields. |
 | `ocx:launch` / `ocx:ultracode` | Launch Claude Code through the gateway using your own `~/.claude` login — native Claude models on your subscription, gateway models on their own providers — normally or with session-only Ultracode. Ordinary permissions are the default; a first `--yolo` is the explicit unsafe bypass profile. |
@@ -518,13 +523,13 @@ there is no minimum libc and no filesystem that has to expose `statx` birth time
 `cp -r` works can install. See "Ownership and lifecycle rules" below for what that costs.
 
 ```bash
-mise run bundle:install -- --agent claude
-mise run bundle:status -- --agent claude
+mise run lifecycle:install -- --agent claude
+mise run lifecycle:status -- --agent claude
 mise run check
 ```
 
 The native Windows path runs the ordinary current-host task; it does not invoke WSL. When
-`bundle:install:all-hosts` or `bundle:status:all-hosts` is run from WSL, it runs the WSL
+`lifecycle:install:all-hosts` or `lifecycle:status:all-hosts` is run from WSL, it runs the WSL
 current-host lifecycle first and then invokes the native Windows mise task. The two host
 summaries remain separate, and the native task's arguments and exit code are preserved.
 
@@ -535,7 +540,7 @@ settings, and no lifecycle here writes into a PATH directory at all. Writing you
 a persistent user-environment mutation that requires explicit operation-specific approval for that
 exact file; a general install approval never covers it.
 
-The packaged statusline is one **bundle ledger row**: `bundle:install -- --agent claude` publishes
+The packaged statusline is one **bundle ledger row**: `lifecycle:install -- --agent claude` publishes
 `assets/claude/statusline-command.sh` to `<claude-home>/.claude/statusline/agentic-sdlc-statusline`
 at mode `0755`, and that owned path is the only place `claude:statusline:activate` will take a
 command from — so a statusline that is absent, unowned, drifted, or unexecutable is a named refusal
@@ -544,7 +549,7 @@ activate it; writing `statusLine.type` and `statusLine.command` into your settin
 operation-specific grant below.
 
 ```bash
-mise run bundle:install -- --agent claude   # publishes the owned statusline command
+mise run lifecycle:install -- --agent claude   # publishes the owned statusline command
 mise run claude:statusline:status           # read-only: active | inactive | unmanaged | conflict
 ```
 
@@ -561,7 +566,7 @@ directly by mise, so a second dispatcher existed only to be placed on `PATH` by 
 would not edit `PATH`.
 
 Deleting the installer deleted `operator-tools:uninstall` with it, so **if you ran it, you still own
-those files and nothing here will remove them for you.** `ccodex sdlc doctor` names the leftover
+those files and nothing here will remove them for you.** `ccodex doctor` names the leftover
 store whenever it is present. Remove them by hand:
 
 ```bash
@@ -574,7 +579,7 @@ Two things worth checking while you are there. A stale `~/.local/bin/ccodex` ear
 mise's shim keeps answering as if nothing changed — `type ccodex` tells you which file wins. And if
 you activated the statusline through the old plane, `statusLine.command` in your Claude settings
 still points into `~/.local/bin`; re-run `claude:statusline:activate` after a
-`bundle:install -- --agent claude` so it names the owned ledger path instead. The historical
+`lifecycle:install -- --agent claude` so it names the owned ledger path instead. The historical
 `ocx-launch` and `ocx-ultracode` aliases, if you have them, are removed the same manual way.
 
 ### `ccodex` — the operator dispatcher
@@ -632,7 +637,10 @@ gateway attribution. See
 
 | Command | What it does |
 |---|---|
-| `ccodex bundle install\|status\|uninstall --agent claude\|codex` | Install, inspect, or remove one plane's bundle entries on this host; the selector is required and a run without it refuses at exit 2. `status` always ends in one terminal line: `no owned entries for this host`, or `N ok, M conflict, K absent`. |
+| `ccodex install\|status\|update\|uninstall --scope user\|project --agent claude\|codex` | The one lifecycle verb family. BOTH selectors are required on all four; a run missing either refuses at exit 2 naming the flag, and there is no default and no wildcard for either. `--scope project`, `--mode`, and `--dry-run` parse and are refused at exit 3 by name until the waves that wire them, so nothing is silently ignored. |
+| `ccodex doctor [--json]` | The whole-box read: every surviving state store, by absolute path, with a verdict each. No selectors — "what is on this machine" spans every scope by definition. |
+| `ccodex recover --dry-run [--json]` / `--apply <plan-sha256>` | Propose the one pending transition this host can carry and render the digest that approves exactly that plan, or resume it. The approval IS the digest. |
+| `ccodex bundle …` / `ccodex sdlc …` | **Retired.** Both refuse at exit 2 with the replacement invocation named. The checkout tasks that shared the `bundle` name are `lifecycle:*` now. |
 | `ccodex libraries list\|status` | List installable external skill libraries with their front doors and surface cost, or report which are already in this home. Read-only. |
 | `ccodex libraries install <name> [--yes]` | Install a named external library through **its own** front door. Dry run unless `--yes`; vendors nothing into this tree. |
 | `ccodex libraries migrate <name> [--yes]` | Retire another channel's copies of the same upstream through that channel's own removal path, then install. Dry run unless `--yes`. |
@@ -846,8 +854,8 @@ macOS; native Windows activation fails with a named unsupported verdict.
 Inspect ownership, then act:
 
 ```bash
-mise run bundle:status -- --agent claude
-mise run bundle:install -- --agent claude --dry-run
+mise run lifecycle:status -- --agent claude
+mise run lifecycle:install -- --agent claude --dry-run
 mise run check
 ```
 
@@ -855,7 +863,7 @@ mise run check
 of the bytes this lifecycle published there. A destination you MODIFIED is refused and preserved,
 because your content changes the tree digest or the link target. A destination you replaced with a
 byte-identical copy of the bundle's own payload is treated as owned and will be removed by
-`bundle:uninstall` — that is a deliberate, bounded weakening (the bytes removed are the bundle's own),
+`lifecycle:uninstall` — that is a deliberate, bounded weakening (the bytes removed are the bundle's own),
 and it is what lets the installer run on filesystems that expose no birth timestamp. AGENTS.md
 records the full doctrine.
 
@@ -864,7 +872,7 @@ refused by name — it tells you the version it found and the remedy, which is t
 and reinstall — and its bytes are never rewritten. There is no `--migrate-state` flag: the physical
 identity witnesses and the transaction journal those older documents carried no longer exist, so
 there is nothing a migration could faithfully convert. Diagnose an unowned destination with
-`bundle:install -- --agent <claude|codex> --dry-run` and resolve its ownership deliberately.
+`lifecycle:install -- --agent <claude|codex> --dry-run` and resolve its ownership deliberately.
 
 Crash consistency is one armed `pending` transition: a write records what it intends durably, moves
 the bytes, then commits, and a later run resolves it by comparing the live bytes to the recorded

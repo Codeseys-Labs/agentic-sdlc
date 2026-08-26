@@ -14,16 +14,29 @@ from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
-#: The real reader, driven directly under -I -B (gh #10 phase 4 deleted the rendered
-#: assets/launchers/ccodex.in template and the install_operator_tools.py plane that rendered it).
-#: There is no install step any more: the committed bin/ccodex resolves the "sdlc" route's pinned
-#: interpreter at run time through `mise -C <root> exec`, which requires this checkout's own
-#: mise.toml to be trusted under the REAL operator HOME -- a fact an isolated test HOME can never
-#: carry without a persistent trust mutation. Driving scripts/ccodex_sdlc.py directly, exactly as
-#: bin/ccodex's own run_sdlc_python resolves and execs it, sidesteps that boundary; the boundary
-#: itself is proven elsewhere (tests/test_bin_ccodex.py, tests/test_ccodex_seam.py).
+#: THE COMMITTED DISPATCHER, driven as a real process. This suite used to drive the reader directly
+#: under -I -B, because bin/ccodex refuses an untrusted root and the trust it wants is scoped to the
+#: REAL operator HOME -- a fact an isolated test HOME can never carry without a persistent operator
+#: mutation. The subprocess-seam harness closed that gap with a recording stub `mise` standing at
+#: exactly that boundary, so this suite now reaches its decisions through the same argv path an
+#: operator does: `bin/ccodex <verb> ...` rather than a hand-built approximation of the route it
+#: would have taken. `seam.stub_dispatcher_environment` is IMPORTED rather than re-implemented -- a
+#: second copy of the stub would be a second opinion about which routes the dispatcher can build.
+#:
+#: Two tests below deliberately keep the DIRECT reader invocation, and both say why in place: the
+#: interpreter-admission test (the real dispatcher cannot be made to hand the reader a bad
+#: interpreter, which is the subject) and the syscall trace (a bash layer plus a stub `mise` would
+#: add write and socket syscalls that have to be excepted, weakening the very claim the trace makes;
+#: the dispatcher layer's effect-freedom is proven more strongly in tests/test_ccodex_seam.py, by a
+#: before/after digest inventory of every file under the fixture).
 READER_SCRIPT = ROOT / "scripts" / "ccodex_sdlc.py"
 DISPATCHER_SCRIPT = ROOT / "bin" / "ccodex"
+SEAM_HARNESS = ROOT / "tests" / "seam_harness.py"
+seam_spec = importlib.util.spec_from_file_location("ccodex_sdlc_seam_harness", SEAM_HARNESS)
+assert seam_spec and seam_spec.loader
+seam = importlib.util.module_from_spec(seam_spec)
+sys.modules[seam_spec.name] = seam
+seam_spec.loader.exec_module(seam)
 #: The reader loaded IN-PROCESS, for the unit-level `retired_store_findings` coverage below. Every
 #: subprocess-driven test above still exercises the real file at its own real physical path; this
 #: import is a second, in-process view of the identical bytes for a function this file's other
@@ -51,48 +64,37 @@ validator_spec.loader.exec_module(validator)
 
 @unittest.skipIf(
     os.name == "nt",
-    "the ccodex sdlc lifecycle writes through the POSIX-only durable-write plane "
+    "the ccodex lifecycle writes through the POSIX-only durable-write plane "
     "(os.open O_DIRECTORY fsync barriers) behind a bash dispatcher; native Windows fails "
     "closed by name at the CLI",
 )
 class CcodexSdlcTests(unittest.TestCase):
     def make_dispatcher(self, root: Path) -> tuple[Path, dict[str, str], Path]:
-        """An isolated per-test query plane for the ``ccodex sdlc`` reader, no install step.
+        """An isolated per-test query plane plus the stub toolchain the real dispatcher needs.
 
-        See the module-level note on ``READER_SCRIPT``/``DISPATCHER_SCRIPT``: ``run_dispatcher``
-        drives the reader directly under ``-I -B`` for the "sdlc"-prefixed vectors this file
-        exercises, so no synthetic ``ocx``/``jq``/``uv``/interpreter binding is rendered here.
+        See the module-level note: the environment is an ALLOWLIST built by the seam harness, not
+        ``os.environ`` plus overrides, so no inherited tool root or state root can re-enter the route
+        and make a report describe the developer's machine. The two extras below are this suite's
+        own: ``CODEX_HOME`` because the projection reads both planes, and a poisoned ``PYTHONPATH``
+        that the reader's own ``-I`` isolation must ignore.
         """
         query_home = root / "query-home"
         query_state = root / "query-state"
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "HOME": str(query_home),
-                "XDG_STATE_HOME": str(query_state),
+        environment = seam.stub_dispatcher_environment(
+            root,
+            home=query_home,
+            state=query_state,
+            extra={
                 "CODEX_HOME": str(query_home / ".codex"),
                 "PYTHONPATH": str(root / "poisoned-pythonpath"),
-            }
+            },
         )
         return DISPATCHER_SCRIPT, environment, query_state
 
     def run_dispatcher(
         self, dispatcher: Path, environment: dict[str, str], *arguments: str
     ) -> subprocess.CompletedProcess[str]:
-        """Drive one ``ccodex`` invocation, routed the way ``bin/ccodex`` itself would route it.
-
-        A leading ``sdlc`` is this suite's own subject and is driven directly against the real
-        reader under ``-I -B``; the toolchain-resolution boundary above it is proven elsewhere
-        (``tests/test_bin_ccodex.py``, ``tests/test_ccodex_seam.py``), not duplicated here.
-        """
-        if arguments and arguments[0] == "sdlc":
-            return subprocess.run(
-                [str(Path(sys.executable)), "-I", "-B", str(READER_SCRIPT), *arguments[1:]],
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+        """Drive one ``ccodex`` invocation through the committed dispatcher, as an operator does."""
         return subprocess.run(
             [str(dispatcher), *arguments],
             env=environment,
@@ -100,6 +102,9 @@ class CcodexSdlcTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    #: The two selectors every selector verb requires, spelled once per this file.
+    SELECTED = ("--scope", "user", "--agent", "claude")
 
     def bundle_state_path(self, environment: dict[str, str]) -> Path:
         return Path(environment["XDG_STATE_HOME"]) / "agentic-sdlc-installer" / "state.json"
@@ -147,16 +152,16 @@ class CcodexSdlcTests(unittest.TestCase):
         (destination / "SKILL.md").write_text("---\nname: replaced-after-recording\n---\n")
         return destination, record
 
-    def test_inspect_json_is_a_read_only_checkout_development_report(self) -> None:
+    def test_status_json_is_a_read_only_checkout_development_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             dispatcher, environment, query_state = self.make_dispatcher(Path(temp))
 
-            completed = self.run_dispatcher(dispatcher, environment, "sdlc", "inspect", "--json")
+            completed = self.run_dispatcher(dispatcher, environment, "status", *self.SELECTED, "--json")
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             report = json.loads(completed.stdout)
             self.assertEqual(report["schema_version"], "ccodex-sdlc-read-report/v1")
-            self.assertEqual(report["command"]["verb"], "inspect")
+            self.assertEqual(report["command"]["verb"], "status")
             self.assertEqual(report["checkout"]["plane"], "checkout-development")
             self.assertEqual(report["checkout"]["version"], "0.7.5")
             self.assertIsNone(report["checkout"]["public_channel"])
@@ -184,9 +189,9 @@ class CcodexSdlcTests(unittest.TestCase):
             root = Path(temp)
             dispatcher, environment, _query_state = self.make_dispatcher(root)
             expected = str(self.bundle_state_path(environment))
-            for verb in ("status", "doctor", "inspect"):
+            for verb, selectors in (("status", self.SELECTED), ("doctor", ())):
                 with self.subTest(verb=verb):
-                    machine = self.run_dispatcher(dispatcher, environment, "sdlc", verb, "--json")
+                    machine = self.run_dispatcher(dispatcher, environment, verb, *selectors, "--json")
 
                     self.assertEqual(machine.returncode, 0, machine.stderr)
                     report = json.loads(machine.stdout)
@@ -200,10 +205,11 @@ class CcodexSdlcTests(unittest.TestCase):
     def test_all_read_only_verbs_and_renderer_parity_share_one_semantic_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             dispatcher, environment, query_state = self.make_dispatcher(Path(temp))
-            for verb, suffix in (("inspect", ()), ("status", ()), ("doctor", ()), ("recover", ("--dry-run",))):
+            # `inspect` is retired: `status` reads one selected plane and `doctor` the whole box.
+            for verb, suffix in (("status", self.SELECTED), ("doctor", ()), ("recover", ("--dry-run",))):
                 with self.subTest(verb=verb):
-                    human = self.run_dispatcher(dispatcher, environment, "sdlc", verb, *suffix)
-                    machine = self.run_dispatcher(dispatcher, environment, "sdlc", verb, *suffix, "--json")
+                    human = self.run_dispatcher(dispatcher, environment, verb, *suffix)
+                    machine = self.run_dispatcher(dispatcher, environment, verb, *suffix, "--json")
 
                     self.assertEqual(human.returncode, 0, human.stderr)
                     self.assertEqual(machine.returncode, 0, machine.stderr)
@@ -211,7 +217,7 @@ class CcodexSdlcTests(unittest.TestCase):
                     self.assertEqual(report["command"]["verb"], verb)
                     self.assertEqual(report["command"]["dry_run"], verb == "recover")
                     self.assertIn(
-                        f"ccodex sdlc {verb}: {report['overall']['state']}",
+                        f"ccodex {verb}: {report['overall']['state']}",
                         human.stdout,
                     )
                     self.assertIn(f"recovery: {report['recovery']['state']} (no effects)", human.stdout)
@@ -245,8 +251,8 @@ class CcodexSdlcTests(unittest.TestCase):
             )
             before = state_path.read_bytes()
 
-            human = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run")
-            machine = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run", "--json")
+            human = self.run_dispatcher(dispatcher, environment, "recover", "--dry-run")
+            machine = self.run_dispatcher(dispatcher, environment, "recover", "--dry-run", "--json")
 
             self.assertEqual(human.returncode, 0, human.stderr)
             self.assertEqual(machine.returncode, 0, machine.stderr)
@@ -282,7 +288,7 @@ class CcodexSdlcTests(unittest.TestCase):
             state_path.write_text('{"version":4,"entries":{},"entries":{},"pending":null}')
             malformed_before = state_path.read_bytes()
 
-            malformed = self.run_dispatcher(dispatcher, environment, "sdlc", "inspect", "--json")
+            malformed = self.run_dispatcher(dispatcher, environment, "status", *self.SELECTED, "--json")
 
             self.assertEqual(malformed.returncode, 0, malformed.stderr)
             malformed_report = json.loads(malformed.stdout)
@@ -301,7 +307,7 @@ class CcodexSdlcTests(unittest.TestCase):
             external.write_text("{}")
             state_path.symlink_to(external)
 
-            symlinked = self.run_dispatcher(dispatcher, environment, "sdlc", "status", "--json")
+            symlinked = self.run_dispatcher(dispatcher, environment, "status", *self.SELECTED, "--json")
 
             self.assertEqual(symlinked.returncode, 0, symlinked.stderr)
             symlinked_report = json.loads(symlinked.stdout)
@@ -323,7 +329,7 @@ class CcodexSdlcTests(unittest.TestCase):
             )
             foreign_before = state_path.read_bytes()
 
-            foreign_result = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
+            foreign_result = self.run_dispatcher(dispatcher, environment, "doctor", "--json")
 
             self.assertEqual(foreign_result.returncode, 0, foreign_result.stderr)
             foreign_report = json.loads(foreign_result.stdout)
@@ -388,8 +394,8 @@ class CcodexSdlcTests(unittest.TestCase):
                 canary = canaries[name]
                 builder(root, environment, canary)
 
-                human = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor")
-                machine = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
+                human = self.run_dispatcher(dispatcher, environment, "doctor")
+                machine = self.run_dispatcher(dispatcher, environment, "doctor", "--json")
 
                 self.assertEqual(human.returncode, 0, human.stderr)
                 self.assertEqual(machine.returncode, 0, machine.stderr)
@@ -415,8 +421,8 @@ class CcodexSdlcTests(unittest.TestCase):
                 )
             )
 
-            human = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor")
-            machine = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
+            human = self.run_dispatcher(dispatcher, environment, "doctor")
+            machine = self.run_dispatcher(dispatcher, environment, "doctor", "--json")
 
             self.assertEqual(human.returncode, 0, human.stderr)
             self.assertEqual(machine.returncode, 0, machine.stderr)
@@ -448,8 +454,8 @@ class CcodexSdlcTests(unittest.TestCase):
                 )
             )
 
-            human = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run")
-            machine = self.run_dispatcher(dispatcher, environment, "sdlc", "recover", "--dry-run", "--json")
+            human = self.run_dispatcher(dispatcher, environment, "recover", "--dry-run")
+            machine = self.run_dispatcher(dispatcher, environment, "recover", "--dry-run", "--json")
 
             self.assertEqual(human.returncode, 0, human.stderr)
             self.assertEqual(machine.returncode, 0, machine.stderr)
@@ -487,8 +493,8 @@ class CcodexSdlcTests(unittest.TestCase):
                 )
             )
 
-            human = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor")
-            machine = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
+            human = self.run_dispatcher(dispatcher, environment, "doctor")
+            machine = self.run_dispatcher(dispatcher, environment, "doctor", "--json")
 
             self.assertEqual(human.returncode, 0, human.stderr)
             self.assertEqual(machine.returncode, 0, machine.stderr)
@@ -503,21 +509,25 @@ class CcodexSdlcTests(unittest.TestCase):
     def test_closed_grammar_rejects_effectful_or_ambiguous_recovery_spellings(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             dispatcher, environment, query_state = self.make_dispatcher(Path(temp))
+            # Every one of these reaches the READER and is refused by its parser. A bare `ccodex`
+            # and an unknown top-level verb are the DISPATCHER's own arms and are covered by the seam
+            # inventory instead, because they never reach this grammar at all.
             invalid = (
-                ("sdlc",),
-                ("sdlc", "recover"),
-                ("sdlc", "recover", "--json"),
-                ("sdlc", "recover", "--json", "--dry-run"),
-                ("sdlc", "recover", "--dry-run", "--dry-run"),
-                ("sdlc", "inspect", "--dry-run"),
-                ("sdlc", "follow"),
-                ("sdlc", "install"),
+                ("recover",),
+                ("recover", "--json"),
+                ("recover", "--json", "--dry-run"),
+                ("recover", "--dry-run", "--dry-run"),
+                ("doctor", "--dry-run"),
+                ("install",),
+                ("install", "--scope", "user"),
+                ("status", "--agent", "claude"),
+                ("update", "--scope", "user", "--agent", "claude", "--mode", "copy"),
             )
             for arguments in invalid:
                 with self.subTest(arguments=arguments):
                     completed = self.run_dispatcher(dispatcher, environment, *arguments)
-                    self.assertEqual(completed.returncode, 2)
-                    self.assertIn("usage: ccodex sdlc", completed.stderr)
+                    self.assertEqual(completed.returncode, 2, completed.stderr)
+                    self.assertIn("usage: ccodex install", completed.stderr)
             self.assertFalse(query_state.exists())
 
     def test_wrong_or_unisolated_interpreters_refuse_before_any_report_is_trusted(self) -> None:
@@ -538,7 +548,7 @@ class CcodexSdlcTests(unittest.TestCase):
             dispatcher, environment, query_state = self.make_dispatcher(root)
 
             unisolated = subprocess.run(
-                [str(Path(sys.executable)), "-B", str(READER_SCRIPT), "inspect", "--json"],
+                [str(Path(sys.executable)), "-B", str(READER_SCRIPT), "doctor", "--json"],
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -577,7 +587,7 @@ class CcodexSdlcTests(unittest.TestCase):
             self.assertIsNotNone(wrong, "a wrong interpreter is required to test runtime admission")
 
             wrong_result = subprocess.run(
-                [str(wrong), "-I", "-B", str(READER_SCRIPT), "inspect", "--json"],
+                [str(wrong), "-I", "-B", str(READER_SCRIPT), "doctor", "--json"],
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -593,7 +603,7 @@ class CcodexSdlcTests(unittest.TestCase):
             # Positive control: the SAME reader, under the SAME pinned interpreter this suite runs
             # on, is admitted -- so the two refusals above are about the interpreter and not about a
             # report that refuses unconditionally.
-            admitted = self.run_dispatcher(dispatcher, environment, "sdlc", "inspect", "--json")
+            admitted = self.run_dispatcher(dispatcher, environment, "status", *self.SELECTED, "--json")
             self.assertEqual(admitted.returncode, 0, admitted.stderr)
             self.assertEqual(json.loads(admitted.stdout)["runtime"]["state"], "admitted")
 
@@ -674,12 +684,14 @@ class CcodexSdlcTests(unittest.TestCase):
     def test_the_reader_does_not_fall_back_to_poisoned_external_tools(self) -> None:
         """The reader loads every sibling by absolute path and never shells out by name.
 
-        Driven directly rather than through a rendered dispatcher (gh #10 phase 4 deleted that
-        rendering plane): ``run_dispatcher`` strips the leading ``sdlc`` and execs the real
-        ``scripts/ccodex_sdlc.py`` under ``-I -B``, so a poisoned ``PATH`` still proves the same
-        claim it always did -- nothing in the reader's own code resolves ``ocx``/``mise``/``uv``/
-        ``curl``/``git``/``claude``/``seeds``/``node`` by name, and its read-only guard blocks
-        ``subprocess`` outright.
+        DRIVEN DIRECTLY, not through the dispatcher, and the reason is the subject: a poisoned PATH
+        necessarily poisons the DISPATCHER's own ``mise`` too, and the dispatcher resolving its
+        pinned toolchain by name is correct behaviour rather than a fallback. Routing this case
+        through ``bin/ccodex`` would therefore assert nothing about the reader -- it would refuse at
+        the toolchain probe before the reader ran. What survives is the claim this test has always
+        made about the READER's own code: nothing in it resolves ``ocx``/``mise``/``uv``/``curl``/
+        ``git``/``claude``/``seeds``/``node`` by name, and its read-only guard blocks ``subprocess``
+        outright.
         """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -693,11 +705,23 @@ class CcodexSdlcTests(unittest.TestCase):
                 executable.chmod(0o755)
             environment["PATH"] = f"{sentinel_bin}:/usr/bin:/bin"
 
-            completed = self.run_dispatcher(dispatcher, environment, "sdlc", "doctor", "--json")
+            completed = subprocess.run(
+                [str(Path(sys.executable)), "-I", "-B", str(READER_SCRIPT), "doctor", "--json"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertFalse(marker.exists(), marker.read_text() if marker.exists() else "")
             self.assertFalse(query_state.exists())
+            # Positive control for the dispatcher half, so "no external tool ran" is not read as a
+            # claim about the whole command: the SAME poisoned PATH stops `bin/ccodex` at its own
+            # toolchain probe, by name, before the reader is reached.
+            through_dispatcher = self.run_dispatcher(dispatcher, environment, "doctor", "--json")
+            self.assertEqual(through_dispatcher.returncode, 3, through_dispatcher.stderr)
+            self.assertIn("refused: mise cannot read", through_dispatcher.stderr)
 
     def test_read_only_guard_rejects_filesystem_locks_processes_and_sockets(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -763,11 +787,15 @@ print('guard blocked every attempted effect')
     def test_the_reader_has_no_effectful_syscalls_or_external_tool_fallbacks(self) -> None:
         """The real reader's own syscall trace, driven directly: no bash layer, no mise, no child.
 
-        gh #10 phase 4 deleted the rendered dispatcher this trace used to cover, along with the
-        install-time plane that rendered it. What this test proves is scoped to exactly what
-        ``run_dispatcher`` drives for every ``sdlc`` vector in this file -- the real
-        ``scripts/ccodex_sdlc.py`` under ``-I -B`` -- so the trace covers the one process this
-        suite's other assertions exercise, with no bash-initialization noise to except.
+        DELIBERATELY NOT RE-POINTED at the dispatcher when the rest of this file was. Routing the
+        trace through ``bin/ccodex`` would add three classes of syscall that have nothing to do with
+        the reader and would each need an exception: bash initialization, the stub ``mise``'s own
+        append to its argv log, and glibc's NSS probe of an absent ``/var/run/nscd/socket``. Every
+        such exception weakens the very claim the trace makes, and the dispatcher layer's
+        effect-freedom is already proven MORE strongly elsewhere -- ``tests/test_ccodex_seam.py``
+        inventories every file under its fixture by digest before and after each invocation, which
+        catches an effect a syscall filter could be argued past. So this stays the reader's own
+        trace, with no bash-initialization noise to except.
         """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

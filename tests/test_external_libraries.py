@@ -736,7 +736,7 @@ class DryRunCommandTests(unittest.TestCase):
         self.assertIn("ecc install --target claude", result.stdout)
         self.assertIn("uv tool install hyperresearch", result.stdout)
         self.assertIn("284", result.stdout)
-        self.assertIn("Nothing below is installed by `bundle:install`", result.stdout)
+        self.assertIn("Nothing below is installed by `lifecycle:install`", result.stdout)
 
     def test_install_is_dry_run_by_default_and_runs_nothing(self) -> None:
         result = self.run_cli("install", "mattpocock")
@@ -1334,7 +1334,7 @@ class RecordedAgentSetTests(unittest.TestCase):
 
 
 class IsolationFromInstallPathTests(unittest.TestCase):
-    """No verb here may be reachable from bundle:install, setup, or any gate leaf."""
+    """No verb here may be reachable from lifecycle:install, setup, or any gate leaf."""
 
     def test_no_install_or_gate_task_depends_on_a_libraries_task(self) -> None:
         config = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
@@ -1376,7 +1376,7 @@ class IsolationFromInstallPathTests(unittest.TestCase):
             "contributor:setup",
             "setup",
             "check",
-            "bundle:install",
+            "lifecycle:install",
             "test",
             "self-test",
         ):
