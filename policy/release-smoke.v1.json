@@ -200,7 +200,7 @@
       ]
     },
     {
-      "id": "project-scope-parses-and-is-refused-by-name-until-it-is-wired",
+      "id": "project-scope-resolves-the-root-and-refuses-an-unresolvable-cwd-by-name",
       "argv": [
         "install",
         "--scope",
@@ -215,10 +215,12 @@
       "environment": "host",
       "expect_exit": 3,
       "expect_stderr_present": [
-        "project-scope-not-yet-wired",
-        "wave W4 of agentic-sdlc-7a2b"
+        "unresolvable-project-root",
+        "no project root to resolve; name one with --project",
+        "Nothing was written"
       ],
       "expect_stderr_absent": [
+        "project-scope-not-yet-wired",
         "expected direct -I -B execution",
         "Traceback",
         "usage: ccodex"
