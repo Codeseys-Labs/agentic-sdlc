@@ -2,9 +2,10 @@
 
 - **Status:** accepted
 - **Date:** 2026-08-22
-- **Note:** amended 2026-08-23 (see the amendment at the end of this record). The six-outcome
-  wave vocabulary the deleted `wave-verdict.py` carried is restored to the operative doc
-  surfaces; every deletion this record decided stands.
+- **Note:** amended 2026-08-23 and again 2026-08-26 (see the amendments at the end of this record).
+  The six-outcome wave vocabulary the deleted `wave-verdict.py` carried is restored to the operative
+  doc surfaces, and the fourth reading's approval check gains a third clause binding the grant to the
+  gate receipt it was shown; every deletion this record decided stands.
 - **Deciders:** operator (ratification of the demolition plan recorded as `agentic-sdlc-3c90`); agent (evidence and drafting)
 - **Relates to:** `skills/agentic-sdlc/SKILL.md`, `commands/sdlc-wave.md`,
   `docs/evidence/waves/TEMPLATE.md`, `skills/agentic-sdlc/references/readiness-composition.md`,
@@ -173,3 +174,31 @@ deliberately not restored: it adjudicated between the sealed records of a crashe
 and that two-record protocol died with the stack this record deleted. Everything else here stands
 unchanged: the eight tools stay deleted, nothing becomes a gate leaf, and the ~120-line derivation
 script stays behind the reversal condition above.
+
+## Amendment — 2026-08-26: the approval reading gains a third clause binding the grant to its gate receipt
+
+Decision 2 calls the fourth reading a "two-line reading" and states that `commands/sdlc-wave.md` step
+8 "names all four". Both halves still hold — there are four readings and step 8 names them — but that
+fourth reading now has three clauses rather than two, and the dated text above is left as written
+rather than reworded.
+
+The gap this closes is one the record left open by composition. It already requires the evidence file
+to name a gate-receipt `self_digest` recorded on the integration commit, and already requires the
+approval to be dated before that commit. Nothing tied the approval to THAT receipt. A dated approval
+and a receipt recorded independently of each other evidence only that both exist, which leaves the
+grant about the wave rather than about the gated tree — the same "is this evidence about what was
+merged" question the Consequences claim as this record's positive result, unanswered for the grant
+itself. So `docs/evidence/waves/TEMPLATE.md` gains an `approved-against` field under Operator
+approval, holding the `self_digest` the operator was shown and required to equal the one under Gate
+receipt, and step 8's fourth reading names it. `unknown` is the honest value when the operator
+approved against no receipt; backfilling it from the receipt afterwards would manufacture the binding
+instead of recording it, which is the one way this lever can be made worthless. Seed
+`agentic-sdlc-4a07`, re-scoped after this record deleted the condition-5 machinery its original scope
+targeted.
+
+Per decision 6 this stays evidence and adds no gate leaf: it is a reading a reviewer performs, and no
+mechanical check is introduced. Scope is records written from the template onward. The one open stub,
+`docs/evidence/waves/f194-w1.md`, is deliberately not edited — its approval blockquote reads `unknown`
+because no approval existed when it was staged, so `unknown` is what the new field would hold, and its
+conductor fills both at fan-in. The Compliance list above is unchanged for the same reason: it states
+what is true of this tree today, and no landed record was retro-fitted.

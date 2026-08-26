@@ -400,8 +400,12 @@ replaces step 1 only.
 
 Each bundle lifecycle action ends in a terminal summary. `mise run lifecycle:status -- --agent
 <claude|codex>` reports only
-entries already present in the lifecycle ownership record: either `no owned entries for this host`
-or an `N ok, M conflict, K absent` summary. It does not inventory unowned names in a configured
+entries already present in the lifecycle ownership record: either
+`no owned entries for this host (run: mise run lifecycle:install)`
+or an `N ok, M conflict, K absent` summary — the empty-plane line quoted here in full, remedy hint
+included, because the truncated paraphrase is a shape the product never prints
+(`agentic-sdlc-b97e`; `tests/test_verification_runbook_contract.py` now binds both shapes to
+`status_summary()`'s own returns). It does not inventory unowned names in a configured
 collection. Before installation, or when a path may have been installed through another checkout,
 use `mise run lifecycle:install -- --agent <claude|codex> --dry-run`; that read-only preview discovers
 an occupied unowned destination, reports it as preserved, and never adopts, overwrites, or removes

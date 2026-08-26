@@ -36,8 +36,16 @@ Validity derivation) ever reads an absent outcome as `accepted`.
 
 > `<the operator's verbatim approval, quoted exactly as written, including its date>`
 
-The quoted date must precede the committer date below. An approval recorded after the effect it
-authorizes is not an approval.
+- `approved-against`: `<the gate-receipt self_digest the operator was shown, or unknown>`
+
+A grant rests on three levers, and this record carries all three. The quote is verbatim, because the
+record may not improve on what was said. The quoted date must precede the committer date below — an
+approval recorded after the effect it authorizes is not an approval. And `approved-against` must equal
+the `self_digest` under Gate receipt below: a dated approval and a receipt recorded independently of
+each other say only that both exist, while naming the digest is what makes the grant about THIS gated
+tree rather than about whatever the head later became. If the operator approved against no receipt,
+write `unknown` — a named gap that fails closed, never a field to backfill by copying the digest in
+afterwards, which would manufacture the very binding this lever exists to record.
 
 ## Integration
 

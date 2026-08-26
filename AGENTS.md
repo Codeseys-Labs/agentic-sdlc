@@ -502,8 +502,14 @@ agentic-sdlc-7a2b — five deleted `operator-tools:*` rows were still listed whi
 `mise.toml` had none, and `mise config` names both files). Diff against the `[tasks.*]` blocks in the
 `mise.toml` you actually edited, or run `mise tasks` from a standalone clone.
 `mise run lifecycle:status` always ends with one
-terminal line — either `no owned entries for this host` or an `N ok, M conflict, K absent`
-summary — so a silent exit 0 is a defect, not a clean host. Status inventories lifecycle-owned
+terminal line — either `no owned entries for this host (run: mise run lifecycle:install)` or an
+`N ok, M conflict, K absent` summary — so a silent exit 0 is a defect, not a clean host. Quote the
+empty-plane line WITH its parenthesised remedy, and never from memory: the truncated form is what a
+release-smoke case asserted against a shape the product never prints (agentic-sdlc-b97e, fixed at
+5dae879), and the task name inside the remedy has already moved once, from `bundle:install` at
+b617529. Both shapes are now bound to `status_summary()`'s own returns by
+`tests/test_verification_runbook_contract.py`, so a reworded product line reddens the gate here
+instead of rotting this sentence. Status inventories lifecycle-owned
 records, not every unowned name in a configured collection. Use `lifecycle:install -- --agent
 <claude|codex> --dry-run` to detect an occupied unowned destination without adopting, overwriting,
 or deleting it.
@@ -687,7 +693,19 @@ for the operator to remove by hand and is never deleted on their behalf. Linux/m
 persistence-barrier failures stop mutation; native Windows provides handle-bound process-crash
 recovery but does not claim sudden-power-loss durability for namespace transitions, and staged copy
 CONTENT is no longer fsynced tree-wide either, so a copy-mode publication is process-crash consistent
-rather than power-loss durable. Concurrent external mutation of managed paths during a write command
+rather than power-loss durable. **A green gate is not evidence that the persistence-barrier property
+HOLDS on the reference CI runner — only that these code paths execute there and refuse where they say
+they refuse.** That runner's workspace is ext4 on `/dev/vda` mounted
+`rw,relatime,journal_async_commit,nobarrier,data=writeback`, so barriers are off and the journal is
+writeback with asynchronous commit; the string is the `findmnt` line
+`.github/scripts/ci-capability-probe.py` prints in the advisory probe step (never a gate leaf) that
+`.github/workflows/validate.yml` runs before `mise run check`. First recorded 2026-08-22 on seed
+`agentic-sdlc-7f56`, re-read unchanged 2026-08-26 from the GREEN ubuntu leg of run 32946016403. The
+mount is the runner image's choice and not ours to change; the honest reading is that a durability
+refusal is exercised in CI while the property it protects is not.
+`docs/research/2026-08-22-ci-red-forensics.md` is the record for that runner's OTHER degenerate
+property — its timestamp granularity, measured degenerate at all three stamps — and it does not carry
+this mount string. Concurrent external mutation of managed paths during a write command
 is unsupported. Exact legacy links and byte-identical copies can be adopted; foreign, retargeted, and
 modified entries are preserved, while unchanged owned copies may refresh. The measured argument for
 the weakening is recorded in `docs/research/2026-08-22-ci-red-forensics.md` and quoted in

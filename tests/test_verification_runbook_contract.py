@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 import re
+import sys
 import unittest
 
 
 ROOT = Path(__file__).parents[1]
 RUNBOOK = ROOT / "docs" / "runbooks" / "verification.md"
+AGENTS_MD = ROOT / "AGENTS.md"
+README_MD = ROOT / "README.md"
 VALIDATE_BUNDLE_PY = ROOT / "scripts" / "validate_bundle.py"
 OPENCODEX_CLAUDE_SH = ROOT / "scripts" / "opencodex-claude.sh"
 INSTALL_SKILL_BUNDLE_PY = ROOT / "scripts" / "install_skill_bundle.py"
@@ -270,6 +274,70 @@ class VerificationRunbookContractTests(unittest.TestCase):
                     f"{claim_name} must be checked by exactly one assert_claim call, found in: "
                     f"{methods!r}",
                 )
+
+
+def _installer_module():
+    """Load `scripts/install_skill_bundle.py` under a name no sibling suite registers.
+
+    The name is this module's own, not `installer`, because `tests/test_install_skill_bundle.py`
+    registers that one for the same file and whichever suite ran second would rebind it. The
+    `sys.modules` insertion is not optional: the installer's `@dataclass` decorators resolve their
+    field types through `sys.modules[cls.__module__].__dict__`, so an unregistered module dies at
+    import with an `AttributeError` from inside `dataclasses`.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "install_skill_bundle_for_prose_contract", INSTALL_SKILL_BUNDLE_PY
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class BundleStatusTerminalLineDocumentationTests(unittest.TestCase):
+    """AGENTS.md and README quote `status_summary()`'s OWN two lines, remedy hint included.
+
+    Why this is not another CLAIM_* pair: those pin the source text as a literal beside the prose
+    fragment, so an editor who reworders the product line and updates the pinned pattern in the same
+    change leaves a stale quote in these two documents GREEN -- both sides moved together. Here both
+    shapes are DERIVED by calling the function, so the documents are compared against what the
+    product returns today and nothing else.
+
+    The regression this exists for: a release-smoke case asserted AGENTS.md's truncated paraphrase
+    instead of the line `status_summary` returns, and it cost two red CI runners because the
+    developer host only ever exercised the other branch (seed `agentic-sdlc-b97e`, manifest fixed at
+    5dae879). The task name inside the remedy has already moved once too, from `bundle:install` to
+    `lifecycle:install` at b617529, which is exactly the drift a paraphrase cannot survive.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        summarize = _installer_module().status_summary
+        cls.empty = summarize({"ok": 0, "conflict": 0, "absent": 0})
+        # The counted branch renders whatever its counts hold, so PLACEHOLDER counts render the
+        # placeholder shape both documents print. Real integers would only ever produce one host's
+        # numbers, which no document can quote.
+        cls.counted = summarize({"ok": "N", "conflict": "M", "absent": "K"})
+
+    def test_both_derived_shapes_are_still_the_ones_a_document_can_quote(self) -> None:
+        # POSITIVE CONTROL for the derivation itself. Without it, a `status_summary` that returned
+        # "" or dropped its remedy would make the assertions below compare the documents against
+        # something this test invented, and an empty needle is in every haystack.
+        self.assertRegex(self.empty, r"^no owned entries for this host \(run: [^)]+\)$")
+        self.assertEqual(self.counted, "N ok, M conflict, K absent")
+
+    def test_agents_and_readme_quote_both_shapes_verbatim(self) -> None:
+        for document in (AGENTS_MD, README_MD):
+            text = _normalize(document.read_text(encoding="utf-8"))
+            for line in (self.empty, self.counted):
+                with self.subTest(document=document.name, line=line):
+                    # assertTrue, not assertIn: the haystack is a ~100 KB document.
+                    self.assertTrue(
+                        f"`{line}`" in text,
+                        f"{document.name} does not quote status_summary()'s own terminal line "
+                        f"`{line}` -- paraphrasing it is what seed agentic-sdlc-b97e records",
+                    )
 
 
 if __name__ == "__main__":

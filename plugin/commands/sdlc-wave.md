@@ -86,5 +86,9 @@ Run ONE implementation wave of the agentic-sdlc loop. Scope: $ARGUMENTS
      to a commit rather than to the tree as it happens to be now.
    - `python scripts/gate_receipt.py record --gate "mise run check" --out <path> -- mise run check`
      on the MERGED head — a worktree-green receipt is not evidence about the merged snapshot.
-   - Reviewer is not the implementer, and the approval blockquote's date precedes the integration
-     commit's committer date (`git -C <repo> show -s --format=%cI <integration-commit>`).
+   - Reviewer is not the implementer; the approval blockquote's date precedes the integration
+     commit's committer date (`git -C <repo> show -s --format=%cI <integration-commit>`); and the
+     approval's `approved-against` equals the `self_digest` of the receipt from the reading above,
+     so the grant names the gated tree it was given for rather than whatever the head later became.
+     An approval shown no receipt is recorded `unknown` — copying the digest in afterwards forges
+     that binding instead of recording it.
