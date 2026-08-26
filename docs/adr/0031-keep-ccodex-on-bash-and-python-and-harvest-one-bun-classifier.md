@@ -2,6 +2,9 @@
 
 - **Status:** accepted
 - **Date:** 2026-08-23
+- **Note:** amended 2026-08-26 (see the amendment at the end of this record). The Decision is
+  unchanged; one REASON stated inside item 2's precondition list at `:90-91` is corrected, and the
+  revisit-trigger scoreboard is re-measured. Read that amendment before citing either.
 - **Deciders:** operator (directed the evaluation and the documentation of its outcome); agent
   (measurement and drafting)
 - **Relates to:** `docs/research/2026-08-22-overengineering-audit.md` (the Bun spike's raw
@@ -139,3 +142,73 @@ every fact its fetchers could not resolve, marked UNKNOWN with what would resolv
   per-host install) changes.
 - Anyone re-proposing a Bun or Go rewrite starts from this record and the survey, and must show
   which measured fact changed.
+
+## Amendment — 2026-08-26: one precondition's stated reason is corrected, and the trigger scoreboard is re-measured
+
+The Decision is untouched. Item 1 stands verbatim, no mandatory precondition of item 2 is removed or
+weakened, and no revisit trigger is added, dropped, or reworded. What changes is one stated REASON
+inside item 2's precondition list and the DATE the scoreboard was last measured.
+
+gh issue #13 (2026-08-24) decided to keep this record "accepted and unamended in its Decision" while
+correcting the survey. That left the stale claim standing in the ADR while the survey no longer
+carried it, so this correction is the deliberate other half rather than a drive-by edit — recorded on
+seed `agentic-sdlc-8ccc`, amended 2026-08-25 to name exactly this obligation.
+
+### The `BUN_OPTIONS` precondition's stated reason was already stale when it was written
+
+Item 2 requires scrubbing `BUN_BE_BUN` and `BUN_OPTIONS` from the helper's child environment
+"because the first turns the pinned helper into the full `bun` CLI and the second splices argv from
+the environment" (`:90-91`). **The scrub stays mandatory and unchanged.** The second reason does not.
+
+- `BUN_OPTIONS` stopped being spliced into a compiled program's `argv` in **Bun 1.2.23**.
+  oven-sh/bun PR #26346 ("fix(compile): apply BUN_OPTIONS env var to standalone executables") merged
+  **2026-01-23**, and the issue it closed — #21496, "`process.argv` includes `BUN_OPTIONS` in
+  compiled executable which can break arg processing" — is closed `COMPLETED` on that same date.
+  Both re-read from the GitHub API on **2026-08-26**. This was never a claim that aged out after the
+  fact: the fix predates this record by seven months.
+- What the variable still does is set Bun **runtime** flags (`process.execArgv`). The residual risk
+  is ambient runtime-flag control over the helper, not arbitrary argv injection into it. That is a
+  narrower threat, and an environment allowlist answers it exactly as well — which is why the
+  precondition needs no change even though its reason does.
+- `BUN_BE_BUN=1`'s full-CLI takeover is unchanged and was described accurately.
+
+`docs/research/2026-08-23-bun-cli-capability-survey.md` carries the same correction at its own three
+sites, marked `[corrected 2026-08-25]`. Item 3 makes that survey this decision's capability
+reference, so a precondition list contradicting it would have made the dated snapshot the weaker
+authority on a fact they both state.
+
+### Trigger scoreboard, re-verified 2026-08-26 rather than inherited
+
+The three triggers at `:103-112` are conjunctive. gh #13 scored 0 of 3 on 2026-08-24; one has since
+moved.
+
+| trigger | verdict | measured 2026-08-26 |
+| --- | --- | --- |
+| 1. Bun pins or verifies its compile-target runtime downloads by digest | **NOT MET** | oven-sh/bun#36173 reads `state: open`, `merged: false` from the GitHub API. Unchanged since 2026-08-23. |
+| 2. The post-demolition `ccodex` surface has been stable for at least one release | **NOT MET** | The newest `v0.7.x` product release is `v0.7.5` (prerelease, published 2026-08-25) and it still CARRIES the plane gh #10 phase 4 deleted: `assets/launchers/ccodex.in` and `scripts/install_operator_tools.py` are both in its tree. `git diff --stat v0.7.5 HEAD` over `bin/ccodex`, `scripts/ccodex_sdlc.py`, and `scripts/install_skill_bundle.py` is +1838/−314. No release has shipped the post-demolition surface at all, so none has been stable across one. |
+| 3. The `sdlc` namespace is tested through its subprocess seam | **MET at HEAD; not in any published artifact** | `tests/seam_harness.py` and `tests/test_ccodex_seam.py` (73bb1b5, 2026-08-25) drive the dispatcher as a subprocess with every assertion reading output content rather than a bare exit code, and the lever `.github/mutations/restore-v0.7.4-uv-run-sdlc-route.patch` runs that proof inside the gate. `.github/workflows/release.yml` with `policy/release-smoke.v1.json` extends it to an extracted archive. `git merge-base --is-ancestor 73bb1b5 v0.7.5` answers NOT an ancestor. |
+
+**1 of 3, and reopening on one of three is not reopening.** Trigger 2's own evidence is why the
+remaining two cannot be read as nearly-satisfied: the surface this decision is about moved by four
+figures of lines since the newest release, and it moved again in the change carrying this amendment.
+
+### The re-measurement obligations at `:114-118`, re-read rather than inherited
+
+- **macOS signing.** oven-sh/bun#39764 is closed `completed` (2026-08-22), and `bun-v1.4.0`
+  (published 2026-08-20) is still the newest release of any 1.4.x. The fix is therefore in **no
+  release** as of 2026-08-26 — exactly the state `:115-117` recorded — so a compiled artifact would
+  still inherit the arm64 signing regression today.
+- **Windows subprocess reliability.** oven-sh/bun#32011 (spawning a Rust-compiled `.exe` hangs, then
+  throws `ETIMEDOUT`) is still `open`. `uv` is Rust-compiled, so it stays on point for this CLI's own
+  dependency profile.
+- Binary sizes, startup, the armv7 gap, `strip` behavior, and compile reproducibility are **not**
+  re-measured here, and nothing above may be cited for them. A future evaluation still owes each one
+  its own measurement rather than a citation of this amendment.
+
+### What the next re-proposal starts from
+
+Restated here so it is reachable from the record and not only from the issue: the first gate is the
+experiment gh #13 adopted verbatim — compile natively on macOS 27 arm64, sign with a Developer ID,
+notarise, staple, and run it on a clean macOS 27 host — funded before any other measurement, with the
+result recorded whether it passes or fails. This amendment is a dated no with a published scoreboard,
+not a permanent one.

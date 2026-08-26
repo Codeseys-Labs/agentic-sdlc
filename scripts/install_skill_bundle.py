@@ -1279,6 +1279,56 @@ def posix_mode_satisfied(destination: Path, kind: str) -> bool:
         return False
 
 
+def posix_mode_converged(destination: Path, kind: str) -> bool:
+    """Whether a destination already carries EXACTLY the POSIX mode a publication would set.
+
+    Deliberately stronger than `posix_mode_satisfied`, which asks the adoption question -- can this
+    file be executed at all. Convergence has to ask what a republication would CHANGE, and
+    `publish_copy` sets the mode exactly: an operator who chmod'ed the statusline to 0o700 keeps the
+    owner-execute bit the weaker predicate looks for while still not carrying the mode this lifecycle
+    publishes, and reporting that host unchanged would silently retire a correction the refresh path
+    has always made. A kind with no required mode, and any host that carries no owner-execute bit at
+    all, answers True -- there is nothing there for a publication to converge on.
+    """
+    required_mode = POSIX_MODE_FOR_KIND.get(kind)
+    if required_mode is None or platform_system() == "Windows":
+        return True
+    try:
+        return stat.S_IMODE(destination.stat().st_mode) == required_mode
+    except OSError:
+        return False
+
+
+def identical_unowned_copy(entry: Entry, destination: Path) -> bool:
+    """Whether an unowned destination already holds this payload's content and its required mode.
+
+    Extracted because two readers ask it and their answers must not differ: `_install` adopts such a
+    destination as a `removable: False` row, and `status` must therefore NOT name it a collision. One
+    predicate is what keeps the writer's classification and the reader's report the same fact.
+    """
+    return (
+        not destination.is_symlink()
+        and destination.exists()
+        and content_equivalent(destination, entry.source)
+        and posix_mode_satisfied(destination, entry.kind)
+    )
+
+
+def unowned_collision(entry: Entry, destination: Path) -> bool:
+    """Whether a PRESENT, unowned destination is one an install would preserve rather than adopt.
+
+    Defined in terms of the same two functions `_install` branches on -- `legacy_link_mode` for the
+    exact-link adoption and `identical_unowned_copy` for the byte-identical one -- so agreement
+    between the writer and the reader is structural rather than a second copy of the rule kept in
+    step by hand. This is the question `status` structurally could not ask while it iterated the
+    ownership document alone, which is what made an operator run `install --dry-run` to discover a
+    collision a read-only reader was standing on.
+    """
+    return legacy_link_mode(destination, entry.source) is None and not identical_unowned_copy(
+        entry, destination
+    )
+
+
 def publish_copy(entry: Entry, destination: Path) -> str:
     """Copy one payload and apply its kind's required POSIX mode. The only copy publication."""
     copy_item(entry.source, destination)
@@ -1366,6 +1416,35 @@ def entry_matches_record(destination: Path, record: dict[str, Any]) -> bool:
         except OSError:
             return False
     return False
+
+
+def copy_publication_converged(
+    entry: Entry, destination: Path, record: dict[str, Any], config: Config
+) -> bool:
+    """Whether republishing this owned copy would move no byte and rewrite no recorded field.
+
+    Callers reach this only after `entry_matches_record` proved `digest(destination) ==
+    record["digest"]`, so a payload digest equal to the record's makes the destination's live bytes
+    the payload's bytes transitively -- that is the whole content half of the question, and it is why
+    this predicate never reads the destination's content itself.
+
+    The other three conjuncts are the fields a refresh corrects, and each names a transition the
+    unconditional refresh really performed: the publication MODE, because a row installed under
+    `--mode copy` becomes a link once that flag is dropped; the recorded SOURCE, because the same
+    payload installed from a second checkout has to re-point the row at it; and the POSIX mode,
+    because `publish_copy` sets it exactly and the digest does not witness it. With all four holding,
+    `entry_record` would rebuild this record field for field and `publish` would move byte-identical
+    content over byte-identical content, so the refresh is redundant work rather than a correction.
+    Skipping it is what makes a second install converge, and it skips no refusal: every conflict this
+    loop reports -- the collection boundary, the marketplace overlap, an armed transition, an owned
+    entry the operator changed -- is decided before this question is asked.
+    """
+    return (
+        effective_mode(entry, config) == "copy"
+        and Path(str(record["source"])) == entry.source.resolve()
+        and record["digest"] == digest(entry.source)
+        and posix_mode_converged(destination, entry.kind)
+    )
 
 
 def exact_owned_statusline(config: Config) -> Path:
@@ -1840,6 +1919,14 @@ def _install(config: Config) -> Result:
             if record["mode"] == "copy":
                 if record["removable"] is False:
                     messages.append(f"ok (preserved on uninstall): {destination}")
+                elif copy_publication_converged(entry, destination, record, config):
+                    # A copy-mode entry used to be refreshed on every run because this lifecycle
+                    # could not diff its source cheaply. It can: the record already carries the
+                    # digest of the bytes it published, so comparing the payload's digest to it
+                    # answers convergence without staging anything. Reported `ok:` rather than
+                    # `refreshed:` -- the same message the link-mode branch below prints for the
+                    # same fact -- so `operation_summary` counts it as unchanged.
+                    messages.append(f"ok: {destination}")
                 elif config.dry_run:
                     messages.append(f"would refresh: {destination}")
                 else:
@@ -1884,12 +1971,7 @@ def _install(config: Config) -> Result:
                         save_owned_entry(config, state, key, legacy_record)
                     messages.append(f"adopted: {destination}")
                 continue
-            if (
-                not destination.is_symlink()
-                and destination.exists()
-                and content_equivalent(destination, entry.source)
-                and posix_mode_satisfied(destination, entry.kind)
-            ):
+            if identical_unowned_copy(entry, destination):
                 adopted_record = entry_record(
                     entry, "copy", removable=False, installed_digest=digest(destination)
                 )
@@ -2125,12 +2207,23 @@ def pending_selects_config(pending: Any, config: Config) -> dict[str, Any] | Non
 
 
 def status(config: Config) -> Result:
-    """Report ownership and pending recovery health without writing anything."""
+    """Report ownership, collisions, and pending recovery health without writing anything.
+
+    Two questions, not one. The ownership document answers "is every entry this lifecycle published
+    still exactly its published bytes"; the payload answers "is a destination this lifecycle WANTS
+    occupied by something it will not touch". Reporting only the first is what made `status` return a
+    clean verdict on a host where `install` would refuse -- the operator had to already suspect a
+    collision and run `install --dry-run` to see it. Both halves count into the same terminal line,
+    because a collision is a conflict by every reader's definition, and neither half writes anything.
+    """
     state = load_config_state(config)
     validate_state(config, state)
     messages, partial = recover_pending(config, state, read_only=True)
+    pending = state.get("pending")
+    blocked_key = pending["path"] if isinstance(pending, dict) else None
     counts = {"ok": 0, "conflict": 0, "absent": 0}
-    if config.agent in {"all", "claude"} and marketplace_overlap(config.home):
+    claude_blocked = config.agent in {"all", "claude"} and marketplace_overlap(config.home)
+    if claude_blocked:
         partial = True
         counts["conflict"] += 1
         messages.extend(marketplace_messages(config))
@@ -2155,6 +2248,31 @@ def status(config: Config) -> Result:
             partial = True
             counts["conflict"] += 1
             messages.extend(conflict_messages(destination, "owned entry changed"))
+
+    for entry in discover_entries(config.repo_root):
+        if config.agent != "all" and entry.agent != config.agent:
+            continue
+        destination = destination_for(entry, config)
+        key = str(destination)
+        if key in state["entries"] or key == blocked_key:
+            # An owned row was reported above with its own verdict, and a destination whose armed
+            # transition this run could not resolve already carries one named remedy. Reporting
+            # either as a collision would hand the operator a second, wrong next step for the
+            # same path, and would disagree with which entries `_install` reaches.
+            continue
+        if entry.agent == "claude" and claude_blocked:
+            continue
+        # The same order `_install` uses: the collection boundary is asserted before the destination
+        # is examined, so a collection replaced with a link is refused by name here too rather than
+        # followed to whatever it now points at.
+        assert_safe_collection(entry, destination, config)
+        if not path_present(destination) or not unowned_collision(entry, destination):
+            continue
+        partial = True
+        counts["conflict"] += 1
+        # Verbatim the writer's own words for the same destination, because an operator who reads
+        # this line and then runs `install --dry-run` must not be shown two different reasons.
+        messages.extend(conflict_messages(destination, "a non-bundle entry already exists"))
     messages.append(status_summary(counts))
     return Result(1 if partial else 0, tuple(messages))
 

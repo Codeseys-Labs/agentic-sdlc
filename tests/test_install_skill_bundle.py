@@ -146,6 +146,13 @@ class InstallSkillBundleTests(LifecycleTestCase):
             self.assertEqual(installer.load_state(config.state_path)["entries"], {})
 
     def test_a_published_entry_leaves_no_private_sibling_behind(self) -> None:
+        """The staging container is discarded on the refresh path, which needs a REAL refresh.
+
+        A second install of an unchanged payload converges and stages nothing, so reaching the
+        refresh through repetition alone would assert this cleanup about a cycle that no longer
+        runs. The source is drifted so the refresh is one that genuinely stages, publishes, and has
+        a private sibling to discard.
+        """
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.make_repo(root)
@@ -154,6 +161,7 @@ class InstallSkillBundleTests(LifecycleTestCase):
 
             self.assertEqual(self.install_only(config, entry).exit_code, 0)
             destination = installer.destination_for(entry, config)
+            (entry.source / "SKILL.md").write_text("---\nname: example\nrevised: true\n---\n")
             refreshed = self.install_only(config, entry)
 
             self.assertIn(f"refreshed: {destination}", refreshed.messages)
@@ -1217,7 +1225,15 @@ class InstallSkillBundleTests(LifecycleTestCase):
                 "no owned entries for this host (run: mise run lifecycle:install)",
             )
 
-    def test_unmanaged_codex_skill_is_found_by_install_dry_run_not_owned_status(self) -> None:
+    def test_unmanaged_codex_skill_is_named_by_status_in_the_writers_own_words(self) -> None:
+        """`status` names the collision `install` would refuse, and still writes nothing.
+
+        This test asserted the opposite until 2026-08-26: that `status` answered `no owned entries`
+        on a host where `install --dry-run` refused, so an operator had to already suspect the
+        collision to find it (gh #13 G3, report 01 §D.5). What replaces it is the agreement itself --
+        the two readers' conflict lines are compared to EACH OTHER rather than to a literal, so a
+        reworded reason on either side fails here instead of drifting apart quietly.
+        """
         if not hasattr(os, "symlink"):
             self.skipTest("symlinks are required")
         with tempfile.TemporaryDirectory() as temp:
@@ -1240,17 +1256,17 @@ class InstallSkillBundleTests(LifecycleTestCase):
             checked = installer.status(config)
             previewed = self.install_only(dry, self.only_entry(root, "codex"))
 
-            self.assertEqual(checked.exit_code, 0)
-            self.assertEqual(
-                checked.messages[-1],
-                "no owned entries for this host (run: mise run lifecycle:install)",
+            self.assertEqual(checked.exit_code, 1)
+            self.assertEqual(checked.messages[-1], "0 ok, 1 conflict, 0 absent")
+            expected = installer.conflict_messages(
+                destination, "a non-bundle entry already exists"
             )
+            for line in expected:
+                self.assertIn(line, checked.messages)
+                self.assertIn(line, previewed.messages)
             self.assertEqual(previewed.exit_code, 1)
-            self.assertIn(f"conflict: {destination}", previewed.messages)
-            self.assertIn(
-                f"preserved: {destination} (a non-bundle entry already exists; inspect and resolve it before retrying)",
-                previewed.messages,
-            )
+            # The reader is still read-only: naming a collision creates no state document and does
+            # not touch the foreign entry it names.
             self.assertTrue(destination.is_symlink())
             self.assertEqual(destination.resolve(), external.resolve())
             self.assertFalse(config.state_path.exists())
@@ -1298,6 +1314,119 @@ class InstallSkillBundleTests(LifecycleTestCase):
             self.assertTrue(removed.messages[-1].startswith("uninstall summary:"))
             self.assertTrue(destination.exists())
 
+    def test_a_second_install_over_an_unchanged_copy_converges_instead_of_republishing(self) -> None:
+        """Convergence is three observables plus one control that MOVES all three.
+
+        `ok:` on its own would also pass on a reader that had stopped publishing entirely, so the
+        claim is the conjunction: the published file's inode survives (a republication renames a
+        freshly staged payload over the destination), the state document's BYTES survive (a refresh
+        rewrites the record), and the content is still the payload's. The drifted-source install at
+        the end is the sensitivity control -- it moves all three -- and its inode change cannot be
+        an accident of inode reuse, because `publish` allocates the staged copy while the previous
+        file is still linked.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            destination = installer.destination_for(entry, config)
+
+            self.assertEqual(self.install_only(config, entry).exit_code, 0)
+            first_inode = (destination / "SKILL.md").stat().st_ino
+            first_state = config.state_path.read_bytes()
+
+            second = self.install_only(config, entry)
+
+            self.assertEqual(second.exit_code, 0, second.messages)
+            self.assertIn(f"ok: {destination}", second.messages)
+            self.assertNotIn(f"refreshed: {destination}", second.messages)
+            self.assertEqual((destination / "SKILL.md").stat().st_ino, first_inode)
+            self.assertEqual(config.state_path.read_bytes(), first_state)
+            self.assertIn("1 unchanged", second.messages[-1])
+
+            (entry.source / "SKILL.md").write_text("---\nname: example\nrevised: true\n---\n")
+            third = self.install_only(config, entry)
+
+            self.assertIn(f"refreshed: {destination}", third.messages)
+            self.assertNotEqual((destination / "SKILL.md").stat().st_ino, first_inode)
+            self.assertNotEqual(config.state_path.read_bytes(), first_state)
+
+    def test_convergence_does_not_survive_a_publication_mode_change(self) -> None:
+        """A copy row whose effective mode became `link` is still converted, not called unchanged.
+
+        The digest is equal on both sides of this transition, so digest equality alone would report
+        the host converged and leave a copy where the selected mode says a link belongs.
+        """
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            as_copy = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            as_link = installer.Config(
+                root, root / "home", root / "codex", "link", False, "claude", root / "state"
+            )
+            entry = self.only_entry(root)
+            destination = installer.destination_for(entry, as_copy)
+
+            self.assertEqual(self.install_only(as_copy, entry).exit_code, 0)
+            self.assertFalse(destination.is_symlink())
+            record = installer.load_state(as_copy.state_path)["entries"][str(destination)]
+            self.assertEqual(record["digest"], installer.digest(entry.source))
+
+            converted = self.install_only(as_link, entry)
+
+            self.assertIn(f"refreshed: {destination}", converted.messages)
+            self.assertNotIn(f"ok: {destination}", converted.messages)
+            self.assertTrue(destination.is_symlink())
+            self.assertEqual(
+                installer.load_state(as_link.state_path)["entries"][str(destination)]["mode"],
+                "link",
+            )
+
+    def test_convergence_does_not_survive_a_source_that_moved(self) -> None:
+        """Identical bytes from a SECOND checkout still re-point the row at the source installed from.
+
+        The two payloads are byte-identical on purpose, so the digest conjunct holds and only the
+        recorded source separates them. A row left naming the first checkout would describe a
+        payload this install did not read.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first_root = root / "first"
+            second_root = root / "second"
+            first_root.mkdir()
+            self.make_repo(first_root)
+            shutil.copytree(first_root, second_root)
+            home, codex_home, state = root / "home", root / "codex", root / "state"
+            first_config = installer.Config(
+                first_root, home, codex_home, "copy", False, "claude", state
+            )
+            second_config = installer.Config(
+                second_root, home, codex_home, "copy", False, "claude", state
+            )
+            first_entry = self.only_entry(first_root)
+            second_entry = self.only_entry(second_root)
+            destination = installer.destination_for(first_entry, first_config)
+
+            self.assertEqual(self.install_only(first_config, first_entry).exit_code, 0)
+            self.assertEqual(
+                installer.digest(first_entry.source), installer.digest(second_entry.source)
+            )
+
+            relocated = self.install_only(second_config, second_entry)
+
+            self.assertIn(f"refreshed: {destination}", relocated.messages)
+            self.assertEqual(
+                installer.load_state(second_config.state_path)["entries"][str(destination)]["source"],
+                str(second_entry.source.resolve()),
+            )
+
     def test_status_summary_is_terminal_for_every_counted_shape(self) -> None:
         self.assertEqual(
             installer.status_summary({"ok": 0, "conflict": 0, "absent": 0}),
@@ -1307,6 +1436,111 @@ class InstallSkillBundleTests(LifecycleTestCase):
             installer.status_summary({"ok": 3, "conflict": 2, "absent": 1}),
             "3 ok, 2 conflict, 1 absent",
         )
+
+    def test_status_counts_an_owned_entry_and_a_collision_in_one_terminal_line(self) -> None:
+        """The two halves compose into the SAME terminal shape, and the collision is not the owned row.
+
+        The planted collision sits at a different payload destination from the installed entry, so a
+        reader that mistook one for the other would produce `1 ok, 0 conflict` or `0 ok, 1 conflict`
+        rather than both.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            skill = self.only_entry(root)
+            self.assertEqual(self.install_only(config, skill).exit_code, 0)
+            command = next(
+                entry
+                for entry in installer.discover_entries(root)
+                if entry.agent == "claude" and entry.kind == "command"
+            )
+            collision = installer.destination_for(command, config)
+            collision.parent.mkdir(parents=True, exist_ok=True)
+            collision.write_text("someone else's command\n")
+
+            checked = installer.status(config)
+
+            self.assertEqual(checked.exit_code, 1)
+            self.assertEqual(checked.messages[-1], "1 ok, 1 conflict, 0 absent")
+            self.assertIn(f"ok: {installer.destination_for(skill, config)}", checked.messages)
+            self.assertIn(f"conflict: {collision}", checked.messages)
+            self.assertEqual(collision.read_text(), "someone else's command\n")
+
+    def test_status_does_not_call_an_adoptable_destination_a_collision(self) -> None:
+        """The false-positive control: install ADOPTS these two, so status must not refuse them.
+
+        Without it, "status reports collisions" is satisfiable by reporting every unowned present
+        destination, which would name a legacy link and an identical copy the writer adopts silently
+        -- and would make the empty-plane terminal line unreachable on any host mid-adoption.
+        """
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "link", False, "claude", root / "state"
+            )
+            skill = self.only_entry(root)
+            command = next(
+                entry
+                for entry in installer.discover_entries(root)
+                if entry.agent == "claude" and entry.kind == "command"
+            )
+            legacy = installer.destination_for(skill, config)
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.symlink_to(skill.source, target_is_directory=True)
+            identical = installer.destination_for(command, config)
+            identical.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(command.source, identical)
+
+            checked = installer.status(config)
+
+            self.assertEqual(checked.exit_code, 0, checked.messages)
+            self.assertEqual(
+                checked.messages[-1],
+                "no owned entries for this host (run: mise run lifecycle:install)",
+            )
+            self.assertFalse(any(message.startswith("conflict:") for message in checked.messages))
+            # POSITIVE CONTROL that both plants are the adoptable shapes and not merely unread: the
+            # writer names each one as an adoption rather than a preserved collision.
+            previewed = installer.install(
+                installer.Config(
+                    root, root / "home", root / "codex", "link", True, "claude", root / "state"
+                )
+            )
+            self.assertIn(f"adopted: {legacy}", previewed.messages)
+            self.assertIn(f"adopted (preserved on uninstall): {identical}", previewed.messages)
+
+    def test_status_refuses_a_linked_collection_it_has_no_owned_row_in(self) -> None:
+        """The collection boundary is the one check byte identity cannot substitute for.
+
+        `status` asserted it only for destinations it already owned, so on a host with no rows yet it
+        reported `no owned entries` for a collection it could not safely read at all. It now refuses
+        by the same name `install` uses, before any destination in that collection is examined.
+        """
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_repo(root)
+            config = installer.Config(
+                root, root / "home", root / "codex", "copy", False, "claude", root / "state"
+            )
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            collection = config.home / ".claude" / "skills"
+            collection.parent.mkdir(parents=True)
+            collection.symlink_to(elsewhere, target_is_directory=True)
+
+            with self.assertRaisesRegex(
+                installer.InstallerError, f"collection root must not be a link: {collection}"
+            ):
+                installer.status(config)
+            self.assertFalse(config.state_path.exists())
 
     def test_codex_home_alias_is_an_allowed_configured_root(self) -> None:
         if not hasattr(os, "symlink"):

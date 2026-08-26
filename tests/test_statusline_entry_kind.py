@@ -288,6 +288,50 @@ class StatuslineLifecycleTests(StatuslineKindTestCase):
         self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
 
     @unittest.skipUnless(EXECUTE_BIT_IS_OBSERVABLE, EXECUTE_BIT_SKIP_REASON)
+    def test_a_refresh_restores_an_executable_mode_that_is_not_the_published_one(self) -> None:
+        """0o700 is the case that separates convergence from the adoption question.
+
+        A converging install skips the republication when nothing would change, and for this kind the
+        MODE is part of what a publication sets. 0o644 (the sibling test above) fails the weaker
+        `posix_mode_satisfied` predicate too, so it cannot tell the two apart; 0o700 still carries the
+        owner-execute bit that predicate looks for while not being the mode this lifecycle publishes.
+        A convergence check built on the weaker question would report this host unchanged and leave
+        the mode wrong.
+        """
+        config = self.config()
+        destination = self.destination(config)
+        self.assertEqual(installer.install(config).exit_code, 0)
+        os.chmod(destination, 0o700)
+        self.assertTrue(bool(os.stat(destination).st_mode & stat.S_IXUSR))
+
+        refreshed = installer.install(config)
+
+        self.assertEqual(refreshed.exit_code, 0, refreshed.messages)
+        self.assertIn(f"refreshed: {destination}", refreshed.messages)
+        self.assertNotIn(f"ok: {destination}", refreshed.messages)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
+
+    @unittest.skipUnless(EXECUTE_BIT_IS_OBSERVABLE, EXECUTE_BIT_SKIP_REASON)
+    def test_an_unchanged_statusline_converges_and_keeps_its_published_mode(self) -> None:
+        """The other side of the same predicate: an untouched row is not republished at all.
+
+        Paired with the two mode-restoring tests above so this kind's convergence and its corrections
+        are asserted from one fixture: `ok:` here, `refreshed:` there, and the mode 0o755 in both.
+        """
+        config = self.config()
+        destination = self.destination(config)
+        self.assertEqual(installer.install(config).exit_code, 0)
+        first_inode = destination.stat().st_ino
+
+        again = installer.install(config)
+
+        self.assertEqual(again.exit_code, 0, again.messages)
+        self.assertIn(f"ok: {destination}", again.messages)
+        self.assertNotIn(f"refreshed: {destination}", again.messages)
+        self.assertEqual(destination.stat().st_ino, first_inode)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
+
+    @unittest.skipUnless(EXECUTE_BIT_IS_OBSERVABLE, EXECUTE_BIT_SKIP_REASON)
     def test_an_identical_but_unexecutable_file_is_preserved_not_adopted(self) -> None:
         """Content equality is not enough for a kind whose payload is executed.
 
