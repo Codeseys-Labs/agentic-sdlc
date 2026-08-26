@@ -555,7 +555,7 @@ mise -C "$repo_root" exec -- uv run --python 3.12.11 python - "$manifest" "$repo
 # `python3 -c "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('.github/workflows/validate.yml').read_text(encoding='utf-8').encode()).hexdigest())"`
 # after reviewing the diff.
 CI_WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "validate.yml"
-CI_WORKFLOW_SHA256 = "9e8a1c3f9c142cc82ad42ee920d31151381b309488e6cf51bbca375ec9177dc5"
+CI_WORKFLOW_SHA256 = "dca12a76c3eb2b02b2a0ebfcafdb7dd3f6d29fb0c66f7d45b4196c731ff1d766"
 
 # The tag gate (issue #9, seed agentic-sdlc-6b68) is the second reviewed CI surface, pinned in the
 # same digest form and for the same three reasons as the graph above. It earns a pin of its own

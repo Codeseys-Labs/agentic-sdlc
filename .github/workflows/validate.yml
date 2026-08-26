@@ -22,6 +22,11 @@ jobs:
       # jdx/mise-action v2.4.7
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
         with:
+          # The exact maintenance mise, not the action's default latest: the canonical
+          # lock-regeneration test in tests/test_gate_graph.py skips on any other version, so an
+          # unpinned mise-action leaves that contract gated on no runner at all (agentic-sdlc-c7e2).
+          # This pins only the mise CLI; the toolchain stays mise.lock's.
+          version: "2026.4.27"
           install: true
       # advisory forensics probe for seed agentic-sdlc-df5f (mechanisms A/B1/B2); remove once the runner's btime/ctime data is recorded
       - name: Advisory host capability probe (never a gate leaf)
