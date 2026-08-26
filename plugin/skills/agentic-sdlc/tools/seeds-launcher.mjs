@@ -710,7 +710,16 @@ function gitDistribution(distribution) {
   try {
     const environment = admission.environment;
     const commit = capture(git, ['rev-parse', '--verify', 'HEAD^{commit}'], 'reviewed distribution must have an exact Git commit', environment);
-    const expectedTree = capture(git, ['rev-parse', '--verify', 'HEAD^{tree}'], 'reviewed distribution must have an exact Git tree', environment);
+    // The receipt records this commit and this tree as ONE fact, so `HEAD` is resolved exactly once
+    // and the tree is derived from the commit just read -- never by a second independent
+    // `HEAD^{tree}`, which can straddle a head that moved between the two reads (agentic-sdlc-6088,
+    // the idiom `scripts/gate_receipt.py`'s `observe_repository_head` owns). The admission sandbox
+    // narrows the window rather than closing it: `sandboxGitDistribution` freezes `HEAD` into its
+    // own private `GIT_DIR`, so the mover is not the distribution's head but a same-UID writer to
+    // that file -- exactly the racer this receipt has never claimed to detect. Two reads there cost
+    // an opaque staged-change refusal, because the `write-tree` cross-check below compares the
+    // second read's answer against an index the first read's commit still describes.
+    const expectedTree = capture(git, ['rev-parse', '--verify', `${commit}^{tree}`], 'reviewed distribution must have an exact Git tree', environment);
     const indexTree = capture(git, ['write-tree'], 'reviewed distribution index must match its exact Git tree', environment);
     if (indexTree !== expectedTree) failRefusal('reviewed distribution index disagrees with its HEAD commit tree: a staged change is present');
     const indexed = captureBytes(git, ['ls-files', '--stage', '-z'], 'cannot enumerate indexed distribution files', environment);

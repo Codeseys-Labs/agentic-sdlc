@@ -522,6 +522,84 @@ class SeedsLauncherTests(LauncherFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(marker.exists(), "Git admission must not execute config- or hook-selected programs")
 
+    def test_bootstrap_derives_the_recorded_tree_from_the_commit_it_just_read(self) -> None:
+        """The single derivation, isolated (agentic-sdlc-6088).
+
+        The receipt seals `distribution.commit` and `distribution.gitTree` as one provenance fact,
+        so `gitDistribution` resolves `HEAD` exactly once and asks for `<commit>^{tree}`. No settled
+        repository can fail a producer that reads `HEAD` twice -- both reads answer for the same
+        commit -- so the forcing lever is what separates the two shapes: a recording Git shim that
+        rewrites the admission sandbox's frozen `HEAD` the instant the commit has been read. That
+        same-UID writer is exactly the racer this receipt has never claimed to detect, and the
+        sandbox is the only head a distribution's own `HEAD` cannot supply, because
+        `sandboxGitDistribution` froze it into a private `GIT_DIR` before either read.
+
+        A derivation naming the commit is immune. A second `HEAD^{tree}` read answers for the
+        replacement commit and then loses the `write-tree` cross-check against an index the recorded
+        commit still describes, so it refuses a clean distribution as carrying a staged change.
+        """
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        first_commit = self._run(["git", "rev-parse", "HEAD"], cwd=self.distribution).stdout.strip()
+        (self.distribution / "second.txt").write_text("second\n", encoding="utf-8")
+        self._run(["git", "add", "second.txt"], cwd=self.distribution)
+        self._run(["git", "commit", "-qm", "second"], cwd=self.distribution)
+        head_commit = self._run(["git", "rev-parse", "HEAD"], cwd=self.distribution).stdout.strip()
+        head_tree = self._run(["git", "rev-parse", f"{head_commit}^{{tree}}"], cwd=self.distribution).stdout.strip()
+        first_tree = self._run(["git", "rev-parse", f"{first_commit}^{{tree}}"], cwd=self.distribution).stdout.strip()
+        # POSITIVE CONTROL: the two commits really do carry distinct trees, so the swap below has a
+        # different answer to give and every equality here is about the derivation rather than about
+        # a fixture that could only ever answer one way.
+        self.assertNotEqual(first_tree, head_tree)
+
+        log = self.root / "recorded-git.log"
+        armed = self.root / "sandbox-head-swap-armed"
+        witness = self.root / "sandbox-head-after-swap"
+        # Only `test` and `printf` are used besides Git's absolute path: the child's PATH is the
+        # receipt directory, so no external command name resolves here.
+        self._write_executable(
+            self.bin / "git",
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$*\" >> {self._quote(str(log))}\n"
+            f"if [ \"$1\" = rev-parse ] && [ \"$3\" = 'HEAD^{{commit}}' ] && [ -f {self._quote(str(armed))} ]; then\n"
+            f"  {self._quote(str(real_git))} \"$@\"\n"
+            "  status=$?\n"
+            f"  printf '%s\\n' {self._quote(first_commit)} > \"$GIT_DIR/HEAD\"\n"
+            f"  {self._quote(str(real_git))} rev-parse --verify 'HEAD^{{tree}}' > {self._quote(str(witness))} 2>&1\n"
+            "  exit $status\n"
+            "fi\n"
+            f"exec {self._quote(str(real_git))} \"$@\"\n",
+        )
+
+        settled = self.bootstrap()
+        self.assertEqual(settled.returncode, 0, settled.stderr)
+        receipt = json.loads(self.active_receipt_path().read_text(encoding="utf-8"))
+        self.assertEqual(receipt["distribution"]["commit"], head_commit)
+        self.assertEqual(receipt["distribution"]["gitTree"], head_tree)
+        # The derivation is NAMED, not merely consistent: the tree read asked about the commit the
+        # first read had returned, and `HEAD` was never resolved a second time.
+        recorded = log.read_text(encoding="utf-8")
+        self.assertEqual(
+            [line for line in recorded.splitlines() if line.startswith("rev-parse")],
+            ["rev-parse --verify HEAD^{commit}", f"rev-parse --verify {head_commit}^{{tree}}"],
+        )
+        self.assertNotIn("HEAD^{tree}", recorded)
+
+        log.unlink()
+        armed.write_text("armed\n", encoding="utf-8")
+        raced = self.bootstrap()
+        self.assertEqual(raced.returncode, 0, raced.stderr)
+        # POSITIVE CONTROL for the lever: the swap landed, and a second `HEAD` read at that instant
+        # really would have answered with the OTHER commit's tree.
+        self.assertEqual(witness.read_text(encoding="utf-8").strip(), first_tree)
+        raced_receipt = json.loads(self.active_receipt_path().read_text(encoding="utf-8"))
+        self.assertEqual(raced_receipt["distribution"]["commit"], head_commit)
+        self.assertEqual(raced_receipt["distribution"]["gitTree"], head_tree)
+        self.assertEqual(
+            [line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("rev-parse")],
+            ["rev-parse --verify HEAD^{commit}", f"rev-parse --verify {head_commit}^{{tree}}"],
+        )
+
     def test_bootstrap_rejects_nested_dirty_and_untracked_distribution_trees(self) -> None:
         nested = self.distribution / "nested"
         nested.mkdir()
