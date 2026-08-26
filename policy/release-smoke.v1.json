@@ -282,6 +282,33 @@
       ]
     },
     {
+      "id": "a-mode-link-request-reaches-the-install-module-and-is-refused-by-name",
+      "argv": [
+        "install",
+        "--scope",
+        "user",
+        "--agent",
+        "claude",
+        "--mode",
+        "link"
+      ],
+      "platforms": [
+        "Darwin",
+        "Linux"
+      ],
+      "environment": "host",
+      "expect_exit": 3,
+      "expect_stderr_present": [
+        "mode-forbidden-for-acquired-payload",
+        "copies and never links"
+      ],
+      "expect_stderr_absent": [
+        "mode-not-yet-wired",
+        "expected direct -I -B execution",
+        "Traceback"
+      ]
+    },
+    {
       "id": "install-refuses-before-effect-on-linux",
       "argv": [
         "install",

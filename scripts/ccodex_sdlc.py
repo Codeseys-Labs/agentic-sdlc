@@ -536,9 +536,16 @@ def refuse_unwired_surface(verb: str, parsed: dict[str, Any]) -> None:
     but does not yet serve (exit 3).
 
     Each refusal names the token the harness greps for, the wave that wires it, and what to run
-    instead. Silently ignoring any of the three would be worse than refusing: an operator who typed
-    ``--scope project`` would get their user home activated, and one who typed ``--dry-run`` would get
-    a real effect.
+    instead. Silently ignoring it would be worse than refusing: an operator who typed
+    ``--scope project`` would get their user home activated.
+
+    ``--mode`` and ``--dry-run`` are NO LONGER HERE. They were refused as unwired for exactly one
+    wave; W3b of the same seed forwards both to the per-verb module, which resolves the mode request
+    against the selected plane and stops a preview before its first write. The two names those
+    refusals carried (``mode-not-yet-wired``, ``dry-run-not-yet-wired``) are therefore gone from the
+    product rather than kept as aliases: a token that still answered would say a wired surface is
+    unwired. ``--dry-run`` reaches only the verbs whose ``SELECTOR_VERB_OPTIONS`` row admits it, so a
+    verb that has no preview refuses the flag as a grammar error (exit 2) rather than by name here.
     """
     if parsed["scope"] == "project":
         raise SurfaceRefusal(
@@ -546,19 +553,6 @@ def refuse_unwired_surface(verb: str, parsed: dict[str, Any]) -> None:
             " (project-scope-not-yet-wired): the project-root resolution ladder, copy forcing, and"
             f" the (agent, scope, root) pointer arrive with wave W4 of {FRONT_DOOR_SEED}. Use"
             f" {SCOPE_FLAG} user until then."
-        )
-    if parsed["mode"] is not None:
-        raise SurfaceRefusal(
-            f"ccodex {verb} {MODE_FLAG} {parsed['mode']} is not served by this release"
-            " (mode-not-yet-wired): the receipted lifecycle records a per-entry mode but takes no mode"
-            f" request yet, and accepting one here would drop it silently. It arrives with wave W3b of"
-            f" {FRONT_DOOR_SEED}; omit {MODE_FLAG} to take the plane's own mode."
-        )
-    if parsed["dry_run"]:
-        raise SurfaceRefusal(
-            f"ccodex {verb} {DRY_RUN_FLAG} is not served by this release (dry-run-not-yet-wired):"
-            " nothing was previewed and nothing was changed. It arrives with wave W3b of"
-            f" {FRONT_DOOR_SEED}; `ccodex doctor` reads this host's state without one."
         )
 
 
@@ -592,6 +586,9 @@ class Invocation(NamedTuple):
     """One parsed, admitted invocation. A NamedTuple so a test can compare it whole."""
 
     verb: str
+    #: Whether the operator asked for a PREVIEW. One field for one fact across both families: it is
+    #: `recover --dry-run`'s proposal-only form and `install`/`uninstall`'s read-only planning pass,
+    #: and a second field for the second family would be two spellings of one request.
     dry_run: bool
     json_output: bool
     #: The ONE argument an admitted mutating vector forwards to a per-verb module: the agent for
@@ -600,6 +597,10 @@ class Invocation(NamedTuple):
     forwarded_value: str | None
     scope: str | None = None
     agent: str | None = None
+    #: The mode the operator REQUESTED, forwarded verbatim to the module that resolves it against the
+    #: selected plane. `None` means none was requested, which is a different input from a request that
+    #: happens to name the plane's own mode.
+    mode: str | None = None
 
 
 def parse_command(argv: list[str]) -> Invocation:
@@ -617,12 +618,15 @@ def parse_command(argv: list[str]) -> Invocation:
         refuse_unwired_surface(verb, parsed)
         return Invocation(
             verb=verb,
-            dry_run=False,
+            # `status` admits no `--dry-run` at all (its own options row), so this is False for a read
+            # by construction rather than by being hardcoded here.
+            dry_run=parsed["dry_run"],
             json_output=parsed["json_output"],
             # A mutating verb forwards its agent; `status` reads and forwards nothing.
             forwarded_value=parsed["agent"] if verb in LIFECYCLE_VERBS else None,
             scope=parsed["scope"],
             agent=parsed["agent"],
+            mode=parsed["mode"],
         )
     if verb not in READER_VERBS:
         raise UsageError(f"unknown ccodex verb: {verb!r}")
@@ -2109,11 +2113,20 @@ def main(argv: list[str] | None = None) -> int:
         # Handed off before any report policy, release contract, or projection is read: a mutating
         # verb neither renders nor depends on the read report, and refusing early keeps the refusal
         # attributable to the missing module rather than to unrelated reader state.
-        # THE FORWARDED FLAG IS THE MODULE ABI, not the operator's spelling: the four per-verb modules
-        # admit exactly `['--host', <agent>]` and this is the one place that vector is built, so the
+        # THE FORWARDED FLAG IS THE MODULE ABI, not the operator's spelling: the per-verb modules
+        # admit `['--host', <agent>]` and this is the one place that vector is built, so the
         # `--agent` grammar above and the `--host` ABI here cannot drift into two operator spellings.
+        # The two optional requests keep their OPERATOR spelling in the forwarded vector, because
+        # `--mode` and `--dry-run` mean the same thing on both sides of the seam; only the plane
+        # selector had two names to reconcile. They are appended in a fixed order and only when the
+        # operator supplied them, so a module receives the vector its own parser admits and an absent
+        # request is absent rather than defaulted.
         return dispatch_lifecycle(
-            command, [FORWARDED_AGENT_FLAG, str(forwarded_value)], label=command
+            command,
+            [FORWARDED_AGENT_FLAG, str(forwarded_value)]
+            + ([MODE_FLAG, invocation.mode] if invocation.mode is not None else [])
+            + ([DRY_RUN_FLAG] if dry_run else []),
+            label=command,
         )
     if command == "recover" and forwarded_value is not None:
         # The one mutating recover form, handed off on the same early path and for the same reason.

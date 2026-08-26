@@ -244,6 +244,18 @@ LIFECYCLE_OWN_REASON = {
     "uninstall": ("no installer ownership document", "only and refuses on"),
     "recover-apply": ("found nothing to recover on this host", "resumes an activated"),
 }
+#: HOW EACH MODULE NAMES ITSELF in its own refusals, which is not one string across the family. The
+#: front-door wave made `ccodex install` the invocation and retired `ccodex sdlc install`; W3b renamed
+#: the install module's own messages to match (seed agentic-sdlc-67c9), and the other three modules
+#: still print the retired spelling because they are other waves' files. One shared f-string here would
+#: have hidden exactly that split, so the map is explicit and each row states what its module EMITS --
+#: the day a module is renamed, its row is what fails and names the rename.
+LIFECYCLE_OWN_PREFIX = {
+    "install": "error: ccodex install",
+    "update": "error: ccodex sdlc update",
+    "uninstall": "error: ccodex sdlc uninstall",
+    "recover-apply": "error: ccodex sdlc recover --apply",
+}
 LIFECYCLE_REASON_SOURCES = {
     "install": "ccodex_sdlc_install.py",
     "update": "ccodex_sdlc_update.py",
@@ -299,7 +311,7 @@ def _reader_human_case(
     )
 
 
-def _lifecycle_case(identifier: str, argv: tuple[str, ...], verb: str, named: str) -> SeamCase:
+def _lifecycle_case(identifier: str, argv: tuple[str, ...], verb: str) -> SeamCase:
     """A mutating verb reaching its own module's pre-effect refusal, never a mutation.
 
     The declared content is platform-independent on purpose: WHICH reason a lifecycle verb states is
@@ -308,12 +320,12 @@ def _lifecycle_case(identifier: str, argv: tuple[str, ...], verb: str, named: st
     refused before any effect, and did not touch the fixture.  The forbidden admission text is what
     makes the case fail the moment the route regresses.
 
-    THE EXPECTED PREFIX IS THE MODULE'S OWN, AND IT NAMES A RETIRED SPELLING. The front-door wave
-    made ``ccodex install`` the invocation and retired ``ccodex sdlc install``, but the four per-verb
-    modules are owned by other waves and still print ``error: ccodex sdlc <verb> refused before any
-    effect``. This assertion states what the product actually emits rather than what it should; the
-    residual is recorded rather than papered over, and the day a module renames itself this case is
-    the thing that fails and names the rename.
+    THE EXPECTED PREFIX IS THE MODULE'S OWN, AND IT IS NOT ONE STRING ACROSS THE FAMILY: `install`
+    names the surviving invocation and the other three still name the retired `ccodex sdlc <verb>`
+    spelling, because they are other waves' files. `LIFECYCLE_OWN_PREFIX` carries the split per verb.
+    This assertion states what the product actually emits rather than what it should; the residual is
+    recorded rather than papered over, and the day a module renames itself this case is the thing that
+    fails and names the rename.
     """
     return SeamCase(
         identifier=identifier,
@@ -321,7 +333,7 @@ def _lifecycle_case(identifier: str, argv: tuple[str, ...], verb: str, named: st
         expect_exit=3,
         route_sensitive=True,
         stdout_empty=True,
-        stderr_present=(f"error: ccodex sdlc {named}",),
+        stderr_present=(LIFECYCLE_OWN_PREFIX[verb],),
         stderr_present_any=LIFECYCLE_OWN_REASON[verb],
         stderr_absent=("expected direct -I -B execution", "Traceback", "is unavailable in this distribution"),
     )
@@ -344,7 +356,6 @@ def _plane_cases() -> tuple[SeamCase, ...]:
                 _lifecycle_case(
                     f"{verb}-on-the-{agent}-plane-reaches-its-module-and-refuses-before-any-effect",
                     (verb, "--scope", "user", "--agent", agent),
-                    verb,
                     verb,
                 )
             )
@@ -476,7 +487,6 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         "recover-apply-reaches-its-module-and-refuses-before-any-effect",
         ("recover", "--apply", _UNAPPROVED_DIGEST),
         "recover-apply",
-        "recover --apply",
     ),
     # ---- grammar arms that are decided BEFORE the runtime is admitted --------------------------
     # These are the mutation lever's controls. The reader parses argv before it admits an
@@ -587,10 +597,15 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         stderr_absent=("expected direct -I -B execution", "Traceback"),
     ),
     # ---- the ratified grammar this release parses but does not yet serve (exit 3, by name) -------
-    # Each of these three is the alternative to the two dishonest options: silently ignoring the flag
-    # (an operator who typed `--scope project` gets their user home) or refusing it as a usage error
-    # (telling them they mistyped what the ratified grammar contains). Deleting any one of them makes
-    # its case fail on the MESSAGE, which is where the refusal name lives.
+    # This is the alternative to the two dishonest options: silently ignoring the flag (an operator who
+    # typed `--scope project` gets their user home) or refusing it as a usage error (telling them they
+    # mistyped what the ratified grammar contains). Deleting it makes this case fail on the MESSAGE,
+    # which is where the refusal name lives.
+    #
+    # `--mode` AND `--dry-run` USED TO BE HERE and are now WIRED (W3b of the same seed). Their cases
+    # moved below and inverted: what they assert now is that each flag reached its module -- a refusal
+    # only the module can produce for `--mode link`, and a preview the reader could not have rendered --
+    # and that the two retired refusal names are GONE from the product rather than kept as aliases.
     SeamCase(
         identifier="project-scope-parses-and-is-refused-by-name-until-the-wave-that-wires-it",
         argv=("install", "--scope", "project", "--agent", "claude"),
@@ -611,31 +626,63 @@ SEAM_CASES: tuple[SeamCase, ...] = (
         # would tell the operator to type what they already typed.
         stderr_absent=("usage: ccodex install", "expected direct -I -B execution", "Traceback"),
     ),
+    # ---- the two flags W3b wired, each proven to REACH its module ------------------------------
     SeamCase(
-        identifier="a-mode-request-at-user-scope-is-refused-by-name-rather-than-silently-dropped",
+        identifier="a-mode-link-request-reaches-its-module-and-is-refused-for-this-payload-class",
         argv=("install",) + _USER_CLAUDE + ("--mode", "link"),
         expect_exit=3,
-        route_sensitive=False,
-        insensitivity_reason=(
-            "refused inside the parser before any runtime admission, so identical on both routes;"
-            " its subject is that an unserved flag is never silently discarded"
-        ),
+        route_sensitive=True,
         stdout_empty=True,
-        stderr_present=("mode-not-yet-wired", "accepting one here would drop it silently"),
-        stderr_absent=("expected direct -I -B execution", "Traceback"),
+        # THIS REFUSAL IS ONLY REACHABLE THROUGH THE MODULE. The reader admits `--mode link` at user
+        # scope as grammar, forwards it, and the install module refuses it against the payload class it
+        # would activate -- so the case fails if the flag is dropped, refused by the reader, or
+        # silently downgraded to a copy. The absent tokens are the two names the retired unwired
+        # refusals carried: an alias that still answered would say a wired surface is unwired.
+        stderr_present=(
+            LIFECYCLE_OWN_PREFIX["install"],
+            "mode-forbidden-for-acquired-payload",
+            "copies and never links",
+        ),
+        stderr_absent=(
+            "mode-not-yet-wired",
+            "expected direct -I -B execution",
+            "Traceback",
+        ),
     ),
     SeamCase(
-        identifier="a-dry-run-request-is-refused-by-name-and-changes-nothing",
+        identifier="an-admitted-mode-request-is-forwarded-and-the-module-refuses-on-its-own-terms",
+        argv=("install",) + _USER_CLAUDE + ("--mode", "copy"),
+        expect_exit=3,
+        route_sensitive=True,
+        stdout_empty=True,
+        # An admitted mode changes nothing about WHY an empty host refuses: the module still reaches its
+        # own payload admission and names it. What this case adds is that the vector carrying `--mode`
+        # is one the module ADMITS -- a module that rejected the shape would answer "admits exactly".
+        stderr_present=(LIFECYCLE_OWN_PREFIX["install"], "no acquired candidate is available"),
+        stderr_absent=(
+            "mode-not-yet-wired",
+            "admits exactly",
+            "expected direct -I -B execution",
+            "Traceback",
+        ),
+    ),
+    SeamCase(
+        identifier="a-dry-run-request-reaches-its-module-and-previews-instead-of-refusing-unwired",
         argv=("uninstall",) + _USER_CLAUDE + ("--dry-run",),
         expect_exit=3,
-        route_sensitive=False,
-        insensitivity_reason=(
-            "refused inside the parser before any runtime admission, so identical on both routes;"
-            " its subject is that a safety flag is refused rather than ignored"
-        ),
+        route_sensitive=True,
         stdout_empty=True,
-        stderr_present=("dry-run-not-yet-wired", "nothing was previewed and nothing was changed"),
-        stderr_absent=("expected direct -I -B execution", "Traceback", "no installer ownership document"),
+        # An empty host has no plane to preview, so the ladder runs out of rungs and names both rungs
+        # it looked for -- the same refusal the flagless vector gets, which is correct: a preview of
+        # nothing is still nothing. What this case owns is that the flag is FORWARDED and admitted
+        # rather than refused by name, and that the retired token is gone.
+        stderr_present=(LIFECYCLE_OWN_PREFIX["uninstall"], "no installer ownership document"),
+        stderr_absent=(
+            "dry-run-not-yet-wired",
+            "admits exactly",
+            "expected direct -I -B execution",
+            "Traceback",
+        ),
     ),
     # ---- the two retired namespaces ------------------------------------------------------------
     _retired_spelling_case(

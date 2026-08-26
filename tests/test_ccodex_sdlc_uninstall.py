@@ -58,6 +58,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -1544,6 +1545,224 @@ class LegacyUnreceipted(Harness):
         self.assertEqual("0.7.5", document["body"]["resolved_version"])
         # No git metadata beside that driver, so the commit is the explicit unknown.
         self.assertEqual("unknown", document["body"]["checkout"]["commit"])
+        # ... and dirty is TRUE for the same reason: with nothing to compare against, this flag fails
+        # toward "not asserted". `CheckoutDirtiness` below proves the computed direction both ways.
+        self.assertTrue(document["body"]["checkout"]["dirty"])
+
+    def distribution(self, name: str) -> Path:
+        """One fabricated distribution root: a scripts/ this module can load, plus a bump driver.
+
+        Built rather than pointed at this repository's own root, because a detector that read the
+        developer's worktree would answer differently on a clean checkout and in the middle of a wave.
+        """
+        root = self.temp / name
+        scripts = root / "scripts"
+        scripts.mkdir(parents=True)
+        for module in (
+            "distribution_activation_receipt.py",
+            "install_skill_bundle.py",
+            "ccodex_sdlc_host_planes.py",
+        ):
+            shutil.copy2(ROOT / "scripts" / module, scripts / module)
+        (root / target.VERSION_DRIVER_NAME).write_text(
+            json.dumps({"current": "0.7.5"}), encoding="utf-8"
+        )
+        (root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        return root
+
+    @staticmethod
+    def commit_tree(root: Path) -> str:
+        """Make the fabricated root a real single-commit git repository, and return its commit.
+
+        The TEST spawns git; the product never does. That asymmetry is the point: what is under test is
+        a reader of ``.git`` metadata, so the fixture has to be metadata a real git wrote rather than
+        bytes this file invented.
+        """
+        environment = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+        }
+        for arguments in (
+            ("init", "-q", "--initial-branch=main", "."),
+            ("add", "-A"),
+            ("commit", "-q", "-m", "fixture"),
+        ):
+            subprocess.run(
+                ["git", *arguments], cwd=root, env=environment, check=True, capture_output=True
+            )
+        resolved = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return resolved.stdout.strip()
+
+
+class CheckoutDirtiness(LegacyUnreceipted):
+    """``checkout.dirty`` is COMPUTED, and both directions are proven on one fixture.
+
+    It was unconditionally ``true`` for one wave. What makes the ``false`` direction admissible is that
+    it is a comparison rather than an assumption, so this class runs the same plane twice: once on a
+    genuinely clean single-commit tree, and once after planting one modified byte in a tracked file.
+    """
+
+    def seal_from(self, distribution: Path, payload: Path) -> dict[str, Any]:
+        code, report = self.plane.run(scripts_dir=distribution / "scripts")
+        self.assertEqual(code, EXIT_RETIRED, report)
+        document = json.loads(
+            sorted((self.plane.activation_root / "receipts").glob("*.json"))[0].read_text(
+                encoding="utf-8"
+            )
+        )
+        self.report = report
+        return document
+
+    def test_a_clean_tree_seals_dirty_false_and_one_modified_file_seals_true(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("this host has no git to build a real metadata fixture with")
+        distribution = self.distribution("clean-distribution")
+        commit = self.commit_tree(distribution)
+
+        payload = self.payload("dirty-clean")
+        activate_with_ownership_rows(self.plane, payload)
+        clean = self.seal_from(distribution, payload)
+
+        self.assertEqual(commit, clean["body"]["checkout"]["commit"])
+        self.assertFalse(clean["body"]["checkout"]["dirty"], "a clean tree may be asserted clean")
+        self.assertIn("dirty=false", self.report)
+        self.assertIn("the git index tracks matches the worktree", self.report)
+        # The receipt is still a checkout body: null archive digest, checkout-tree version source.
+        self.assertIsNone(clean["body"]["archive_sha256"])
+        self.assertEqual("checkout-tree", clean["body"]["version_source"])
+
+        # THE OTHER DIRECTION, on the same fixture: one tracked file's content moves.
+        # The sealed receipt is removed first because a ledger retirement's id is derived from its plan
+        # digest, and the plan for the re-planted rows is byte-identical -- so the second run would be
+        # refused as "a second retirement of one assessed plane", which is a DIFFERENT control (proven
+        # in its own test). Resetting it here keeps this test about the dirty computation.
+        for sealed in sorted((self.plane.activation_root / "receipts").glob("*.json")):
+            sealed.unlink()
+        (distribution / "tracked.txt").write_text("planted\n", encoding="utf-8")
+        second_payload = self.payload("dirty-modified")
+        activate_with_ownership_rows(self.plane, second_payload)
+        modified = self.seal_from(distribution, second_payload)
+
+        self.assertEqual(commit, modified["body"]["checkout"]["commit"], "the commit did not move")
+        self.assertTrue(modified["body"]["checkout"]["dirty"], "a modified tracked path is dirty")
+        self.assertIn("dirty=true", self.report)
+        self.assertIn("'tracked.txt' differs in content from the index", self.report)
+
+    def test_the_detector_answers_dirty_for_every_shape_it_cannot_compare(self) -> None:
+        """A staged change, an unparseable index, and absent metadata each fail toward NOT-asserted.
+
+        The staged case is the one that matters most: the worktree and the index agree with each other
+        while both differ from the commit, so a detector that compared only those two would call it
+        clean. The cache-tree root is what catches it, and this is where that claim is checked.
+        """
+        if shutil.which("git") is None:
+            self.skipTest("this host has no git to build a real metadata fixture with")
+        distribution = self.distribution("shapes")
+        self.commit_tree(distribution)
+        clean, reason = target.observe_dirty(distribution)
+        self.assertFalse(clean, reason)
+
+        # A rewrite that changes only mtime is NOT dirty: content is hashed, never stat data.
+        (distribution / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        os.utime(distribution / "tracked.txt", (0, 0))
+        unchanged, reason = target.observe_dirty(distribution)
+        self.assertFalse(unchanged, reason)
+
+        (distribution / "tracked.txt").write_text("staged\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "tracked.txt"],
+            cwd=distribution,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+            check=True,
+            capture_output=True,
+        )
+        staged, reason = target.observe_dirty(distribution)
+        self.assertTrue(staged, "a staged-but-uncommitted change may not be asserted clean")
+        self.assertIn("cache-tree root", reason)
+
+        index = distribution / ".git" / "index"
+        index.write_bytes(b"NOTDIRC" + index.read_bytes()[7:])
+        unparseable, reason = target.observe_dirty(distribution)
+        self.assertTrue(unparseable)
+        self.assertIn("not a shape this reader parses", reason)
+
+        shutil.rmtree(distribution / ".git")
+        absent, reason = target.observe_dirty(distribution)
+        self.assertTrue(absent)
+        self.assertIn("no readable git metadata", reason)
+
+
+class LedgerPreview(LegacyUnreceipted):
+    """``--dry-run`` on both admission rungs: the plan is rendered and nothing is touched."""
+
+    def test_a_preview_renders_the_plan_and_removes_nothing_on_either_rung(self) -> None:
+        payload = self.payload("preview")
+        entries = activate_with_ownership_rows(self.plane, payload)
+        implementer = self.plane.plane_root / "agents" / "sdlc-implementer.md"
+        before = implementer.read_bytes()
+
+        code, report = self.plane.run(dry_run=True)
+
+        self.assertEqual(code, target.EXIT_PREVIEWED, report)
+        self.assertIn("--dry-run: nothing was removed", report)
+        self.assertIn("admission: ledger", report)
+        self.assertIn("would remove 'agents/sdlc-implementer.md'", report)
+        self.assertEqual(before, implementer.read_bytes(), "the preview touched no byte")
+        self.assertFalse((self.plane.activation_root / "receipts").exists())
+        self.assertFalse((self.plane.activation_root / "journals").exists())
+        # The ownership rows survive a preview, which is what makes the real run below possible.
+        state = bundle.load_config_state(installer_read_config(self.plane, payload))
+        self.assertNotEqual({}, state["entries"])
+
+        # The receipt-directed rung previews too, and names the pointer that admitted it.
+        self.plane.seal_active(entries)
+        receipted_code, receipted_report = self.plane.run(dry_run=True)
+        self.assertEqual(receipted_code, target.EXIT_PREVIEWED, receipted_report)
+        self.assertIn("admission: activation-receipt", receipted_report)
+        self.assertIn(str(self.plane.pointer), receipted_report)
+        self.assertTrue(implementer.is_file())
+        self.assertFalse((self.plane.activation_root / "receipts").exists())
+
+        # POSITIVE CONTROL: the same plane, run for real, does every one of those things.
+        real_code, real_report = self.plane.run()
+        self.assertEqual(real_code, EXIT_RETIRED, real_report)
+        self.assertFalse(implementer.exists())
+        self.assertEqual(
+            "activation-receipt", self.plane.terminal_receipt()["body"]["prestate_evidence"]
+        )
+
+    def test_a_preview_leaves_the_legacy_pointer_where_it_found_it(self) -> None:
+        """The migration is a write, so a preview reports it as pending instead of performing it."""
+        payload = self.payload("preview-legacy")
+        entries = activate_with_ownership_rows(self.plane, payload)
+        self.plane.seal_active(entries)
+        legacy = self.plane.legacy_pointer
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_bytes(self.plane.active_bytes())
+        self.plane.pointer.unlink()
+
+        code, report = self.plane.run(dry_run=True)
+
+        self.assertEqual(code, target.EXIT_PREVIEWED, report)
+        self.assertIn("would be re-filed at", report)
+        self.assertTrue(legacy.is_file(), "the preview left the legacy pointer alone")
+        self.assertFalse(self.plane.pointer.exists(), "and wrote no keyed pointer")
+        # POSITIVE CONTROL: the real run performs the migration the preview only described.
+        real_code, real_report = self.plane.run()
+        self.assertEqual(real_code, EXIT_RETIRED, real_report)
+        self.assertFalse(legacy.exists())
 
 
 # ---- refusals ------------------------------------------------------------------------------------

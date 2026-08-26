@@ -203,9 +203,23 @@ exit 3 naming the `mise trust <tree>/mise.toml` remedy, and after that explicit 
 digest-matched, receipted uninstall reading clean). **That spelling is RETIRED** as of the
 front-door unification and now refuses at exit 2 naming `ccodex install --scope user --agent
 <claude|codex>`; the sentence keeps the verb it executed because it is dated evidence about
-v0.7.4, not an instruction. Until the acquisition half lands (agentic-sdlc-7a2b W3b) the working
-equivalent on a release tree is `mise run lifecycle:install -- --agent claude`, because the
-top-level `install` is the RECEIPTED activation and refuses without an acquired candidate. The
+v0.7.4, not an instruction. The acquisition half has since landed (agentic-sdlc-7a2b W3b): the
+top-level `install` is the RECEIPTED activation, and it now MINTS its own admission ticket when the
+acquisition layout holds a release root and no receipt yet — it verifies that root against its own
+`manifest.json` in both directions, seals the acquisition receipt through
+`scripts/write_acquisition_receipt.py`'s own seal path (that module stays the schema owner), then
+activates and seals the v2 activation receipt and pointer. A second install of the same archive
+REUSES the filed ticket, and a ticket whose bytes disagree with their own seal is refused rather
+than replaced. What auto-seal does NOT remove is the archive's PLACEMENT at
+`$XDG_DATA_HOME/agentic-sdlc/acquisition/candidates/<archive-sha256>/root`: an extracted release
+root states no digest of the archive it came from, so that directory name is the only surviving
+record of the fact the receipt is keyed by (`docs/plans/2026-08-14T163833Z-Install-UX.md`'s
+placement section, superseded in part rather than deleted). `install --dry-run` runs the whole
+admission and writes nothing — no ticket, no plan, no journal, no receipt, no pointer — and
+`install --mode auto|copy` states the resolution to this plane's one publication mode while
+`--mode link` refuses by name, because an acquired candidate is copy-activated and the live-edit
+loop that mode names needs a checkout payload this plane does not admit. `mise run
+lifecycle:install -- --agent claude` remains the checkout-development plane and is unreceipted. The
 UNVERSIONED
 `mise use -g github:Codeseys-Labs/agentic-sdlc` does not resolve a prerelease (prerelease listing
 exclusion plus mise's built-in `minimum_release_age` filter while a release is young) and stays

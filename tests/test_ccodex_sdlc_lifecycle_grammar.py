@@ -126,19 +126,31 @@ PLAN_DIGEST = "5" * 64
 # parsed `scope` and `agent` -- so an expected value is a six-tuple and a read's two trailing slots
 # are `None`. A NamedTuple compares equal to a plain tuple of the same length, which is what keeps
 # these expectations readable without importing the class.
+#: HOW EACH PER-VERB MODULE NAMES ITSELF, which is NOT one string across the family: `install` names
+#: the surviving top-level invocation (renamed in W3b of agentic-sdlc-7a2b, seed agentic-sdlc-67c9) and
+#: the other two still name the retired `ccodex sdlc <verb>` spelling because they are other waves'
+#: files. A shared f-string here asserted one spelling for all three and would have passed while
+#: proving the wrong thing about two of them.
+MODULE_OWN_PREFIX = {
+    "install": "error: ccodex install ",
+    "update": "error: ccodex sdlc update ",
+    "uninstall": "error: ccodex sdlc uninstall ",
+}
+
+
 READER_FORMS = (
-    (("status", *USER_SCOPE, "--agent", "claude"), ("status", False, False, None, "user", "claude")),
+    (("status", *USER_SCOPE, "--agent", "claude"), ("status", False, False, None, "user", "claude", None)),
     (
         ("status", *USER_SCOPE, "--agent", "codex", "--json"),
-        ("status", False, True, None, "user", "codex"),
+        ("status", False, True, None, "user", "codex", None),
     ),
-    (("doctor",), ("doctor", False, False, None, None, None)),
-    (("doctor", "--json"), ("doctor", False, True, None, None, None)),
-    (("recover", "--dry-run"), ("recover", True, False, None, None, None)),
-    (("recover", "--dry-run", "--json"), ("recover", True, True, None, None, None)),
+    (("doctor",), ("doctor", False, False, None, None, None, None)),
+    (("doctor", "--json"), ("doctor", False, True, None, None, None, None)),
+    (("recover", "--dry-run"), ("recover", True, False, None, None, None, None)),
+    (("recover", "--dry-run", "--json"), ("recover", True, True, None, None, None, None)),
     # The mutating form: never a dry run, never a report, and it carries the approved digest in the
     # same fourth slot that `install` uses for its explicit agent.
-    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None)),
+    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None, None)),
 )
 #: Every recover spelling that is a grammar error, so exit 2 is proven per spelling and not once.
 # `\d` would admit the Arabic-Indic digit, which is why an explicitly non-ASCII digest is pinned
@@ -474,11 +486,12 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
         # so those refusals are the grammar's verdicts and not `parse_command` refusing everything.
         self.assertEqual(
             reader.parse_command(["recover", "--apply", PLAN_DIGEST]),
-            ("recover", False, False, PLAN_DIGEST, None, None),
+            ("recover", False, False, PLAN_DIGEST, None, None, None),
         )
         # A digest is not an agent and an agent is not a digest: the shared forwarded slot never lets
         # one verb's argument reach the other's module. Index access still reads that slot after the
-        # 4-tuple became a six-field `Invocation`, which is why these pins survived unchanged.
+        # 4-tuple became a SEVEN-field `Invocation` -- the seventh is the requested `--mode`, absent on
+        # every form above -- which is why these pins survived unchanged.
         self.assertEqual(reader.parse_command(["install", *USER_SCOPE, "--agent", "claude"])[3], "claude")
         self.assertEqual(reader.parse_command(["install", *USER_SCOPE, "--agent", "codex"])[3], "codex")
         self.assertEqual(reader.parse_command(["uninstall", *USER_SCOPE, "--agent", "codex"])[3], "codex")
@@ -510,7 +523,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                         # front door is now called, so the day a module renames itself this is what
                         # fails and names the rename. The loader's absence refusal appearing here
                         # would instead mean dispatch never reached the module.
-                        self.assertIn(f"error: ccodex sdlc {verb} ", completed.stderr)
+                        self.assertIn(MODULE_OWN_PREFIX[verb], completed.stderr)
                         self.assertNotIn("is unavailable in this distribution", completed.stderr)
                     self.assertNotIn("Traceback", completed.stderr)
                     self.assertEqual(completed.stdout, "")
@@ -670,7 +683,7 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
                             dispatcher, environment, verb, *USER_SCOPE, "--agent", agent
                         )
                         self.assertEqual(admitted.returncode, 3, admitted.stderr)
-                        self.assertIn(f"error: ccodex sdlc {verb}", admitted.stderr)
+                        self.assertIn(MODULE_OWN_PREFIX[verb], admitted.stderr)
                         self.assertNotIn("usage: ccodex install", admitted.stderr)
             self.assertFalse(query_state.exists())
 

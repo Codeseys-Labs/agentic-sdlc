@@ -358,7 +358,12 @@ class NoFollowFallbackTest(ShimFixture):
 
 
 class RealAdmissionTest(ShimFixture):
-    """``ccodex sdlc install``'s own admission code, run against a shim-produced receipt."""
+    """``ccodex install``'s own admission code, run against a shim-produced receipt.
+
+    Both directions of the W3b library boundary live here: the consumer ADMITS a receipt this module's
+    CLI produced, and the consumer's own auto-seal produces bytes identical to that CLI's for the same
+    root. A drift in either direction is a drift between the schema owner and its one caller.
+    """
 
     def config(self) -> object:
         return install.Config(
@@ -373,9 +378,21 @@ class RealAdmissionTest(ShimFixture):
             observed_machine="x86_64",
         )
 
+    def admitted(self) -> object:
+        """The consumer's whole admission, in the two steps it now takes.
+
+        W3b split it: ``classify_payload`` resolves the root and says whether a ticket is already filed,
+        and ``admit_payload`` holds one -- sealing it through THIS module when there is none. Both are
+        driven here, with this test file's own shim module passed as the producer, so what is exercised
+        is the real seam between the consumer and the schema owner rather than a stand-in.
+        """
+        config = self.config()
+        candidate = install.classify_payload(config, shim)
+        return install.admit_payload(config, candidate, shim, INSTANT)
+
     def test_the_consumer_admits_a_shim_receipt_and_its_root(self) -> None:
         self.seal()
-        payload = install.admit_payload(self.config())
+        payload = self.admitted()
         self.assertEqual(payload.archive_sha256, self.archive_sha256)
         self.assertEqual(payload.candidate_root, self.candidate_root)
         self.assertEqual(payload.resolved_version, "0.7.3")
@@ -391,7 +408,7 @@ class RealAdmissionTest(ShimFixture):
         tampered["installed_at"] = "2026-08-20T12:13:15Z"
         path.write_bytes(shim.canonical(tampered))
         with self.assertRaises(install.Refusal):
-            install.admit_payload(self.config())
+            self.admitted()
 
     def test_the_cli_produces_a_receipt_the_consumer_admits(self) -> None:
         completed = subprocess.run(
@@ -413,8 +430,56 @@ class RealAdmissionTest(ShimFixture):
         )
         self.assertEqual(completed.returncode, shim.EXIT_OK, completed.stdout + completed.stderr)
         self.assertIn(f"{self.archive_sha256}.json", completed.stdout)
-        payload = install.admit_payload(self.config())
+        payload = self.admitted()
         self.assertEqual(payload.archive_sha256, self.archive_sha256)
+        self.assertEqual("reused", payload.acquisition, "a filed ticket is reused, never re-sealed")
+
+    def test_the_consumer_seals_the_same_bytes_this_modules_cli_would(self) -> None:
+        """W3b's library boundary, checked from the schema owner's own suite.
+
+        ``ccodex install`` auto-seals by CALLING ``write_receipt``. If that ever became a second
+        implementation, the two documents would drift -- so this seals the same root twice, once through
+        the consumer's admission and once through this module's CLI into a separate state home, and
+        requires the bytes to be equal. The control changes one input and requires them to differ.
+        """
+        payload = self.admitted()
+        self.assertEqual("sealed", payload.acquisition, "no ticket was filed, so the consumer sealed one")
+        consumer_bytes = payload.receipt_path.read_bytes()
+
+        elsewhere = Path(self.temporary.name) / "cli-state"
+        elsewhere.mkdir()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(MODULE_PATH),
+                "--root",
+                str(self.candidate_root),
+                "--state-home",
+                str(elsewhere),
+                "--archive",
+                str(self.archive),
+                "--installed-at",
+                INSTANT,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, shim.EXIT_OK, completed.stdout + completed.stderr)
+        produced = elsewhere.joinpath(*shim.RECEIPT_SEGMENTS) / f"{self.archive_sha256}.json"
+        self.assertEqual(consumer_bytes, produced.read_bytes())
+        # CONTROL: a different instant is different bytes, so the equality above has content.
+        other = Path(self.temporary.name) / "cli-state-later"
+        other.mkdir()
+        later = shim.write_receipt(
+            root=self.candidate_root,
+            state_home=other,
+            archive=self.archive,
+            archive_sha256=None,
+            operation_id=None,
+            installed_at="2026-08-20T12:15:00Z",
+        )
+        self.assertNotEqual(consumer_bytes, later.read_bytes())
 
     def test_the_cli_refuses_a_tampered_root_at_exit_three(self) -> None:
         (self.candidate_root / "commands" / "sdlc-frame.md").write_text("tampered\n", encoding="utf-8")

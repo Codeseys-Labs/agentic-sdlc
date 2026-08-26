@@ -120,6 +120,7 @@ import os
 import platform
 import re
 import stat
+import struct
 import sys
 import time
 import dataclasses
@@ -145,6 +146,11 @@ EXIT_PARTIAL = 4
 #: exit 4 with ``EXIT_PARTIAL`` because Decision 9 has ONE class for both admitted-effect states; the
 #: two constants stay distinct because the receipt's ``effect_state`` distinguishes them.
 EXIT_UNKNOWN = 4
+#: A COMPLETED PREVIEW.  It shares exit 0 with ``EXIT_RETIRED`` because Decision 9 has one class for
+#: "ok" and a preview that answered is an ok read; the two constants stay distinct because "the plane
+#: was retired" and "nothing was touched and here is what would be" are different statements, and one
+#: name for both is how a caller ends up reading a preview as a retirement.
+EXIT_PREVIEWED = 0
 
 JOURNAL_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-journal@1"
 PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-plan@1"
@@ -154,6 +160,8 @@ PLAN_SCHEMA = "agentic-sdlc/ccodex-sdlc-uninstall-plan@1"
 #: Every per-agent fact -- the collection beneath the configured root, the version-observation argv, the
 #: contract row -- lives in ONE record per agent in ``ccodex_sdlc_host_planes`` (agentic-sdlc-7a2b, WX).
 HOST_FLAG = "--host"
+#: The ONE optional request the front door forwards to this verb, in the operator's own spelling.
+DRY_RUN_FLAG = "--dry-run"
 DEFAULT_HOST = "claude"
 #: The one ``host`` token and the one ``activation_scope`` token a v1 body could carry, frozen with that
 #: generation.  These are facts about DOCUMENTS a retired writer produced, not about which plane a run
@@ -191,6 +199,12 @@ VERSION_SOURCE_CHECKOUT = "checkout-tree"
 CHECKOUT_COMMIT_UNKNOWN = "unknown"
 _MAX_DRIVER_BYTES = 65536
 _MAX_GIT_FILE_BYTES = 4096
+#: The three index entry modes this reader compares.  A gitlink (0o160000) and a sparse directory entry
+#: are deliberately absent: neither can be compared by hashing one worktree node, so both answer dirty.
+_GIT_MODE_FILE = 0o100644
+_GIT_MODE_EXECUTABLE = 0o100755
+_GIT_MODE_SYMLINK = 0o120000
+_GIT_MODES = (_GIT_MODE_FILE, _GIT_MODE_EXECUTABLE, _GIT_MODE_SYMLINK)
 
 
 def _pointer_path(activation_root: Path, agent: str, kind: str, root: str | None = None) -> Path:
@@ -346,6 +360,11 @@ class Config:
     #: The resolved project root at project scope, and ``None`` at user scope.  It is the removal
     #: boundary AND the value the pointer filename's key is derived from.
     project_root: Path | None = None
+    #: Whether this run is a PREVIEW.  It stops after the plan is derived -- before the legacy-pointer
+    #: migration, before the journal is armed, before any destination moves, and before any receipt is
+    #: sealed -- and the installer configuration it borrows carries the same flag, so the shared lock
+    #: yields without durably creating the state directory a lock file would need.
+    dry_run: bool = False
 
     @property
     def boundary_home(self) -> Path:
@@ -1509,9 +1528,26 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
         )
 
     # The legacy pointer is re-filed at its keyed path BEFORE the ladder below reads anything, so the
-    # admission sees one plane with one pointer.  A refusal here removed nothing.
-    announcement = migrate_legacy_pointer(bundle, config)
-    announcements = [announcement] if announcement is not None else []
+    # admission sees one plane with one pointer.  A refusal here removed nothing.  A PREVIEW DOES NOT
+    # RE-FILE IT: the migration is a real write, and a preview that performed one would make its own
+    # "nothing was touched" false, so it is reported as pending instead.  The ladder below then reads
+    # the plane as it stands, which is the plane a real run would migrate first -- so a preview on a
+    # pre-keyed plane reports the ledger-directed rung it would take AFTER the migration only if the
+    # legacy document is absent, and says so when it is not.
+    if config.dry_run:
+        legacy = config.legacy_active_receipt_path
+        announcements = (
+            [
+                f"the legacy active pointer {str(legacy)!r} would be re-filed at "
+                f"{str(config.active_receipt_path)!r} by a real run; this preview left it alone, so the "
+                "assessment below reads the plane as it stands"
+            ]
+            if config.scope_kind == SCOPE_USER and config.retires_legacy_pointer and legacy.is_file()
+            else []
+        )
+    else:
+        announcement = migrate_legacy_pointer(bundle, config)
+        announcements = [announcement] if announcement is not None else []
 
     if not bundle.path_present(config.active_receipt_path):
         return run_ledger_directed(bundle, dar, config, ledger, announcements)
@@ -1551,6 +1587,9 @@ def run_receipt_directed(
     plan = build_plan(config, body, observations)
     plan["retired_receipt_id"] = retired_id
     plan_sha256 = digest_bytes(dar.canonical_bytes(plan))
+
+    if config.dry_run:
+        return EXIT_PREVIEWED, preview_lines(config, plan, announcements, "activation-receipt")
 
     journal = Journal(
         bundle,
@@ -1833,7 +1872,7 @@ def ledger_entry_name(config: Config, destination: Path) -> str | None:
     return relative
 
 
-def observe_distribution(config: Config) -> tuple[str, dict[str, Any]]:
+def observe_distribution(config: Config) -> tuple[str, dict[str, Any], str]:
     """What this run can honestly say about the distribution a ledger retirement is running from.
 
     A ledger-directed retirement has NO acquisition receipt and no activation receipt to inherit a
@@ -1841,10 +1880,14 @@ def observe_distribution(config: Config) -> tuple[str, dict[str, Any]]:
     Exactly one file answers the version -- ``.version-bump.json``'s own ``current``, the bump driver --
     and the checkout object answers the commit when git METADATA is readable, never by spawning git.
 
-    ``dirty`` IS ALWAYS TRUE ON THIS PATH, and the reason is honesty rather than caution: the field
-    means "this receipt does not assert the payload tree equals the commit it names", and nothing in
-    this module compares a worktree against a commit, so it may not claim the tree was clean. A run
-    that does prove it may record False.
+    ``dirty`` IS COMPUTED, not assumed (agentic-sdlc-7a2b, W3b).  It was unconditionally ``true`` for
+    one wave, with the honest meaning "this receipt does not assert the payload tree equals the commit
+    it names".  ``observe_dirty`` now answers it by comparing every path the git index tracks against
+    the worktree, reading only ``.git`` metadata and never spawning ``git``; its two residuals -- no
+    untracked-content inspection and no object-store read -- are stated there, and every unreadable or
+    unsupported shape still answers ``true``.  The reason is returned as well as the flag, because a
+    boolean in sealed evidence with no statement of what produced it is a value an operator cannot
+    check.
     """
     root = config.scripts_dir.parent
     driver = root / VERSION_DRIVER_NAME
@@ -1873,7 +1916,176 @@ def observe_distribution(config: Config) -> tuple[str, dict[str, Any]]:
             f"the version driver {str(driver)!r} states no admissible current version, so a retirement "
             "receipt could not name the version it retired. Nothing was removed"
         )
-    return current, {"commit": observe_commit(root), "dirty": True}
+    dirty, reason = observe_dirty(root)
+    return current, {"commit": observe_commit(root), "dirty": dirty}, reason
+
+
+def git_metadata_directory(root: Path) -> Path | None:
+    """The ``.git`` directory this root's metadata actually lives in, or ``None``.
+
+    One level of ``gitdir:`` indirection is followed, which is what makes a LINKED WORKTREE readable:
+    its ``.git`` is a file naming the real metadata directory.  Nothing here spawns ``git``.
+    """
+    metadata = root / ".git"
+    try:
+        if metadata.is_file():
+            line = metadata.read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
+            if not line.startswith("gitdir:"):
+                return None
+            target = Path(line.split(":", 1)[1].strip())
+            metadata = target if target.is_absolute() else (root / target)
+        return metadata if metadata.is_dir() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _index_entries(raw: bytes) -> tuple[list[dict[str, Any]], bool]:
+    """Parse a git index (version 2 or 3) into its entries plus its cache-tree validity.
+
+    THE INDEX IS THE ONLY THING READ, and that is the whole design: every entry records the blob's own
+    sha1 beside the path, so a worktree can be compared against it by re-hashing content -- no object
+    store, no pack index, no delta chains, and no ``git`` process.  Version 4 uses prefix-compressed
+    path names and is deliberately NOT parsed: a half-understood index would answer with confidence
+    about entries it misread, so an unsupported version raises and the caller answers ``dirty``.
+    """
+    if raw[:4] != b"DIRC" or len(raw) < 32:
+        raise ValueError("not a DIRC index")
+    version, count = struct.unpack(">II", raw[4:12])
+    if version not in (2, 3):
+        raise ValueError(f"index version {version} is not parsed here")
+    offset = 12
+    entries: list[dict[str, Any]] = []
+    for _ in range(count):
+        start = offset
+        fields = struct.unpack(">10I", raw[offset : offset + 40])
+        sha = raw[offset + 40 : offset + 60].hex()
+        flags, = struct.unpack(">H", raw[offset + 60 : offset + 62])
+        offset += 62
+        extended_flags = 0
+        if flags & 0x4000:
+            extended_flags, = struct.unpack(">H", raw[offset : offset + 2])
+            offset += 2
+        length = flags & 0x0FFF
+        if length < 0x0FFF:
+            name = raw[offset : offset + length]
+            offset += length
+        else:
+            end = raw.index(b"\0", offset)
+            name = raw[offset:end]
+            offset = end
+        offset += 1
+        while (offset - start) % 8:
+            offset += 1
+        entries.append(
+            {
+                "name": name.decode("utf-8", "replace"),
+                "sha1": sha,
+                "mode": fields[6],
+                "stage": (flags >> 12) & 0x3,
+                "extended_flags": extended_flags,
+            }
+        )
+    # The extensions, then the 20-byte trailer checksum. Only `TREE` is read, and only its ROOT row:
+    # git invalidates a cache-tree row (entry_count < 0) when the index below it is staged, so an
+    # invalid root is the witness that the index no longer agrees with a written tree.
+    tail = raw[offset:-20]
+    root_valid = False
+    position = 0
+    while position + 8 <= len(tail):
+        signature = tail[position : position + 4]
+        size, = struct.unpack(">I", tail[position + 4 : position + 8])
+        position += 8
+        payload = tail[position : position + size]
+        position += size
+        if signature == b"TREE" and payload:
+            separator = payload.index(b"\0")
+            newline = payload.index(b"\n", separator)
+            root_valid = int(payload[separator + 1 : newline].split(b" ")[0]) >= 0
+    return entries, root_valid
+
+
+def _blob_sha1(path: Path, mode: int) -> str:
+    """Git's own blob identity for one worktree node: sha1 over ``blob <len>\\0`` plus the content."""
+    data = os.readlink(path).encode("utf-8") if mode == _GIT_MODE_SYMLINK else path.read_bytes()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
+
+
+def observe_dirty(root: Path) -> tuple[bool, str]:
+    """Whether this distribution tree may still be asserted equal to the commit ``observe_commit``
+    names -- computed, with its residuals stated, rather than assumed.
+
+    WHAT ``dirty: False`` ASSERTS, exactly: every path the git index tracks exists in the worktree with
+    the node type and executable bit the index records and hashes to the blob the index records, no
+    entry is conflicted, and the index's own cache-tree root is intact.  That last condition is what
+    catches the common ``git add``-without-commit: git invalidates the cache-tree row when the index is
+    staged, and without it a staged change would read as clean because the worktree and the index agree
+    with each other while both differ from the commit.  Measured in both directions on 2026-08-25 in a
+    throwaway repository: a clean tree, a content-identical rewrite that only moved mtime, a modified
+    file, a deleted tracked file, a staged-not-committed change, and the commit that follows it.
+
+    TWO RESIDUALS, NAMED because a ``False`` here is a claim in sealed evidence:
+
+      * UNTRACKED CONTENT IS NOT INSPECTED.  Deciding whether an untracked path is ignored needs the
+        full ``.gitignore`` semantics, which this module will not reimplement, so an untracked file
+        beside a tracked payload does not move this flag.  ``dirty: False`` therefore means "no tracked
+        path differs", not "no other file exists".
+      * NO OBJECT STORE IS READ.  The commit's own tree is never fetched, because reaching a packed
+        object means a pack index and delta chains, and a detector that answered only for loose objects
+        would give two hosts different answers about one tree.  So a deliberate index-versus-commit
+        surgery (``git reset --soft``, ``git update-index``) that leaves the cache-tree intact is not
+        detected.
+
+    Everything unreadable, unsupported, or unparseable answers ``True``: this flag fails toward "not
+    asserted", which is the direction that cannot make a receipt claim more than it observed.
+    """
+    metadata = git_metadata_directory(root)
+    if metadata is None:
+        return True, "no readable git metadata, so nothing here can be compared with a commit"
+    try:
+        raw = (metadata / "index").read_bytes()
+    except OSError as exc:
+        return True, f"the git index could not be read ({exc.__class__.__name__})"
+    try:
+        entries, root_valid = _index_entries(raw)
+    except (ValueError, IndexError, struct.error) as exc:
+        return True, f"the git index is not a shape this reader parses ({exc})"
+    if not entries:
+        return True, "the git index tracks no path, so no tree could be compared with it"
+    if not root_valid:
+        return True, (
+            "the git index carries no intact cache-tree root, which is how a staged-but-uncommitted "
+            "change reads: the worktree may equal the index while the index differs from the commit"
+        )
+    for entry in entries:
+        name = entry["name"]
+        if entry["stage"] != 0:
+            return True, f"{name!r} is a conflicted index entry"
+        if entry["extended_flags"]:
+            return True, f"{name!r} carries index flags this reader does not interpret"
+        if entry["mode"] not in _GIT_MODES:
+            return True, f"{name!r} is recorded with mode {entry['mode']:o}, which this reader does not compare"
+        path = root / name
+        try:
+            item = path.lstat()
+        except OSError:
+            return True, f"the tracked path {name!r} is absent from the worktree"
+        if entry["mode"] == _GIT_MODE_SYMLINK:
+            if not stat.S_ISLNK(item.st_mode):
+                return True, f"the tracked symlink {name!r} is not a symlink in the worktree"
+        elif not stat.S_ISREG(item.st_mode) or stat.S_ISLNK(item.st_mode):
+            return True, f"the tracked file {name!r} is not a regular file in the worktree"
+        elif bool(item.st_mode & 0o100) != (entry["mode"] == _GIT_MODE_EXECUTABLE):
+            return True, f"the tracked file {name!r} differs from the index in its executable bit"
+        try:
+            observed = _blob_sha1(path, entry["mode"])
+        except OSError as exc:
+            return True, f"the tracked path {name!r} could not be hashed ({exc.__class__.__name__})"
+        if observed != entry["sha1"]:
+            return True, f"the tracked path {name!r} differs in content from the index"
+    return False, (
+        f"every one of the {len(entries)} paths the git index tracks matches the worktree and the "
+        "index's cache-tree root is intact (untracked content is not inspected)"
+    )
 
 
 def observe_commit(root: Path) -> str:
@@ -1939,9 +2151,13 @@ def run_ledger_directed(
             f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
             f" at {str(config.active_receipt_path)!r} and no installer ownership document at"
             f" {str(installer_config.state_path)!r}; there is nothing to retire, and"
-            " `ccodex sdlc install --host claude` is the front door for a first activation"
+            " `ccodex install --scope user --agent claude` is the front door for a first activation"
         )
-    resolved_version, checkout = observe_distribution(config)
+    resolved_version, checkout, dirty_reason = observe_distribution(config)
+    announcements.append(
+        f"distribution tree: commit {str(checkout['commit'])[:12]}, dirty={str(checkout['dirty']).lower()}"
+        f" -- {dirty_reason}"
+    )
     announcement = LEDGER_ANNOUNCEMENT.format(agent=config.host, scope=config.scope_kind)
 
     removed: set[str] = set()
@@ -1957,11 +2173,16 @@ def run_ledger_directed(
                 f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
                 f" at {str(config.active_receipt_path)!r} and no ownership rows under"
                 f" {str(config.plane_root)!r}; there is nothing to retire, and"
-                " `ccodex sdlc install --host claude` is the front door for a first activation"
+                " `ccodex install --scope user --agent claude` is the front door for a first activation"
             )
         removable = [row for row in rows if row["class"] == "owned-exact"]
         plan = ledger_plan(config, rows, resolved_version)
         plan_sha256 = digest_bytes(dar.canonical_bytes(plan))
+        if config.dry_run:
+            # Inside the lock, which is a no-op here: the borrowed installer configuration carries this
+            # run's own `dry_run`, so `installer_lock` yielded without creating a lock file. The rows
+            # above were READ; nothing below this line has run.
+            return EXIT_PREVIEWED, preview_lines(config, plan, announcements, "ledger")
         receipt_id = ledger_receipt_id(config, plan_sha256)
         receipt_path = config.receipts_dir / f"{receipt_id}.json"
         journal_path = config.journals_dir / f"{receipt_id}.json"
@@ -2142,6 +2363,42 @@ def run_ledger_directed(
     )
 
 
+def preview_lines(
+    config: Config, plan: dict[str, Any], announcements: list[str], evidence: str
+) -> list[str]:
+    """Render one derived plan as a preview, for either admission rung, from the plan alone.
+
+    ONE renderer for both rungs, because both build the same closed plan shape: a second renderer
+    would be a second opinion about what a run intends, and the plan is the document the receipt's own
+    ``plan_sha256`` binds.  Every line states what WOULD happen; nothing here claims an effect, and the
+    preserve rows carry the same reason codes a real run would seal.
+    """
+    lines = [
+        f"ccodex uninstall --scope {config.scope_kind} --agent {config.host} --dry-run: nothing was "
+        "removed, no receipt was sealed, and no ownership row was retired",
+        f"admission: {evidence}"
+        + (
+            f" ({str(config.active_receipt_path)!r})"
+            if evidence == "activation-receipt"
+            else f" (legacy-unreceipted; no activation receipt for {config.host}/{config.scope_kind})"
+        ),
+        f"plane root: {str(config.plane_root)!r}",
+    ]
+    lines.extend(announcements)
+    for row in plan["remove"]:
+        lines.append(
+            f"would remove {row['entry_name']!r} at {row['destination']!r} (expected digest "
+            f"{str(row['expected_sha256'])[:12]!r})"
+        )
+    for row in plan["preserve"]:
+        lines.append(f"would preserve {row['entry_name']!r}: {row['reason_code']}")
+    lines.append(
+        f"{len(plan['remove'])} would be removed, {len(plan['preserve'])} preserved; a real run seals "
+        "one terminal receipt and retires the matching ownership rows"
+    )
+    return lines
+
+
 def ledger_plan(config: Config, rows: list[dict[str, Any]], resolved_version: str) -> dict[str, Any]:
     """The ledger-directed run's pre-effect intent, in the same closed plan shape."""
     remove: list[dict[str, Any]] = []
@@ -2209,7 +2466,7 @@ def bundle_config(bundle: ModuleType, config: Config) -> Any:
         claude_root,
         codex_root,
         "auto",
-        False,
+        config.dry_run,
         config.host,
         config.state_root,
     )
@@ -2226,15 +2483,26 @@ def main(argv: list[str]) -> int:
         # This module owns no grammar: any other vector is a pre-effect refusal, not a usage error,
         # because the dispatcher already owns usage and a second opinion would report one defect twice.
         planes = load_sibling(scripts_dir, "ccodex_sdlc_host_planes")
-        if not (len(argv) == 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES):
+        # The vector is the selected plane, optionally followed by the ONE preview request the front
+        # door forwards. `--dry-run` keeps its operator spelling across the seam because it means the
+        # same thing on both sides; only the plane selector had two names to reconcile.
+        admitted = (
+            f"[{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>] optionally followed by {DRY_RUN_FLAG!r}"
+        )
+        if not (len(argv) >= 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES):
             raise Refusal(
-                f"ccodex sdlc uninstall admits exactly [{HOST_FLAG!r}, "
-                f"<{'|'.join(planes.AGENTS)}>]; this module received {argv!r}"
+                f"ccodex uninstall admits exactly {admitted}; this module received {argv!r}"
+            )
+        rest = list(argv[2:])
+        dry_run = rest[:1] == [DRY_RUN_FLAG]
+        if rest[1:] or (rest and not dry_run):
+            raise Refusal(
+                f"ccodex uninstall admits exactly {admitted}; this module received {argv!r}"
             )
         dar = load_sibling(scripts_dir, "distribution_activation_receipt")
         bundle = load_sibling(scripts_dir, "install_skill_bundle")
         _ESCAPE = dar.escape_display
-        config = dataclasses.replace(default_config(bundle), host=argv[1])
+        config = dataclasses.replace(default_config(bundle), host=argv[1], dry_run=dry_run)
     except Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_REFUSED

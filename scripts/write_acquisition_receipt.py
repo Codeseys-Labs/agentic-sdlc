@@ -5,11 +5,31 @@
 # ///
 """Seal one ``release-candidate-acquisition-receipt/v1`` over an already-placed candidate root.
 
-WHY THIS EXISTS.  ``ccodex sdlc install --host claude`` and ``ccodex sdlc update`` admit exactly
+WHY THIS EXISTS.  ``ccodex install`` and ``ccodex update`` admit exactly
 one sealed acquisition receipt and the candidate root it names.  Nothing else produces that
 document, so without this module both verbs refuse by naming a command no longer in the tree.
 This module is that producer, and only that: it copies nothing, extracts nothing, installs
 nothing, and activates nothing.
+
+LIBRARY BOUNDARY, DECLARED because ``ccodex install`` now calls into it rather than telling an
+operator to run it (agentic-sdlc-7a2b, W3b).  This module remains the SCHEMA OWNER: it is the one
+place the closed key set, the constants, the two derived digests, and the create-only write live,
+and a caller that re-expressed any of them would be a second producer of the same document.  Two
+names are the whole callable surface a sibling may use:
+
+  * ``verify_root(root)`` -- the pure both-directions re-hash.  It writes nothing, so a caller may
+    use it to REFUSE a disagreeing root before deciding to seal, and a preview may use it to say
+    what a seal would attest to.
+  * ``write_receipt(...)`` -- verify, derive, seal, read back.  Given one root, one archive digest,
+    one instant, and one state home, its bytes are a FUNCTION of those inputs: ``operation_id``
+    defaults to a derivation over the archive digest and the verified journal digest rather than to
+    a counter or a clock, so the caller that supplies its own observed instant gets exactly the
+    bytes this module's own CLI would write for the same root.  A test pins that byte-identity in
+    both directions, which is what makes ``install``'s auto-seal a call rather than a copy.
+
+``main`` and its argparse surface are the CLI and are NOT part of that boundary: a caller that went
+through ``main`` would take this module's exit classes as its own.  Sealing here is still not an
+activation and not an authorization -- see the closing paragraph.
 
 THE OBLIGATION IT CARRIES.  Before it seals, it RE-HASHES every entry at ``--root`` against that
 root's own ``manifest.json`` -- both directions, plus symlink targets and node types -- and

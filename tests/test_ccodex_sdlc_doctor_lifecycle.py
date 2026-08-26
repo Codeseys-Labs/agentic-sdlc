@@ -111,30 +111,30 @@ SELECTED = ("--scope", "user", "--agent", "claude")
 # (`--agent`) and one module ABI (`--host`), which is why the operator flag below is `--agent` while
 # the module-facing assertions further down still read `--host`.
 READER_FORMS = (
-    (("status", *SELECTED), ("status", False, False, None, "user", "claude")),
-    (("status", *SELECTED, "--json"), ("status", False, True, None, "user", "claude")),
+    (("status", *SELECTED), ("status", False, False, None, "user", "claude", None)),
+    (("status", *SELECTED, "--json"), ("status", False, True, None, "user", "claude", None)),
     (
         ("status", "--scope", "user", "--agent", "codex"),
-        ("status", False, False, None, "user", "codex"),
+        ("status", False, False, None, "user", "codex", None),
     ),
-    (("doctor",), ("doctor", False, False, None, None, None)),
-    (("doctor", "--json"), ("doctor", False, True, None, None, None)),
-    (("recover", "--dry-run"), ("recover", True, False, None, None, None)),
-    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None)),
-    (("install", *SELECTED), ("install", False, False, "claude", "user", "claude")),
+    (("doctor",), ("doctor", False, False, None, None, None, None)),
+    (("doctor", "--json"), ("doctor", False, True, None, None, None, None)),
+    (("recover", "--dry-run"), ("recover", True, False, None, None, None, None)),
+    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None, None)),
+    (("install", *SELECTED), ("install", False, False, "claude", "user", "claude", None)),
     (
         ("install", "--scope", "user", "--agent", "codex"),
-        ("install", False, False, "codex", "user", "codex"),
+        ("install", False, False, "codex", "user", "codex", None),
     ),
-    (("update", *SELECTED), ("update", False, False, "claude", "user", "claude")),
+    (("update", *SELECTED), ("update", False, False, "claude", "user", "claude", None)),
     (
         ("update", "--scope", "user", "--agent", "codex"),
-        ("update", False, False, "codex", "user", "codex"),
+        ("update", False, False, "codex", "user", "codex", None),
     ),
-    (("uninstall", *SELECTED), ("uninstall", False, False, "claude", "user", "claude")),
+    (("uninstall", *SELECTED), ("uninstall", False, False, "claude", "user", "claude", None)),
     (
         ("uninstall", "--scope", "user", "--agent", "codex"),
-        ("uninstall", False, False, "codex", "user", "codex"),
+        ("uninstall", False, False, "codex", "user", "codex", None),
     ),
 )
 #: The three reader verbs and the argument tail each one needs. `status` carries the two required
@@ -266,6 +266,17 @@ WINDOWS_SKIP = unittest.skipIf(
     "at the CLI, so no such plane exists there",
 )
 
+
+#: HOW EACH PER-VERB MODULE NAMES ITSELF, which is NOT one string across the family: `install` names
+#: the surviving top-level invocation (renamed in W3b of agentic-sdlc-7a2b, seed agentic-sdlc-67c9) and
+#: the other two still name the retired `ccodex sdlc <verb>` spelling because they are other waves'
+#: files. A shared f-string here asserted one spelling for all three and would have passed while
+#: proving the wrong thing about two of them.
+MODULE_OWN_PREFIX = {
+    "install": "error: ccodex install ",
+    "update": "error: ccodex sdlc update ",
+    "uninstall": "error: ccodex sdlc uninstall ",
+}
 
 class ReadinessHarness(unittest.TestCase):
     """One injected host: an acquisition plane, an activation plane, and an acquired candidate."""
@@ -1207,11 +1218,12 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
                 self.assertEqual(completed.returncode, 3, completed.stderr)
                 # All three per-verb modules ship, so each refuses pre-effect in its OWN name; the
                 # loader's absence message appearing here would mean dispatch never reached one.
-                # THE `sdlc` WORD IS THE MODULE'S OWN and is asserted deliberately: the operator verb
-                # moved to the top level, the three modules did not, and they still print `ccodex sdlc
-                # <verb>`. Dropping it here would stop proving that the module answered rather than
-                # the reader -- the reader's own refusals no longer carry the word at all.
-                self.assertIn(f"error: ccodex sdlc {vector[0]} ", completed.stderr)
+                # THE PREFIX IS THE MODULE'S OWN AND THE FAMILY IS SPLIT: `install` was renamed to
+                # the surviving top-level invocation in W3b, while `update` and `uninstall` still print
+                # `ccodex sdlc <verb>` because they are other waves' files. The map is what proves the
+                # MODULE answered rather than the reader -- neither reader refusal carries a prefix
+                # with a trailing verb -- and a rename lands here as one line.
+                self.assertIn(MODULE_OWN_PREFIX[vector[0]], completed.stderr)
                 self.assertNotIn("is unavailable in this distribution", completed.stderr)
                 self.assertEqual(completed.stdout, "")
                 self.assertNotIn("Traceback", completed.stderr)

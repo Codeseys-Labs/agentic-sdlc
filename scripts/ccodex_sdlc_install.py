@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""``ccodex sdlc install --host <claude|codex>``: copy-activate ONE acquired candidate, seal ONE receipt.
+"""``ccodex install --scope user --agent <claude|codex>``: copy-activate ONE acquired candidate.
 
 WHAT LOADS THIS FILE, AND WHAT IT MAY RETURN. ``scripts/ccodex_sdlc.py`` parses the closed
 lifecycle grammar, refuses it, or loads this file by absolute non-symlink path and calls
@@ -19,15 +19,34 @@ file honours it exactly.
 
 THE FOUR PHASES, IN ORDER, EACH REFUSING BY NAME BEFORE THE NEXT COULD MOVE ANYTHING.
 
-  1. ADMIT ONE EXACT ACQUIRED CANDIDATE PAYLOAD.  The only admissible payload root today is the
-     exactly acquired local candidate (Seed agentic-sdlc-0cce): one sealed
-     ``release-candidate-acquisition-receipt/v1`` under the acquisition layout, terminal phase
-     ``installed-unselected``, ``selection`` and ``activation`` both ``absent`` INSIDE the seal, and
-     the candidate root at the exact path that receipt records.  There is no checkout payload, no
-     archive payload, no ``--from`` and no discovery: an ambiguous receipts directory is refused
-     rather than resolved.  The sealed acquisition receipt is READ and never written: its bytes are
+  1. ADMIT ONE EXACT ACQUIRED CANDIDATE PAYLOAD, SEALING ITS TICKET WHEN THE ROOT CARRIES NONE.
+     The only admissible payload root is the exactly acquired local candidate (Seed
+     agentic-sdlc-0cce) at the acquisition layout, and the document that admits it is one sealed
+     ``release-candidate-acquisition-receipt/v1``: terminal phase ``installed-unselected``,
+     ``selection`` and ``activation`` both ``absent`` INSIDE the seal, and the candidate root at the
+     exact path that receipt records.  There are TWO ways that document comes to exist and exactly
+     one way it is admitted:
+
+       * REUSED.  A receipt already filed for this archive digest is re-validated and used as it is.
+         Receipts are create-only files keyed by ``<archive-sha256>.json``, so reuse-not-overwrite is
+         the only admissible idempotence: a second install of one archive seals no second ticket, and
+         a receipt whose bytes disagree with their own seal is refused rather than replaced.
+       * AUTO-SEALED (agentic-sdlc-7a2b, W3b).  A release root at the layout carrying its own
+         ``manifest.json`` and NO receipt yet is verified against that manifest in both directions and
+         its ticket is sealed HERE, by calling ``write_acquisition_receipt``'s own library seal path.
+         That module stays the schema owner; this one supplies the root, the layout's own archive
+         digest, and this run's observed instant, so the bytes equal what its CLI would have written.
+         This retires the manual placement-bridge recipe's sealing step -- what it does NOT retire is
+         the PLACEMENT, because a release root states no digest of the archive it was extracted from
+         and the layout's own directory name is the only place that fact survives.
+
+     There is no checkout payload, no archive payload, no ``--from``, and no discovery beyond one
+     exact layout: two receipts, or two release roots, are each refused as an ambiguity rather than
+     resolved.  Once admitted, the acquisition receipt is READ and never written: its bytes are
      digested at admission and re-digested after the whole run, and a change is an unknown effect
-     rather than a success.
+     rather than a success.  The auto-seal runs AFTER every other pre-effect admission -- platform,
+     root verification, compatibility, marketplace overlap -- so a refusal from any of those leaves
+     the state plane exactly as it was, and a preview never seals at all.
   2. CHECK THE PAYLOAD'S OWN COMPATIBILITY CLAIMS.  ``policy/release-contract.v1.json`` inside the
      admitted payload declares the host it is about, an eligibility floor, and
      ``known_incompatible_host_versions``.  A DECLARED incompatibility with the observed host is
@@ -66,6 +85,23 @@ THE FOUR PHASES, IN ORDER, EACH REFUSING BY NAME BEFORE THE NEXT COULD MOVE ANYT
      evidence and leaves the pointer ALONE -- a pointer that claims an activation nobody completed
      is worse than an absent one -- and exit 0 therefore requires all three halves: every claimed
      effect complete, the receipt sealed, and the pointer naming it.
+
+THE TWO OPTIONAL REQUESTS THE FRONT DOOR FORWARDS, each admitted here and neither dropped.
+
+  * ``--mode auto|link|copy``.  ``auto`` and ``copy`` both RESOLVE to this plane's one publication
+     mode, and the resolution is stated in the report rather than assumed: an acquired candidate is
+     copy-activated because a link would make the activated plane depend on a payload root that can
+     move or vanish.  ``link`` is therefore refused BY NAME instead of being silently downgraded --
+     the live-edit loop it names needs a checkout payload, which this plane does not admit.  Nothing
+     here forwards ``auto`` to the substrate: the substrate would resolve it to a LINK on Unix, and
+     this module would then catch the wrong publication mode only AFTER bytes had moved.
+  * ``--dry-run``.  The substrate's own read-only planning pass, surfaced through the new grammar:
+     the payload is admitted, the release contract is checked, and every entry is classified, then
+     the plan is PRINTED and the run stops before the acquisition seal, before the plan and journal
+     documents, before any entry moves, and before any pointer is written.  It takes no installer
+     lock, because taking one durably creates the state directory a preview must not create.  A
+     preview that had sealed the acquisition ticket would have made "nothing was written" false, so
+     the report names the ticket it WOULD seal instead of sealing it.
 
 WHAT THIS MODULE DOES NOT DO, BECAUSE THE TICKET'S MUST-NOTs ARE THE POINT.  No repository
 activation, no config trust, no OCX, no provider, no library, no statusline, no Claude launch, and
@@ -164,6 +200,22 @@ EXIT_UNKNOWN = 4
 #: gain a second agent independently, and a plane widened in four of them would activate one host while
 #: checking another's compatibility row (agentic-sdlc-7a2b, WX).
 HOST_FLAG = "--host"
+#: The OPERATOR SURFACE this module's messages name, spelled once (seed agentic-sdlc-67c9). The
+#: retired `ccodex sdlc install` namespace refuses at the dispatcher, so a refusal that still named it
+#: would send an operator to a spelling the dispatcher itself rejects. The vector this module admits is
+#: still `--host <agent>`: that is the module ABI, built in exactly one place by the reader, and it is
+#: deliberately not the operator's spelling.
+SURFACE = "ccodex install"
+#: The two optional requests the front door forwards. Neither is a value this module invents.
+MODE_FLAG = "--mode"
+DRY_RUN_FLAG = "--dry-run"
+#: `--mode`'s closed set, re-expressed from the installer's own argparse choices and pinned against
+#: them by a test. `auto` and `copy` resolve to this plane's one mode; `link` is refused by name.
+INSTALL_MODES = ("auto", "link", "copy")
+#: The ONE token every payload-versus-manifest disagreement carries, whichever side catches it: the
+#: whole-root verification before a ticket is sealed, or the per-entry verification of the subset this
+#: activation copies. One name for one class of defect, so a test greps for one string (§2.3).
+MANIFEST_MISMATCH = "payload-manifest-mismatch"
 OPERATION = "install"
 #: Which part of the host plane this operation touches, as the receipt body's own closed union. This
 #: verb activates the operator's user plane, so the kind is `user` and the body carries no root: a
@@ -516,19 +568,19 @@ def load_sibling(stem: str) -> ModuleType:
     path = Path(__file__).with_name(f"{stem}.py")
     if path.is_symlink() or not path.is_file():
         raise Refusal(
-            f"ccodex sdlc install requires the sibling module {show(str(path))}, which is absent or"
+            f"{SURFACE} requires the sibling module {show(str(path))}, which is absent or"
             " is a link"
         )
     spec = importlib.util.spec_from_file_location(f"_ccodex_sdlc_install_{stem}", path)
     if spec is None or spec.loader is None:
-        raise Refusal(f"ccodex sdlc install cannot load the sibling module {show(str(path))}")
+        raise Refusal(f"{SURFACE} cannot load the sibling module {show(str(path))}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 - an import failure here is still pre-effect
         raise Refusal(
-            f"ccodex sdlc install cannot import the sibling module {show(str(path))}: {show(exc)}"
+            f"{SURFACE} cannot import the sibling module {show(str(path))}: {show(exc)}"
         ) from exc
     return module
 
@@ -654,17 +706,22 @@ def observe_platform(config: Config) -> tuple[str, str]:
 
 
 def admit_platform(config: Config) -> tuple[str, str]:
-    """Refuse an uncertified platform BY NAME rather than attempting a linux-x64 payload on it."""
+    """Refuse an uncertified platform BY NAME rather than attempting a linux-x64 payload on it.
+
+    The message names the SELECTED plane rather than a hardcoded one: it read ``--host claude`` for
+    every agent until this wave, so a codex run on macOS was refused by a sentence about Claude.
+    """
     system, machine = observe_platform(config)
+    selected = f"{SURFACE} --scope user --agent {escape_display(config.agent)}"
     if system != SUPPORTED_SYSTEM:
         raise Refusal(
-            f"ccodex sdlc install --host claude activates a {CANDIDATE_PLATFORM} candidate and is"
+            f"{selected} activates a {CANDIDATE_PLATFORM} candidate and is"
             f" certified only on {SUPPORTED_SYSTEM}; the observed operating system is"
             f" {show(system)}. Another platform is refused rather than attempted"
         )
     if machine.lower() not in SUPPORTED_MACHINES:
         raise Refusal(
-            f"ccodex sdlc install --host claude activates a {CANDIDATE_PLATFORM} candidate; the"
+            f"{selected} activates a {CANDIDATE_PLATFORM} candidate; the"
             f" observed architecture is {show(machine)}, not one of {list(SUPPORTED_MACHINES)}"
         )
     return system, machine
@@ -698,6 +755,27 @@ def observe_instant(config: Config) -> str:
 
 
 @dataclass(frozen=True)
+class PayloadCandidate:
+    """The payload root this run resolved, BEFORE it holds an admitted acquisition ticket.
+
+    It exists because the ticket is now sealed as late as possible: every field here is read from the
+    root and its own manifest, so compatibility, the marketplace gate, and a preview can all be
+    decided from it while the state plane is still untouched.  ``existing`` carries the already-filed
+    receipt when there is one, which is what makes reuse and auto-seal one admission with two
+    prestates rather than two admissions.
+    """
+
+    candidate_root: Path
+    archive_sha256: str
+    manifest: dict[str, Any]
+    candidate_id: str
+    resolved_version: str
+    inventory: dict[str, dict[str, Any]]
+    #: ``(path, bytes, document)`` for a receipt this run REUSES, or ``None`` when it must seal one.
+    existing: tuple[Path, bytes, dict[str, Any]] | None
+
+
+@dataclass(frozen=True)
 class AdmittedPayload:
     """The one admitted payload: its acquisition receipt, its root, and its manifest identity."""
 
@@ -711,6 +789,9 @@ class AdmittedPayload:
     candidate_id: str
     resolved_version: str
     inventory: dict[str, dict[str, Any]]
+    #: How this run came to hold the ticket above: ``reused`` or ``sealed``. Recorded because the two
+    #: are different facts about the same document and the report must not merge them.
+    acquisition: str
 
 
 def _require_physical_directory(path: Path, subject: str) -> None:
@@ -734,15 +815,18 @@ def _require_physical_directory(path: Path, subject: str) -> None:
         )
 
 
-def admit_acquisition_receipt(config: Config) -> tuple[Path, bytes, dict[str, Any], str]:
-    """Admit exactly ONE sealed acquisition receipt, or refuse the ambiguity by name."""
+def acquisition_receipt_names(config: Config) -> list[str]:
+    """Every ``<archive-sha256>.json`` filed in the acquisition receipts plane, in one sorted list.
+
+    An absent or non-directory plane is an EMPTY list rather than a refusal: with the auto-seal there
+    are two admissible prestates for a first install -- no receipt yet, and one already filed -- and a
+    refusal here would decide the first one before the release root had been looked for.  A plane that
+    exists but cannot be listed is still a refusal, because that is an unreadable answer rather than a
+    negative one.
+    """
     receipts_dir = config.acquisition_receipts_dir
     if not receipts_dir.is_dir() or receipts_dir.is_symlink():
-        raise Refusal(
-            f"no acquired candidate is available: the acquisition receipts directory"
-            f" {show(str(receipts_dir))} is absent or is not an exact directory. Acquire a"
-            " candidate first; this operation never acquires one"
-        )
+        return []
     try:
         names = sorted(item.name for item in receipts_dir.iterdir())
     except OSError as exc:
@@ -750,7 +834,18 @@ def admit_acquisition_receipt(config: Config) -> tuple[Path, bytes, dict[str, An
             f"the acquisition receipts directory {show(str(receipts_dir))} cannot be listed:"
             f" {show(exc)}"
         ) from exc
-    candidates = [name for name in names if name.endswith(".json") and _HEX64.match(name[: -len(".json")])]
+    return [name for name in names if name.endswith(".json") and _HEX64.match(name[: -len(".json")])]
+
+
+def admit_acquisition_receipt(config: Config) -> tuple[Path, bytes, dict[str, Any], str]:
+    """Admit exactly ONE sealed acquisition receipt, or refuse the ambiguity by name.
+
+    This is the ONE admission both prestates pass through, and that is deliberate: a receipt this run
+    sealed itself is re-read from disk and validated by exactly the checks a hand-placed one faces, so
+    the auto-seal earns no trust from having been written here.
+    """
+    receipts_dir = config.acquisition_receipts_dir
+    candidates = acquisition_receipt_names(config)
     if not candidates:
         raise Refusal(
             f"no acquired candidate is available: {show(str(receipts_dir))} holds no"
@@ -768,6 +863,51 @@ def admit_acquisition_receipt(config: Config) -> tuple[Path, bytes, dict[str, An
     archive_sha256 = candidates[0][: -len(".json")]
     validate_acquisition_receipt(receipt, receipt_path, archive_sha256)
     return receipt_path, raw, receipt, archive_sha256
+
+
+def admit_release_root(config: Config) -> tuple[Path, str]:
+    """Resolve the ONE release root at the acquisition layout that carries its own manifest.
+
+    Reached only when no receipt is filed.  The enumeration is bounded to one exact layout and admits
+    a directory only when it is named by 64 lowercase hexadecimal characters AND holds
+    ``root/manifest.json``: the layout's own directory name is the archive digest, and it is the only
+    place that fact survives extraction, because a release root states no digest of the archive it
+    came from.  Two such roots are refused as an ambiguity for the same reason two receipts are --
+    choosing would be a guess -- and none is the honest "no acquired candidate" refusal, naming both
+    planes so an operator can see which half is missing.
+    """
+    candidates_dir = config.acquisition_candidates_dir
+    roots: list[str] = []
+    if candidates_dir.is_dir() and not candidates_dir.is_symlink():
+        try:
+            names = sorted(item.name for item in candidates_dir.iterdir())
+        except OSError as exc:
+            raise Refusal(
+                f"the acquisition candidates directory {show(str(candidates_dir))} cannot be listed:"
+                f" {show(exc)}"
+            ) from exc
+        for name in names:
+            if not _HEX64.match(name):
+                continue
+            manifest = candidates_dir / name / ACQUISITION_CANDIDATE_LEAF / CANDIDATE_MANIFEST_NAME
+            if manifest.is_file() and not manifest.is_symlink():
+                roots.append(name)
+    if not roots:
+        raise Refusal(
+            f"no acquired candidate is available: {show(str(config.acquisition_receipts_dir))} holds"
+            " no <archive-sha256>.json acquisition receipt and"
+            f" {show(str(candidates_dir))} holds no <archive-sha256>/"
+            f"{ACQUISITION_CANDIDATE_LEAF}/{CANDIDATE_MANIFEST_NAME} release root to seal one from."
+            " Acquire and place a candidate first; this operation never acquires one"
+        )
+    if len(roots) > 1:
+        raise Refusal(
+            f"{show(str(candidates_dir))} holds {len(roots)} release roots"
+            f" ({', '.join(show(name) for name in roots)}) and no acquisition receipt names which one"
+            " this activation is about; exactly one is admissible, and choosing between them would be"
+            " a guess"
+        )
+    return require_candidate_layout(config, roots[0]), roots[0]
 
 
 def acquisition_record_digest(receipt: dict[str, Any]) -> str:
@@ -839,6 +979,24 @@ def validate_acquisition_receipt(receipt: dict[str, Any], path: Path, archive_sh
         )
 
 
+def require_candidate_layout(config: Config, archive_sha256: str) -> Path:
+    """The ONE path this data home's acquisition layout gives this archive digest, every component
+    of it proven an exact physical directory.
+
+    Factored out of ``admit_candidate_root`` so the auto-seal path proves the same physical identity
+    for a root no receipt has named yet.  Without it a redirected component could move the payload a
+    freshly sealed ticket attests to.
+    """
+    expected = config.acquisition_candidates_dir / archive_sha256 / ACQUISITION_CANDIDATE_LEAF
+    _require_physical_directory(config.data_home, "the configured XDG data home")
+    for depth in range(len(ACQUISITION_CANDIDATE_SEGMENTS) + 2):
+        component = expected
+        for _ in range(depth):
+            component = component.parent
+        _require_physical_directory(component, "a component of the acquired candidate root")
+    return expected
+
+
 def admit_candidate_root(config: Config, receipt: dict[str, Any], archive_sha256: str) -> Path:
     """The candidate root is the ONE path the acquisition layout and the sealed receipt both name."""
     expected = config.acquisition_candidates_dir / archive_sha256 / ACQUISITION_CANDIDATE_LEAF
@@ -849,13 +1007,7 @@ def admit_candidate_root(config: Config, receipt: dict[str, Any], archive_sha256
             f" acquisition layout for this data home places it at {show(str(expected))}; a payload"
             " root outside that layout is not an exactly acquired local candidate"
         )
-    _require_physical_directory(config.data_home, "the configured XDG data home")
-    for depth in range(len(ACQUISITION_CANDIDATE_SEGMENTS) + 2):
-        component = expected
-        for _ in range(depth):
-            component = component.parent
-        _require_physical_directory(component, "a component of the acquired candidate root")
-    return expected
+    return require_candidate_layout(config, archive_sha256)
 
 
 def admit_candidate_manifest(candidate_root: Path) -> tuple[dict[str, Any], str, str]:
@@ -940,23 +1092,134 @@ def manifest_inventory(manifest: dict[str, Any], candidate_root: Path) -> dict[s
     return index
 
 
-def admit_payload(config: Config) -> AdmittedPayload:
-    """Phase 1, whole: exactly one acquired candidate, its exact root, and its manifest identity."""
-    receipt_path, raw, receipt, archive_sha256 = admit_acquisition_receipt(config)
-    candidate_root = admit_candidate_root(config, receipt, archive_sha256)
+def load_acquisition_producer() -> ModuleType:
+    """The acquisition receipt's SCHEMA OWNER, loaded as an exact physical sibling.
+
+    Its ``verify_root`` and ``write_receipt`` are the library boundary it declares; nothing here
+    re-expresses its key set, its constants, or its derived digests, because a second producer of one
+    document is how two spellings of one fact get written on two different days.
+    """
+    return load_sibling("write_acquisition_receipt")
+
+
+def verify_release_root(producer: ModuleType, candidate_root: Path) -> None:
+    """Re-hash a release root against its own manifest, both directions, before anything is sealed.
+
+    The producer's own obligation, called rather than copied, and its refusal is re-raised carrying
+    the ``payload-manifest-mismatch`` token §2.3 names -- so the same disagreement is named the same
+    way whether it is caught here, on the seal, or per entry later.  This function writes nothing, so
+    a mismatch is a clean refusal with the state plane and the host plane both untouched.
+    """
+    try:
+        producer.verify_root(candidate_root)
+    except producer.Refusal as exc:
+        raise Refusal(
+            f"{MANIFEST_MISMATCH}: the release root {show(str(candidate_root))} disagrees with its own"
+            f" {CANDIDATE_MANIFEST_NAME}, so no acquisition ticket may attest to it: {show(exc)}."
+            " Nothing was written"
+        ) from exc
+    except OSError as exc:
+        raise Refusal(
+            f"the release root {show(str(candidate_root))} could not be verified against its own"
+            f" {CANDIDATE_MANIFEST_NAME}: {show(exc)}. Nothing was written"
+        ) from exc
+
+
+def classify_payload(config: Config, producer: ModuleType) -> PayloadCandidate:
+    """Resolve the ONE payload root and say which acquisition prestate this run is in.
+
+    Two prestates, both admissible and neither guessed at: a receipt already filed for this archive
+    digest (REUSE), or a release root at the layout with none (AUTO-SEAL).  Nothing is written here --
+    the seal happens later, after every other pre-effect admission -- so every refusal below leaves
+    both planes exactly as they were.
+    """
+    filed = acquisition_receipt_names(config)
+    if filed:
+        receipt_path, raw, receipt, archive_sha256 = admit_acquisition_receipt(config)
+        candidate_root = admit_candidate_root(config, receipt, archive_sha256)
+        existing: tuple[Path, bytes, dict[str, Any]] | None = (receipt_path, raw, receipt)
+    else:
+        candidate_root, archive_sha256 = admit_release_root(config)
+        verify_release_root(producer, candidate_root)
+        existing = None
     manifest, candidate_id, version = admit_candidate_manifest(candidate_root)
     inventory = manifest_inventory(manifest, candidate_root)
-    return AdmittedPayload(
-        receipt_path=receipt_path,
-        receipt_bytes=raw,
-        receipt=receipt,
-        archive_sha256=archive_sha256,
-        operation_id=str(receipt["operation_id"]),
+    return PayloadCandidate(
         candidate_root=candidate_root,
+        archive_sha256=archive_sha256,
         manifest=manifest,
         candidate_id=candidate_id,
         resolved_version=version,
         inventory=inventory,
+        existing=existing,
+    )
+
+
+def admit_payload(
+    config: Config, candidate: PayloadCandidate, producer: ModuleType, instant: str
+) -> AdmittedPayload:
+    """Hold an admitted acquisition ticket for this payload, sealing one first when there is none.
+
+    THE SEAL IS A CALL, NOT A COPY: ``write_receipt`` verifies the root against its manifest again --
+    its own obligation, which this module does not get to waive -- derives both digests, writes
+    create-only, and reads the file back.  Everything this module supplies is a fact it already
+    observed: the root, the layout's own archive digest, and this run's instant.  Given those, the
+    bytes are the bytes that module's CLI would have written for the same root.
+
+    Then the document is READ BACK OFF DISK and admitted by ``admit_acquisition_receipt`` -- the same
+    validator a hand-placed receipt faces.  A run does not trust a receipt because it wrote it.
+    """
+    if candidate.existing is not None:
+        receipt_path, raw, receipt = candidate.existing
+        acquisition = "reused"
+    else:
+        try:
+            producer.write_receipt(
+                root=candidate.candidate_root,
+                state_home=config.state_home,
+                archive=None,
+                archive_sha256=candidate.archive_sha256,
+                operation_id=None,
+                installed_at=instant,
+            )
+        except producer.Refusal as exc:
+            raise Refusal(
+                f"the acquisition ticket for the release root"
+                f" {show(str(candidate.candidate_root))} could not be sealed, so this activation has"
+                f" no admissible payload evidence: {show(exc)}. Nothing was written"
+            ) from exc
+        except producer.UnknownEffect as exc:
+            raise UnknownEffect(
+                f"the acquisition ticket for the release root"
+                f" {show(str(candidate.candidate_root))} was written but this run cannot say what it"
+                f" holds: {show(exc)}"
+            ) from exc
+        except OSError as exc:
+            raise Refusal(
+                f"the acquisition ticket for the release root"
+                f" {show(str(candidate.candidate_root))} could not be sealed: {show(exc)}. Nothing"
+                " was written"
+            ) from exc
+        receipt_path, raw, receipt, sealed_digest = admit_acquisition_receipt(config)
+        if sealed_digest != candidate.archive_sha256:
+            raise UnknownEffect(
+                f"the acquisition ticket this run sealed is filed as {show(sealed_digest)} but the"
+                f" release root it verified is keyed {show(candidate.archive_sha256)}; the acquisition"
+                " plane now holds a document this run cannot correlate with its own payload"
+            )
+        acquisition = "sealed"
+    return AdmittedPayload(
+        receipt_path=receipt_path,
+        receipt_bytes=raw,
+        receipt=receipt,
+        archive_sha256=candidate.archive_sha256,
+        operation_id=str(receipt["operation_id"]),
+        candidate_root=candidate.candidate_root,
+        manifest=candidate.manifest,
+        candidate_id=candidate.candidate_id,
+        resolved_version=candidate.resolved_version,
+        inventory=candidate.inventory,
+        acquisition=acquisition,
     )
 
 
@@ -1080,7 +1343,7 @@ def select_compatibility_row(
     return row, label
 
 
-def check_compatibility(config: Config, payload: AdmittedPayload) -> str:
+def check_compatibility(config: Config, candidate_root: Path) -> str:
     """Refuse a DECLARED incompatibility by name; never substitute another version for the observed.
 
     Three separate refusals, because collapsing them hides which half of the question was
@@ -1097,7 +1360,7 @@ def check_compatibility(config: Config, payload: AdmittedPayload) -> str:
     cross-agent defect this plane's keying exists to delete, one layer up.
     """
     plane = config.plane
-    contract = load_release_contract(payload.candidate_root)
+    contract = load_release_contract(candidate_root)
     compatibility = contract["compatibility"]
     row, label = select_compatibility_row(compatibility, plane, config.agent)
     declared_host = row.get("host")
@@ -1202,6 +1465,14 @@ class Run:
     #: The one line a legacy-pointer migration owes the report, or None when there was nothing to
     #: migrate. Held here rather than printed where it happens, so the report stays one write.
     pointer_migration: str | None = None
+    #: The one line the acquisition ticket owes the report: which document admitted this payload and
+    #: whether this run sealed it or reused one already filed.
+    acquisition: str | None = None
+    #: The ticket THIS run sealed, or None when it reused one. A refusal after the seal must name it:
+    #: the seal is create-only immutable evidence about a verified root, so a later refusal leaves a
+    #: real file behind and reporting "nothing was written" without naming it would be false. The next
+    #: run reuses exactly this document, which is why the leftover is a resumption rather than debris.
+    sealed_ticket: Path | None = None
 
 
 def entry_display_name(destination: Path, agent_root: Path) -> str:
@@ -1233,7 +1504,7 @@ def node_kind(path: Path) -> str:
     raise Refusal(f"the payload node {show(str(path))} is neither a file, a directory, nor a symlink")
 
 
-def verify_entry_against_manifest(payload: AdmittedPayload, source: Path) -> None:
+def verify_entry_against_manifest(payload: PayloadCandidate, source: Path) -> None:
     """Verify the payload subset this activation copies against the candidate manifest's own rows.
 
     Both directions, because each catches a different defect: an observed node with no row is
@@ -1260,13 +1531,14 @@ def verify_entry_against_manifest(payload: AdmittedPayload, source: Path) -> Non
     }
     for name in sorted(set(observed) - inventoried):
         raise Refusal(
-            f"the candidate payload carries {show(name)}, which its manifest does not inventory, so"
-            " this activation would copy content the payload's own identity does not cover"
+            f"{MANIFEST_MISMATCH}: the candidate payload carries {show(name)}, which its manifest does"
+            " not inventory, so this activation would copy content the payload's own identity does not"
+            " cover"
         )
     for name in sorted(inventoried - set(observed)):
         raise Refusal(
-            f"the candidate manifest inventories {show(name)}, which is absent from the payload, so"
-            " the admitted candidate is not the payload its manifest describes"
+            f"{MANIFEST_MISMATCH}: the candidate manifest inventories {show(name)}, which is absent"
+            " from the payload, so the admitted candidate is not the payload its manifest describes"
         )
     for name in sorted(observed):
         path = observed[name]
@@ -1274,22 +1546,22 @@ def verify_entry_against_manifest(payload: AdmittedPayload, source: Path) -> Non
         kind = node_kind(path)
         if row.get("type") != kind:
             raise Refusal(
-                f"the candidate payload node {show(name)} is a {kind} while its manifest row"
-                f" declares {show(row.get('type'))}"
+                f"{MANIFEST_MISMATCH}: the candidate payload node {show(name)} is a {kind} while its"
+                f" manifest row declares {show(row.get('type'))}"
             )
         if kind == "file":
             digest = sha256_file(path)
             if digest != row.get("sha256"):
                 raise Refusal(
-                    f"the candidate payload file {show(name)} digests to {show(digest)} but its"
-                    f" manifest row records {show(row.get('sha256'))}"
+                    f"{MANIFEST_MISMATCH}: the candidate payload file {show(name)} digests to"
+                    f" {show(digest)} but its manifest row records {show(row.get('sha256'))}"
                 )
         elif kind == "symlink":
             target = os.readlink(path)
             if target != row.get("target"):
                 raise Refusal(
-                    f"the candidate payload symlink {show(name)} points at {show(target)} but its"
-                    f" manifest row records {show(row.get('target'))}"
+                    f"{MANIFEST_MISMATCH}: the candidate payload symlink {show(name)} points at"
+                    f" {show(target)} but its manifest row records {show(row.get('target'))}"
                 )
 
 
@@ -1297,7 +1569,7 @@ def classify_entries(
     bundle: ModuleType,
     bundle_config: Any,
     state: dict[str, Any],
-    payload: AdmittedPayload,
+    payload: PayloadCandidate,
     agent: str,
 ) -> list[PlannedEntry]:
     """Per-entry prestate classification, entirely before any write.
@@ -2027,45 +2299,131 @@ def replace_active_pointer(bundle: ModuleType, config: Config, raw: bytes) -> No
 # ---- the run --------------------------------------------------------------------------------------
 
 
-def parse_argv(argv: list[str]) -> str:
+@dataclass(frozen=True)
+class Options:
+    """The whole admitted vector: one selected plane and the two optional requests.
+
+    A record rather than three returned values, because a caller that unpacked a tuple in the wrong
+    order would run a real activation for an operator who asked for a preview.
+    """
+
+    agent: str
+    #: The mode the operator REQUESTED, or ``None`` for "take the plane's own". Kept distinct from the
+    #: mode this plane publishes, so the report can state the resolution instead of hiding it.
+    requested_mode: str | None = None
+    dry_run: bool = False
+
+    @property
+    def resolved_mode(self) -> str:
+        """The mode the substrate is asked for. ``link`` never reaches here -- it is refused first."""
+        return ACTIVATION_MODE
+
+    #: WHY THE REPORT WORDING AVOIDS "publication": that word is an authority token in the shipped
+    #: non-authority scanner's closed vocabulary, and a line about a copy carries no denial marker, so
+    #: naming the mode a "publication mode" made an honest sentence read as an authorization claim
+    #: (caught by `tests/test_lifecycle_exit_conformance.py`'s NonAuthorityTest, not by review).
+
+
+def parse_argv(argv: list[str]) -> Options:
     """This module owns no grammar; it admits exactly the vector its dispatcher forwards.
 
     A direct invocation with any other vector is a pre-effect refusal, not a usage error, because
     the dispatcher already owns usage and a second opinion here would report the same defect twice.
-    What is returned is the ONE selected agent: the vector's shape is fixed and its value is the only
-    thing this module reads out of it.
+    The shape is fixed: the selected plane first, then at most one ``--mode <value>`` and at most one
+    ``--dry-run``, in that order and each at most once.  A repeated or reordered flag is refused
+    rather than tolerated, because this vector is BUILT by one caller and a shape it did not build is
+    a caller defect, not an operator's typo.
     """
     planes = load_sibling("ccodex_sdlc_host_planes")
-    if len(argv) == 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES:
-        return argv[1]
-    raise Refusal(
-        f"ccodex sdlc install admits exactly [{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>]; this"
-        f" module received {[escape_display(item) for item in argv]}"
+    admitted = (
+        f"[{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>] optionally followed by"
+        f" [{MODE_FLAG!r}, <{'|'.join(INSTALL_MODES)}>] and {DRY_RUN_FLAG!r}"
+    )
+    rest = list(argv)
+    if len(rest) < 2 or rest[0] != HOST_FLAG or rest[1] not in planes.HOST_PLANES:
+        raise Refusal(
+            f"{SURFACE} admits exactly {admitted}; this module received"
+            f" {[escape_display(item) for item in argv]}"
+        )
+    agent, rest = rest[1], rest[2:]
+    requested_mode: str | None = None
+    if len(rest) >= 2 and rest[0] == MODE_FLAG:
+        if rest[1] not in INSTALL_MODES:
+            raise Refusal(
+                f"{SURFACE} {MODE_FLAG} admits {', '.join(INSTALL_MODES)}; this module received"
+                f" {show(rest[1])}"
+            )
+        requested_mode, rest = rest[1], rest[2:]
+    dry_run = False
+    if rest and rest[0] == DRY_RUN_FLAG:
+        dry_run, rest = True, rest[1:]
+    if rest:
+        raise Refusal(
+            f"{SURFACE} admits exactly {admitted}; this module received"
+            f" {[escape_display(item) for item in argv]}"
+        )
+    return Options(agent=agent, requested_mode=requested_mode, dry_run=dry_run)
+
+
+def admit_mode(options: Options) -> str:
+    """Resolve the requested mode to this plane's one publication mode, or refuse ``link`` by name.
+
+    ``link`` is not silently downgraded to a copy, because the operator asked for a specific
+    publication shape and getting a different one without being told is the drop this wiring exists to
+    delete.  It is also not forwarded to the substrate: the substrate would publish a link, and this
+    module's copy-only check would then catch it only after the bytes had moved.
+    """
+    if options.requested_mode == "link":
+        raise Refusal(
+            f"{SURFACE} {MODE_FLAG} link is not admissible for an acquired candidate payload"
+            " (mode-forbidden-for-acquired-payload): this plane copies and never links, because a link"
+            " would make every activated entry depend on a payload root under the acquisition plane"
+            " that a later acquisition can replace or remove. The live-edit loop that mode names is a"
+            " checkout payload, which this receipted plane does not admit. Pass"
+            f" {MODE_FLAG} copy, {MODE_FLAG} auto, or omit {MODE_FLAG}; nothing was written"
+        )
+    return options.resolved_mode
+
+
+def mode_report_line(options: Options) -> str:
+    """One line stating what the mode request resolved to, so a resolution is never silent."""
+    if options.requested_mode is None:
+        return f"mode: {ACTIVATION_MODE} (this plane copies and never links; none was requested)"
+    return (
+        f"mode: requested {escape_display(options.requested_mode)}, resolved"
+        f" {ACTIVATION_MODE} (this plane copies and never links)"
     )
 
 
-def run_install(config: Config, run: Run) -> int:
+def run_install(config: Config, options: Options, run: Run) -> int:
     """The four phases, in order, each refusing by name before the next could move anything."""
     plane = config.plane
+    # THE MODE REQUEST IS ADMITTED BEFORE THE PLATFORM, deliberately. A mode this plane can never
+    # publish is a property of the request and of the payload class, not of the host, so refusing it
+    # first gives one answer on every host -- which is what lets the seam suite and the shipped
+    # artifact's smoke manifest assert ONE expected text instead of a per-platform pairing (the W0
+    # recorded gap). The platform refusal is about the payload and still fires for every other vector.
+    admit_mode(options)
     admit_platform(config)
     instant = observe_instant(config)
     receipts = load_sibling("distribution_activation_receipt")
     bundle = load_sibling("install_skill_bundle")
+    producer = load_acquisition_producer()
 
     # The legacy pointer is re-filed BEFORE this run's own admission, so every later decision reads
     # one plane with one pointer. It is a pre-effect move of this module's own bookkeeping document,
-    # not a host-plane effect, and a refusal here leaves the plane exactly as it was.
-    run.pointer_migration = migrate_legacy_pointer(bundle, config)
-
-    payload = admit_payload(config)
-    host_version = check_compatibility(config, payload)
+    # not a host-plane effect, and a refusal here leaves the plane exactly as it was. A PREVIEW DOES
+    # NOT MOVE IT: re-filing is a write, and a preview that performed one would make its own "nothing
+    # was changed" false, so it is reported as pending instead.
+    candidate = classify_payload(config, producer)
+    host_version = check_compatibility(config, candidate.candidate_root)
 
     bundle_config = bundle.Config(
-        payload.candidate_root,
+        candidate.candidate_root,
         config.home,
         config.codex_home,
-        ACTIVATION_MODE,
-        False,
+        options.resolved_mode,
+        options.dry_run,
         config.agent,
         config.installer_state_root,
     )
@@ -2079,6 +2437,27 @@ def run_install(config: Config, run: Run) -> int:
             " for Claude, use either direct installation or the marketplace, never both. The"
             " overlap blocks this Claude activation and nothing was written"
         )
+
+    if options.dry_run:
+        # THE PREVIEW STOPS HERE, above every write this module can make: no legacy-pointer migration,
+        # no acquisition seal, no plan, no journal, no entry, no pointer. `installer_lock` is entered
+        # with `dry_run` set, which the substrate answers by yielding without creating the state
+        # directory a lock file would need -- so a preview on a host with no state plane leaves it
+        # with no state plane.
+        with bundle.installer_lock(bundle_config):
+            try:
+                state = bundle.load_config_state(bundle_config)
+                bundle.validate_state(bundle_config, state)
+            except bundle.InstallerError as exc:
+                raise Refusal(f"the installer ownership state is not admissible: {show(exc)}") from exc
+            planned = classify_entries(bundle, bundle_config, state, candidate, config.agent)
+        report_preview(config, options, candidate, planned, host_version)
+        return EXIT_OK
+
+    run.pointer_migration = migrate_legacy_pointer(bundle, config)
+    payload = admit_payload(config, candidate, producer, instant)
+    run.acquisition = acquisition_report_line(payload)
+    run.sealed_ticket = payload.receipt_path if payload.acquisition == "sealed" else None
 
     with bundle.installer_lock(bundle_config):
         try:
@@ -2095,7 +2474,7 @@ def run_install(config: Config, run: Run) -> int:
         except bundle.InstallerError as exc:
             raise Refusal(f"the installer ownership state is not admissible: {show(exc)}") from exc
 
-        planned = classify_entries(bundle, bundle_config, state, payload, config.agent)
+        planned = classify_entries(bundle, bundle_config, state, candidate, config.agent)
         plan_document = build_plan_document(config, payload, planned, host_version, instant)
         plan_raw = canonical_document_bytes(receipts, plan_document, "the activation plan")
         plan_sha256 = sha256_bytes(plan_raw)
@@ -2194,7 +2573,7 @@ def run_install(config: Config, run: Run) -> int:
             run.pointer_replaced = True
 
     reassert_acquisition_receipt(payload, run.effect_started)
-    report(config, payload, outcomes, effect_state, terminal_phase, receipt_path, run)
+    report(config, options, payload, outcomes, effect_state, terminal_phase, receipt_path, run)
     # Exit 0 requires all three halves: every claimed effect completed durably, the receipt sealed,
     # and the plane's active statement naming it. An effect state the producer would not call
     # complete is exit 4 even with no failure recorded, because an observation nobody could make is
@@ -2210,8 +2589,84 @@ def run_install(config: Config, run: Run) -> int:
     return EXIT_OK
 
 
+def acquisition_report_line(payload: AdmittedPayload) -> str:
+    """Name the ticket that admitted this payload, and which of the two prestates produced it.
+
+    Sealed and reused are different facts about the same document, so they are different lines: an
+    operator reading "reused" knows this run added no evidence, and one reading "sealed" knows a new
+    create-only file exists that the next run will reuse.
+    """
+    if payload.acquisition == "reused":
+        return (
+            f"acquisition ticket: REUSED {escape_display(str(payload.receipt_path))} (already filed for"
+            " this archive digest, re-validated against its own seal; receipts are create-only and this"
+            " run wrote none)"
+        )
+    return (
+        f"acquisition ticket: SEALED {escape_display(str(payload.receipt_path))} from the release root's"
+        f" own {CANDIDATE_MANIFEST_NAME}, verified in both directions (a later run reuses exactly this"
+        " document)"
+    )
+
+
+def report_preview(
+    config: Config,
+    options: Options,
+    candidate: PayloadCandidate,
+    planned: list[PlannedEntry],
+    host_version: str,
+) -> None:
+    """What a real run WOULD do, with every write named as pending rather than performed.
+
+    Every line here is derived from the same admission a real run makes, which is what makes this a
+    preview of THIS operation rather than a second opinion about it.
+    """
+    ticket = config.acquisition_receipts_dir / f"{candidate.archive_sha256}.json"
+    lines = [
+        f"{SURFACE} --scope user --agent {escape_display(config.agent)} {DRY_RUN_FLAG}: nothing was"
+        " written, and nothing was previewed that this run could not admit",
+        f"candidate {escape_display(candidate.candidate_id[:12])} resolves"
+        f" {escape_display(candidate.resolved_version)} via {VERSION_SOURCE} from"
+        f" {escape_display(str(candidate.candidate_root))}",
+        f"observed {escape_display(config.plane.display)} host version"
+        f" {escape_display(host_version)}: admitted against the payload's declared claims",
+        mode_report_line(options),
+        f"{escape_display(config.agent)} root: {escape_display(str(config.plane_root))}",
+    ]
+    if candidate.existing is not None:
+        lines.append(
+            f"acquisition ticket: would REUSE {escape_display(str(candidate.existing[0]))}"
+        )
+    else:
+        lines.append(
+            f"acquisition ticket: would SEAL {escape_display(str(ticket))} from the release root's own"
+            f" {CANDIDATE_MANIFEST_NAME}, which this preview verified in both directions without"
+            " writing it"
+        )
+    if config.migrates_legacy_pointer and config.legacy_active_receipt_path.is_file():
+        lines.append(
+            f"legacy pointer {escape_display(str(config.legacy_active_receipt_path))} would be re-filed"
+            f" at {escape_display(str(config.active_receipt_path))}; this preview left it alone"
+        )
+    for item in planned:
+        lines.append(
+            f"entry {escape_display(item.name)}: {escape_display(item.prestate)} would be"
+            f" {escape_display(item.action)}ed -- {escape_display(item.detail)}"
+        )
+    lines.append(
+        f"active pointer {escape_display(str(config.active_receipt_path))} would name the receipt a real"
+        " run seals; this preview wrote no receipt and no pointer"
+    )
+    lines.append(
+        "public_channel null and release_claim none: a preview states no published release exists, and"
+        " it authorizes no push, publication, merge, or deployment"
+    )
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
 def report(
     config: Config,
+    options: Options,
     payload: AdmittedPayload,
     outcomes: list[Outcome],
     effect_state: str,
@@ -2221,14 +2676,17 @@ def report(
 ) -> None:
     """One line per fact, every artifact-derived value escaped, and no claim beyond the evidence."""
     lines = [
-        f"ccodex sdlc install {HOST_FLAG} {escape_display(config.agent)}:"
+        f"{SURFACE} --scope user --agent {escape_display(config.agent)}:"
         f" effect {escape_display(effect_state)}, terminal {escape_display(terminal_phase)}",
         f"candidate {escape_display(payload.candidate_id[:12])} resolved"
         f" {escape_display(payload.resolved_version)} via {VERSION_SOURCE}"
         f" (requested: no version was requested)",
+        mode_report_line(options),
         f"{escape_display(config.agent)} root: {escape_display(str(config.plane_root))}"
         " (copies, never links)",
     ]
+    if run.acquisition is not None:
+        lines.append(run.acquisition)
     if run.pointer_migration is not None:
         lines.append(run.pointer_migration)
     for outcome in outcomes:
@@ -2255,41 +2713,61 @@ def report(
     sys.stdout.write("\n".join(lines) + "\n")
 
 
+def report_sealed_ticket(run: Run) -> None:
+    """Name a ticket this run sealed before it refused, so no refusal implies an empty state plane.
+
+    The acquisition seal is create-only immutable evidence about a VERIFIED ROOT rather than a
+    statement about any activation, so a refusal after it is still a clean refusal on the host plane --
+    but "refused before any effect" would read as "the state plane is untouched", which would be false.
+    The next run reuses exactly this document, which is why it is named rather than removed: removing
+    it would be a second effect, and this module removes nothing it did not put there for one run.
+    """
+    if run.sealed_ticket is None:
+        return
+    print(
+        f"note: the acquisition ticket {escape_display(str(run.sealed_ticket))} was sealed before this"
+        " refusal and is left in place as evidence that the release root verified against its own"
+        f" {CANDIDATE_MANIFEST_NAME}; a later run reuses it rather than sealing a second one",
+        file=sys.stderr,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """The dispatcher's entry point: always an ``int`` in the exit class 0-4, never a ``bool``."""
     selected = list(sys.argv[1:] if argv is None else argv)
     run = Run()
     try:
-        agent = parse_argv(selected)
+        options = parse_argv(selected)
         # The admitted selector REPLACES the configuration's default plane, so there is exactly one
         # statement of which plane this run touches and it is the one the dispatcher forwarded. A
         # configuration that carried its own agent and an argv that carried another would be two
         # spellings of one fact, which is the shape this wave exists to delete everywhere else.
-        return run_install(dataclass_replace(default_config(), agent=agent), run)
+        return run_install(dataclass_replace(default_config(), agent=options.agent), options, run)
     except Refusal as exc:
         if run.effect_started:
             # A refusal raised after an effect started is not a clean refusal; reporting it as one
             # would claim an absence of effect nobody observed.
             print(
-                f"error: ccodex sdlc install left an unknown effect: {escape_display(str(exc))}",
+                f"error: {SURFACE} left an unknown effect: {escape_display(str(exc))}",
                 file=sys.stderr,
             )
             return EXIT_UNKNOWN
-        print(f"error: ccodex sdlc install refused before any effect: {escape_display(str(exc))}", file=sys.stderr)
+        print(f"error: {SURFACE} refused before any effect: {escape_display(str(exc))}", file=sys.stderr)
+        report_sealed_ticket(run)
         return EXIT_REFUSED
     except UnknownEffect as exc:
-        print(f"error: ccodex sdlc install left an unknown effect: {escape_display(str(exc))}", file=sys.stderr)
+        print(f"error: {SURFACE} left an unknown effect: {escape_display(str(exc))}", file=sys.stderr)
         return EXIT_UNKNOWN
     except Exception as exc:  # noqa: BLE001 - classified against the one fact that decides the class
         if run.effect_started:
             print(
-                f"error: ccodex sdlc install failed after an effect started, so its effect is"
+                f"error: {SURFACE} failed after an effect started, so its effect is"
                 f" unknown: {escape_display(repr(exc))}",
                 file=sys.stderr,
             )
             return EXIT_UNKNOWN
         print(
-            f"error: ccodex sdlc install failed before any effect: {escape_display(repr(exc))}",
+            f"error: {SURFACE} failed before any effect: {escape_display(repr(exc))}",
             file=sys.stderr,
         )
         return EXIT_REFUSED

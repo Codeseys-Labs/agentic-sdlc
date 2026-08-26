@@ -1501,10 +1501,10 @@ UNWIRED_SURFACE_MATRIX: tuple[tuple[str, tuple[str, ...], str], ...] = (
         ("install", "--scope", "project", "--agent", "claude", "--project", "/nonexistent/project-root"),
         "project-scope-not-yet-wired",
     ),
-    ("install-mode-copy", ("install", "--scope", "user", "--agent", "claude", "--mode", "copy"), "mode-not-yet-wired"),
-    ("install-mode-link", ("install", "--scope", "user", "--agent", "claude", "--mode", "link"), "mode-not-yet-wired"),
-    ("install-dry-run", ("install", "--scope", "user", "--agent", "claude", "--dry-run"), "dry-run-not-yet-wired"),
-    ("uninstall-dry-run", ("uninstall", "--scope", "user", "--agent", "claude", "--dry-run"), "dry-run-not-yet-wired"),
+    # `--mode` and `--dry-run` LEFT THIS MATRIX in W3b of agentic-sdlc-7a2b: both are wired, so a row
+    # asserting "is not served by this release" would now be asserting a lie. `WiredFlagRequestTest`
+    # below owns them, and it owns the two directions that matter -- a request the module admits and one
+    # it refuses on its own terms -- rather than one shared "declined" shape.
 )
 
 
@@ -1563,6 +1563,87 @@ class UnwiredSurfaceExitThreeTest(Conformance):
         # Positive control: the same lookup does NOT find a token the reader never declares, so the
         # three above are findings about this file rather than a scan that passes over any text.
         self.assertNotIn("wildcard-scope-not-yet-wired", source)
+
+
+class WiredFlagRequestTest(Conformance):
+    """The two optional requests W3b wired, driven through the committed dispatcher.
+
+    They used to sit in ``UNWIRED_SURFACE_MATRIX`` as declined surfaces. What replaces that row is not
+    one shared "served now" assertion but the two directions the wiring actually has: a request this
+    plane can serve reaches its effect, and one it cannot is refused BY NAME rather than downgraded.
+    Both are measured with the whole-tree hash, because "changed nothing" is a claim about the
+    filesystem rather than about the interesting files in it.
+    """
+
+    def test_an_admitted_mode_request_activates_and_states_its_resolution(self) -> None:
+        plane = self.plane()
+        plane.acquire_a()
+
+        completed = plane.dispatch("install", *SELECTED, "--mode", "auto")
+
+        self.assert_admitted_class(completed)
+        self.assertEqual(EXIT_OK, completed.returncode, completed.stderr)
+        # The REQUEST and the RESOLUTION are both stated: a plane that silently took its own mode would
+        # print one of them, and an operator could not tell which.
+        self.assertIn("mode: requested auto, resolved copy", completed.stdout)
+        self.assertTrue(plane.pointer.is_file())
+        # And the resolution is what bound bytes: every inventory row that published anything is a copy.
+        body = self.sealed(plane, plane.receipts()[0])["body"]
+        self.assertEqual({"copy"}, {row["mode"] for row in body["entries"] if row["mode"] is not None})
+        self.assert_no_authority_claim(completed.stdout, completed.stderr)
+
+    def test_a_mode_this_plane_cannot_serve_is_refused_by_name_and_moves_nothing(self) -> None:
+        plane = self.plane()
+        plane.acquire_a()
+        before = tree_hash(*plane.observed_roots())
+
+        completed = plane.dispatch("install", *SELECTED, "--mode", "link")
+
+        self.assert_admitted_class(completed)
+        self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
+        self.assertEqual("", completed.stdout)
+        self.assertIn("mode-forbidden-for-acquired-payload", completed.stderr)
+        self.assertNotIn("mode-not-yet-wired", completed.stderr)
+        self.assertNotIn("usage: ccodex install", completed.stderr)
+        self.assertEqual(before, tree_hash(*plane.observed_roots()))
+        # POSITIVE CONTROL: the same plane with a mode it can serve activates, so the refusal above is
+        # about the request and not about a host that could not have been activated.
+        self.install_once(plane)
+        self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
+
+    def test_a_preview_exits_zero_and_changes_nothing_then_the_real_run_changes_it(self) -> None:
+        plane = self.plane()
+        plane.acquire_a()
+        before = tree_hash(*plane.observed_roots())
+
+        preview = plane.dispatch("install", *SELECTED, "--dry-run")
+
+        self.assert_admitted_class(preview)
+        self.assertEqual(EXIT_OK, preview.returncode, preview.stderr)
+        self.assertIn("nothing was written", preview.stdout)
+        self.assertIn("would name the receipt a real run seals", preview.stdout)
+        self.assertEqual([], plane.receipts())
+        self.assertEqual([], plane.journals())
+        self.assertEqual([], plane.plans())
+        self.assertFalse(plane.pointer.exists())
+        self.assertEqual(before, tree_hash(*plane.observed_roots()), preview.stdout)
+        self.assert_no_authority_claim(preview.stdout, preview.stderr)
+
+        # POSITIVE CONTROL, and the pairing that makes the preview meaningful: the same vector without
+        # the flag does every one of those things.
+        self.install_once(plane)
+        self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
+        self.assertEqual(1, len(plane.receipts()))
+
+        # And the retirement previews too, on a plane that now really has something to retire.
+        retire_preview = plane.dispatch("uninstall", *SELECTED, "--dry-run")
+        self.assert_admitted_class(retire_preview)
+        self.assertEqual(EXIT_OK, retire_preview.returncode, retire_preview.stderr)
+        self.assertIn("nothing was removed", retire_preview.stdout)
+        self.assertIn("admission: activation-receipt", retire_preview.stdout)
+        self.assertTrue(plane.pointer.is_file(), "a preview retires no pointer")
+        self.assertEqual(1, len(plane.receipts()), "and seals no terminal receipt")
+        self.assert_no_authority_claim(retire_preview.stdout, retire_preview.stderr)
 
 
 # ---- (1d) exit 4: an admitted partial or unknown effect --------------------------------------------

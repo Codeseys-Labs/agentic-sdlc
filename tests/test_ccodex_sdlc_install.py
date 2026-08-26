@@ -2,12 +2,14 @@
 
 THE OPERATOR SPELLING AND THIS MODULE'S ABI ARE TWO DIFFERENT FACTS, and neither is a mistake.
 ``ccodex sdlc install`` is retired at exit 2 and the front door is the top-level ``install`` with
-``--scope``/``--agent``; this module is unchanged and still admits exactly ``['--host', <agent>]``,
-still naming itself ``ccodex sdlc install`` in its own messages, because the reader builds that one
-vector in one place (``ccodex_sdlc.main``) and renaming the ABI would reach files this wave does not
-own. So the in-process tests below drive ``--host`` and the subprocess test that goes through the
-shipped reader drives ``--scope user --agent claude``; every message assertion quotes whichever of
-the two actually emitted it.
+``--scope``/``--agent``, which is what this module's own messages now name (seed agentic-sdlc-67c9,
+W3b). Its ABI is still exactly ``['--host', <agent>]`` plus the two optional requests the reader
+forwards -- ``--mode <auto|link|copy>`` and ``--dry-run`` -- because the reader builds that one vector
+in one place (``ccodex_sdlc.main``) and renaming the ABI would reach files this wave does not own. So
+the in-process tests below drive ``--host`` and the subprocess test that goes through the shipped
+reader drives ``--scope user --agent claude``; every message assertion quotes whichever of the two
+actually emitted it. The sibling modules for ``update`` and ``uninstall`` still name the retired
+spelling in their own messages, which is why the shared test maps are keyed per verb.
 
 WHAT THIS MODULE PROVES, AND HOW IT AVOIDS PROVING NOTHING. Every negative assertion here carries a
 POSITIVE CONTROL in the same test: an absence proves nothing unless the same harness is shown to
@@ -173,6 +175,29 @@ def inventory_for_tree(root: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def manifest_document(candidate_root: Path, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The candidate manifest for a payload tree as it stands NOW.
+
+    Factored out of ``build_fixture`` so a test that mutates the payload can re-derive the manifest
+    instead of hand-editing rows: the auto-seal verifies the root against this document in both
+    directions, so a fixture whose manifest lags its tree would refuse for the wrong reason.
+    """
+    manifest = {
+        "archive_root": f"agentic-sdlc-candidate-{CANDIDATE_ID}-linux-x64",
+        "artifact_kind": "unpublished-candidate",
+        "candidate_id": CANDIDATE_ID,
+        "inventory": inventory_for_tree(candidate_root),
+        "platform": "linux-x64",
+        "product_version": PRODUCT_VERSION,
+        "public_channel": None,
+        "release_claim": "none",
+        "schema_version": "release-candidate/v1",
+        "support_tier": "unsupported",
+    }
+    manifest.update(overrides or {})
+    return manifest
+
+
 @dataclass
 class Fixture:
     root: Path
@@ -187,6 +212,16 @@ class Fixture:
     @property
     def claude_root(self) -> Path:
         return self.home / ".claude"
+
+    def write_manifest(self, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """(Re-)derive and write this candidate root's manifest from the tree as it stands."""
+        manifest = manifest_document(self.candidate_root, overrides)
+        (self.candidate_root / "manifest.json").write_bytes(canonical(manifest))
+        return manifest
+
+    def acquisition_receipts(self) -> list[Path]:
+        directory = self.acquisition_receipt.parent
+        return sorted(directory.glob("*.json")) if directory.is_dir() else []
 
     def destination(self, relative: str) -> Path:
         return self.claude_root / relative
@@ -246,6 +281,7 @@ def build_fixture(
     manifest_overrides: dict[str, Any] | None = None,
     observed_system: str = "Linux",
     observed_machine: str = "x86_64",
+    seal_receipt: bool = True,
 ) -> Fixture:
     """Fabricate one complete acquisition: payload tree, manifest, sealed receipt, and Config.
 
@@ -274,20 +310,9 @@ def build_fixture(
     contract_path.parent.mkdir(parents=True, exist_ok=True)
     contract_path.write_bytes(canonical(contract_document))
 
-    manifest = {
-        "archive_root": f"agentic-sdlc-candidate-{CANDIDATE_ID}-linux-x64",
-        "artifact_kind": "unpublished-candidate",
-        "candidate_id": CANDIDATE_ID,
-        "inventory": inventory_for_tree(candidate_root),
-        "platform": "linux-x64",
-        "product_version": PRODUCT_VERSION,
-        "public_channel": None,
-        "release_claim": "none",
-        "schema_version": "release-candidate/v1",
-        "support_tier": "unsupported",
-    }
-    manifest.update(manifest_overrides or {})
-    (candidate_root / "manifest.json").write_bytes(canonical(manifest))
+    (candidate_root / "manifest.json").write_bytes(
+        canonical(manifest_document(candidate_root, manifest_overrides))
+    )
 
     receipt = {
         "activation": "absent",
@@ -308,9 +333,12 @@ def build_fixture(
     }
     receipt.update(receipt_overrides or {})
     receipt_dir = state_home / "agentic-sdlc" / "acquisition" / "receipts"
-    receipt_dir.mkdir(parents=True)
     receipt_path = receipt_dir / f"{ARCHIVE_SHA}.json"
-    receipt_path.write_bytes(seal_acquisition(receipt) if reseal else canonical(receipt))
+    if seal_receipt:
+        # The directory is created only when a receipt is written, so `seal_receipt=False` is the real
+        # fresh-host shape the auto-seal admits: a placed release root and no acquisition plane at all.
+        receipt_dir.mkdir(parents=True)
+        receipt_path.write_bytes(seal_acquisition(receipt) if reseal else canonical(receipt))
 
     config = install.Config(
         home=home,
@@ -1068,10 +1096,20 @@ class PlatformTest(TemporaryRoot):
 class AdmissionTest(TemporaryRoot):
     def test_absent_and_ambiguous_acquisition_are_different_refusals(self) -> None:
         fixture = self.fixture()
+        # BOTH halves of the acquisition plane must be empty for "no acquired candidate": since W3b a
+        # release root with no receipt is the auto-seal prestate, not a refusal, so removing only the
+        # receipt would exercise that path instead of this refusal. Removing the manifest is what
+        # stops the root from being a release root at all.
         fixture.acquisition_receipt.unlink()
+        (fixture.candidate_root / "manifest.json").unlink()
         absent = call_main(fixture)
-        self.assertEqual(3, absent.code)
+        self.assertEqual(3, absent.code, absent.stderr)
         self.assertIn("no <archive-sha256>.json acquisition receipt", absent.stderr)
+        self.assertIn("release root to seal one from", absent.stderr)
+        # A refusal creates nothing: neither plane gained a file, and no ticket was sealed.
+        self.assertEqual([], fixture.acquisition_receipts())
+        self.assertEqual([], fixture.activation_receipts())
+        fixture.write_manifest()
 
         second = fixture.acquisition_receipt.with_name(f"{'b' * 64}.json")
         fixture.acquisition_receipt.write_bytes(
@@ -1627,6 +1665,12 @@ class DispatchContractTest(TemporaryRoot):
             "scripts/ccodex_sdlc_host_planes.py",
             "scripts/install_skill_bundle.py",
             "scripts/distribution_activation_receipt.py",
+            # The acquisition ticket's SCHEMA OWNER. It joined this list when `install` started
+            # sealing tickets by calling it (agentic-sdlc-7a2b, W3b): the module is loaded eagerly on
+            # every run, including the reuse path, so a shadow tree without it refuses by naming the
+            # absent sibling. The release payload carries the whole `scripts` tree, so a real
+            # distribution always has it.
+            "scripts/write_acquisition_receipt.py",
         ):
             shutil.copy2(ROOT / relative, shadow / relative)
         fixture = self.fixture()
@@ -1771,6 +1815,373 @@ class ConfigSeamTest(unittest.TestCase):
         self.assertIsNot(install.UNSUPPLIED, None)
         self.assertFalse(isinstance(None, install._Unsupplied))
         self.assertTrue(isinstance(install.UNSUPPLIED, install._Unsupplied))
+
+
+def plane_snapshot(*roots: Path) -> dict[str, tuple[int, str]]:
+    """Every path under each root, with its size and content digest.
+
+    STRONGER THAN THE AUDIT'S ``find -newer`` FORMULATION, and deliberately so: a coarse clock can put
+    a real write inside the marker's own tick, and a rewrite that restored an mtime would pass a
+    timestamp comparison while changing bytes. Comparing the whole inventory is clock-independent. The
+    ``-newer`` check is kept beside it, because it is the check the audit worded and it catches a
+    touched-but-unchanged file this one would call equal.
+    """
+    observed: dict[str, tuple[int, str]] = {}
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            key = str(path)
+            item = path.lstat()
+            if stat.S_ISLNK(item.st_mode):
+                observed[key] = (0, f"link:{os.readlink(path)}")
+            elif path.is_dir():
+                observed[key] = (0, "dir")
+            else:
+                observed[key] = (item.st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+    return observed
+
+
+def newer_than(marker: Path, *roots: Path) -> list[str]:
+    """The audit's own check: every path under these roots modified after the marker file was."""
+    threshold = marker.stat().st_mtime_ns
+    found: list[str] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path == marker:
+                continue
+            if path.lstat().st_mtime_ns > threshold:
+                found.append(str(path))
+    return found
+
+
+@WINDOWS_SKIP
+class AcquisitionAutoSealTest(TemporaryRoot):
+    """W3b: a release root with no ticket seals its own, and a second install reuses it.
+
+    Every test here starts from ``seal_receipt=False`` -- a placed release root and NO acquisition
+    plane at all, which is the fresh-host prestate the manual placement-bridge recipe used to fill by
+    hand. The seal is a CALL into ``write_acquisition_receipt``; the byte-identity test below is what
+    makes that a call rather than a second implementation.
+    """
+
+    def test_a_release_root_with_no_ticket_seals_one_and_activates(self) -> None:
+        fixture = self.fixture(seal_receipt=False)
+        self.assertFalse(fixture.acquisition_receipt.exists())
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertIn("acquisition ticket: SEALED", outcome.stdout)
+        self.assertIn("verified in both directions", outcome.stdout)
+        # ONE ticket, at the digest-keyed path, admitted by the same validator a hand-placed one faces.
+        self.assertEqual([fixture.acquisition_receipt], fixture.acquisition_receipts())
+        ticket = json.loads(fixture.acquisition_receipt.read_text(encoding="utf-8"))
+        self.assertEqual(ARCHIVE_SHA, ticket["archive_sha256"])
+        self.assertEqual("installed-unselected", ticket["terminal_phase"])
+        self.assertEqual(str(fixture.candidate_root), ticket["candidate_root_absolute_physical_path"])
+        # The activation receipt's ONE ancestor names the ticket this run sealed.
+        document = sealed_receipt(fixture)
+        self.assertEqual(
+            [
+                {
+                    "expected_kind": "distribution-activation",
+                    "receipt_id": ticket["operation_id"],
+                    "relation": "derived-from",
+                }
+            ],
+            document["ancestors"],
+        )
+        self.assertEqual("complete", document["body"]["effect_state"])
+        self.assertEqual(ARCHIVE_SHA, document["body"]["archive_sha256"])
+        # And the plane is activated: entries copied, pointer naming this receipt.
+        for relative in CLAUDE_DESTINATIONS:
+            self.assertTrue(fixture.destination(relative).exists(), relative)
+        self.assertTrue(fixture.pointer.is_file())
+        self.assertEqual(fixture.pointer.read_bytes(), sorted(fixture.activation_receipts())[0].read_bytes())
+
+    def test_the_sealed_bytes_are_the_producers_own_for_the_same_root(self) -> None:
+        """Byte-identity with ``write_acquisition_receipt`` for the same root, digest, and instant.
+
+        This is the test that makes "call it, never reimplement it" checkable. It seals the SAME root a
+        second time into a different state home through the producer's own function and compares the
+        two files byte for byte; the control mutates one input and requires them to differ, so the
+        equality is not the trivial equality of two constants.
+        """
+        fixture = self.fixture(seal_receipt=False)
+        self.assertEqual(0, call_main(fixture).code)
+        sealed_by_install = fixture.acquisition_receipt.read_bytes()
+
+        elsewhere = self.root / "producer-state"
+        elsewhere.mkdir()
+        produced = shim.write_receipt(
+            root=fixture.candidate_root,
+            state_home=elsewhere,
+            archive=None,
+            archive_sha256=ARCHIVE_SHA,
+            operation_id=None,
+            installed_at=INSTANT,
+        )
+        self.assertEqual(sealed_by_install, produced.read_bytes())
+        # CONTROL: one different input, different bytes -- so the comparison above has content.
+        other = self.root / "producer-state-later"
+        other.mkdir()
+        later = shim.write_receipt(
+            root=fixture.candidate_root,
+            state_home=other,
+            archive=None,
+            archive_sha256=ARCHIVE_SHA,
+            operation_id=None,
+            installed_at=LATER_INSTANT,
+        )
+        self.assertNotEqual(sealed_by_install, later.read_bytes())
+
+    def test_a_second_install_reuses_the_filed_ticket_and_seals_no_second_one(self) -> None:
+        fixture = self.fixture(seal_receipt=False)
+        first = call_main(fixture)
+        self.assertEqual(0, first.code, first.stderr)
+        self.assertIn("acquisition ticket: SEALED", first.stdout)
+        filed = fixture.acquisition_receipt.read_bytes()
+
+        second = call_main(fixture, config=self.later_config(fixture))
+
+        self.assertEqual(0, second.code, second.stderr)
+        self.assertIn("acquisition ticket: REUSED", second.stdout)
+        self.assertIn("this run wrote none", second.stdout)
+        # Create-only keying means reuse-not-overwrite is the only admissible idempotence: one file,
+        # byte-identical, and no second document beside it.
+        self.assertEqual([fixture.acquisition_receipt], fixture.acquisition_receipts())
+        self.assertEqual(filed, fixture.acquisition_receipt.read_bytes())
+        # Two activation receipts, because two runs happened; one ticket, because one archive did.
+        self.assertEqual(2, len(fixture.activation_receipts()))
+
+    def test_a_tampered_filed_ticket_is_refused_rather_than_re_sealed(self) -> None:
+        """N5's replacement direction: the check that can actually go red.
+
+        "No duplicate receipt" is near-vacuous under create-only keying -- the producer refuses a
+        second write by itself. The direction with content is that a filed ticket whose bytes disagree
+        with their own seal is REFUSED, not silently replaced by a fresh correct one, because replacing
+        it would destroy the only evidence of what the first acquisition observed.
+        """
+        fixture = self.fixture(seal_receipt=False)
+        self.assertEqual(0, call_main(fixture).code)
+        document = json.loads(fixture.acquisition_receipt.read_text(encoding="utf-8"))
+        document["installed_at"] = LATER_INSTANT  # sealed field, digest not recomputed
+        tampered = canonical(document)
+        fixture.acquisition_receipt.write_bytes(tampered)
+
+        outcome = call_main(fixture, config=self.later_config(fixture))
+
+        self.assertEqual(3, outcome.code, outcome.stderr)
+        self.assertIn("mismatched pair", outcome.stderr)
+        self.assertIn("refused before any effect", outcome.stderr)
+        # NOT re-sealed: the tampered bytes are still there and no second ticket was filed.
+        self.assertEqual(tampered, fixture.acquisition_receipt.read_bytes())
+        self.assertEqual([fixture.acquisition_receipt], fixture.acquisition_receipts())
+        # POSITIVE CONTROL: resealing the same edit admits it, so the refusal was about the seal.
+        fixture.acquisition_receipt.write_bytes(seal_acquisition(document))
+        self.assertEqual(0, call_main(fixture, config=self.later_config(fixture)).code)
+
+    def test_a_corrupted_release_root_refuses_by_name_with_the_destination_plane_untouched(self) -> None:
+        """audit W-h: the ``-newer`` check is pinned to the DESTINATION plane, not the source root."""
+        fixture = self.fixture(seal_receipt=False)
+        marker = self.root / "marker"
+        marker.write_text("marker\n", encoding="utf-8")
+        before = plane_snapshot(fixture.home, fixture.state_home, fixture.installer_state_root)
+        target = fixture.candidate_root / "skills" / "alpha-skill" / "SKILL.md"
+        # ONE BYTE, same length: a size comparison would miss it and a digest cannot.
+        payload = target.read_bytes()
+        target.write_bytes(payload[:-2] + b"X" + payload[-1:])
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(3, outcome.code, outcome.stderr)
+        self.assertIn("payload-manifest-mismatch", outcome.stderr)
+        self.assertIn("refused before any effect", outcome.stderr)
+        # No ticket was sealed, so the refusal did not mint the evidence it would have consumed.
+        self.assertEqual([], fixture.acquisition_receipts())
+        self.assertEqual([], fixture.activation_receipts())
+        self.assertFalse(fixture.destination("skills/alpha-skill").exists())
+        self.assertEqual(
+            [], newer_than(marker, fixture.home, fixture.state_home, fixture.installer_state_root)
+        )
+        self.assertEqual(
+            before, plane_snapshot(fixture.home, fixture.state_home, fixture.installer_state_root)
+        )
+        # POSITIVE CONTROL: restoring the byte admits the same root.
+        target.write_bytes(payload)
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_two_release_roots_with_no_ticket_are_an_ambiguity(self) -> None:
+        fixture = self.fixture(seal_receipt=False)
+        second = fixture.candidate_root.parent.parent / ("c" * 64) / "root"
+        shutil.copytree(fixture.candidate_root, second)
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(3, outcome.code, outcome.stderr)
+        self.assertIn("holds 2 release roots", outcome.stderr)
+        self.assertIn("would be a guess", outcome.stderr)
+        self.assertEqual([], fixture.acquisition_receipts())
+        # POSITIVE CONTROL: with one root the same plane activates.
+        shutil.rmtree(second.parent)
+        self.assertEqual(0, call_main(fixture).code)
+
+    def test_a_directory_without_a_manifest_is_not_a_release_root(self) -> None:
+        """The manifest is what makes a placed directory a release root, and its absence says so."""
+        fixture = self.fixture(seal_receipt=False)
+        (fixture.candidate_root / "manifest.json").unlink()
+
+        outcome = call_main(fixture)
+
+        self.assertEqual(3, outcome.code, outcome.stderr)
+        self.assertIn("no acquired candidate is available", outcome.stderr)
+        self.assertIn("release root to seal one from", outcome.stderr)
+        # POSITIVE CONTROL: writing the manifest back makes the same directory a release root.
+        fixture.write_manifest()
+        self.assertEqual(0, call_main(fixture).code)
+
+
+@WINDOWS_SKIP
+class ModeRequestTest(TemporaryRoot):
+    """``--mode`` is admitted, resolved, and stated -- and ``link`` is refused rather than downgraded."""
+
+    def test_copy_and_auto_resolve_to_the_planes_own_mode_and_say_so(self) -> None:
+        for requested in ("copy", "auto"):
+            with self.subTest(requested=requested):
+                fixture = self.fixture()
+                outcome = call_main(fixture, argv=["--host", "claude", "--mode", requested])
+                self.assertEqual(0, outcome.code, outcome.stderr)
+                self.assertIn(f"mode: requested {requested}, resolved copy", outcome.stdout)
+                # The RESOLUTION is what binds bytes: every inventory row records a copy.
+                body = sealed_receipt(fixture)["body"]
+                published = {row["mode"] for row in body["entries"] if row["mode"] is not None}
+                self.assertEqual({"copy"}, published)
+                self.assertFalse(fixture.destination("agents/cartographer.md").is_symlink())
+
+    def test_an_omitted_mode_states_the_planes_own_without_claiming_a_request(self) -> None:
+        fixture = self.fixture()
+        outcome = call_main(fixture)
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertIn("mode: copy (this plane copies and never links; none was requested)", outcome.stdout)
+
+    def test_link_is_refused_by_name_and_never_silently_downgraded(self) -> None:
+        fixture = self.fixture()
+
+        outcome = call_main(fixture, argv=["--host", "claude", "--mode", "link"])
+
+        self.assertEqual(3, outcome.code, outcome.stderr)
+        self.assertIn("mode-forbidden-for-acquired-payload", outcome.stderr)
+        self.assertIn("copies and never links", outcome.stderr)
+        self.assertIn("nothing was written", outcome.stderr)
+        self.assertEqual([], fixture.activation_receipts())
+        self.assertFalse(fixture.destination("skills/alpha-skill").exists())
+        # POSITIVE CONTROL: the same plane with an admitted mode activates.
+        self.assertEqual(0, call_main(fixture, argv=["--host", "claude", "--mode", "copy"]).code)
+
+    def test_the_module_refuses_a_vector_its_dispatcher_would_never_build(self) -> None:
+        fixture = self.fixture()
+        for vector in (
+            ["--host", "claude", "--mode"],
+            ["--host", "claude", "--mode", "hardlink"],
+            ["--host", "claude", "--dry-run", "--mode", "copy"],
+            ["--host", "claude", "--dry-run", "--dry-run"],
+            ["--host", "claude", "--unknown"],
+        ):
+            with self.subTest(vector=vector):
+                outcome = call_main(fixture, argv=vector)
+                self.assertEqual(3, outcome.code, outcome.stderr)
+                self.assertIn("refused before any effect", outcome.stderr)
+                self.assertEqual([], fixture.activation_receipts())
+
+    def test_the_admitted_modes_are_the_installers_own(self) -> None:
+        """The closed set is a checked copy of the substrate's own argparse choices, not a second list."""
+        source = (ROOT / "scripts" / "install_skill_bundle.py").read_text(encoding="utf-8")
+        self.assertIn('choices=("auto", "link", "copy")', source)
+        self.assertEqual(("auto", "link", "copy"), install.INSTALL_MODES)
+
+
+@WINDOWS_SKIP
+class PreviewTest(TemporaryRoot):
+    """``--dry-run``: the whole admission runs, the plan is printed, and no byte is written."""
+
+    def test_a_preview_writes_nothing_at_all_and_then_the_real_run_does(self) -> None:
+        fixture = self.fixture(seal_receipt=False)
+        marker = self.root / "preview-marker"
+        marker.write_text("marker\n", encoding="utf-8")
+        before = plane_snapshot(fixture.home, fixture.state_home, fixture.installer_state_root)
+
+        outcome = call_main(fixture, argv=["--host", "claude", "--dry-run"])
+
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertIn("nothing was written", outcome.stdout)
+        self.assertIn("acquisition ticket: would SEAL", outcome.stdout)
+        self.assertIn("which this preview verified in both directions without writing it", outcome.stdout)
+        self.assertIn("would name the receipt a real run seals", outcome.stdout)
+        self.assertIn("entry skills/alpha-skill: absent would be installed", outcome.stdout)
+        # NOTHING: no ticket, no plan, no journal, no receipt, no pointer, no destination -- and the
+        # state root the fixture never populated was not even created.
+        self.assertEqual([], fixture.acquisition_receipts())
+        self.assertEqual([], fixture.activation_receipts())
+        self.assertEqual([], fixture.plans())
+        self.assertFalse(fixture.pointer.exists())
+        self.assertFalse(fixture.destination("skills/alpha-skill").exists())
+        self.assertEqual(
+            [], newer_than(marker, fixture.home, fixture.state_home, fixture.installer_state_root)
+        )
+        self.assertEqual(
+            before, plane_snapshot(fixture.home, fixture.state_home, fixture.installer_state_root)
+        )
+
+        # POSITIVE CONTROL: the same fixture, run for real, does every one of those things -- which is
+        # what makes the emptiness above a preview rather than a broken run.
+        real = call_main(fixture)
+        self.assertEqual(0, real.code, real.stderr)
+        self.assertEqual(1, len(fixture.acquisition_receipts()))
+        self.assertEqual(1, len(fixture.activation_receipts()))
+        self.assertTrue(fixture.pointer.is_file())
+        self.assertTrue(fixture.destination("skills/alpha-skill").is_dir())
+
+    def test_a_preview_reports_the_ticket_it_would_reuse(self) -> None:
+        fixture = self.fixture()
+        outcome = call_main(fixture, argv=["--host", "claude", "--dry-run"])
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertIn("acquisition ticket: would REUSE", outcome.stdout)
+        self.assertIn(str(fixture.acquisition_receipt), outcome.stdout)
+
+    def test_a_preview_refuses_exactly_what_a_real_run_refuses(self) -> None:
+        """A preview that admitted more than the run it previews would be a different operation."""
+        fixture = self.fixture(seal_receipt=False)
+        target = fixture.candidate_root / "commands" / "sdlc-frame.md"
+        target.write_text("tampered\n", encoding="utf-8")
+
+        preview = call_main(fixture, argv=["--host", "claude", "--dry-run"])
+        real = call_main(fixture)
+
+        self.assertEqual(3, preview.code, preview.stderr)
+        self.assertEqual(3, real.code, real.stderr)
+        self.assertIn("payload-manifest-mismatch", preview.stderr)
+        self.assertIn("payload-manifest-mismatch", real.stderr)
+
+    def test_a_preview_leaves_the_legacy_pointer_and_names_the_migration(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(0, call_main(fixture).code)
+        legacy = fixture.legacy_pointer
+        legacy.write_bytes(fixture.pointer.read_bytes())
+        fixture.pointer.unlink()
+
+        outcome = call_main(fixture, argv=["--host", "claude", "--dry-run"])
+
+        self.assertEqual(0, outcome.code, outcome.stderr)
+        self.assertIn("would be re-filed at", outcome.stdout)
+        self.assertTrue(legacy.is_file(), "the preview left the legacy pointer alone")
+        self.assertFalse(fixture.pointer.exists(), "and wrote no keyed pointer")
+        # POSITIVE CONTROL: the real run performs the migration the preview described.
+        self.assertEqual(0, call_main(fixture, config=self.later_config(fixture)).code)
+        self.assertFalse(legacy.exists())
+        self.assertTrue(fixture.pointer.is_file())
 
 
 if __name__ == "__main__":  # pragma: no cover - direct execution convenience
