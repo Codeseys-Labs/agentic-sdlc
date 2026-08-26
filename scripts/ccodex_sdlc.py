@@ -531,29 +531,14 @@ def parse_selector_verb(verb: str, rest: list[str]) -> dict[str, Any]:
     }
 
 
-def refuse_unwired_surface(verb: str, parsed: dict[str, Any]) -> None:
-    """Decline, by name and before any effect, the parts of the ratified grammar this release parses
-    but does not yet serve (exit 3).
-
-    Each refusal names the token the harness greps for, the wave that wires it, and what to run
-    instead. Silently ignoring it would be worse than refusing: an operator who typed
-    ``--scope project`` would get their user home activated.
-
-    ``--mode`` and ``--dry-run`` are NO LONGER HERE. They were refused as unwired for exactly one
-    wave; W3b of the same seed forwards both to the per-verb module, which resolves the mode request
-    against the selected plane and stops a preview before its first write. The two names those
-    refusals carried (``mode-not-yet-wired``, ``dry-run-not-yet-wired``) are therefore gone from the
-    product rather than kept as aliases: a token that still answered would say a wired surface is
-    unwired. ``--dry-run`` reaches only the verbs whose ``SELECTOR_VERB_OPTIONS`` row admits it, so a
-    verb that has no preview refuses the flag as a grammar error (exit 2) rather than by name here.
-    """
-    if parsed["scope"] == "project":
-        raise SurfaceRefusal(
-            f"ccodex {verb} {SCOPE_FLAG} project is not served by this release"
-            " (project-scope-not-yet-wired): the project-root resolution ladder, copy forcing, and"
-            f" the (agent, scope, root) pointer arrive with wave W4 of {FRONT_DOOR_SEED}. Use"
-            f" {SCOPE_FLAG} user until then."
-        )
+# THERE IS NO `refuse_unwired_surface` LEFT, and its absence is the record of what landed. It refused
+# `--mode` and `--dry-run` for one wave (W3a) and `--scope project` for two (W3a, W3b); W3b wired the
+# first two and W4 of the same seed wires the third -- the resolution ladder, copy forcing, and the
+# (agent, scope, root) pointer all reach their modules now. The three tokens those refusals carried
+# (`mode-not-yet-wired`, `dry-run-not-yet-wired`, `project-scope-not-yet-wired`) are GONE from the
+# product rather than kept as aliases, because a token that still answered would say a wired surface is
+# unwired. `SurfaceRefusal` itself stays: it is the class for a grammatical invocation this release
+# declines, and the next parsed-but-unserved surface will use it again.
 
 
 def parse_recover_apply(rest: list[str]) -> str:
@@ -601,6 +586,10 @@ class Invocation(NamedTuple):
     #: selected plane. `None` means none was requested, which is a different input from a request that
     #: happens to name the plane's own mode.
     mode: str | None = None
+    #: The project root the operator NAMED, forwarded verbatim to the module that resolves it against
+    #: the ladder. `None` means none was named, which at project scope is a request to walk up from the
+    #: working directory -- a different input from a named root, and never the same as user scope.
+    project: str | None = None
 
 
 def parse_command(argv: list[str]) -> Invocation:
@@ -615,7 +604,6 @@ def parse_command(argv: list[str]) -> Invocation:
     rest = argv[1:]
     if verb in SELECTOR_VERBS:
         parsed = parse_selector_verb(verb, rest)
-        refuse_unwired_surface(verb, parsed)
         return Invocation(
             verb=verb,
             # `status` admits no `--dry-run` at all (its own options row), so this is False for a read
@@ -627,6 +615,7 @@ def parse_command(argv: list[str]) -> Invocation:
             scope=parsed["scope"],
             agent=parsed["agent"],
             mode=parsed["mode"],
+            project=parsed["project"],
         )
     if verb not in READER_VERBS:
         raise UsageError(f"unknown ccodex verb: {verb!r}")
@@ -678,8 +667,9 @@ def usage() -> str:
         f"{AGENT_FLAG}; there is no default and no wildcard for either, so one agent's removal can\n"
         f"never reach another agent's bytes. doctor and recover take neither: doctor is the whole-box\n"
         "read, and recover resumes the one pending slot the substrate can carry, which is not a\n"
-        f"scoped object. {SCOPE_FLAG} project, {MODE_FLAG}, and {DRY_RUN_FLAG} parse and are refused\n"
-        "by name at exit 3 until the waves that wire them; nothing is silently ignored.\n"
+        f"scoped object. {SCOPE_FLAG} project resolves ONE repository root -- {PROJECT_FLAG} PATH, or a\n"
+        "walk up from the working directory -- and its plane is keyed by that root, so two worktrees of\n"
+        "one repository are two independent planes. Project scope is copy-only.\n"
     )
 
 
@@ -1300,6 +1290,100 @@ def plane_node_present(path: Path) -> bool:
     return True
 
 
+#: How a project pointer's own locator is rendered. It is per POINTER rather than the one fixed
+#: `ACTIVE_POINTER_LOCATOR`, because a host can hold N of them and `make_report` sorts findings by
+#: (component, path, code, message): with one shared locator, two orphaned roots would be ordered only
+#: by their message text. The key in the filename is already a digest of the root, so echoing it
+#: republishes no operator content.
+PROJECT_POINTER_PREFIX = "project-"
+PROJECT_POINTER_LOCATOR = "activation-plane://project-pointer"
+
+
+def project_pointer_locator(name: str) -> str:
+    """One locator per project pointer, carrying the root KEY its filename already carries.
+
+    The key is a truncated digest of the root, so echoing it republishes no operator content -- which is
+    the same argument `plane_locator` makes for a receipt named by its own digest. A name that is not
+    the keyed shape is named by a digest of itself instead, so two unrecognised neighbours are still
+    distinguishable without either name reaching the report.
+    """
+    stem = name[len(PROJECT_POINTER_PREFIX) : -len(".json")] if name.endswith(".json") else ""
+    if len(stem) == 16 and all(character in _HEX_CHARACTERS for character in stem):
+        return f"{PROJECT_POINTER_LOCATOR}-{stem}"
+    digest = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
+    return f"{PROJECT_POINTER_LOCATOR}-unrecognised-{digest[:16]}"
+#: The three states a project pointer's recorded root can be in, and the two that are findings. A root
+#: that is a live git project is the healthy case and says nothing; `unassessed` is what a caller who
+#: supplied no judge gets, and it is deliberately NOT a finding -- a reader that could not look must not
+#: report what it did not see.
+ROOT_LIVE = "live"
+ROOT_ABSENT = "absent"
+ROOT_NOT_A_PROJECT = "not-a-project"
+ROOT_UNASSESSED = "unassessed"
+
+
+def observe_project_pointers(
+    active_directory: Path,
+    read_document: Any,
+    root_state: Any = None,
+) -> list[dict[str, Any]]:
+    """Observe every project pointer this host holds, and the state of the root each one names.
+
+    WHAT THIS READS AND WHAT IT DOES NOT. The pointer document's own `body.scope.root` is the only
+    place the resolved root survives -- the filename carries a one-way digest of it -- so the root is
+    read out of the document. The SEAL is deliberately not required for this observation: an unsealed
+    or drifted pointer is already reported by the keyed-pointer observation above, and the question here
+    is narrower and answerable without trusting the document, because the answer is about a path on disk
+    rather than about the document's claims.
+
+    `root_state` is the judge, injected the way the receipt validator is: a caller that supplies none
+    gets `unassessed` rows and no finding. That keeps the honest gap visible instead of letting a reader
+    with no git-metadata reader available report every root as broken.
+
+    Nothing here follows a link, resolves a path, or reads a repository. Every row is bounded, and an
+    unreadable pointer is named rather than guessed at.
+    """
+    rows: list[dict[str, Any]] = []
+    try:
+        item = active_directory.lstat()
+    except OSError:
+        return rows
+    if stat.S_ISLNK(item.st_mode) or not stat.S_ISDIR(item.st_mode):
+        return rows
+    try:
+        planes = sorted(entry.name for entry in os.scandir(active_directory))
+    except OSError:
+        return rows
+    for agent in planes[:MAX_PLANE_DOCUMENTS]:
+        directory = active_directory / agent
+        names, _listing = list_plane_documents(directory)
+        for name in names:
+            if not name.startswith(PROJECT_POINTER_PREFIX):
+                continue
+            locator = project_pointer_locator(name)
+            document, reason = read_document(directory / name)
+            if document is None:
+                rows.append(
+                    {"locator": locator, "root": None, "state": ROOT_UNASSESSED, "reason": reason or "cannot be read"}
+                )
+                continue
+            scope = document.get("body", {}) if isinstance(document.get("body"), dict) else {}
+            recorded = scope.get("scope", {}).get("root") if isinstance(scope.get("scope"), dict) else None
+            if not isinstance(recorded, str) or not recorded or not recorded.startswith("/"):
+                rows.append(
+                    {
+                        "locator": locator,
+                        "root": None,
+                        "state": ROOT_UNASSESSED,
+                        "reason": "records no absolute project root, so which repository it is about cannot be read",
+                    }
+                )
+                continue
+            state = root_state(Path(recorded)) if root_state is not None else ROOT_UNASSESSED
+            rows.append({"locator": locator, "root": recorded, "state": state, "reason": None})
+    return rows
+
+
 def observe_activation(
     directory: Path,
     validator: ModuleType | None,
@@ -1307,6 +1391,7 @@ def observe_activation(
     read_document: Any = read_plane_document,
     *,
     active_pointer: Path | None | _Unsupplied = UNSUPPLIED,
+    project_root_state: Any = None,
 ) -> dict[str, Any]:
     """Observe the distribution-activation plane: presence, seal validity, versions, transitions."""
     names, listing_reason = list_plane_documents(directory)
@@ -1334,6 +1419,12 @@ def observe_activation(
         receipt for receipt in validated if receipt["terminal_phase"] in ACTIVE_TERMINAL_PHASES
     ]
     pointer = observe_active_pointer(active_pointer, directory, validator, validator_reason, read_document)
+    # EVERY PROJECT POINTER, beside the one keyed pointer above. The keyed observation answers "what does
+    # this plane say is active"; these answer "does each project pointer still have a repository", which
+    # is a different question with its own two named states (§2.2 items 6-7).
+    project_pointers = observe_project_pointers(
+        directory.parent / ACTIVE_DIRECTORY, read_document, project_root_state
+    )
     # WHICH FILED RECEIPTS ARE STILL THIS PLANE'S STATEMENT. An update retains the receipt it
     # replaced, so a plane with a history holds more than one activation receipt by design. A receipt
     # another VALIDATED receipt names in a `supersedes` ancestor has been replaced, and the pointer --
@@ -1396,6 +1487,7 @@ def observe_activation(
         "unversioned_activations": unversioned,
         "interrupted": [receipt["locator"] for receipt in receipts if receipt["interrupted"]],
         "active_pointer": pointer,
+        "project_pointers": project_pointers,
         # The plane's current statement and its retained history, kept as separate lists so no
         # consumer has to re-derive either one from a count.
         "active_activations": active_locators,
@@ -1529,6 +1621,7 @@ def observe_readiness(
     observed_host_version: str | None = None,
     read_document: Any = read_plane_document,
     active_pointer: Path | None | _Unsupplied = UNSUPPLIED,
+    project_root_state: Any = None,
 ) -> dict[str, Any]:
     """One read-only host-level readiness observation. Every location above is a parameter."""
     selection = observe_selected_payload(acquisition_receipts, read_document)
@@ -1538,6 +1631,7 @@ def observe_readiness(
         validator_reason,
         read_document,
         active_pointer=active_pointer,
+        project_root_state=project_root_state,
     )
     return {
         "activation": activation,
@@ -1712,6 +1806,28 @@ def readiness_findings(readiness: dict[str, Any]) -> list[dict[str, str]]:
             )
         )
     compatibility = readiness["compatibility"]
+    for row in activation["project_pointers"]:
+        if row["state"] == ROOT_ABSENT:
+            findings.append(
+                readiness_finding(
+                    "orphaned-root",
+                    "this project pointer names a repository root that no longer exists on disk; retire"
+                    " its records with `ccodex uninstall --scope project --agent <agent> --project"
+                    " <that root>`, which removes the pointer and the ownership rows and touches no"
+                    " bytes",
+                    row["locator"],
+                )
+            )
+        elif row["state"] == ROOT_NOT_A_PROJECT:
+            findings.append(
+                readiness_finding(
+                    "pointer-outlived-root",
+                    "this project pointer's root still exists but no longer admits as a git project, so"
+                    " the pointer outlived its repository; either restore that root's git metadata and"
+                    " uninstall normally, or remove the directory entirely and then retire the records",
+                    row["locator"],
+                )
+            )
     if compatibility["state"] == "declared-incompatible":
         findings.append(
             readiness_finding(
@@ -1761,7 +1877,33 @@ def observe_host_readiness(
         activation_receipts=plane.joinpath(*ACTIVATION_PLANE),
         validator=validator,
         validator_reason=validator_reason,
+        project_root_state=project_root_judge(bundle),
     )
+
+
+def project_root_judge(bundle: ModuleType) -> Any:
+    """The predicate that decides a recorded project root's state, or ``None`` when none can be built.
+
+    It reads through the SAME shared `.git` reader the resolution ladder uses, so a root this reader
+    calls broken is a root `uninstall` would refuse to retire normally, and the two cannot disagree
+    about what a git project is. When the reader cannot be loaded at all the judge is ``None``: the rows
+    are then observed as `unassessed` and no finding is emitted, because a reader that could not look
+    must not report what it did not see.
+    """
+    try:
+        detector = bundle.load_git_project_detector()
+    except Exception:  # noqa: BLE001 - an unavailable reader is an unassessed row, never a finding
+        return None
+
+    def judge(root: Path) -> str:
+        try:
+            if not bundle.path_present(root):
+                return ROOT_ABSENT
+            return ROOT_LIVE if detector.admit(root).admitted else ROOT_NOT_A_PROJECT
+        except OSError:
+            return ROOT_UNASSESSED
+
+    return judge
 
 
 def load_read_only_adapters() -> tuple[ModuleType, ModuleType]:
@@ -2124,6 +2266,12 @@ def main(argv: list[str] | None = None) -> int:
         return dispatch_lifecycle(
             command,
             [FORWARDED_AGENT_FLAG, str(forwarded_value)]
+            # THE SCOPE IS FORWARDED ONLY WHEN IT IS NOT THE DEFAULT, so the vector every pre-project
+            # dispatcher built is still the vector a user-scope run builds today: the per-verb modules
+            # default to the user plane for a caller that names no scope, and appending a constant here
+            # would change every existing invocation to say what it already meant.
+            + ([SCOPE_FLAG, invocation.scope] if invocation.scope == "project" else [])
+            + ([PROJECT_FLAG, invocation.project] if invocation.project is not None else [])
             + ([MODE_FLAG, invocation.mode] if invocation.mode is not None else [])
             + ([DRY_RUN_FLAG] if dry_run else []),
             label=command,
@@ -2157,6 +2305,44 @@ def main(argv: list[str] | None = None) -> int:
             emit(report, json_output)
             return 3
         adapters = load_read_only_adapters()
+        # A PROJECT-SCOPE READ RESOLVES ITS ROOT, and refuses an unresolvable one by name (§2.3: the
+        # read verbs carry no refusal beyond grammar and this one). It runs against the same ladder the
+        # mutating verbs use, through the substrate the read-only adapters already loaded, so a root
+        # this reader accepts is a root `install` would accept and the two cannot disagree.
+        project_root: Path | None = None
+        if invocation.scope == "project":
+            # BOTH configured plane roots, so a root this READ accepts is a root `install` accepts:
+            # the mutating verbs pass their own home and codex home, and a reader that passed one
+            # would admit a project the next verb refuses.
+            operator_home = adapters[1].operational_path(Path.home())
+            codex_value = os.environ.get("CODEX_HOME")
+            codex_home = (
+                adapters[1].operational_path(Path(codex_value))
+                if codex_value and codex_value.strip()
+                else operator_home / ".codex"
+            )
+            resolution = adapters[1].resolve_project_root(
+                Path(invocation.project) if invocation.project is not None else None,
+                cwd=Path.cwd(),
+                operator_home=operator_home,
+                plane_roots=(operator_home, codex_home),
+            )
+            if resolution.state == adapters[1].PROJECT_ABSENT:
+                print(
+                    f"error: ccodex {command} {SCOPE_FLAG} project cannot read"
+                    f" {str(resolution.root)!r} (unresolvable-project-root): the path does not exist,"
+                    " so there is no repository plane to report on",
+                    file=sys.stderr,
+                )
+                return 3
+            if not resolution.admitted:
+                print(
+                    f"error: ccodex {command} {SCOPE_FLAG} project refused this root"
+                    f" ({resolution.refusal}): {resolution.detail}",
+                    file=sys.stderr,
+                )
+                return 3
+            project_root = resolution.root
         bundle = observe_projections(root, adapters)
         # The host-level readiness dimensions are read for every reader verb rather than for
         # `doctor` alone: the three verbs render ONE semantic report, and a verb that hid a
@@ -2182,18 +2368,24 @@ def main(argv: list[str] | None = None) -> int:
             # then the digest that approves exactly that plan.
             sys.stderr.write(recovery_plan_line(root, adapters))
         if command == "status":
-            # A SELECTOR THIS RELEASE READS BUT DOES NOT YET NARROW BY, said out loud. `status`
-            # requires --scope/--agent by ratified decision 1, and the per-(agent, scope, root)
-            # projection §2.3 describes lands with project scope; until then the body is the same
-            # whole-host read `doctor` renders, so `--agent claude` and `--agent codex` produce the
-            # same document. Saying nothing would make the selector look like a filter it is not, and
-            # the report's `command` field is a closed two-key set in a digest-pinned policy, so the
-            # honest place for this is stderr -- exactly where `recover` already puts its plan line.
-            # stdout stays byte-identical, which is what keeps the canonical-JSON contract intact.
+            # A SELECTOR THIS RELEASE READS AND DOES NOT NARROW BY, said out loud rather than implied.
+            # `status` requires --scope/--agent by ratified decision 1, and W4 wired the project ROOT
+            # RESOLUTION above -- an unresolvable root refuses by name and the resolved one is named
+            # here -- but the report BODY is still the whole-host read `doctor` renders, so
+            # `--agent claude` and `--agent codex` produce the same document. That residual is stated
+            # instead of dated: the per-(agent, scope, root) projection §2.3 describes needs the
+            # digest-pinned report policy to grow a scope dimension, which is a reviewed policy edit and
+            # not this surface's authority. Saying nothing would make the selector look like a filter it
+            # is not, and the report's `command` field is a closed two-key set in that same pinned
+            # policy, so the honest place for this is stderr -- exactly where `recover` already puts its
+            # plan line. stdout stays byte-identical, which keeps the canonical-JSON contract intact.
+            selected = f"{invocation.agent}/{invocation.scope}"
+            if project_root is not None:
+                selected = f"{selected} at {project_root}"
             sys.stderr.write(
-                f"selected plane: {invocation.agent}/{invocation.scope}. This release's `status` body"
-                " is the whole-host read; the per-(agent, scope, root) projection arrives with"
-                f" project scope (wave W4 of {FRONT_DOOR_SEED}).\n"
+                f"selected plane: {selected}. This release's `status` body is the whole-host read; the"
+                " per-(agent, scope, root) projection it does not yet narrow to needs a scope dimension"
+                " in the digest-pinned report policy.\n"
             )
         return 0
     except (ReportInvariantError, OSError, ValueError) as exc:

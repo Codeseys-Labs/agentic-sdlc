@@ -606,25 +606,84 @@ SEAM_CASES: tuple[SeamCase, ...] = (
     # moved below and inverted: what they assert now is that each flag reached its module -- a refusal
     # only the module can produce for `--mode link`, and a preview the reader could not have rendered --
     # and that the two retired refusal names are GONE from the product rather than kept as aliases.
+    # ---- project scope, wired in W4 and proven to REACH each module ----------------------------
+    #
+    # The case that used to sit here asserted `project-scope-not-yet-wired`. It is GONE rather than
+    # kept as an alias, for the reason the mode and dry-run cases below record: a token that still
+    # answered would say a wired surface is unwired. What replaces it is the same shape those two took
+    # -- a refusal only the module (or, for a read, only the reader's own ladder) can produce.
     SeamCase(
-        identifier="project-scope-parses-and-is-refused-by-name-until-the-wave-that-wires-it",
-        argv=("install", "--scope", "project", "--agent", "claude"),
+        identifier="a-project-root-request-reaches-the-install-module-and-its-ladder-names-the-refusal",
+        argv=("install", "--scope", "project", "--agent", "claude", "--project", "/nonexistent/project"),
         expect_exit=3,
-        route_sensitive=False,
-        insensitivity_reason=(
-            "the unwired-surface refusals fire inside the parser, before any runtime admission, so"
-            " they are decided identically on both routes; they are controls whose subject is the"
-            " honesty of the grammar rather than the route"
+        route_sensitive=True,
+        stdout_empty=True,
+        # ONLY THE MODULE CAN PRODUCE THIS. The reader admits the pair as grammar and forwards it; the
+        # install module resolves it through the shared ladder and refuses the absent root by name,
+        # BEFORE it reads the acquisition plane -- which is why an empty host answers about the root
+        # rather than about a missing candidate. The case fails if either flag is dropped, if the reader
+        # refuses the scope itself, or if a user-scope plane is silently activated instead.
+        stderr_present=(
+            LIFECYCLE_OWN_PREFIX["install"],
+            "unresolvable-project-root",
+            "/nonexistent/project",
         ),
+        stderr_absent=(
+            "project-scope-not-yet-wired",
+            "admits exactly",
+            "expected direct -I -B execution",
+            "Traceback",
+        ),
+    ),
+    SeamCase(
+        identifier="a-project-scope-with-no-named-root-walks-up-from-the-working-directory",
+        argv=("uninstall", "--scope", "project", "--agent", "claude"),
+        expect_exit=3,
+        route_sensitive=True,
+        stdout_empty=True,
+        # The OTHER rung of the ladder, driven through the whole seam: no `--project`, so the module
+        # walks up from the working directory this runner hands it -- a scratch cell with no `.git`
+        # anywhere above it -- and names the flag that would resolve one. A module that defaulted to the
+        # user plane would answer about the operator's home instead, which is the substitution the
+        # refusal exists to prevent.
+        # THE MODULE'S OWN PREFIX IS DELIBERATELY NOT ASSERTED HERE, and that is a finding rather than
+        # an omission: `LIFECYCLE_OWN_PREFIX["uninstall"]` is `error: ccodex sdlc uninstall`, the RETIRED
+        # namespace the dispatcher itself refuses (W3a residual 4 records that those modules still print
+        # it). This wave's own refusals name the surviving surface instead, so what proves the module
+        # produced this line is its own closing sentence -- the reader dispatches for `uninstall` and
+        # never resolves a root, and it has no "Nothing was removed" to print.
+        stderr_present=(
+            "error: ccodex uninstall --scope project refused this root",
+            "unresolvable-project-root",
+            "--project PATH",
+            "Nothing was removed",
+        ),
+        stderr_absent=(
+            "project-scope-not-yet-wired",
+            "admits exactly",
+            "expected direct -I -B execution",
+            "Traceback",
+        ),
+    ),
+    SeamCase(
+        identifier="a-project-scope-read-resolves-its-own-root-and-refuses-an-absent-one",
+        argv=("status", "--scope", "project", "--agent", "claude", "--project", "/nonexistent/project", "--json"),
+        expect_exit=3,
+        route_sensitive=True,
+        # A READ resolves the root ITSELF -- it dispatches to no module -- so this refusal is the
+        # reader's own, and stdout stays empty rather than carrying a whole-host report about a
+        # repository that does not exist.
         stdout_empty=True,
         stderr_present=(
-            "error: ccodex install --scope project is not served by this release",
-            "project-scope-not-yet-wired",
-            "wave W4 of agentic-sdlc-7a2b",
+            "error: ccodex status --scope project cannot read",
+            "unresolvable-project-root",
         ),
-        # Exit 3 carries no usage block: the invocation IS in the grammar, so reprinting the grammar
-        # would tell the operator to type what they already typed.
-        stderr_absent=("usage: ccodex install", "expected direct -I -B execution", "Traceback"),
+        stderr_absent=(
+            "project-scope-not-yet-wired",
+            "usage: ccodex status",
+            "expected direct -I -B execution",
+            "Traceback",
+        ),
     ),
     # ---- the two flags W3b wired, each proven to REACH its module ------------------------------
     SeamCase(

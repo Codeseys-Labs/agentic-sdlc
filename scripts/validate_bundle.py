@@ -270,7 +270,11 @@ CCODEX_SDLC_REPORT_POLICY_SHA256 = {
     # set with the plane that produced it. Re-pin deliberately, never by copying whatever the tree now
     # holds -- the point of the pin is that a policy edit is reviewed, and the reader carries the same
     # field list a second time so the two must be changed together or the gate fails closed.
-    "policy/ccodex-sdlc-read-report.v1.json": "6cd42ca48e91806e6ab5f6bc775b3adab7c5c59093a7239497dc858e3bfa612a",
+    # v1 moved a second time, at agentic-sdlc-7a2b W4: `finding_codes` gained `orphaned-root` and
+    # `pointer-outlived-root`, the two states a project pointer's root can be in that a reader must be
+    # able to NAME. Re-pinned deliberately from the reviewed bytes, never by copying whatever the tree
+    # now holds.
+    "policy/ccodex-sdlc-read-report.v1.json": "372359480a25ffee90820f4d27c71f60ad77a27b6cbebfae2915a980ed96fd3e",
     "policy/ccodex-sdlc-read-report.v2.json": "0667ab351d7ab755f94f4ca74be1d3a6510c0cf7ea30f35ff9a0821e732108d9",
 }
 RELEASE_CONTRACT_TOP_LEVEL_KEYS = (

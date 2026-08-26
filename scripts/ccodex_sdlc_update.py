@@ -152,7 +152,15 @@ OPERATION = "update"
 #: Which part of the host plane this verb refreshes, as the receipt body's own closed union: the
 #: operator's user plane of one agent. A receipt about another scope describes a plane this module
 #: never observed, so it is refused rather than reinterpreted.
-SCOPE_KIND = "user"
+SCOPE_USER = "user"
+SCOPE_PROJECT = "project"
+SCOPE_KINDS = (SCOPE_USER, SCOPE_PROJECT)
+#: The DEFAULT scope for a caller that names none, which is the vector every pre-project dispatcher
+#: built. The scope a run refreshes is a parameter (`Config.scope_kind`), not this constant.
+SCOPE_KIND = SCOPE_USER
+#: The two scope selectors this module admits in the forwarded vector, in the operator's own spelling.
+SCOPE_FLAG = "--scope"
+PROJECT_FLAG = "--project"
 #: The v1 spelling of the same fact, admitted only on the OUTGOING receipt: a plane activated before
 #: the scope union existed is refreshed exactly once, and the receipt this run seals is v2.
 LEGACY_ACTIVATION_SCOPE = "claude-home"
@@ -477,6 +485,12 @@ class Config:
     #: from it, so there is one selector and no second spelling. ``main`` replaces the default with the
     #: dispatcher's own admitted ``--host`` value before this configuration reaches any admission.
     agent: str = "claude"
+    #: WHICH SCOPE of that plane this run refreshes, defaulting to the operator's own plane.
+    scope_kind: str = SCOPE_KIND
+    #: The resolved project root at project scope, and ``None`` at user scope. It is the configured root
+    #: the ownership rows are bounded by AND the value the pointer filename's key is derived from, so it
+    #: arrives normalised.
+    project_root: Path | None = None
     #: ``None`` means "the installer's own default state root"; a path relocates the ownership state.
     installer_state_root: Path | None = None
     #: ``UNSUPPLIED`` observes the host itself; ``None`` is an observation that was made and failed.
@@ -492,6 +506,8 @@ class Config:
             object.__setattr__(self, name, _absolute(getattr(self, name)))
         if self.installer_state_root is not None:
             object.__setattr__(self, "installer_state_root", _absolute(self.installer_state_root))
+        if self.project_root is not None:
+            object.__setattr__(self, "project_root", _absolute(self.project_root))
 
     @property
     def plane(self) -> Any:
@@ -500,12 +516,26 @@ class Config:
 
     @property
     def configured_root(self) -> Path:
-        """The root the operator SELECTED for this agent, which the ownership rows are bounded by."""
+        """The root the operator SELECTED for this run, which the ownership rows are bounded by.
+
+        At project scope that root is the RESOLVED PROJECT, exactly as it is for the install verb: the
+        substrate derives `<root>/.claude` from it and its own escape check keeps every destination
+        inside it, so pointing the configured root at a repository reuses that check rather than adding
+        a second one.
+        """
+        if self.scope_kind == SCOPE_PROJECT:
+            if self.project_root is None:
+                raise Refusal(
+                    "a project-scope refresh is bounded by its resolved root, and none was supplied"
+                )
+            return self.project_root
         return self.home if self.plane.collection is not None else self.codex_home
 
     @property
     def plane_root(self) -> Path:
         """The collection root this agent's entries live in, derived from the installer's own model."""
+        if self.scope_kind == SCOPE_PROJECT:
+            return self.plane.project_root_collection(self.configured_root)
         return self.plane.agent_root(self.configured_root)
 
     @property
@@ -516,7 +546,7 @@ class Config:
         spelled the scope ``claude-home``. A plane that could not is neither blocked by that document
         nor allowed to claim it, because claiming it would move one plane's statement onto another.
         """
-        return bool(self.plane.owns_legacy_pointer)
+        return bool(self.plane.owns_legacy_pointer) and self.scope_kind == SCOPE_USER
 
     @property
     def acquisition_receipts_dir(self) -> Path:
@@ -533,7 +563,8 @@ class Config:
     @property
     def active_receipt_path(self) -> Path:
         """This plane's ONE pointer, at the keyed path (agent, scope kind, root) names."""
-        return _pointer_path(self.activation_dir, self.agent, SCOPE_KIND)
+        root = str(self.project_root) if self.scope_kind == SCOPE_PROJECT and self.project_root else None
+        return _pointer_path(self.activation_dir, self.agent, self.scope_kind, root)
 
     @property
     def legacy_active_receipt_path(self) -> Path:
@@ -918,7 +949,7 @@ def admit_active_scope(
     `claude-home` document would refresh the Claude collections while writing a codex-scoped receipt,
     which is the cross-agent defect the keyed pointer plane exists to delete, one layer up.
     """
-    expected = {"agent": config.agent, "kind": SCOPE_KIND}
+    expected = scope_object(config)
     scope = body.get("scope")
     if isinstance(scope, dict):
         if scope != expected:
@@ -1703,8 +1734,16 @@ def classify_footprint(
     # The entry filter is the SELECTED agent, not a constant: the payload carries both planes' entries
     # and the installer's own discovery labels each one, so selecting by this run's agent is what keeps
     # a codex refresh out of the Claude collections and the reverse.
+    #
+    # AND THE SCOPE'S DEFERRED KINDS, read from the substrate's one table rather than re-expressed here:
+    # a project install that never placed a workflow followed by an update that placed one would be a
+    # plane whose two verbs disagree about what it owns, and it would reach a destination
+    # `claude:workflows:activate` still owns.
     discovered = [
-        entry for entry in bundle.discover_entries(payload.candidate_root) if entry.agent == config.agent
+        entry
+        for entry in bundle.discover_entries(payload.candidate_root)
+        if entry.agent == config.agent
+        and not (config.scope_kind == SCOPE_PROJECT and entry.kind in bundle.PROJECT_DEFERRED_KINDS)
     ]
     if not discovered:
         raise Refusal(
@@ -2370,8 +2409,30 @@ def build_receipt_body(
 
 
 def scope_object(config: Config) -> dict[str, Any]:
-    """The receipt body's closed scope union for this verb: the user plane of the SELECTED agent."""
-    return {"agent": config.agent, "kind": SCOPE_KIND}
+    """The receipt body's closed scope union for this run: EXACT key set per kind.
+
+    ONE construction site, read by the plan, by the sealed receipt, AND by the admission of the
+    outgoing receipt this refresh supersedes -- which is why the project arm needed no second spelling:
+    `admit_active_scope` compares the incoming body against exactly this object, so a project receipt's
+    three keys are compared against three and a user receipt's two against two.
+    """
+    if config.scope_kind == SCOPE_PROJECT:
+        return {"agent": config.agent, "kind": SCOPE_PROJECT, "root": str(config.configured_root)}
+    return {"agent": config.agent, "kind": SCOPE_USER}
+
+
+def scope_token(config: Config) -> str:
+    """The scope's discriminator inside a per-run filename: empty at user scope, keyed at project.
+
+    ONE derivation, read by the receipt identity, the journal name, and the plan name -- all three are
+    filenames that must be distinct per run, and all three were previously distinct only per agent. An
+    agent has one user plane but N project planes, so two repositories refreshed from one payload in the
+    same second would otherwise share every one of those names (agentic-sdlc-7a2b, W4).
+    """
+    if config.scope_kind != SCOPE_PROJECT:
+        return ""
+    key = hashlib.sha256(str(config.configured_root).encode("utf-8")).hexdigest()[:ROOT_KEY_CHARACTERS]
+    return f"{SCOPE_PROJECT}-{key}-"
 
 
 def receipt_identity(config: Config, payload: AdmittedPayload, instant: str) -> str:
@@ -2383,7 +2444,7 @@ def receipt_identity(config: Config, payload: AdmittedPayload, instant: str) -> 
     first plane's filed receipt instead of sealing its own.
     """
     compact = instant.replace("-", "").replace(":", "").lower()
-    token = f"{OPERATION}-{config.agent}-{payload.operation_id}-{compact}"
+    token = f"{OPERATION}-{config.agent}-{scope_token(config)}{payload.operation_id}-{compact}"
     if not _TOKEN.match(token):
         raise Refusal(f"the derived receipt identity {show(token)} is not a lowercase ASCII token")
     return token
@@ -2620,21 +2681,91 @@ def report(
 # ---- the run ---------------------------------------------------------------------------------------
 
 
-def parse_argv(argv: list[str]) -> str:
+def parse_argv(argv: list[str]) -> tuple[str, str, Path | None]:
     """This module owns no grammar; it admits exactly the vector its dispatcher forwards.
 
     A direct invocation with any other vector is a pre-effect refusal, not a usage error, because the
-    dispatcher already owns usage and a second opinion here would report the same defect twice.  What
-    is returned is the ONE selected agent: the vector's shape is fixed and its value is the only thing
-    this module reads out of it.
+    dispatcher already owns usage and a second opinion here would report the same defect twice.  What is
+    returned is the selected plane, the scope it refreshes, and the project root the operator named --
+    three values because the vector now carries three, not because this module reads anything else.
+
+    ``--scope`` is OPTIONAL and defaults to the operator's own plane, which is the vector every
+    pre-project dispatcher built; ``--project`` without ``--scope project`` is refused here as well as at
+    the dispatcher, because the two flags are one request.
     """
     planes = load_sibling("ccodex_sdlc_host_planes")
-    if len(argv) == 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES:
-        return argv[1]
-    raise Refusal(
-        f"ccodex sdlc update admits exactly [{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>]; this module"
-        f" received {[escape_display(item) for item in argv]}"
+    admitted = (
+        f"[{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>] optionally followed by"
+        f" [{SCOPE_FLAG!r}, <{'|'.join(SCOPE_KINDS)}>] and [{PROJECT_FLAG!r}, <path>]"
     )
+    if not (len(argv) >= 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES):
+        raise Refusal(
+            f"ccodex sdlc update admits exactly {admitted}; this module received"
+            f" {[escape_display(item) for item in argv]}"
+        )
+    rest = list(argv[2:])
+    scope_kind = SCOPE_KIND
+    if len(rest) >= 2 and rest[0] == SCOPE_FLAG:
+        if rest[1] not in SCOPE_KINDS:
+            raise Refusal(
+                f"ccodex sdlc update {SCOPE_FLAG} admits {', '.join(SCOPE_KINDS)}; this module received"
+                f" {show(rest[1])}"
+            )
+        scope_kind, rest = rest[1], rest[2:]
+    requested_project: Path | None = None
+    if len(rest) >= 2 and rest[0] == PROJECT_FLAG:
+        if scope_kind != SCOPE_PROJECT:
+            raise Refusal(
+                f"ccodex sdlc update {PROJECT_FLAG} is admitted only with {SCOPE_FLAG} {SCOPE_PROJECT};"
+                " a user-scope run has no project root to name"
+            )
+        if not rest[1]:
+            raise Refusal(f"ccodex sdlc update {PROJECT_FLAG} was supplied with an empty path")
+        requested_project, rest = Path(rest[1]), rest[2:]
+    if rest:
+        raise Refusal(
+            f"ccodex sdlc update admits exactly {admitted}; this module received"
+            f" {[escape_display(item) for item in argv]}"
+        )
+    return argv[1], scope_kind, requested_project
+
+
+def admit_scope(config: Config, requested: Path | None, bundle: ModuleType) -> Config:
+    """Resolve the scope this run refreshes, or refuse by name before any payload work.
+
+    Same ladder and same refusals as the install verb's, and deliberately WITHOUT its two special
+    outcomes: an absent root has nothing to refresh and no records to retire, so it is one refusal here
+    rather than a records-only mode, and a plane with no project layout is refused for the same reason it
+    is refused there -- the root it would derive is the repository's own top level.
+    """
+    if config.scope_kind != SCOPE_PROJECT:
+        return config
+    plane = config.plane
+    if plane.project_collection is None:
+        raise Refusal(
+            f"ccodex sdlc update {SCOPE_FLAG} {SCOPE_PROJECT} is not admissible for the"
+            f" {escape_display(plane.display)} plane (project-scope-unsupported-for-agent): its"
+            " configured root IS its agent root, so it has no repository-local collection to refresh."
+            f" Use {SCOPE_FLAG} {SCOPE_USER} for that plane; nothing was written"
+        )
+    resolution = bundle.resolve_project_root(
+        requested,
+        cwd=Path.cwd(),
+        operator_home=config.home,
+        plane_roots=(config.home, config.codex_home),
+    )
+    if resolution.state == bundle.PROJECT_ABSENT:
+        raise Refusal(
+            f"ccodex sdlc update {SCOPE_FLAG} {SCOPE_PROJECT} cannot refresh"
+            f" {show(str(resolution.root))} (unresolvable-project-root): the path does not exist, so"
+            " there is no activation there to refresh. Nothing was written"
+        )
+    if not resolution.admitted:
+        raise Refusal(
+            f"ccodex sdlc update {SCOPE_FLAG} {SCOPE_PROJECT} refused this root"
+            f" ({resolution.refusal}): {escape_display(resolution.detail)}. Nothing was written"
+        )
+    return dataclass_replace(config, project_root=resolution.root)
 
 
 def installer_config(bundle: ModuleType, config: Config, payload: AdmittedPayload) -> Any:
@@ -2654,12 +2785,14 @@ def installer_config(bundle: ModuleType, config: Config, payload: AdmittedPayloa
     )
 
 
-def run_update(config: Config, run: Run) -> int:
+def run_update(config: Config, run: Run, requested_project: Path | None = None) -> int:
     """Admit both halves, plan, refresh, seal, then activate. Each phase refuses before the next."""
     admit_platform(config)
     instant = observe_instant(config)
     dar = load_sibling("distribution_activation_receipt")
     bundle = load_sibling("install_skill_bundle")
+    # THE SCOPE IS RESOLVED BEFORE ANY PAYLOAD WORK, so a refused root costs no acquisition read.
+    config = admit_scope(config, requested_project, bundle)
 
     # The legacy pointer is re-filed at its keyed path BEFORE this run admits anything, so the
     # admission below reads one plane with one pointer.  A refusal here leaves the plane as it was.
@@ -2684,7 +2817,10 @@ def run_update(config: Config, run: Run) -> int:
     # id, this document is written replaceably, and the receipt binds its digest -- so without the
     # agent one plane's journal would overwrite the other's and leave that receipt naming a
     # `journal_sha256` no file on disk carries.
-    journal_path = config.journals_dir / f"{OPERATION}-{config.agent}-{payload.candidate_id}.json"
+    journal_path = (
+        config.journals_dir
+        / f"{OPERATION}-{config.agent}-{scope_token(config)}{payload.candidate_id}.json"
+    )
 
     with bundle.installer_lock(bconfig):
         try:
@@ -2709,7 +2845,7 @@ def run_update(config: Config, run: Run) -> int:
         plan_sha256 = sha256_bytes(plan_raw)
         plan_path = (
             config.plans_dir
-            / f"{OPERATION}-{config.agent}-{payload.candidate_id}-{plan_sha256[:12]}.json"
+            / f"{OPERATION}-{config.agent}-{scope_token(config)}{payload.candidate_id}-{plan_sha256[:12]}.json"
         )
         write_replaceable_document(bundle, plan_path, plan_raw, "the update plan")
 
@@ -2855,11 +2991,15 @@ def main(argv: list[str] | None = None) -> int:
     selected = list(sys.argv[1:] if argv is None else argv)
     run = Run()
     try:
-        agent = parse_argv(selected)
+        agent, scope_kind, requested_project = parse_argv(selected)
         refuse_read_only_guard()
         # The admitted selector REPLACES the configuration's default plane, so there is exactly one
         # statement of which plane this run touches and it is the one the dispatcher forwarded.
-        return run_update(dataclass_replace(default_config(), agent=agent), run)
+        return run_update(
+            dataclass_replace(default_config(), agent=agent, scope_kind=scope_kind),
+            run,
+            requested_project,
+        )
     except Refusal as exc:
         if run.effect_started:
             # A refusal raised after an effect started is not a clean refusal; reporting it as one

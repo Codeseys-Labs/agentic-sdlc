@@ -75,6 +75,11 @@ from scripts import ccodex_sdlc_uninstall as target  # noqa: E402
 from scripts import distribution_activation_receipt as dar  # noqa: E402
 from scripts import install_skill_bundle as bundle  # noqa: E402
 
+#: The ONE reader of `.git` metadata, loaded the way the product loads it (agentic-sdlc-7a2b, W4).
+#: This module's own trio moved there, so the dirtiness tests below drive the shared reader directly
+#: rather than a wrapper this suite would then be proving something about.
+detector = bundle.load_git_project_detector(ROOT)
+
 MODULE = ROOT / "scripts" / "ccodex_sdlc_uninstall.py"
 READER = ROOT / "scripts" / "ccodex_sdlc.py"
 
@@ -1344,6 +1349,12 @@ class LedgerFixtures:
             "ccodex_sdlc_host_planes.py",
         ):
             shutil.copy2(ROOT / "scripts" / module, scripts / module)
+        # The shared `.git` reader travels too, and it has to: modules are loaded from
+        # `scripts_dir.parent`, and a fabricated distribution that carried the scripts but not the
+        # reader would be a shape no real distribution has (agentic-sdlc-7a2b, W4).
+        reader = root / bundle.GIT_DETECTOR_RELATIVE
+        reader.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / bundle.GIT_DETECTOR_RELATIVE, reader)
         (root / target.VERSION_DRIVER_NAME).write_text(
             json.dumps({"current": "0.7.5"}), encoding="utf-8"
         )
@@ -1611,6 +1622,9 @@ class LegacyUnreceipted(LedgerFixtures, Harness):
             "ccodex_sdlc_host_planes.py",
         ):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
+        reader = scripts.parent / bundle.GIT_DETECTOR_RELATIVE
+        reader.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / bundle.GIT_DETECTOR_RELATIVE, reader)
 
         code, report = self.plane.run(scripts_dir=scripts)
 
@@ -1701,13 +1715,13 @@ class CheckoutDirtiness(LedgerFixtures, Harness):
             self.skipTest("this host has no git to build a real metadata fixture with")
         distribution = self.distribution("shapes")
         self.commit_tree(distribution)
-        clean, reason = target.observe_dirty(distribution)
+        clean, reason = detector.observe_dirty(distribution)
         self.assertFalse(clean, reason)
 
         # A rewrite that changes only mtime is NOT dirty: content is hashed, never stat data.
         (distribution / "tracked.txt").write_text("tracked\n", encoding="utf-8")
         os.utime(distribution / "tracked.txt", (0, 0))
-        unchanged, reason = target.observe_dirty(distribution)
+        unchanged, reason = detector.observe_dirty(distribution)
         self.assertFalse(unchanged, reason)
 
         (distribution / "tracked.txt").write_text("staged\n", encoding="utf-8")
@@ -1718,18 +1732,18 @@ class CheckoutDirtiness(LedgerFixtures, Harness):
             check=True,
             capture_output=True,
         )
-        staged, reason = target.observe_dirty(distribution)
+        staged, reason = detector.observe_dirty(distribution)
         self.assertTrue(staged, "a staged-but-uncommitted change may not be asserted clean")
         self.assertIn("cache-tree root", reason)
 
         index = distribution / ".git" / "index"
         index.write_bytes(b"NOTDIRC" + index.read_bytes()[7:])
-        unparseable, reason = target.observe_dirty(distribution)
+        unparseable, reason = detector.observe_dirty(distribution)
         self.assertTrue(unparseable)
         self.assertIn("not a shape this reader parses", reason)
 
         shutil.rmtree(distribution / ".git")
-        absent, reason = target.observe_dirty(distribution)
+        absent, reason = detector.observe_dirty(distribution)
         self.assertTrue(absent)
         self.assertIn("no readable git metadata", reason)
 

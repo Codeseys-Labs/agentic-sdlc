@@ -44,7 +44,9 @@ import argparse
 from contextlib import contextmanager
 import copy
 from dataclasses import dataclass
+import functools
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -92,6 +94,26 @@ COPY_ONLY_KINDS = frozenset(POSIX_MODE_FOR_KIND)
 #: operator sees in their own settings document.
 STATUSLINE_SOURCE_RELATIVE = Path("assets") / "claude" / "statusline-command.sh"
 STATUSLINE_COMMAND_NAME = "agentic-sdlc-statusline"
+#: THE ONE ENTRY KIND A PROJECT-SCOPE ACTIVATION DOES NOT PUBLISH YET, and the front-door design's §4.3
+#: window rule is why: exactly one path must be authoritative for each destination at every intermediate
+#: commit. `scripts/manage_claude_workflows.py` is this tree's existing project-scope path for that one
+#: kind -- `claude:workflows:activate` copies one owned workflow into `<repo>/.claude/workflows/<name>.js`
+#: under a receipt in its OWN store, and it writes no ownership row here. So a repository whose operator
+#: already enabled a workflow presents a project activation a destination it owns no row for, whose bytes
+#: are byte-identical to the payload's -- which the project-scope adoption rule would take as removable,
+#: leaving two authorities over one file and a later project uninstall removing bytes the manager's
+#: receipt still claims.
+#:
+#: Excluding the kind keeps the manager sole owner of that destination until the wave that deletes it, at
+#: which point removing this row is purely additive. It is a DEFERRAL and never a silent drop: every
+#: project-scope report names it. The alternative -- reading the manager's own receipt store from an
+#: activation to refuse a claimed destination -- would couple this lifecycle to a store the next wave
+#: removes, and would block a whole plane for an operator who used the supported command.
+#:
+#: It lives HERE, beside the other per-kind tables, because both the install and the update verb read it
+#: and a re-expression in each would be two places to widen (agentic-sdlc-7a2b, W4).
+PROJECT_DEFERRED_KINDS = ("workflow",)
+
 #: The closed key set of one ownership record.
 RECORD_FIELDS = frozenset({"agent", "kind", "name", "source", "mode", "digest", "removable"})
 #: The three transitions the `pending` slot can describe.
@@ -603,6 +625,256 @@ def installer_lock(config: Config) -> Iterator[None]:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
             os.close(descriptor)
+
+
+#: Where the ONE shared reader of `.git` metadata lives, relative to a distribution root. It is inside
+#: the flagship skill's own payload because its other consumer, `offline-inspect.py`, is INSTALLED into
+#: an operator's home as part of that skill and would not be able to reach a module under `scripts/`
+#: from a copy-mode install. See that module's docstring for the full argument.
+GIT_DETECTOR_RELATIVE = Path("skills") / "agentic-sdlc" / "tools" / "git_project_detector.py"
+
+
+def distribution_root() -> Path:
+    """The distribution THIS module is part of -- never the payload a run was pointed at.
+
+    Two roots exist in this module and conflating them is the hazard: `Config.repo_root` is the
+    PAYLOAD a caller selected (an acquired candidate, a checkout, a fixture) and is what
+    `discover_entries` globs, while this is the tree these bytes were loaded from and is what
+    `load_git_project_detector` resolves its sibling payload against. A run may legitimately publish
+    one distribution's payload while executing another's code, so the two are answered separately.
+    """
+    return Path(__file__).resolve().parents[1]
+
+
+@functools.lru_cache(maxsize=None)
+def load_git_project_detector(root: Path | None = None) -> Any:
+    """Load the shared `.git` reader, or raise naming the exact path that is missing.
+
+    ONE loader for the whole `scripts/` plane: the lifecycle verbs already load this module as a
+    sibling, so routing the detector through it keeps a single resolution rule instead of four
+    copies. Cached because the ladder consults it per candidate root within one run and the module is
+    pure; a failure is not cached, since an exception leaves no entry.
+    """
+    path = (root or distribution_root()) / GIT_DETECTOR_RELATIVE
+    if path.is_symlink() or not path.is_file():
+        raise InstallerError(
+            f"the shared git-metadata reader is absent or is a link: {path}; a distribution carries it"
+            " inside the flagship skill's payload"
+        )
+    name = "_install_skill_bundle_git_project_detector"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise InstallerError(f"the shared git-metadata reader cannot be loaded: {path}")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before execution: `dataclasses` resolves a decorated class's module through
+    # `sys.modules`, and an unregistered module holding a `@dataclass` fails on import.
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - a reader that cannot import has read nothing
+        raise InstallerError(f"the shared git-metadata reader failed to load: {path}: {exc}") from exc
+    return module
+
+
+# ---- the project-scope resolution ladder ----------------------------------------------------------
+#
+# Every step is a NAMED outcome and never a guess (front-door unification §2.2). The tokens below are
+# the stable ones every verb's refusal quotes and every test greps for; the accompanying detail is
+# prose that may improve without breaking a caller.
+PROJECT_UNRESOLVABLE = "unresolvable-project-root"
+PROJECT_UNSAFE_NODE = "unsafe-node"
+PROJECT_NOT_A_GIT_PROJECT = "not-a-git-project"
+PROJECT_FORBIDDEN_ROOT = "forbidden-root"
+#: The three STATES a resolution can end in. `absent` is not a refusal: an explicitly named path that
+#: does not exist is exactly the input `uninstall`'s records-only retirement admits, and it is the
+#: caller -- not this ladder -- that decides whether its own verb has anything to do with one.
+PROJECT_ADMITTED = "admitted"
+PROJECT_ABSENT = "absent"
+PROJECT_REFUSED = "refused"
+#: Where mise installs the tools this repository pins. A root inside it is a tool's own tree, not a
+#: project, and publishing a plane there would be owned by the next `mise install`. The variable is
+#: mise's own documented override; an empty value is treated as unset, the way this module treats
+#: every other empty location variable.
+MISE_DATA_ENVIRONMENT = "MISE_DATA_DIR"
+
+
+def mise_install_tree() -> Path:
+    """The mise data directory this host would install tools into, without creating it."""
+    override = os.environ.get(MISE_DATA_ENVIRONMENT)
+    if override and override.strip():
+        return operational_path(Path(override))
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    base = operational_path(Path(xdg_data)) if xdg_data else operational_path(Path.home() / ".local" / "share")
+    return base / "mise"
+
+
+def path_within(candidate: Path, boundary: Path) -> bool:
+    """Whether `candidate` is `boundary` or lexically inside it, without resolving links.
+
+    Lexical on purpose: the question is which tree the operator NAMED, and resolving would let a
+    symlinked spelling answer about a directory they did not type. Case is normalised the way every
+    other comparison in this module normalises it.
+    """
+    left = os.path.normcase(os.path.abspath(candidate))
+    right = os.path.normcase(os.path.abspath(boundary))
+    return left == right or left.startswith(right.rstrip(os.sep) + os.sep)
+
+
+@dataclass(frozen=True)
+class ProjectResolution:
+    """One resolved project root, or one named reason there is none.
+
+    TWO PATH FIELDS, because callers need two different facts and merging them is how a refused root
+    gets used as an admitted one:
+
+      * `root` is a root this lifecycle may act on. It is populated for `admitted` and for `absent` --
+        an absent root still has a normalised path, which is what the records-only retirement is keyed
+        by -- and is `None` for every refusal.
+      * `candidate` is the normalised path this resolution is ABOUT, whatever the verdict. It is `None`
+        only when the walk found no candidate at all. `uninstall` needs it on a refusal: deciding
+        whether a pointer outlived its repository means deriving that pointer's key from the very root
+        the ladder just refused.
+    """
+
+    state: str
+    root: Path | None = None
+    refusal: str = ""
+    detail: str = ""
+    candidate: Path | None = None
+
+    @property
+    def admitted(self) -> bool:
+        return self.state == PROJECT_ADMITTED
+
+
+def forbidden_project_root(
+    root: Path, *, operator_home: Path, plane_roots: tuple[Path, ...], distribution: Path
+) -> str:
+    """Why this root may not host a project plane, or `""`.
+
+    The four boundaries, and why each is a boundary rather than a preference:
+
+      * THE OPERATOR'S HOME and any configured plane root. Publishing "the project plane" into the
+        home plane would put two scopes' ownership rows on one destination, and `uninstall --scope
+        project` would then be able to remove the user plane's bytes. This generalises the workflow
+        manager's own `target selects the installed home plane itself` refusal.
+      * THE DISTRIBUTION ROOT, by EQUALITY only. Containment is deliberately admitted: a linked
+        worktree lives inside the primary checkout and is a legitimate root of its own (§2.2 item 5),
+        so refusing everything under the distribution would refuse the ordinary wave workspace.
+      * THE MISE INSTALL TREE, by containment. Every path in it belongs to a pinned tool and the next
+        install owns it.
+    """
+    def same(left: Path, right: Path) -> bool:
+        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+    if same(root, operator_home):
+        return f"{root} is the operator's own home, which is the user scope's plane and not a project"
+    for plane in plane_roots:
+        if same(root, plane):
+            return (
+                f"{root} is a configured agent plane root, so a project plane there would put two"
+                " scopes' ownership rows on one destination"
+            )
+    if same(root, distribution):
+        return (
+            f"{root} is this distribution's own root; the bundle does not publish its payload into the"
+            " tree it was loaded from"
+        )
+    mise_tree = mise_install_tree()
+    if path_within(root, mise_tree):
+        return f"{root} is inside the mise install tree {mise_tree}, which the next tool install owns"
+    return ""
+
+
+def resolve_project_root(
+    requested: Path | None,
+    *,
+    cwd: Path,
+    operator_home: Path,
+    plane_roots: tuple[Path, ...] = (),
+    distribution: Path | None = None,
+    detector: Any | None = None,
+) -> ProjectResolution:
+    """Resolve one project root through the ordered ladder, or name why there is none.
+
+    The order is the contract, and each rung answers a different question:
+
+      1. An explicit `--project PATH` is the candidate and there is NO walk. An operator who named a
+         directory gets that directory judged, never a parent substituted for it.
+      2. Otherwise walk up from `cwd` to the nearest directory holding a `.git` entry of any shape.
+         Nothing found is `unresolvable-project-root`.
+      3. `forbidden-root` is applied to the NORMALISED candidate before anything is read out of it,
+         and it is applied to an absent path too, so a records-only retirement cannot name a
+         forbidden root either.
+      4. An explicitly named path that does not exist ends the ladder as `absent`, not as a refusal.
+      5. The shared detector admits the metadata. Its `absent` verdict is this ladder's
+         `not-a-git-project`; both of its refusals are `unsafe-node`, per §2.2 step 3 -- a `.git` that
+         is a fifo and a `.git` file carrying two lines are both "not the shape this admits", and the
+         detail says which.
+      6. An explicit PATH that is a strict subdirectory of a real repository is `forbidden-root`
+         naming that repository, which is a more useful answer than `not-a-git-project` about a
+         directory that is, in fact, inside a project.
+    """
+    reader = detector if detector is not None else load_git_project_detector()
+    anchor = distribution if distribution is not None else distribution_root()
+    explicit = requested is not None
+    if explicit:
+        candidate = operational_path(requested)  # type: ignore[arg-type]
+    else:
+        found = reader.walk_up(operational_path(cwd))
+        if found is None:
+            return ProjectResolution(
+                PROJECT_REFUSED,
+                refusal=PROJECT_UNRESOLVABLE,
+                detail=(
+                    f"no directory at or above {operational_path(cwd)} holds a .git entry, so this run"
+                    " has no project root to resolve; name one with --project PATH"
+                ),
+            )
+        candidate = found
+    forbidden = forbidden_project_root(
+        candidate, operator_home=operational_path(operator_home), plane_roots=plane_roots, distribution=anchor
+    )
+    if forbidden:
+        return ProjectResolution(
+            PROJECT_REFUSED, refusal=PROJECT_FORBIDDEN_ROOT, detail=forbidden, candidate=candidate
+        )
+    if explicit and not path_present(candidate):
+        return ProjectResolution(PROJECT_ABSENT, root=candidate, candidate=candidate)
+    if not candidate.is_dir() or candidate.is_symlink():
+        return ProjectResolution(
+            PROJECT_REFUSED,
+            refusal=PROJECT_NOT_A_GIT_PROJECT,
+            detail=f"{candidate} is not a directory, so it holds no git metadata a root could be read from",
+            candidate=candidate,
+        )
+    admission = reader.admit(candidate)
+    if admission.admitted:
+        return ProjectResolution(PROJECT_ADMITTED, root=candidate, candidate=candidate)
+    if admission.verdict == reader.ABSENT:
+        enclosing = reader.walk_up(candidate.parent) if explicit else None
+        if enclosing is not None:
+            return ProjectResolution(
+                PROJECT_REFUSED,
+                refusal=PROJECT_FORBIDDEN_ROOT,
+                detail=(
+                    f"{candidate} is inside the repository {enclosing} rather than being its root; a"
+                    f" project plane is keyed by the root, so name --project {enclosing}"
+                ),
+                candidate=candidate,
+            )
+        return ProjectResolution(
+            PROJECT_REFUSED,
+            refusal=PROJECT_NOT_A_GIT_PROJECT,
+            detail=f"{candidate} holds no .git entry, so it is not a git project this scope can be keyed by",
+            candidate=candidate,
+        )
+    return ProjectResolution(
+        PROJECT_REFUSED,
+        refusal=PROJECT_UNSAFE_NODE,
+        detail=f"{candidate} is not a git project this run may publish into: {admission.reason}",
+        candidate=candidate,
+    )
 
 
 def statusline_entry(repo_root: Path) -> Entry | None:

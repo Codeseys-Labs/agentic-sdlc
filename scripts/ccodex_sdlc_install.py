@@ -217,11 +217,18 @@ INSTALL_MODES = ("auto", "link", "copy")
 #: activation copies. One name for one class of defect, so a test greps for one string (§2.3).
 MANIFEST_MISMATCH = "payload-manifest-mismatch"
 OPERATION = "install"
-#: Which part of the host plane this operation touches, as the receipt body's own closed union. This
-#: verb activates the operator's user plane, so the kind is `user` and the body carries no root: a
-#: project root arrives with the project-scope verb, whose pointer is keyed by it. The v1 spelling
-#: (`activation_scope: "claude-home"`) is gone -- the union is the one statement of this fact.
-SCOPE_KIND = "user"
+#: Which part of the host plane this operation touches, as the receipt body's own closed union. The
+#: kind is a PARAMETER of the run (`Config.scope_kind`), not a constant: `user` activates the
+#: operator's own plane and carries no root, `project` activates one repository's plane and carries the
+#: resolved root the pointer is keyed by. The v1 spelling (`activation_scope: "claude-home"`) is gone
+#: -- the union is the one statement of this fact. `SCOPE_KIND` remains as the DEFAULT for a caller
+#: that names no scope, which is the vector every pre-project dispatcher built.
+SCOPE_USER = "user"
+SCOPE_PROJECT = "project"
+SCOPE_KINDS = (SCOPE_USER, SCOPE_PROJECT)
+SCOPE_KIND = SCOPE_USER
+SCOPE_FLAG = "--scope"
+PROJECT_FLAG = "--project"
 EMITTING_PLANE = "acquired-candidate"
 #: Copies, never links: the activation plane must not depend on a checkout that can move or vanish.
 ACTIVATION_MODE = "copy"
@@ -333,6 +340,11 @@ DISPOSITION_PRESERVED = "preserved"
 ACTION_INSTALL = "install"
 ACTION_REFRESH = "refresh"
 ACTION_PRESERVE = "preserve"
+#: PROJECT SCOPE ONLY (§3.7): take ownership of a destination whose bytes are already exactly this
+#: payload entry's, inside the resolved project root. It writes an ownership row and NOTHING to disk,
+#: which is why its receipt row is `owned` + `preserved`: the ownership model's answer for those bytes
+#: is "ours, removable", and the disposition states honestly that nothing was published.
+ACTION_ADOPT = "adopt"
 
 #: Every class is written out. ``\\d`` and ``\\w`` admit Unicode, so a digest or a version spelled
 #: in Arabic-Indic digits would read as the same value and compare unequal to it everywhere else.
@@ -463,6 +475,15 @@ class Config:
     #: The default is the primary product host, and ``main`` replaces it with the dispatcher's own
     #: admitted ``--host`` value before this configuration reaches any admission logic.
     agent: str = "claude"
+    #: WHICH SCOPE of that plane this run activates. The default is the operator's own plane, which is
+    #: the vector every pre-project dispatcher built and the only scope a caller that names none can
+    #: mean.
+    scope_kind: str = SCOPE_KIND
+    #: The resolved project root at project scope, and ``None`` at user scope. It is the configured root
+    #: the ownership rows are bounded by AND the value the pointer filename's key is derived from; the
+    #: operator's own ``home`` stays exactly what it is, because a marketplace overlap is a fact about
+    #: the operator's plane whichever scope this run activates.
+    project_root: Path | None = None
     #: ``None`` means "the installer's own default state root"; a path relocates the ownership state.
     installer_state_root: Path | None = None
     #: ``UNSUPPLIED`` observes the host itself; ``None`` is an observation that failed.
@@ -478,6 +499,11 @@ class Config:
             object.__setattr__(
                 self, "installer_state_root", _absolute(self.installer_state_root)
             )
+        # NORMALISED HERE, once: the pointer's key is `sha256` over this exact string, and the
+        # ownership rows are bounded by `relative_to` against it, so an unnormalised spelling would
+        # produce a second key for one root and select no rows under it.
+        if self.project_root is not None:
+            object.__setattr__(self, "project_root", _absolute(self.project_root))
 
     @property
     def plane(self) -> Any:
@@ -486,12 +512,31 @@ class Config:
 
     @property
     def configured_root(self) -> Path:
-        """The root the operator SELECTED for this agent, which the ownership rows are bounded by."""
+        """The root the operator SELECTED for this run, which the ownership rows are bounded by.
+
+        At project scope that root is the RESOLVED PROJECT, for both halves of the ownership model at
+        once: `install_skill_bundle.agent_root` derives `<root>/.claude` from it and
+        `assert_safe_collection` keeps every destination inside it, so pointing the configured root at
+        a repository reuses the escape check rather than adding a second one (§3.5).
+        """
+        if self.scope_kind == SCOPE_PROJECT:
+            if self.project_root is None:
+                raise Refusal(
+                    "a project-scope activation is bounded by its resolved root, and none was supplied"
+                )
+            return self.project_root
         return self.home if self.plane.collection is not None else self.codex_home
 
     @property
     def plane_root(self) -> Path:
-        """The collection root this agent's entries land in, derived from the installer's own model."""
+        """The collection root this agent's entries land in, derived from the installer's own model.
+
+        The two scopes read two different fields of the plane record, because they are two different
+        facts: a user scope's collection sits under the operator's configured home, and a project
+        scope's sits under a repository root -- and a plane may have the first without the second.
+        """
+        if self.scope_kind == SCOPE_PROJECT:
+            return self.plane.project_root_collection(self.configured_root)
         return self.plane.agent_root(self.configured_root)
 
     @property
@@ -515,7 +560,8 @@ class Config:
         the filename IS the admission authority. `active_pointer_path` on the sibling verbs resolves
         the same way for the same reason.
         """
-        return _pointer_path(self.activation_dir, self.agent, SCOPE_KIND)
+        root = str(self.project_root) if self.scope_kind == SCOPE_PROJECT and self.project_root else None
+        return _pointer_path(self.activation_dir, self.agent, self.scope_kind, root)
 
     @property
     def legacy_active_receipt_path(self) -> Path:
@@ -528,9 +574,11 @@ class Config:
 
         Only (claude, user) could: every writer of ``activation/active-receipt.json`` spelled the scope
         ``claude-home``. So a codex run neither claims that document nor is blocked by it -- re-filing
-        it under a codex key would move a claude statement onto a plane it was never about.
+        it under a codex key would move a claude statement onto a plane it was never about, and the
+        same argument excludes every PROJECT scope: no pre-keyed writer ever activated a repository, so
+        a project run that re-filed that document would claim one plane's activation for another.
         """
-        return bool(self.plane.owns_legacy_pointer)
+        return bool(self.plane.owns_legacy_pointer) and self.scope_kind == SCOPE_USER
 
     @property
     def plans_dir(self) -> Path:
@@ -1465,6 +1513,10 @@ class Run:
     #: The one line a legacy-pointer migration owes the report, or None when there was nothing to
     #: migrate. Held here rather than printed where it happens, so the report stays one write.
     pointer_migration: str | None = None
+    #: The one advisory line a project-scope run owes when the operator's own plane carries a
+    #: marketplace overlap, or None. It is a NOTICE and never a refusal (§8 D5), and it is held here
+    #: for the same reason the migration line is: the report stays one write.
+    overlap_advisory: str | None = None
     #: The one line the acquisition ticket owes the report: which document admitted this payload and
     #: whether this run sealed it or reused one already filed.
     acquisition: str | None = None
@@ -1571,6 +1623,7 @@ def classify_entries(
     state: dict[str, Any],
     payload: PayloadCandidate,
     agent: str,
+    project_root: Path | None = None,
 ) -> list[PlannedEntry]:
     """Per-entry prestate classification, entirely before any write.
 
@@ -1581,9 +1634,23 @@ def classify_entries(
     The entry filter is the SELECTED agent, not a constant: the payload carries both planes' entries
     and the installer's own ``discover_entries`` labels each one, so selecting by the run's own agent
     is what keeps a codex activation out of the Claude collections and the reverse.
+
+    ONE ARM IS PROJECT-SCOPE ONLY, and ``project_root`` is what turns it on (§3.7).  In the shared user
+    home, a byte-identical unowned destination is adopted as ``removable: False`` -- correct there,
+    because nothing authorises this lifecycle to remove bytes it did not place in an operator's own
+    home.  Inside a root the operator NAMED, the answer differs: a repository that commits its own
+    ``<repo>/.claude/**`` payload would otherwise be permanently un-installable on a teammate's fresh
+    clone (any byte differs) or permanently un-uninstallable (every byte matches).  The project root is
+    the authorisation boundary the user home does not provide, so a destination byte-identical to the
+    planned source AND inside that root is adopted ``removable: True``.  Containment is re-checked here
+    against the resolved root rather than inferred from the configured root, because this is the arm
+    that decides removability.
     """
     discovered = [
-        entry for entry in bundle.discover_entries(payload.candidate_root) if entry.agent == agent
+        entry
+        for entry in bundle.discover_entries(payload.candidate_root)
+        if entry.agent == agent
+        and not (project_root is not None and entry.kind in bundle.PROJECT_DEFERRED_KINDS)
     ]
     if not discovered:
         raise Refusal(
@@ -1615,8 +1682,11 @@ def classify_entries(
             planned.append(_classify_owned(bundle, bundle_config, entry, destination, name, key, record))
             continue
         if bundle.path_present(destination):
+            adopted = _project_adoption(bundle, entry, destination, name, project_root)
             planned.append(
-                PlannedEntry(
+                adopted
+                if adopted is not None
+                else PlannedEntry(
                     entry=entry,
                     destination=destination,
                     name=name,
@@ -1642,6 +1712,57 @@ def classify_entries(
             )
         )
     return planned
+
+
+def _project_adoption(
+    bundle: ModuleType,
+    entry: Any,
+    destination: Path,
+    name: str,
+    project_root: Path | None,
+) -> PlannedEntry | None:
+    """The §3.7 arm: one adoptable destination, or ``None`` when this one is an ordinary collision.
+
+    Every condition is required and each excludes a different way of being wrong:
+
+      * ``project_root is not None`` -- user scope has no such rule at all.
+      * the destination is INSIDE that root, re-derived here rather than assumed from the configured
+        root, because this is the decision that makes an entry removable.
+      * it is not a link and not a junction: a link's bytes live somewhere this receipt does not
+        describe, so it stays a named collision however its target reads.
+      * its content is exactly the planned source's, by the substrate's own equivalence -- the same
+        predicate the user-home adoption arm uses, so "byte-identical" means one thing in both.
+      * the published node type matches the kind: an empty directory and an empty file must not be
+        adopted as each other.
+    """
+    if project_root is None or destination.is_symlink() or bundle.is_junction(destination):
+        return None
+    if not bundle.path_within(destination, project_root):
+        return None
+    if bundle.is_directory_object(destination) != (entry.kind in bundle.DIRECTORY_KINDS):
+        return None
+    try:
+        if not bundle.content_equivalent(destination, entry.source):
+            return None
+        installed_digest = bundle.digest(destination)
+    except (bundle.InstallerError, OSError):
+        return None
+    return PlannedEntry(
+        entry=entry,
+        destination=destination,
+        name=name,
+        # `owned` is the ownership model's answer for these bytes at this scope, and the row this run
+        # writes is what makes it true; the disposition says nothing was published, which is also true.
+        prestate=PRESTATE_OWNED,
+        action=ACTION_ADOPT,
+        record=bundle.entry_record(
+            entry, ACTIVATION_MODE, removable=True, installed_digest=installed_digest
+        ),
+        detail=(
+            "the destination is already byte-identical to this payload entry and sits inside the"
+            " resolved project root, so it is adopted as removable and nothing is written to it"
+        ),
+    )
 
 
 def _classify_owned(
@@ -1836,12 +1957,16 @@ def build_plan_document(
 
 
 def scope_object(config: Config) -> dict[str, Any]:
-    """The receipt body's closed scope union for this verb: the user plane of the SELECTED agent.
+    """The receipt body's closed scope union for this run: EXACT key set per kind.
 
     One construction site, read by the plan and by the receipt, because the pointer that admits every
-    later verb is keyed by exactly these values.
+    later verb is keyed by exactly these values. A user scope carries no ``root`` and a project scope
+    must carry one: the receipt family compares the key sets rather than checking a prose guard, so a
+    third spelling here would be refused at the seal.
     """
-    return {"agent": config.agent, "kind": SCOPE_KIND}
+    if config.scope_kind == SCOPE_PROJECT:
+        return {"agent": config.agent, "kind": SCOPE_PROJECT, "root": str(config.configured_root)}
+    return {"agent": config.agent, "kind": SCOPE_USER}
 
 
 def build_journal_document(
@@ -1967,6 +2092,25 @@ def activate(
     outcomes: list[Outcome] = []
     for index, item in enumerate(planned):
         if item.action == ACTION_PRESERVE:
+            outcomes.append(_preserved_outcome(bundle, item, item.detail))
+            continue
+        if item.action == ACTION_ADOPT:
+            # AN OWNERSHIP EFFECT WITH NO BYTE EFFECT. The row is written through the substrate's own
+            # `save_owned_entry`, so it is one atomic state write like every other row this run makes,
+            # and `effect_started` is set because the ownership document HAS moved -- a failure after
+            # this point may not claim an absence of effect. Nothing is written to the destination, so
+            # the row's disposition stays `preserved` and its published mode stays null.
+            run.effect_started = True
+            assert item.record is not None  # built by `_project_adoption`
+            try:
+                bundle.save_owned_entry(bundle_config, state, str(item.destination), item.record)
+            except Exception as exc:  # noqa: BLE001 - an unwritten row leaves this entry unowned
+                run.failures.append(
+                    f"adoption of {escape_display(item.name)} failed: {escape_display(str(exc))}"
+                )
+                outcomes.extend(_unattempted_outcomes(bundle, planned[index:]))
+                break
+            run.completed_effects += 1
             outcomes.append(_preserved_outcome(bundle, item, item.detail))
             continue
         run.effect_started = True
@@ -2191,6 +2335,20 @@ def seal_receipt(
     return result["receipt"]
 
 
+def scope_token(config: Config) -> str:
+    """The scope's discriminator inside a per-run filename: empty at user scope, keyed at project.
+
+    ONE derivation, read by the receipt identity and by the journal name, because both are filenames
+    that must be distinct per run and both were previously distinct only per agent. The user scope adds
+    nothing: an agent has exactly one user plane, so the agent already separates them, and appending a
+    constant would rename every existing document for no fact.
+    """
+    if config.scope_kind != SCOPE_PROJECT:
+        return ""
+    key = hashlib.sha256(str(config.configured_root).encode("utf-8")).hexdigest()[:ROOT_KEY_CHARACTERS]
+    return f"{SCOPE_PROJECT}-{key}-"
+
+
 def receipt_identity(config: Config, payload: AdmittedPayload, instant: str) -> str:
     """One lowercase token identifying this receipt, derived from facts and never from a counter.
 
@@ -2199,9 +2357,15 @@ def receipt_identity(config: Config, payload: AdmittedPayload, instant: str) -> 
     (operation, payload, instant) triple twice.  Receipts are create-only, so without the agent the
     second plane's install would refuse against the first plane's filed receipt -- and a run whose
     instants happened to differ would instead file two documents an operator cannot tell apart.
+
+    AT PROJECT SCOPE THE ROOT KEY IS PART OF IT TOO, for exactly the same reason one level down: one
+    agent has ONE user plane but N project planes, so (operation, agent, payload, instant) repeats
+    across two repositories activated from one payload in the same second.  The user scope adds no
+    token, because the agent already discriminates the only root it can have; the discriminator is
+    added precisely where two runs can differ (agentic-sdlc-7a2b, W4).
     """
     compact = instant.replace("-", "").replace(":", "").lower()
-    token = f"{OPERATION}-{config.agent}-{payload.operation_id}-{compact}"
+    token = f"{OPERATION}-{config.agent}-{scope_token(config)}{payload.operation_id}-{compact}"
     if not re.match(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z", token):
         raise Refusal(f"the derived receipt identity {show(token)} is not a lowercase ASCII token")
     return token
@@ -2308,6 +2472,13 @@ class Options:
     """
 
     agent: str
+    #: The scope the dispatcher admitted, defaulting to the operator's own plane for a caller that named
+    #: none -- which is the vector every pre-project dispatcher built.
+    scope_kind: str = SCOPE_KIND
+    #: The project root the operator NAMED, or ``None``. It is a request here and not yet a root: the
+    #: resolution ladder judges it, and a run resolves one from the working directory when none was
+    #: named.
+    requested_project: Path | None = None
     #: The mode the operator REQUESTED, or ``None`` for "take the plane's own". Kept distinct from the
     #: mode this plane publishes, so the report can state the resolution instead of hiding it.
     requested_mode: str | None = None
@@ -2329,14 +2500,20 @@ def parse_argv(argv: list[str]) -> Options:
 
     A direct invocation with any other vector is a pre-effect refusal, not a usage error, because
     the dispatcher already owns usage and a second opinion here would report the same defect twice.
-    The shape is fixed: the selected plane first, then at most one ``--mode <value>`` and at most one
-    ``--dry-run``, in that order and each at most once.  A repeated or reordered flag is refused
-    rather than tolerated, because this vector is BUILT by one caller and a shape it did not build is
-    a caller defect, not an operator's typo.
+    The shape is fixed: the selected plane first, then at most one each of ``--scope <kind>``,
+    ``--project <path>``, ``--mode <value>``, and ``--dry-run``, in that order.  A repeated or
+    reordered flag is refused rather than tolerated, because this vector is BUILT by one caller and a
+    shape it did not build is a caller defect, not an operator's typo.
+
+    ``--scope`` is OPTIONAL and defaults to the user plane, because that is the vector every
+    pre-project dispatcher built and the only scope a caller that names none can mean.  ``--project``
+    without ``--scope project`` is refused here as well as at the dispatcher: the two flags are one
+    request, and a module that accepted a root it would not use would activate the wrong plane.
     """
     planes = load_sibling("ccodex_sdlc_host_planes")
     admitted = (
         f"[{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>] optionally followed by"
+        f" [{SCOPE_FLAG!r}, <{'|'.join(SCOPE_KINDS)}>], [{PROJECT_FLAG!r}, <path>],"
         f" [{MODE_FLAG!r}, <{'|'.join(INSTALL_MODES)}>] and {DRY_RUN_FLAG!r}"
     )
     rest = list(argv)
@@ -2346,6 +2523,24 @@ def parse_argv(argv: list[str]) -> Options:
             f" {[escape_display(item) for item in argv]}"
         )
     agent, rest = rest[1], rest[2:]
+    scope_kind = SCOPE_KIND
+    if len(rest) >= 2 and rest[0] == SCOPE_FLAG:
+        if rest[1] not in SCOPE_KINDS:
+            raise Refusal(
+                f"{SURFACE} {SCOPE_FLAG} admits {', '.join(SCOPE_KINDS)}; this module received"
+                f" {show(rest[1])}"
+            )
+        scope_kind, rest = rest[1], rest[2:]
+    requested_project: Path | None = None
+    if len(rest) >= 2 and rest[0] == PROJECT_FLAG:
+        if scope_kind != SCOPE_PROJECT:
+            raise Refusal(
+                f"{SURFACE} {PROJECT_FLAG} is admitted only with {SCOPE_FLAG} {SCOPE_PROJECT}; a"
+                " user-scope run has no project root to name"
+            )
+        if not rest[1]:
+            raise Refusal(f"{SURFACE} {PROJECT_FLAG} was supplied with an empty path")
+        requested_project, rest = Path(rest[1]), rest[2:]
     requested_mode: str | None = None
     if len(rest) >= 2 and rest[0] == MODE_FLAG:
         if rest[1] not in INSTALL_MODES:
@@ -2362,7 +2557,13 @@ def parse_argv(argv: list[str]) -> Options:
             f"{SURFACE} admits exactly {admitted}; this module received"
             f" {[escape_display(item) for item in argv]}"
         )
-    return Options(agent=agent, requested_mode=requested_mode, dry_run=dry_run)
+    return Options(
+        agent=agent,
+        scope_kind=scope_kind,
+        requested_project=requested_project,
+        requested_mode=requested_mode,
+        dry_run=dry_run,
+    )
 
 
 def admit_mode(options: Options) -> str:
@@ -2395,6 +2596,66 @@ def mode_report_line(options: Options) -> str:
     )
 
 
+def marketplace_advisory(config: Config) -> str:
+    """The project-scope overlap NOTICE: one named line, stating what it does and does not mean."""
+    return (
+        f"overlap: a Claude marketplace overlap is present under"
+        f" {escape_display(str(config.home / '.claude'))}, which is the operator's own plane and not"
+        " this project; the same entries may reach a session from both, and this project activation"
+        " proceeded"
+    )
+
+
+def admit_scope(config: Config, options: Options, bundle: ModuleType) -> Config:
+    """Resolve the scope this run activates, or refuse by name before any payload work.
+
+    A user scope has nothing to resolve. A project scope resolves ONE root through the substrate's
+    ordered ladder and returns a configuration carrying it, so every later property -- the configured
+    root, the plane root, the pointer key, the receipt's scope union -- derives from one value that was
+    judged once.
+
+    THE PLANE'S OWN LAYOUT DECIDES WHETHER PROJECT SCOPE EXISTS FOR IT. A plane with no project
+    collection refuses here by name rather than deriving a root: for Codex that would mean publishing
+    this bundle's `skills/` and `agents/` at a repository's own top level, because its configured root
+    IS its agent root. The refusal names the plane and the scope that does serve it.
+
+    AN EXPLICITLY NAMED PATH THAT DOES NOT EXIST is `unresolvable-project-root` HERE, even though the
+    ladder reports it as merely absent: an install publishes bytes, and there is no directory to
+    publish into. `uninstall` is the one verb that admits that state, because records can be retired
+    for a root whose bytes are already gone.
+    """
+    if config.scope_kind != SCOPE_PROJECT:
+        return config
+    plane = config.plane
+    if plane.project_collection is None:
+        raise Refusal(
+            f"{SURFACE} {SCOPE_FLAG} {SCOPE_PROJECT} is not admissible for the"
+            f" {escape_display(plane.display)} plane (project-scope-unsupported-for-agent): its"
+            " configured root IS its agent root, so a project root would place this bundle's"
+            " collections at the repository's own top level, and nothing in this distribution measures"
+            " a repository-local collection that host reads. Use"
+            f" {SCOPE_FLAG} {SCOPE_USER} for that plane; nothing was written"
+        )
+    resolution = bundle.resolve_project_root(
+        options.requested_project,
+        cwd=Path.cwd(),
+        operator_home=config.home,
+        plane_roots=(config.home, config.codex_home),
+    )
+    if resolution.state == bundle.PROJECT_ABSENT:
+        raise Refusal(
+            f"{SURFACE} {SCOPE_FLAG} {SCOPE_PROJECT} cannot activate"
+            f" {show(str(resolution.root))} (unresolvable-project-root): the path does not exist, so"
+            " there is no repository to publish a plane into. Nothing was written"
+        )
+    if not resolution.admitted:
+        raise Refusal(
+            f"{SURFACE} {SCOPE_FLAG} {SCOPE_PROJECT} refused this root"
+            f" ({resolution.refusal}): {escape_display(resolution.detail)}. Nothing was written"
+        )
+    return dataclass_replace(config, project_root=resolution.root)
+
+
 def run_install(config: Config, options: Options, run: Run) -> int:
     """The four phases, in order, each refusing by name before the next could move anything."""
     plane = config.plane
@@ -2409,6 +2670,9 @@ def run_install(config: Config, options: Options, run: Run) -> int:
     receipts = load_sibling("distribution_activation_receipt")
     bundle = load_sibling("install_skill_bundle")
     producer = load_acquisition_producer()
+    # THE SCOPE IS RESOLVED BEFORE ANY PAYLOAD WORK, so a refused root costs no acquisition read and
+    # leaves no ticket behind. Everything below reads the returned configuration.
+    config = admit_scope(config, options, bundle)
 
     # The legacy pointer is re-filed BEFORE this run's own admission, so every later decision reads
     # one plane with one pointer. It is a pre-effect move of this module's own bookkeeping document,
@@ -2418,9 +2682,13 @@ def run_install(config: Config, options: Options, run: Run) -> int:
     candidate = classify_payload(config, producer)
     host_version = check_compatibility(config, candidate.candidate_root)
 
+    # THE CONFIGURED ROOT IS THE SCOPE'S ROOT: at project scope `config.configured_root` is the
+    # resolved repository, so the substrate derives `<root>/.claude` through its own `agent_root` and
+    # `assert_safe_collection` keeps every destination inside it. Nothing about the ownership model
+    # changes; what changes is which root it is pointed at.
     bundle_config = bundle.Config(
         candidate.candidate_root,
-        config.home,
+        config.configured_root if config.scope_kind == SCOPE_PROJECT else config.home,
         config.codex_home,
         options.resolved_mode,
         options.dry_run,
@@ -2431,12 +2699,22 @@ def run_install(config: Config, options: Options, run: Run) -> int:
     # same entries this bundle owns, so only Claude's activation can be blocked by one. The check is
     # selected by the plane's own field rather than by an inline agent comparison, so the reason it is
     # Claude-only stays beside the plane's other properties.
-    if plane.checks_marketplace_overlap and bundle.marketplace_overlap(config.home):
+    #
+    # AT PROJECT SCOPE IT IS AN ADVISORY LINE AND BLOCKS NOTHING (ratified §8 D5). The overlap it names
+    # is a fact about the OPERATOR'S OWN plane -- `config.home`, never the project root, whichever scope
+    # this run activates -- and a marketplace plugin does not own a repository's `.claude/`, so there is
+    # no second publisher of these destinations to collide with. What an operator may still want to know
+    # is that the same entries reach their session from two places, so the line is emitted and the
+    # activation proceeds. Escalating it would need a measurement of an actual session's load, which is
+    # what D5 defers.
+    overlap = bool(plane.checks_marketplace_overlap and bundle.marketplace_overlap(config.home))
+    if overlap and config.scope_kind != SCOPE_PROJECT:
         raise Refusal(
             f"a Claude marketplace overlap is present under {show(str(config.home / '.claude'))};"
             " for Claude, use either direct installation or the marketplace, never both. The"
             " overlap blocks this Claude activation and nothing was written"
         )
+    run.overlap_advisory = marketplace_advisory(config) if overlap else None
 
     if options.dry_run:
         # THE PREVIEW STOPS HERE, above every write this module can make: no legacy-pointer migration,
@@ -2450,8 +2728,10 @@ def run_install(config: Config, options: Options, run: Run) -> int:
                 bundle.validate_state(bundle_config, state)
             except bundle.InstallerError as exc:
                 raise Refusal(f"the installer ownership state is not admissible: {show(exc)}") from exc
-            planned = classify_entries(bundle, bundle_config, state, candidate, config.agent)
-        report_preview(config, options, candidate, planned, host_version)
+            planned = classify_entries(
+                bundle, bundle_config, state, candidate, config.agent, config.project_root
+            )
+        report_preview(config, options, candidate, planned, host_version, run)
         return EXIT_OK
 
     run.pointer_migration = migrate_legacy_pointer(bundle, config)
@@ -2474,7 +2754,9 @@ def run_install(config: Config, options: Options, run: Run) -> int:
         except bundle.InstallerError as exc:
             raise Refusal(f"the installer ownership state is not admissible: {show(exc)}") from exc
 
-        planned = classify_entries(bundle, bundle_config, state, candidate, config.agent)
+        planned = classify_entries(
+                bundle, bundle_config, state, candidate, config.agent, config.project_root
+            )
         plan_document = build_plan_document(config, payload, planned, host_version, instant)
         plan_raw = canonical_document_bytes(receipts, plan_document, "the activation plan")
         plan_sha256 = sha256_bytes(plan_raw)
@@ -2484,11 +2766,16 @@ def run_install(config: Config, options: Options, run: Run) -> int:
         )
         write_replaceable_document(bundle, plan_path, plan_raw, "the activation plan")
 
-        # THE AGENT IS PART OF THE JOURNAL NAME, and it has to be: one payload activated into both
-        # planes shares a candidate id, this document is written replaceably, and the receipt binds
-        # its digest -- so without the agent the second plane's journal would overwrite the first
-        # plane's and leave that receipt naming a `journal_sha256` no file on disk carries.
-        journal_path = config.journals_dir / f"{OPERATION}-{config.agent}-{payload.candidate_id}.json"
+        # THE AGENT AND THE SCOPE ARE PART OF THE JOURNAL NAME, and both have to be: one payload
+        # activated into two planes -- or into two project roots -- shares a candidate id, this document
+        # is written replaceably, and the receipt binds its digest, so a name that omitted either would
+        # let the second run overwrite the first's journal and leave that receipt naming a
+        # `journal_sha256` no file on disk carries. The scope token is derived exactly as the receipt
+        # identity's is, from the same one place.
+        journal_path = (
+            config.journals_dir
+            / f"{OPERATION}-{config.agent}-{scope_token(config)}{payload.candidate_id}.json"
+        )
         armed_records = [
             {"action": item.action, "entry_name": item.name, "phase": "armed", "prestate": item.prestate}
             for item in planned
@@ -2609,12 +2896,47 @@ def acquisition_report_line(payload: AdmittedPayload) -> str:
     )
 
 
+def scope_report_lines(config: Config) -> list[str]:
+    """What a project-scope run owes its operator, and nothing at user scope.
+
+    Three facts, each said once:
+
+      * WHICH ROOT was resolved, because the operator may have named none and the walk chose one.
+      * THAT ENABLEMENT TAKES EFFECT AT THE TARGET'S NEXT SESSION, carried over verbatim from the
+        workflows manager: a repository's own `.claude/workflows/` is the host's only name-discovery
+        surface and it is read once at session start (agentic-sdlc-4d2b), so placing a workflow there
+        enables it -- while hook bytes land inert, since settings wiring is its own separate grant.
+      * THAT A COMMITTED COPY IS DOUBLY RECOVERABLE (audit N4). The uninstall's own receipt records the
+        removal, and for a git-tracked file `git status` shows the deletion and the index restores it.
+        The root always admits as a git project -- the ladder refuses every other kind -- so this line
+        is unconditional at project scope rather than guessing at the root's shape.
+    """
+    if config.scope_kind != SCOPE_PROJECT:
+        return []
+    return [
+        f"project root: {escape_display(str(config.configured_root))} (resolved; the plane is keyed by"
+        " this root, so two worktrees of one repository are two independent planes)",
+        "enablement: a workflow placed in this repository's .claude/workflows/ is discovered at the"
+        " target's NEXT session, because that directory is the host's only name registry and it is read"
+        " once at session start; hook bytes land inert, since wiring one into settings is its own grant",
+        "the project root is a git repository; a committed copy is restorable from its index, so an"
+        " uninstall's removal is recorded twice -- by its own receipt, and by git status plus the index",
+        # NAMED, never dropped silently: the operator can see which kind this scope does not publish yet
+        # and which command still owns it.
+        f"deferred at this scope: {', '.join(load_sibling('install_skill_bundle').PROJECT_DEFERRED_KINDS)}"
+        " entries are not published here"
+        " while `claude:workflows:activate` remains the one path that owns a repository's"
+        " .claude/workflows/ destinations; exactly one path is authoritative per destination",
+    ]
+
+
 def report_preview(
     config: Config,
     options: Options,
     candidate: PayloadCandidate,
     planned: list[PlannedEntry],
     host_version: str,
+    run: Run,
 ) -> None:
     """What a real run WOULD do, with every write named as pending rather than performed.
 
@@ -2623,7 +2945,8 @@ def report_preview(
     """
     ticket = config.acquisition_receipts_dir / f"{candidate.archive_sha256}.json"
     lines = [
-        f"{SURFACE} --scope user --agent {escape_display(config.agent)} {DRY_RUN_FLAG}: nothing was"
+        f"{SURFACE} {SCOPE_FLAG} {escape_display(config.scope_kind)}"
+        f" --agent {escape_display(config.agent)} {DRY_RUN_FLAG}: nothing was"
         " written, and nothing was previewed that this run could not admit",
         f"candidate {escape_display(candidate.candidate_id[:12])} resolves"
         f" {escape_display(candidate.resolved_version)} via {VERSION_SOURCE} from"
@@ -2633,6 +2956,9 @@ def report_preview(
         mode_report_line(options),
         f"{escape_display(config.agent)} root: {escape_display(str(config.plane_root))}",
     ]
+    lines.extend(scope_report_lines(config))
+    if run.overlap_advisory is not None:
+        lines.append(run.overlap_advisory)
     if candidate.existing is not None:
         lines.append(
             f"acquisition ticket: would REUSE {escape_display(str(candidate.existing[0]))}"
@@ -2676,7 +3002,8 @@ def report(
 ) -> None:
     """One line per fact, every artifact-derived value escaped, and no claim beyond the evidence."""
     lines = [
-        f"{SURFACE} --scope user --agent {escape_display(config.agent)}:"
+        f"{SURFACE} {SCOPE_FLAG} {escape_display(config.scope_kind)}"
+        f" --agent {escape_display(config.agent)}:"
         f" effect {escape_display(effect_state)}, terminal {escape_display(terminal_phase)}",
         f"candidate {escape_display(payload.candidate_id[:12])} resolved"
         f" {escape_display(payload.resolved_version)} via {VERSION_SOURCE}"
@@ -2685,6 +3012,9 @@ def report(
         f"{escape_display(config.agent)} root: {escape_display(str(config.plane_root))}"
         " (copies, never links)",
     ]
+    lines.extend(scope_report_lines(config))
+    if run.overlap_advisory is not None:
+        lines.append(run.overlap_advisory)
     if run.acquisition is not None:
         lines.append(run.acquisition)
     if run.pointer_migration is not None:
@@ -2742,7 +3072,11 @@ def main(argv: list[str] | None = None) -> int:
         # statement of which plane this run touches and it is the one the dispatcher forwarded. A
         # configuration that carried its own agent and an argv that carried another would be two
         # spellings of one fact, which is the shape this wave exists to delete everywhere else.
-        return run_install(dataclass_replace(default_config(), agent=options.agent), options, run)
+        return run_install(
+            dataclass_replace(default_config(), agent=options.agent, scope_kind=options.scope_kind),
+            options,
+            run,
+        )
     except Refusal as exc:
         if run.effect_started:
             # A refusal raised after an effect started is not a clean refusal; reporting it as one

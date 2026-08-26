@@ -53,6 +53,20 @@ class HostPlane:
     #: The collection beneath the configured root, or ``None`` when the configured root IS the agent
     #: root. Mirrors ``install_skill_bundle.agent_root`` exactly.
     collection: str | None
+    #: The collection beneath a PROJECT root, or ``None`` when this plane has no project-scope layout
+    #: at all and a project-scope verb must refuse for it by name.
+    #:
+    #: It is a separate field from ``collection`` rather than derived from it, because the two are
+    #: independent facts about different roots. Claude's answer is the same string twice only by
+    #: coincidence of convention: ``<home>/.claude`` is where Claude Code reads a user's entries and
+    #: ``<repo>/.claude`` is where it reads a repository's, and the second is a MEASURED discovery
+    #: surface (agentic-sdlc-4d2b) rather than an inference from the first. Codex's answers differ:
+    #: its configured root IS its agent root, and no evidence in this tree says the Codex CLI reads
+    #: any repository-local collection, so there is no layout to publish into and inventing one would
+    #: put this bundle's payload at a repository's own top level. That refusal is a property of the
+    #: plane and belongs here beside its other properties, not as an inline agent comparison at a
+    #: call site (agentic-sdlc-7a2b, W4).
+    project_collection: str | None
     #: The host application's own name, as its release-contract compatibility row declares it.
     contract_host: str
     #: Which ``compatibility`` member carries that row: Claude Code is the Core surface (ADR-0017),
@@ -75,6 +89,17 @@ class HostPlane:
         """The collection root this agent's entries land in, given its configured root."""
         return configured_root if self.collection is None else configured_root / self.collection
 
+    def project_root_collection(self, project_root: Path) -> Path:
+        """Where this agent's entries land under one project root.
+
+        A plane with no project layout has no answer, and this raises rather than returning the root
+        itself: the caller that reached here without checking would otherwise publish a bundle's
+        collections at a repository's own top level.
+        """
+        if self.project_collection is None:
+            raise ValueError(f"the {self.agent} plane has no project-scope collection")
+        return project_root / self.project_collection
+
 
 #: The contract member that carries the primary product host's compatibility row.
 CONTRACT_SECTION_CORE = "core"
@@ -87,6 +112,10 @@ HOST_PLANES: dict[str, HostPlane] = {
     "claude": HostPlane(
         agent="claude",
         collection=".claude",
+        # A repository's own `.claude/` is a measured discovery surface: its `workflows/` is read once
+        # at session start (agentic-sdlc-4d2b), which is why project-scope activation is a grant of its
+        # own rather than a placement detail.
+        project_collection=".claude",
         contract_host="claude-code",
         contract_section=CONTRACT_SECTION_CORE,
         version_command=("claude", "--version"),
@@ -97,6 +126,14 @@ HOST_PLANES: dict[str, HostPlane] = {
     "codex": HostPlane(
         agent="codex",
         collection=None,
+        # NO PROJECT LAYOUT, and the absence is the reviewed decision rather than an omission: this
+        # tree carries no evidence that the Codex CLI reads any repository-local collection, and the
+        # two shapes that could be invented for it are both wrong. `<repo>/` itself would scatter this
+        # bundle's `skills/` and `agents/` across a repository's top level, and `<repo>/.claude/` would
+        # file a Codex plane under another host's directory. A project-scope verb therefore refuses for
+        # this plane by name; if a repository-local Codex surface is ever measured, this field is where
+        # it arrives, with its own evidence (agentic-sdlc-7a2b, W4).
+        project_collection=None,
         contract_host="codex-cli",
         contract_section=CONTRACT_SECTION_COMPANION,
         version_command=("codex", "--version"),

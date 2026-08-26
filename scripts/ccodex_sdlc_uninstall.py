@@ -120,7 +120,6 @@ import os
 import platform
 import re
 import stat
-import struct
 import sys
 import time
 import dataclasses
@@ -175,6 +174,11 @@ LEGACY_ACTIVATION_SCOPE = "claude-home"
 #: -- is scope-agnostic, which is what makes the project arm a parameter rather than a second verb.
 SCOPE_USER = "user"
 SCOPE_PROJECT = "project"
+SCOPE_KINDS = (SCOPE_USER, SCOPE_PROJECT)
+#: The two scope selectors this module admits in the vector the dispatcher forwards, in the operator's
+#: own spelling: they mean the same thing on both sides of the seam, so neither is renamed across it.
+SCOPE_FLAG = "--scope"
+PROJECT_FLAG = "--project"
 
 SUPPORTED_PLATFORM = "Linux"
 
@@ -198,13 +202,6 @@ VERSION_DRIVER_NAME = ".version-bump.json"
 VERSION_SOURCE_CHECKOUT = "checkout-tree"
 CHECKOUT_COMMIT_UNKNOWN = "unknown"
 _MAX_DRIVER_BYTES = 65536
-_MAX_GIT_FILE_BYTES = 4096
-#: The three index entry modes this reader compares.  A gitlink (0o160000) and a sparse directory entry
-#: are deliberately absent: neither can be compared by hashing one worktree node, so both answer dirty.
-_GIT_MODE_FILE = 0o100644
-_GIT_MODE_EXECUTABLE = 0o100755
-_GIT_MODE_SYMLINK = 0o120000
-_GIT_MODES = (_GIT_MODE_FILE, _GIT_MODE_EXECUTABLE, _GIT_MODE_SYMLINK)
 
 
 def _pointer_path(activation_root: Path, agent: str, kind: str, root: str | None = None) -> Path:
@@ -222,7 +219,6 @@ def _pointer_path(activation_root: Path, agent: str, kind: str, root: str | None
 #: with the Arabic-Indic ``٩`` would read as the same token while comparing unequal to it.
 _TOKEN = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
-_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _VERSION = re.compile(r"[0-9A-Za-z]([0-9A-Za-z.+-]*[0-9A-Za-z])?\Z")
 _INSTANT = re.compile(r"[0-9]{4}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\Z")
 
@@ -353,13 +349,21 @@ class Config:
     stated_at: str | None = None
     emitting_plane: str = "ccodex-sdlc-uninstall"
     checkpoint: Callable[[str, dict[str, Any]], None] | None = None
-    #: Which scope this run retires.  The default is the operator's user plane, which is the only
-    #: scope today's grammar can select; the project arm is wired to a resolved root by its own wave,
-    #: and everything here already reads the boundary from ``boundary_home``.
+    #: Which scope this run retires.  The default is the operator's user plane, which is the vector
+    #: every pre-project dispatcher built; everything below reads the boundary from ``boundary_home``,
+    #: which is what makes the project arm a parameter rather than a second verb.
     scope_kind: str = SCOPE_USER
     #: The resolved project root at project scope, and ``None`` at user scope.  It is the removal
-    #: boundary AND the value the pointer filename's key is derived from.
+    #: boundary AND the value the pointer filename's key is derived from, so it arrives NORMALISED:
+    #: ``ledger_entry_name`` bounds rows by a lexical ``relative_to`` against it and the pointer key is
+    #: ``sha256`` over this exact string, so an unnormalised spelling would produce a second key for one
+    #: root and select no rows beneath it.
     project_root: Path | None = None
+    #: Whether this run may retire RECORDS ONLY, for a project root that no longer exists (§2.2 item 6).
+    #: It is a separate fact from ``project_root``: an absent root is what makes the mode admissible,
+    #: and a run that inferred it from the root's absence would silently switch modes on a root that
+    #: vanished between the resolution and the walk.
+    records_only: bool = False
     #: Whether this run is a PREVIEW.  It stops after the plan is derived -- before the legacy-pointer
     #: migration, before the journal is armed, before any destination moves, and before any receipt is
     #: sealed -- and the installer configuration it borrows carries the same flag, so the shared lock
@@ -397,7 +401,15 @@ class Config:
 
     @property
     def plane_root(self) -> Path:
-        """The agent root this run's removal is bounded by."""
+        """The agent root this run's removal is bounded by.
+
+        The two scopes read two different fields of the plane record: a user scope's collection sits
+        under the operator's configured home and a project scope's sits under a repository root. A
+        plane with no project layout raises rather than answering the root itself, which is the same
+        boundary the install verb refuses at before it ever gets here.
+        """
+        if self.scope_kind == SCOPE_PROJECT:
+            return self.plane.project_root_collection(self.boundary_home)
         return self.plane.agent_root(self.boundary_home)
 
     @property
@@ -1554,6 +1566,99 @@ def run(bundle: ModuleType, dar: ModuleType, config: Config, ledger: dict[str, b
     return run_receipt_directed(bundle, dar, config, ledger, announcements)
 
 
+def retire_stranded_rows(
+    bundle: ModuleType,
+    config: Config,
+    installer_config: Any,
+    state: dict[str, Any],
+    observations: list[dict[str, Any]],
+    attention: list[str],
+    journal: Journal,
+    ledger: dict[str, bool],
+) -> None:
+    """Drop the ownership rows of a vanished project root, and name every row left alone.
+
+    THE ROW IS DROPPED WITHOUT PROVING ITS BYTES, and that is the whole difference from the ordinary
+    walk: `matched_ownership_row` requires `entry_matches_record` before it retires a row, which no
+    absent destination can satisfy, so reusing it here would preserve every row and leave the operator
+    exactly the stranded state this path exists to clear. What bounds the removal instead is the same
+    pair the ledger rung uses -- the row is keyed by a destination this configured root owns, and that
+    destination is absent -- and this is the shipped `bundle uninstall` rule for an absent destination,
+    which drops the row because leaving it makes the very next status report an owned-entry conflict.
+
+    A row whose destination is present is NOT dropped: the root was resolved as absent, so a present
+    destination beneath it means the root came back between the resolution and this walk, and a
+    bookkeeping drop for bytes that exist would strand the bytes instead of the row.
+    """
+    for item in observations:
+        destination = item["destination"]
+        if destination is None:
+            continue
+        key = str(destination)
+        record = state["entries"].get(key)
+        if not isinstance(record, dict):
+            continue
+        if not bundle.destination_is_configured(key, record, installer_config):
+            note = (
+                f"the installer ownership row for {dar_escape(item['entry_name'])} describes another "
+                "configured home, so the row is preserved rather than retired"
+            )
+            attention.append(note)
+            journal.document["attention"].append({"entry_name": item["entry_name"], "reason": note})
+            continue
+        if bundle.path_present(Path(key)):
+            note = (
+                f"the destination of {dar_escape(item['entry_name'])} exists after the root resolved as"
+                " absent, so its ownership row is preserved rather than retired"
+            )
+            attention.append(note)
+            journal.document["attention"].append({"entry_name": item["entry_name"], "reason": note})
+            continue
+        try:
+            bundle.persist_state(installer_config, state, bundle.state_without_entry(state, key))
+        except Exception as exc:  # noqa: BLE001 - a row this run could not retire is named, never hidden
+            note = (
+                f"the ownership row for {dar_escape(item['entry_name'])} names an absent destination "
+                f"under a vanished root and could not be retired: {exc!r}"
+            )
+            attention.append(note)
+            journal.document["attention"].append({"entry_name": item["entry_name"], "reason": note})
+            continue
+        # The ownership document HAS moved, so no later handler may claim this run moved nothing.
+        ledger["moved"] = True
+
+
+def retire_pointer(bundle: ModuleType, config: Config, attention: list[str]) -> str | None:
+    """Remove the pointer of a vanished root, or NAME why it is still there.
+
+    WHY ONLY HERE, and not after every retirement: an ordinary uninstall LEAVES its pointer in place,
+    still naming the install receipt it retired, and that is deliberate -- the root still exists, the
+    terminal receipt refuses a second retirement by name, and the pair reads as a history. For a root
+    that no longer exists, the same pointer is the write-only artifact this path exists to delete: it
+    names a receipt about a repository nobody can re-install into, `doctor` reports it as an orphan
+    until it is gone, and no other verb would ever select it again.
+
+    A failure to unlink is NOT an unknown effect: the receipt is sealed, the rows are retired, and the
+    one thing left is a document whose absence the operator can produce by hand. It is named instead.
+    """
+    pointer = config.active_receipt_path
+    try:
+        pointer.unlink()
+        bundle.fsync_directory(pointer.parent)
+    except FileNotFoundError:
+        return None
+    except (OSError, bundle.DurabilityError) as exc:
+        attention.append(
+            f"the pointer {str(pointer)!r} names a root that no longer exists and could not be removed: "
+            f"{dar_escape(str(exc))}. Remove it by hand; the retirement itself is sealed"
+        )
+        return None
+    return (
+        f"retired the pointer {dar_escape(str(pointer))} of a root that no longer exists; its records "
+        "are what this run removed, and no bytes were touched"
+    )
+
+
 def run_receipt_directed(
     bundle: ModuleType,
     dar: ModuleType,
@@ -1618,8 +1723,22 @@ def run_receipt_directed(
         # The ownership document is admitted only when this run will remove something: a walk that
         # removes nothing retires no rows, so a plane whose installer state is broken can still
         # have its all-preserved assessment sealed.
-        ownership = admit_ownership_state(bundle, installer_config) if plan["remove"] else None
+        ownership = (
+            admit_ownership_state(bundle, installer_config)
+            if plan["remove"] or config.records_only
+            else None
+        )
         journal.write("planned", before_any_effect=True)
+        if config.records_only and ownership is not None:
+            # RECORDS ONLY (§2.2 item 6): the root is gone, so every inventory entry classified absent
+            # and `plan["remove"]` is empty -- there is nothing to walk. What is left to retire is the
+            # BOOKKEEPING: the ownership rows under that vanished root, which no other verb selects once
+            # the pointer is the only thing naming them. This runs after the planned journal write,
+            # because dropping a row is an effect and the journal's "before any effect" claim has to
+            # stay true.
+            retire_stranded_rows(
+                bundle, config, installer_config, ownership, observations, attention, journal, ledger
+            )
         for row in plan["remove"]:
             outcome: dict[str, bool] = {"moved": False, "settled": False}
             retirement: RowRetirement | None = None
@@ -1679,6 +1798,14 @@ def run_receipt_directed(
         attention.append(unknown)
     elif len(removed) == len(observations):
         effect_state, terminal_phase, exit_class, state = "complete", "retired", EXIT_RETIRED, "retired"
+    elif config.records_only and all(item["class"] == "absent" for item in observations):
+        # THE REQUESTED END STATE IS REACHED, so this is `retired` and not the all-preserved outcome
+        # below. A records-only retirement was asked to remove RECORDS: the rows are retired, the
+        # pointer is removed, and the receipt is sealed, while every destination was already gone -- so
+        # `complete` is a claim about the effect this run was asked for rather than about bytes it never
+        # found. Reporting it as `not-activated` at exit 4 would tell an operator their cleanup failed
+        # when it is precisely the cleanup that succeeded.
+        effect_state, terminal_phase, exit_class, state = "complete", "retired", EXIT_RETIRED, "retired"
     elif not removed:
         # No DESTINATION moved, and the receipt says so: `effect_state: none`. The exit class is still
         # 4, because this run is not a refusal. It ran the whole assessment and SEALED the terminal
@@ -1731,6 +1858,14 @@ def run_receipt_directed(
         attention.append(f"the terminal receipt could not be recorded: {dar_escape(str(exc))}")
         if removed or unknown is not None:
             exit_class, state = EXIT_UNKNOWN, "unknown"
+
+    # THE POINTER GOES LAST, and only after its own retirement is durably sealed: an interruption
+    # between the two leaves a sealed retirement beside a pointer an operator can still read, which is
+    # recoverable, where the reverse order would leave a vanished root with neither.
+    if config.records_only and written is not None and exit_class == EXIT_RETIRED:
+        retired_pointer = retire_pointer(bundle, config, attention)
+        if retired_pointer is not None:
+            announcements = [*announcements, retired_pointer]
 
     return exit_class, render_report(
         state,
@@ -1872,7 +2007,7 @@ def ledger_entry_name(config: Config, destination: Path) -> str | None:
     return relative
 
 
-def observe_distribution(config: Config) -> tuple[str, dict[str, Any], str]:
+def observe_distribution(bundle: ModuleType, config: Config) -> tuple[str, dict[str, Any], str]:
     """What this run can honestly say about the distribution a ledger retirement is running from.
 
     A ledger-directed retirement has NO acquisition receipt and no activation receipt to inherit a
@@ -1882,12 +2017,20 @@ def observe_distribution(config: Config) -> tuple[str, dict[str, Any], str]:
 
     ``dirty`` IS COMPUTED, not assumed (agentic-sdlc-7a2b, W3b).  It was unconditionally ``true`` for
     one wave, with the honest meaning "this receipt does not assert the payload tree equals the commit
-    it names".  ``observe_dirty`` now answers it by comparing every path the git index tracks against
-    the worktree, reading only ``.git`` metadata and never spawning ``git``; its two residuals -- no
-    untracked-content inspection and no object-store read -- are stated there, and every unreadable or
-    unsupported shape still answers ``true``.  The reason is returned as well as the flag, because a
-    boolean in sealed evidence with no statement of what produced it is a value an operator cannot
-    check.
+    it names".  ``observe_dirty`` answers it by comparing every path the git index tracks against the
+    worktree, reading only ``.git`` metadata and never spawning ``git``; its two residuals -- no
+    untracked-content inspection and no object-store read -- are stated where it lives, and every
+    unreadable or unsupported shape still answers ``true``.  The reason is returned as well as the
+    flag, because a boolean in sealed evidence with no statement of what produced it is a value an
+    operator cannot check.
+
+    BOTH GIT OBSERVATIONS NOW COME FROM THE SHARED READER (agentic-sdlc-7a2b, W4), which is where this
+    module's own trio moved: one reader of ``.git`` metadata serves this verb, the project-root ladder,
+    and the installed ``offline-inspect.py``.  TWO ROOTS ARE IN PLAY HERE and they are separate facts:
+    ``config.scripts_dir.parent`` is the SUBJECT -- the distribution whose version and commit this
+    receipt records -- and it is also where the sibling MODULES are loaded from, exactly as
+    ``load_sibling`` resolves them, so a fabricated distribution root must carry the reader as well as
+    the scripts.
     """
     root = config.scripts_dir.parent
     driver = root / VERSION_DRIVER_NAME
@@ -1916,208 +2059,17 @@ def observe_distribution(config: Config) -> tuple[str, dict[str, Any], str]:
             f"the version driver {str(driver)!r} states no admissible current version, so a retirement "
             "receipt could not name the version it retired. Nothing was removed"
         )
-    dirty, reason = observe_dirty(root)
-    return current, {"commit": observe_commit(root), "dirty": dirty}, reason
-
-
-def git_metadata_directory(root: Path) -> Path | None:
-    """The ``.git`` directory this root's metadata actually lives in, or ``None``.
-
-    One level of ``gitdir:`` indirection is followed, which is what makes a LINKED WORKTREE readable:
-    its ``.git`` is a file naming the real metadata directory.  Nothing here spawns ``git``.
-    """
-    metadata = root / ".git"
+    # The reader is loaded AFTER the version driver is admitted, so a distribution missing both
+    # answers about the field the receipt needs first rather than about a module.
     try:
-        if metadata.is_file():
-            line = metadata.read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
-            if not line.startswith("gitdir:"):
-                return None
-            target = Path(line.split(":", 1)[1].strip())
-            metadata = target if target.is_absolute() else (root / target)
-        return metadata if metadata.is_dir() else None
-    except (OSError, ValueError):
-        return None
-
-
-def _index_entries(raw: bytes) -> tuple[list[dict[str, Any]], bool]:
-    """Parse a git index (version 2 or 3) into its entries plus its cache-tree validity.
-
-    THE INDEX IS THE ONLY THING READ, and that is the whole design: every entry records the blob's own
-    sha1 beside the path, so a worktree can be compared against it by re-hashing content -- no object
-    store, no pack index, no delta chains, and no ``git`` process.  Version 4 uses prefix-compressed
-    path names and is deliberately NOT parsed: a half-understood index would answer with confidence
-    about entries it misread, so an unsupported version raises and the caller answers ``dirty``.
-    """
-    if raw[:4] != b"DIRC" or len(raw) < 32:
-        raise ValueError("not a DIRC index")
-    version, count = struct.unpack(">II", raw[4:12])
-    if version not in (2, 3):
-        raise ValueError(f"index version {version} is not parsed here")
-    offset = 12
-    entries: list[dict[str, Any]] = []
-    for _ in range(count):
-        start = offset
-        fields = struct.unpack(">10I", raw[offset : offset + 40])
-        sha = raw[offset + 40 : offset + 60].hex()
-        flags, = struct.unpack(">H", raw[offset + 60 : offset + 62])
-        offset += 62
-        extended_flags = 0
-        if flags & 0x4000:
-            extended_flags, = struct.unpack(">H", raw[offset : offset + 2])
-            offset += 2
-        length = flags & 0x0FFF
-        if length < 0x0FFF:
-            name = raw[offset : offset + length]
-            offset += length
-        else:
-            end = raw.index(b"\0", offset)
-            name = raw[offset:end]
-            offset = end
-        offset += 1
-        while (offset - start) % 8:
-            offset += 1
-        entries.append(
-            {
-                "name": name.decode("utf-8", "replace"),
-                "sha1": sha,
-                "mode": fields[6],
-                "stage": (flags >> 12) & 0x3,
-                "extended_flags": extended_flags,
-            }
-        )
-    # The extensions, then the 20-byte trailer checksum. Only `TREE` is read, and only its ROOT row:
-    # git invalidates a cache-tree row (entry_count < 0) when the index below it is staged, so an
-    # invalid root is the witness that the index no longer agrees with a written tree.
-    tail = raw[offset:-20]
-    root_valid = False
-    position = 0
-    while position + 8 <= len(tail):
-        signature = tail[position : position + 4]
-        size, = struct.unpack(">I", tail[position + 4 : position + 8])
-        position += 8
-        payload = tail[position : position + size]
-        position += size
-        if signature == b"TREE" and payload:
-            separator = payload.index(b"\0")
-            newline = payload.index(b"\n", separator)
-            root_valid = int(payload[separator + 1 : newline].split(b" ")[0]) >= 0
-    return entries, root_valid
-
-
-def _blob_sha1(path: Path, mode: int) -> str:
-    """Git's own blob identity for one worktree node: sha1 over ``blob <len>\\0`` plus the content."""
-    data = os.readlink(path).encode("utf-8") if mode == _GIT_MODE_SYMLINK else path.read_bytes()
-    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
-
-
-def observe_dirty(root: Path) -> tuple[bool, str]:
-    """Whether this distribution tree may still be asserted equal to the commit ``observe_commit``
-    names -- computed, with its residuals stated, rather than assumed.
-
-    WHAT ``dirty: False`` ASSERTS, exactly: every path the git index tracks exists in the worktree with
-    the node type and executable bit the index records and hashes to the blob the index records, no
-    entry is conflicted, and the index's own cache-tree root is intact.  That last condition is what
-    catches the common ``git add``-without-commit: git invalidates the cache-tree row when the index is
-    staged, and without it a staged change would read as clean because the worktree and the index agree
-    with each other while both differ from the commit.  Measured in both directions on 2026-08-25 in a
-    throwaway repository: a clean tree, a content-identical rewrite that only moved mtime, a modified
-    file, a deleted tracked file, a staged-not-committed change, and the commit that follows it.
-
-    TWO RESIDUALS, NAMED because a ``False`` here is a claim in sealed evidence:
-
-      * UNTRACKED CONTENT IS NOT INSPECTED.  Deciding whether an untracked path is ignored needs the
-        full ``.gitignore`` semantics, which this module will not reimplement, so an untracked file
-        beside a tracked payload does not move this flag.  ``dirty: False`` therefore means "no tracked
-        path differs", not "no other file exists".
-      * NO OBJECT STORE IS READ.  The commit's own tree is never fetched, because reaching a packed
-        object means a pack index and delta chains, and a detector that answered only for loose objects
-        would give two hosts different answers about one tree.  So a deliberate index-versus-commit
-        surgery (``git reset --soft``, ``git update-index``) that leaves the cache-tree intact is not
-        detected.
-
-    Everything unreadable, unsupported, or unparseable answers ``True``: this flag fails toward "not
-    asserted", which is the direction that cannot make a receipt claim more than it observed.
-    """
-    metadata = git_metadata_directory(root)
-    if metadata is None:
-        return True, "no readable git metadata, so nothing here can be compared with a commit"
-    try:
-        raw = (metadata / "index").read_bytes()
-    except OSError as exc:
-        return True, f"the git index could not be read ({exc.__class__.__name__})"
-    try:
-        entries, root_valid = _index_entries(raw)
-    except (ValueError, IndexError, struct.error) as exc:
-        return True, f"the git index is not a shape this reader parses ({exc})"
-    if not entries:
-        return True, "the git index tracks no path, so no tree could be compared with it"
-    if not root_valid:
-        return True, (
-            "the git index carries no intact cache-tree root, which is how a staged-but-uncommitted "
-            "change reads: the worktree may equal the index while the index differs from the commit"
-        )
-    for entry in entries:
-        name = entry["name"]
-        if entry["stage"] != 0:
-            return True, f"{name!r} is a conflicted index entry"
-        if entry["extended_flags"]:
-            return True, f"{name!r} carries index flags this reader does not interpret"
-        if entry["mode"] not in _GIT_MODES:
-            return True, f"{name!r} is recorded with mode {entry['mode']:o}, which this reader does not compare"
-        path = root / name
-        try:
-            item = path.lstat()
-        except OSError:
-            return True, f"the tracked path {name!r} is absent from the worktree"
-        if entry["mode"] == _GIT_MODE_SYMLINK:
-            if not stat.S_ISLNK(item.st_mode):
-                return True, f"the tracked symlink {name!r} is not a symlink in the worktree"
-        elif not stat.S_ISREG(item.st_mode) or stat.S_ISLNK(item.st_mode):
-            return True, f"the tracked file {name!r} is not a regular file in the worktree"
-        elif bool(item.st_mode & 0o100) != (entry["mode"] == _GIT_MODE_EXECUTABLE):
-            return True, f"the tracked file {name!r} differs from the index in its executable bit"
-        try:
-            observed = _blob_sha1(path, entry["mode"])
-        except OSError as exc:
-            return True, f"the tracked path {name!r} could not be hashed ({exc.__class__.__name__})"
-        if observed != entry["sha1"]:
-            return True, f"the tracked path {name!r} differs in content from the index"
-    return False, (
-        f"every one of the {len(entries)} paths the git index tracks matches the worktree and the "
-        "index's cache-tree root is intact (untracked content is not inspected)"
-    )
-
-
-def observe_commit(root: Path) -> str:
-    """The distribution's own commit, read from git METADATA, or the explicit ``unknown``.
-
-    No ``git`` process is spawned, ever: this is a lifecycle verb, and shelling out to resolve a commit
-    would make an ambient executable part of what a receipt asserts. One level of loose-ref
-    indirection is followed; a packed ref, an unreadable file, or any other shape answers ``unknown``,
-    which is a statement the family admits rather than a plausible-looking value.
-    """
-    metadata = root / ".git"
-    try:
-        if metadata.is_file():
-            line = metadata.read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
-            if not line.startswith("gitdir:"):
-                return CHECKOUT_COMMIT_UNKNOWN
-            target = Path(line.split(":", 1)[1].strip())
-            metadata = target if target.is_absolute() else (root / target)
-        if not metadata.is_dir():
-            return CHECKOUT_COMMIT_UNKNOWN
-        head = (metadata / "HEAD").read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
-        if _COMMIT.match(head):
-            return head
-        if not head.startswith("ref:"):
-            return CHECKOUT_COMMIT_UNKNOWN
-        reference = head.split(":", 1)[1].strip()
-        if not reference or ".." in reference.split("/"):
-            return CHECKOUT_COMMIT_UNKNOWN
-        resolved = (metadata / reference).read_bytes()[:_MAX_GIT_FILE_BYTES].decode("utf-8", "replace").strip()
-        return resolved if _COMMIT.match(resolved) else CHECKOUT_COMMIT_UNKNOWN
-    except (OSError, ValueError):
-        return CHECKOUT_COMMIT_UNKNOWN
+        detector = bundle.load_git_project_detector(root)
+    except bundle.InstallerError as exc:
+        raise Refusal(
+            f"the distribution root {str(root)!r} carries no readable git-metadata reader, so a "
+            f"retirement receipt could not state the tree it ran from: {exc}. Nothing was removed"
+        ) from exc
+    dirty, reason = detector.observe_dirty(root)
+    return current, {"commit": detector.observe_commit(root), "dirty": dirty}, reason
 
 
 def run_ledger_directed(
@@ -2151,9 +2103,10 @@ def run_ledger_directed(
             f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
             f" at {str(config.active_receipt_path)!r} and no installer ownership document at"
             f" {str(installer_config.state_path)!r}; there is nothing to retire, and"
-            " `ccodex install --scope user --agent claude` is the front door for a first activation"
+            f" `ccodex install --scope {config.scope_kind} --agent {config.host}` is the front door for a"
+                " first activation"
         )
-    resolved_version, checkout, dirty_reason = observe_distribution(config)
+    resolved_version, checkout, dirty_reason = observe_distribution(bundle, config)
     announcements.append(
         f"distribution tree: commit {str(checkout['commit'])[:12]}, dirty={str(checkout['dirty']).lower()}"
         f" -- {dirty_reason}"
@@ -2173,7 +2126,8 @@ def run_ledger_directed(
                 f"ccodex sdlc uninstall found no activation receipt for {config.host}/{config.scope_kind}"
                 f" at {str(config.active_receipt_path)!r} and no ownership rows under"
                 f" {str(config.plane_root)!r}; there is nothing to retire, and"
-                " `ccodex install --scope user --agent claude` is the front door for a first activation"
+                f" `ccodex install --scope {config.scope_kind} --agent {config.host}` is the front door for a"
+                " first activation"
             )
         removable = [row for row in rows if row["class"] == "owned-exact"]
         plan = ledger_plan(config, rows, resolved_version)
@@ -2472,6 +2426,78 @@ def bundle_config(bundle: ModuleType, config: Config) -> Any:
     )
 
 
+def admit_scope(bundle: ModuleType, config: Config, requested: Path | None) -> Config:
+    """Resolve the scope this run retires, or refuse by name before anything is read.
+
+    A user scope has nothing to resolve. A project scope resolves ONE root through the substrate's
+    ordered ladder, and this verb -- alone among the four -- admits two outcomes the others refuse:
+
+      * AN ABSENT ROOT is admitted for RECORDS-ONLY retirement (§2.2 item 6), and only when a pointer
+        exists for its key. What keeps a moved or deleted repository from stranding its records beyond
+        every verb is exactly this path; without it the pointer is a write-only artifact, which is the
+        ADR-0022 pathology this program exists to delete. The removal set is then the pointer, the
+        retirement seal, and the ledger rows under that root: there are no bytes to remove, and none are
+        touched. `forbidden-root` still applies to the normalised path, so a records-only retirement
+        cannot name the operator's home either.
+      * A ROOT THAT EXISTS BUT NO LONGER ADMITS AS A GIT PROJECT, while its pointer lives, is its own
+        named state: `pointer-outlived-root` (§2.2 item 7). It is NOT `not-a-git-project`, which reads
+        as a wrong input when the truth is that the pointer outlived its repository, and it is NOT
+        records-only, because real bytes may still sit under `<root>/.claude`. Both remedies are named
+        and neither is guessed at.
+    """
+    if config.scope_kind != SCOPE_PROJECT:
+        return config
+    plane = config.plane
+    if plane.project_collection is None:
+        raise Refusal(
+            f"ccodex uninstall {SCOPE_FLAG} {SCOPE_PROJECT} is not admissible for the"
+            f" {plane.display} plane (project-scope-unsupported-for-agent): its configured root IS its"
+            " agent root, so it has no repository-local collection to retire. Nothing was removed"
+        )
+    resolution = bundle.resolve_project_root(
+        requested,
+        cwd=Path.cwd(),
+        operator_home=config.home,
+        plane_roots=(config.home, config.codex_home),
+    )
+    if resolution.state == bundle.PROJECT_ABSENT:
+        candidate = dataclasses.replace(
+            config, project_root=absolute(resolution.root), records_only=True
+        )
+        if not bundle.path_present(candidate.active_receipt_path):
+            raise Refusal(
+                f"ccodex uninstall {SCOPE_FLAG} {SCOPE_PROJECT} has nothing to retire for"
+                f" {str(resolution.root)!r} (unresolvable-project-root): the requested end state is"
+                " ALREADY TRUE -- the path does not exist and this plane holds no pointer for it at"
+                f" {str(candidate.active_receipt_path)!r}, so there are no bytes, no pointer, and no key"
+                " to select ownership rows by. This is also what a second records-only retirement of one"
+                " vanished root reads as. Nothing was removed"
+            )
+        return candidate
+    if not resolution.admitted:
+        outlived = resolution.candidate is not None and resolution.refusal in (
+            bundle.PROJECT_NOT_A_GIT_PROJECT,
+            bundle.PROJECT_UNSAFE_NODE,
+        )
+        if outlived:
+            probe = dataclasses.replace(config, project_root=absolute(resolution.candidate))
+            if bundle.path_present(probe.active_receipt_path):
+                raise Refusal(
+                    f"the pointer {str(probe.active_receipt_path)!r} outlived its repository"
+                    f" (pointer-outlived-root): {str(resolution.candidate)!r} still exists but no"
+                    f" longer admits as a git project -- {resolution.detail}. Real bytes may still sit"
+                    f" under {str(probe.plane_root)!r}, so this is not a records-only retirement."
+                    " Nothing was removed, and there are two remedies this verb will not choose"
+                    " between: restore that root's git metadata and uninstall normally, or remove the"
+                    " directory entirely and then run the same command again to retire the records alone"
+                )
+        raise Refusal(
+            f"ccodex uninstall {SCOPE_FLAG} {SCOPE_PROJECT} refused this root"
+            f" ({resolution.refusal}): {resolution.detail}. Nothing was removed"
+        )
+    return dataclasses.replace(config, project_root=absolute(resolution.root))
+
+
 def main(argv: list[str]) -> int:
     """The dispatcher's entry point. Returns an admitted exit class 0-4 and never raises."""
     global _ESCAPE
@@ -2483,17 +2509,39 @@ def main(argv: list[str]) -> int:
         # This module owns no grammar: any other vector is a pre-effect refusal, not a usage error,
         # because the dispatcher already owns usage and a second opinion would report one defect twice.
         planes = load_sibling(scripts_dir, "ccodex_sdlc_host_planes")
-        # The vector is the selected plane, optionally followed by the ONE preview request the front
-        # door forwards. `--dry-run` keeps its operator spelling across the seam because it means the
-        # same thing on both sides; only the plane selector had two names to reconcile.
+        # The vector is the selected plane, then the scope it retires, then the ONE preview request the
+        # front door forwards. `--scope`, `--project`, and `--dry-run` keep their operator spellings
+        # across the seam because they mean the same thing on both sides; only the plane selector had
+        # two names to reconcile. `--scope` is optional and defaults to the operator's own plane, which
+        # is the vector every pre-project dispatcher built.
         admitted = (
-            f"[{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>] optionally followed by {DRY_RUN_FLAG!r}"
+            f"[{HOST_FLAG!r}, <{'|'.join(planes.AGENTS)}>] optionally followed by"
+            f" [{SCOPE_FLAG!r}, <{'|'.join(SCOPE_KINDS)}>], [{PROJECT_FLAG!r}, <path>] and"
+            f" {DRY_RUN_FLAG!r}"
         )
         if not (len(argv) >= 2 and argv[0] == HOST_FLAG and argv[1] in planes.HOST_PLANES):
             raise Refusal(
                 f"ccodex uninstall admits exactly {admitted}; this module received {argv!r}"
             )
         rest = list(argv[2:])
+        scope_kind = SCOPE_USER
+        if len(rest) >= 2 and rest[0] == SCOPE_FLAG:
+            if rest[1] not in SCOPE_KINDS:
+                raise Refusal(
+                    f"ccodex uninstall {SCOPE_FLAG} admits {', '.join(SCOPE_KINDS)}; this module"
+                    f" received {rest[1]!r}"
+                )
+            scope_kind, rest = rest[1], rest[2:]
+        requested_project: Path | None = None
+        if len(rest) >= 2 and rest[0] == PROJECT_FLAG:
+            if scope_kind != SCOPE_PROJECT:
+                raise Refusal(
+                    f"ccodex uninstall {PROJECT_FLAG} is admitted only with {SCOPE_FLAG}"
+                    f" {SCOPE_PROJECT}; a user-scope run has no project root to name"
+                )
+            if not rest[1]:
+                raise Refusal(f"ccodex uninstall {PROJECT_FLAG} was supplied with an empty path")
+            requested_project, rest = Path(rest[1]), rest[2:]
         dry_run = rest[:1] == [DRY_RUN_FLAG]
         if rest[1:] or (rest and not dry_run):
             raise Refusal(
@@ -2502,7 +2550,13 @@ def main(argv: list[str]) -> int:
         dar = load_sibling(scripts_dir, "distribution_activation_receipt")
         bundle = load_sibling(scripts_dir, "install_skill_bundle")
         _ESCAPE = dar.escape_display
-        config = dataclasses.replace(default_config(bundle), host=argv[1], dry_run=dry_run)
+        config = admit_scope(
+            bundle,
+            dataclasses.replace(
+                default_config(bundle), host=argv[1], dry_run=dry_run, scope_kind=scope_kind
+            ),
+            requested_project,
+        )
     except Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_REFUSED

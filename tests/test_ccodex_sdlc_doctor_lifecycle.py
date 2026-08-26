@@ -110,31 +110,34 @@ SELECTED = ("--scope", "user", "--agent", "claude")
 # is what `main` wraps in the modules' own `['--host', <agent>]` ABI -- one operator spelling
 # (`--agent`) and one module ABI (`--host`), which is why the operator flag below is `--agent` while
 # the module-facing assertions further down still read `--host`.
+#: The two finding codes W4 added, spelled once so a test cannot assert one and forget the other.
+ORPHAN_CODES = ("orphaned-root", "pointer-outlived-root")
+
 READER_FORMS = (
-    (("status", *SELECTED), ("status", False, False, None, "user", "claude", None)),
-    (("status", *SELECTED, "--json"), ("status", False, True, None, "user", "claude", None)),
+    (("status", *SELECTED), ("status", False, False, None, "user", "claude", None, None)),
+    (("status", *SELECTED, "--json"), ("status", False, True, None, "user", "claude", None, None)),
     (
         ("status", "--scope", "user", "--agent", "codex"),
-        ("status", False, False, None, "user", "codex", None),
+        ("status", False, False, None, "user", "codex", None, None),
     ),
-    (("doctor",), ("doctor", False, False, None, None, None, None)),
-    (("doctor", "--json"), ("doctor", False, True, None, None, None, None)),
-    (("recover", "--dry-run"), ("recover", True, False, None, None, None, None)),
-    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None, None)),
-    (("install", *SELECTED), ("install", False, False, "claude", "user", "claude", None)),
+    (("doctor",), ("doctor", False, False, None, None, None, None, None)),
+    (("doctor", "--json"), ("doctor", False, True, None, None, None, None, None)),
+    (("recover", "--dry-run"), ("recover", True, False, None, None, None, None, None)),
+    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None, None, None)),
+    (("install", *SELECTED), ("install", False, False, "claude", "user", "claude", None, None)),
     (
         ("install", "--scope", "user", "--agent", "codex"),
-        ("install", False, False, "codex", "user", "codex", None),
+        ("install", False, False, "codex", "user", "codex", None, None),
     ),
-    (("update", *SELECTED), ("update", False, False, "claude", "user", "claude", None)),
+    (("update", *SELECTED), ("update", False, False, "claude", "user", "claude", None, None)),
     (
         ("update", "--scope", "user", "--agent", "codex"),
-        ("update", False, False, "codex", "user", "codex", None),
+        ("update", False, False, "codex", "user", "codex", None, None),
     ),
-    (("uninstall", *SELECTED), ("uninstall", False, False, "claude", "user", "claude", None)),
+    (("uninstall", *SELECTED), ("uninstall", False, False, "claude", "user", "claude", None, None)),
     (
         ("uninstall", "--scope", "user", "--agent", "codex"),
-        ("uninstall", False, False, "codex", "user", "codex", None),
+        ("uninstall", False, False, "codex", "user", "codex", None, None),
     ),
 )
 #: The three reader verbs and the argument tail each one needs. `status` carries the two required
@@ -1235,6 +1238,181 @@ class DoctorLifecycleReadinessTests(ReadinessHarness):
 
 
 @WINDOWS_SKIP
+@WINDOWS_SKIP
+class ProjectPointerRootTest(ReadinessHarness):
+    """The two states a project pointer's ROOT can be in, and the rows a reader owes for each.
+
+    A pointer for a vanished repository is the ADR-0022 pathology this program exists to delete -- an
+    evidence record with no reader is a write-only artifact -- so `doctor` naming it is half of the exit
+    (§2.2 items 6-7); the records-only uninstall is the other half and lives in its own suite.
+
+    THE JUDGE IS INJECTED, and every test here supplies the real one built over the shipped substrate,
+    because a stub would prove this suite's idea of a git project rather than the product's. One test
+    supplies none, which is the honest third state: a reader that could not look reports `unassessed` and
+    emits no finding at all.
+    """
+
+    def project_pointer(self, root: Path, *, agent: str = "claude", **overrides: Any) -> Path:
+        """One project pointer at the keyed path the shipped writers derive, holding a sealed receipt.
+
+        The filename's key is `sha256(root)[:16]`, spelled out here rather than read back from the
+        writer: the filename IS the admission authority, so a fixture that asked the writer where it
+        wrote would agree with any path it chose.
+        """
+        key = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
+        directory = self.state / "agentic-sdlc" / "activation" / "active" / agent
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"project-{key}.json"
+        receipt = sealed_activation_receipt(
+            receipt_id=overrides.pop("receipt_id", f"activation-project-{key[:8]}"),
+            scope={"agent": agent, "kind": "project", "root": str(root)},
+            **overrides,
+        )
+        path.write_bytes(receipts.canonical_bytes(receipt))
+        return path
+
+    def judge(self) -> Any:
+        """The product's own root-state predicate, over the product's own shared `.git` reader."""
+        return reader.project_root_judge(bundle)
+
+    def rows(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return reader.observe_activation(
+            self.activation, receipts, None, project_root_state=kwargs.pop("root_state", self.judge())
+        )["project_pointers"]
+
+    def findings_for(self, root_state: Any) -> list[dict[str, str]]:
+        observation = reader.observe_readiness(
+            self.contract,
+            acquisition_receipts=self.acquisition,
+            activation_receipts=self.activation,
+            validator=receipts,
+            validator_reason=None,
+            project_root_state=root_state,
+        )
+        return reader.readiness_findings(observation)
+
+    def live_repository(self, name: str) -> Path:
+        """A root the shared reader admits: one regular one-line HEAD plus `objects/` and `refs/`."""
+        root = self.root / name
+        (root / ".git" / "objects").mkdir(parents=True)
+        (root / ".git" / "refs").mkdir()
+        (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        return root
+
+    def test_a_live_project_root_is_observed_and_says_nothing(self) -> None:
+        root = self.live_repository("live-project")
+        self.project_pointer(root)
+
+        rows = self.rows()
+
+        self.assertEqual(1, len(rows), rows)
+        self.assertEqual(reader.ROOT_LIVE, rows[0]["state"])
+        self.assertEqual(str(root), rows[0]["root"])
+        # A healthy plane produces NO row in the report: a finding for it would make every activated
+        # repository read as a defect.
+        self.assertEqual([], [f for f in self.findings_for(self.judge()) if f["code"] in ORPHAN_CODES])
+
+    def test_a_pointer_whose_root_no_longer_exists_is_reported_as_an_orphaned_root(self) -> None:
+        root = self.live_repository("moved-away")
+        self.project_pointer(root)
+        shutil.move(str(root), str(self.root / "somewhere-else"))
+
+        rows = self.rows()
+        findings = [f for f in self.findings_for(self.judge()) if f["code"] in ORPHAN_CODES]
+
+        self.assertEqual(reader.ROOT_ABSENT, rows[0]["state"])
+        self.assertEqual(1, len(findings), findings)
+        self.assertEqual("orphaned-root", findings[0]["code"])
+        self.assertIn("no longer exists", findings[0]["message"])
+        # The remedy is the records-only retirement, named in the finding an operator will read.
+        self.assertIn("uninstall --scope project", findings[0]["message"])
+        # POSITIVE CONTROL: moving it back makes the same reader say nothing.
+        shutil.move(str(self.root / "somewhere-else"), str(root))
+        self.assertEqual([], [f for f in self.findings_for(self.judge()) if f["code"] in ORPHAN_CODES])
+
+    def test_a_pointer_whose_root_stopped_being_a_git_project_is_reported_as_outliving_it(self) -> None:
+        root = self.live_repository("de-gitted")
+        self.project_pointer(root)
+        shutil.rmtree(root / ".git")
+
+        rows = self.rows()
+        findings = [f for f in self.findings_for(self.judge()) if f["code"] in ORPHAN_CODES]
+
+        self.assertEqual(reader.ROOT_NOT_A_PROJECT, rows[0]["state"])
+        self.assertEqual(1, len(findings), findings)
+        self.assertEqual("pointer-outlived-root", findings[0]["code"])
+        self.assertIn("outlived its repository", findings[0]["message"])
+        # BOTH REMEDIES, because this verb refuses to choose between them.
+        self.assertIn("restore", findings[0]["message"])
+        self.assertIn("remove the directory entirely", findings[0]["message"])
+        # POSITIVE CONTROL: the two states are DISTINCT, not one refusal wearing two names -- the same
+        # fixture with the root deleted outright reports the other code.
+        shutil.rmtree(root)
+        recoded = [f for f in self.findings_for(self.judge()) if f["code"] in ORPHAN_CODES]
+        self.assertEqual(["orphaned-root"], [f["code"] for f in recoded])
+
+    def test_two_orphaned_roots_carry_distinct_locators_so_neither_report_row_hides_the_other(self) -> None:
+        """`make_report` sorts findings by (component, path, code, message): one shared locator would
+        order two orphans by their prose, and the pointer's own key is what keeps them apart."""
+        for name in ("first", "second"):
+            root = self.live_repository(name)
+            self.project_pointer(root)
+            shutil.rmtree(root)
+
+        findings = [f for f in self.findings_for(self.judge()) if f["code"] == "orphaned-root"]
+
+        self.assertEqual(2, len(findings), findings)
+        self.assertEqual(2, len({f["path"] for f in findings}), findings)
+        for finding in findings:
+            self.assertTrue(finding["path"].startswith("activation-plane://project-pointer"), finding)
+
+    def test_a_reader_with_no_judge_reports_unassessed_and_emits_no_finding(self) -> None:
+        """The honest third state: what could not be looked at is not reported as broken."""
+        root = self.live_repository("unjudged")
+        self.project_pointer(root)
+        shutil.rmtree(root)
+
+        rows = self.rows(root_state=None)
+
+        self.assertEqual(reader.ROOT_UNASSESSED, rows[0]["state"])
+        self.assertEqual([], [f for f in self.findings_for(None) if f["code"] in ORPHAN_CODES])
+        # POSITIVE CONTROL: the same plane WITH a judge reports the orphan, so the silence above is the
+        # absent judge and not an enumeration that found nothing.
+        self.assertEqual(
+            ["orphaned-root"],
+            [f["code"] for f in self.findings_for(self.judge()) if f["code"] in ORPHAN_CODES],
+        )
+
+    def test_a_pointer_that_states_no_absolute_root_is_named_rather_than_guessed_at(self) -> None:
+        root = self.live_repository("relative")
+        path = self.project_pointer(root)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["body"]["scope"]["root"] = "relative/path"
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+        rows = self.rows()
+
+        self.assertEqual(reader.ROOT_UNASSESSED, rows[0]["state"])
+        self.assertIn("no absolute project root", rows[0]["reason"])
+        self.assertEqual([], [f for f in self.findings_for(self.judge()) if f["code"] in ORPHAN_CODES])
+
+    def test_the_user_pointer_is_not_a_project_pointer_and_is_never_enumerated_here(self) -> None:
+        """The two pointer kinds are read by two observers, and the filename is what separates them."""
+        self.write_pointer(sealed_activation_receipt())
+
+        self.assertEqual([], self.rows())
+
+    def test_both_new_codes_are_members_of_the_pinned_v1_report_vocabulary(self) -> None:
+        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+
+        for code in ORPHAN_CODES:
+            with self.subTest(code=code):
+                self.assertIn(code, policy["vocabularies"]["finding_codes"])
+        # Positive control: the same membership test rejects a code the policy does not carry, so the
+        # loop above is a check rather than a no-op.
+        self.assertNotIn("project-pointer-stranded", policy["vocabularies"]["finding_codes"])
+
+
 class SupersededActivationHistoryTest(ReadinessHarness):
     """A RETAINED prior receipt is history, not an ambiguity (agentic-sdlc-7b2e).
 
@@ -1696,8 +1874,9 @@ EXPECTED_USAGE = (
     "--agent; there is no default and no wildcard for either, so one agent's removal can\n"
     "never reach another agent's bytes. doctor and recover take neither: doctor is the whole-box\n"
     "read, and recover resumes the one pending slot the substrate can carry, which is not a\n"
-    "scoped object. --scope project, --mode, and --dry-run parse and are refused\n"
-    "by name at exit 3 until the waves that wire them; nothing is silently ignored.\n"
+    "scoped object. --scope project resolves ONE repository root -- --project PATH, or a\n"
+    "walk up from the working directory -- and its plane is keyed by that root, so two worktrees of\n"
+    "one repository are two independent planes. Project scope is copy-only.\n"
 )
 
 

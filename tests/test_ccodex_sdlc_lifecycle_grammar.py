@@ -139,18 +139,18 @@ MODULE_OWN_PREFIX = {
 
 
 READER_FORMS = (
-    (("status", *USER_SCOPE, "--agent", "claude"), ("status", False, False, None, "user", "claude", None)),
+    (("status", *USER_SCOPE, "--agent", "claude"), ("status", False, False, None, "user", "claude", None, None)),
     (
         ("status", *USER_SCOPE, "--agent", "codex", "--json"),
-        ("status", False, True, None, "user", "codex", None),
+        ("status", False, True, None, "user", "codex", None, None),
     ),
-    (("doctor",), ("doctor", False, False, None, None, None, None)),
-    (("doctor", "--json"), ("doctor", False, True, None, None, None, None)),
-    (("recover", "--dry-run"), ("recover", True, False, None, None, None, None)),
-    (("recover", "--dry-run", "--json"), ("recover", True, True, None, None, None, None)),
+    (("doctor",), ("doctor", False, False, None, None, None, None, None)),
+    (("doctor", "--json"), ("doctor", False, True, None, None, None, None, None)),
+    (("recover", "--dry-run"), ("recover", True, False, None, None, None, None, None)),
+    (("recover", "--dry-run", "--json"), ("recover", True, True, None, None, None, None, None)),
     # The mutating form: never a dry run, never a report, and it carries the approved digest in the
     # same fourth slot that `install` uses for its explicit agent.
-    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None, None)),
+    (("recover", "--apply", PLAN_DIGEST), ("recover", False, False, PLAN_DIGEST, None, None, None, None)),
 )
 #: Every recover spelling that is a grammar error, so exit 2 is proven per spelling and not once.
 # `\d` would admit the Arabic-Indic digit, which is why an explicitly non-ASCII digest is pinned
@@ -486,12 +486,13 @@ class CcodexSdlcLifecycleGrammarTests(unittest.TestCase):
         # so those refusals are the grammar's verdicts and not `parse_command` refusing everything.
         self.assertEqual(
             reader.parse_command(["recover", "--apply", PLAN_DIGEST]),
-            ("recover", False, False, PLAN_DIGEST, None, None, None),
+            ("recover", False, False, PLAN_DIGEST, None, None, None, None),
         )
         # A digest is not an agent and an agent is not a digest: the shared forwarded slot never lets
         # one verb's argument reach the other's module. Index access still reads that slot after the
-        # 4-tuple became a SEVEN-field `Invocation` -- the seventh is the requested `--mode`, absent on
-        # every form above -- which is why these pins survived unchanged.
+        # 4-tuple became an EIGHT-field `Invocation` -- the seventh is the requested `--mode` and the
+        # eighth the named `--project` root, both absent on every form above -- which is why these pins
+        # survived unchanged.
         self.assertEqual(reader.parse_command(["install", *USER_SCOPE, "--agent", "claude"])[3], "claude")
         self.assertEqual(reader.parse_command(["install", *USER_SCOPE, "--agent", "codex"])[3], "codex")
         self.assertEqual(reader.parse_command(["uninstall", *USER_SCOPE, "--agent", "codex"])[3], "codex")

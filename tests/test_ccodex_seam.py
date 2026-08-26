@@ -159,6 +159,20 @@ class SeamInventoryTest(unittest.TestCase):
                     ),
                     f"no seam case selects the {agent} plane",
                 )
+        # EVERY SCOPE, on the same terms as every agent (agentic-sdlc-7a2b, W4). The axis was missing
+        # while `project` was refused as unwired -- one case covered the whole scope because it was one
+        # refusal -- and its absence would now let a wired scope ship with no case at all, which is the
+        # gap this inventory exists to close for the verb axis.
+        for scope in reader.LIFECYCLE_SCOPES:
+            with self.subTest(scope=scope):
+                self.assertTrue(
+                    any(
+                        reader.SCOPE_FLAG in vector
+                        and vector[vector.index(reader.SCOPE_FLAG) + 1] == scope
+                        for vector in vectors
+                    ),
+                    f"no seam case drives the {scope} scope",
+                )
         # THE RETIRED SPELLINGS: both namespaces must be driven, or deleting a refusal arm would go
         # unnoticed by this inventory.
         for retired in ("bundle", "sdlc"):

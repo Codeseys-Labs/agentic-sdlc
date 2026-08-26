@@ -1480,89 +1480,131 @@ class CleanRefusalExitThreeTest(Conformance):
         self.install_once(control)
 
 
-#: The parts of the ratified grammar this release PARSES and does not yet serve.  Each is a named exit-3
-#: refusal, and the three names are the tokens the product itself greps for.  This is a whole exit CLASS
-#: the surface gained: before the front door was ratified these spellings did not parse at all, so the
-#: only way to get them wrong was exit 2.  Both of the wrong answers are worse than a refusal and
-#: neither is hypothetical -- an operator who typed ``--scope project`` and got exit 0 would have their
-#: USER home activated, and one who typed ``--dry-run`` and got exit 0 would get a real effect from a
-#: preview -- while answering 2 would tell them they mistyped something that is in the grammar.
-UNWIRED_SURFACE_MATRIX: tuple[tuple[str, tuple[str, ...], str], ...] = (
-    ("install-project-scope", ("install", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
-    ("update-project-scope", ("update", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
-    ("uninstall-project-scope", ("uninstall", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
-    # `status` too: a read that silently answered about the USER plane for an operator who named a
-    # repository would be the same substitution, in a report they would then act on.
-    ("status-project-scope", ("status", "--scope", "project", "--agent", "claude"), "project-scope-not-yet-wired"),
-    # A project ROOT parses too, and is refused by the scope it requires rather than by its own value:
-    # the path below is never resolved, because the refusal lands before any filesystem resolution.
-    (
-        "install-project-root",
-        ("install", "--scope", "project", "--agent", "claude", "--project", "/nonexistent/project-root"),
-        "project-scope-not-yet-wired",
-    ),
-    # `--mode` and `--dry-run` LEFT THIS MATRIX in W3b of agentic-sdlc-7a2b: both are wired, so a row
-    # asserting "is not served by this release" would now be asserting a lie. `WiredFlagRequestTest`
-    # below owns them, and it owns the two directions that matter -- a request the module admits and one
-    # it refuses on its own terms -- rather than one shared "declined" shape.
+#: PROJECT SCOPE IS WIRED, and this is the exit CLASS that survived the wiring. Every row is a
+#: grammatically valid project-scope invocation the ladder DECLINES by name -- the same Decision-9
+#: class 3 the three `*-not-yet-wired` rows used to hold, with reasons that cannot rot into a lie the
+#: way "is not served by this release" did the moment W4 served it. The wrong answers are still worse
+#: than a refusal and still not hypothetical: an operator whose `--project` named their home and got
+#: exit 0 would have the user plane activated under a project key, and one whose root was refused
+#: silently would think a repository was activated.
+#:
+#: The rows are the ladder's four names. `forbidden-root` appears twice on purpose, because its two
+#: reachable causes are different operator mistakes: naming a boundary the lifecycle owns, and naming a
+#: subdirectory of a real repository instead of its root.
+PROJECT_REFUSAL_MATRIX: tuple[tuple[str, str, str], ...] = (
+    ("home-is-forbidden", "home", "forbidden-root"),
+    ("subdirectory-is-forbidden", "inside", "forbidden-root"),
+    ("absent-root-is-unresolvable", "gone", "unresolvable-project-root"),
+    ("plain-directory-is-not-a-git-project", "plain", "not-a-git-project"),
+    ("hostile-git-node-is-unsafe", "hostile", "unsafe-node"),
 )
 
 
-class UnwiredSurfaceExitThreeTest(Conformance):
+class ProjectScopeExitThreeTest(Conformance):
     """Decision 9's OTHER exit 3: a grammatically valid invocation this release declines to serve.
 
     The distinction from exit 2 is the whole point of the class, so it is asserted in both directions on
-    one plane: an unwired surface refuses at 3 and prints NO usage block (reprinting the grammar would
+    one plane: a refused project root exits 3 and prints NO usage block (reprinting the grammar would
     tell the operator to type what they already typed), while a genuine grammar error on the same plane
-    refuses at 2 and DOES print it.  Every row is measured with the whole-tree hash, because
-    "before any effect" is a claim about the filesystem rather than about the interesting files in it.
+    exits 2 and DOES print it. Every row is measured with the whole-tree hash, because "before any
+    effect" is a claim about the filesystem rather than about the interesting files in it -- and here it
+    is a claim about the TARGET root too, which is hashed separately (audit W-h: a `-newer` check or a
+    hash pointed at the source would pass while a partial write dirtied the destination).
+
+    THE GIT METADATA IS FABRICATED, not produced by `git`, and the reason is scope: what is under test
+    here is the exit class of a dispatcher invocation, and the minimum structure the shared reader admits
+    (a one-line `HEAD` plus `objects/` and `refs/`) is exactly what the ladder judges. The reader's own
+    suite, `tests/test_git_project_ladder.py`, drives real `git init`/`worktree add` fixtures instead,
+    which is where metadata this file could have got wrong belongs.
     """
 
-    def test_every_unwired_surface_refuses_at_three_by_name_and_moves_nothing(self) -> None:
+    def project_roots(self, plane: Plane) -> dict[str, Path]:
+        """One directory per row, plus the admitted repository the positive control activates."""
+        base = plane.root / "projects"
+        roots = {name: base / name for name in ("repo", "plain", "hostile")}
+        for path in roots.values():
+            path.mkdir(parents=True, exist_ok=True)
+        self.plant_git_metadata(roots["repo"])
+        (roots["repo"] / "README.md").write_text("committed\n", encoding="utf-8")
+        inside = roots["repo"] / "sub"
+        inside.mkdir(exist_ok=True)
+        os.mkfifo(roots["hostile"] / ".git")
+        return {
+            "home": plane.home,
+            "inside": inside,
+            "gone": base / "never-existed",
+            "plain": roots["plain"],
+            "hostile": roots["hostile"],
+            "repo": roots["repo"],
+        }
+
+    @staticmethod
+    def plant_git_metadata(root: Path) -> None:
+        """The minimum structure the shared reader admits as a git project."""
+        metadata = root / ".git"
+        (metadata / "objects").mkdir(parents=True, exist_ok=True)
+        (metadata / "refs" / "heads").mkdir(parents=True, exist_ok=True)
+        (metadata / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    def test_every_refused_project_root_exits_three_by_name_and_moves_nothing(self) -> None:
         plane = self.plane()
         # An acquisition is available, so each refusal below is declining work this host could really
         # have done. Without one, every row would refuse for the acquisition's absence instead.
         plane.acquire_a()
+        roots = self.project_roots(plane)
         before = tree_hash(*plane.observed_roots())
-        for label, vector, reason in UNWIRED_SURFACE_MATRIX:
-            with self.subTest(case=label):
-                completed = plane.dispatch(*vector)
-                self.assert_admitted_class(completed)
-                self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
-                self.assertEqual("", completed.stdout)
-                self.assertIn(reason, completed.stderr)
-                self.assertIn("is not served by this release", completed.stderr)
-                # NO USAGE BLOCK: this is the exit-2/exit-3 distinction on the stream, and the negative
-                # control at the end of this test shows the same assertion catching one when it is there.
-                self.assertNotIn("usage: ccodex install", completed.stderr)
-                self.assertNotIn("Traceback", completed.stderr)
-                self.assertEqual(before, tree_hash(*plane.observed_roots()), label)
-                self.assert_no_authority_claim(completed.stdout, completed.stderr)
+        target_before = {label: tree_hash(path) for label, path in roots.items() if path.exists()}
+        for label, root_label, reason in PROJECT_REFUSAL_MATRIX:
+            for verb in ("install", "update", "uninstall", "status"):
+                with self.subTest(case=f"{verb}-{label}"):
+                    completed = plane.dispatch(
+                        verb, "--scope", "project", "--agent", "claude", "--project", str(roots[root_label])
+                    )
+                    self.assert_admitted_class(completed)
+                    self.assertEqual(EXIT_REFUSED, completed.returncode, completed.stderr)
+                    self.assertEqual("", completed.stdout)
+                    self.assertIn(reason, completed.stderr)
+                    # NO USAGE BLOCK: this is the exit-2/exit-3 distinction on the stream, and the
+                    # negative control at the end of this test shows the same assertion catching one.
+                    self.assertNotIn(f"usage: ccodex {verb}", completed.stderr)
+                    self.assertNotIn("Traceback", completed.stderr)
+                    self.assertEqual(before, tree_hash(*plane.observed_roots()), label)
+                    # THE TARGET ROOT IS PINNED SEPARATELY (audit W-h): the plane's own roots are not
+                    # where a project-scope partial write would land.
+                    for target, digest in target_before.items():
+                        self.assertEqual(digest, tree_hash(roots[target]), f"{label}/{target}")
+                    self.assert_no_authority_claim(completed.stdout, completed.stderr)
         # NEGATIVE CONTROL for the missing usage block: the same plane, the same channel, one genuine
         # grammar error -- and the usage block IS there. Without this, "no usage block" would be
         # indistinguishable from a stderr this harness failed to capture.
-        grammar = plane.dispatch("install", "--scope", "user")
+        grammar = plane.dispatch("install", "--scope", "project", "--project", str(roots["repo"]))
         self.assertEqual(EXIT_GRAMMAR, grammar.returncode, grammar.stderr)
         self.assertIn("usage: ccodex install", grammar.stderr)
-        # POSITIVE CONTROL: the served spelling of the same verb on the same plane installs, so every
-        # refusal above is the unwired surface and not a host that could not have been activated.
-        self.install_once(plane)
+        # POSITIVE CONTROL: the admitted root on the same plane activates, so every refusal above is the
+        # ladder's verdict and not a host that could not have been activated at project scope at all.
+        served = plane.dispatch(
+            "install", "--scope", "project", "--agent", "claude", "--project", str(roots["repo"])
+        )
+        self.assert_admitted_class(served)
+        self.assertEqual(EXIT_OK, served.returncode, served.stderr)
+        self.assertIn(f"project root: {roots['repo']}", served.stdout)
+        self.assertTrue((roots["repo"] / ".claude" / "agents").is_dir())
         self.assertNotEqual(before, tree_hash(*plane.observed_roots()))
 
-    def test_the_unwired_reasons_are_the_ones_the_reader_declares(self) -> None:
-        """A refusal token this harness invented would pin nothing, so the three are read back.
+    def test_every_refusal_name_is_a_literal_the_substrate_declares(self) -> None:
+        """A refusal token this harness invented would pin nothing, so each one is read back.
 
-        ``refuse_unwired_surface`` is the one place they are raised, and its wave references are what
-        tell an operator when each arrives; a row that stopped matching the shipped text would otherwise
-        keep passing on a substring the product no longer prints.
+        The ladder is the one place they are declared, so the source read is the SUBSTRATE's rather than
+        the reader's: a row that stopped matching the shipped token would otherwise keep passing on a
+        substring the product no longer prints.
         """
-        source = (ROOT / "scripts" / "ccodex_sdlc.py").read_text(encoding="utf-8")
-        for reason in {reason for _label, _vector, reason in UNWIRED_SURFACE_MATRIX}:
+        source = (ROOT / "scripts" / "install_skill_bundle.py").read_text(encoding="utf-8")
+        for reason in {reason for _label, _root, reason in PROJECT_REFUSAL_MATRIX}:
             with self.subTest(reason=reason):
-                self.assertIn(reason, source)
-        # Positive control: the same lookup does NOT find a token the reader never declares, so the
-        # three above are findings about this file rather than a scan that passes over any text.
-        self.assertNotIn("wildcard-scope-not-yet-wired", source)
+                self.assertIn(f'"{reason}"', source)
+        # Positive control: the same lookup does NOT find a token the substrate never declares, so the
+        # four above are findings about this file rather than a scan that passes over any text.
+        self.assertNotIn('"wildcard-root-not-admissible"', source)
 
 
 class WiredFlagRequestTest(Conformance):

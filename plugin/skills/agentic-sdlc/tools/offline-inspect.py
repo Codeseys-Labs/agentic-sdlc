@@ -4,14 +4,23 @@
 from __future__ import annotations
 
 import argparse
-import errno
+import importlib.util
 import json
 import os
 import stat
 import sys
 from pathlib import Path
+from types import ModuleType
 
 SCHEMA = "agentic-sdlc/offline-inspect@1"
+
+#: The ONE reader of `.git` metadata, shared with the receipted lifecycle verbs (agentic-sdlc-7a2b,
+#: W4). It is a plain sibling of this file inside the skill payload, so it travels with an installed
+#: copy exactly as this tool does -- which is why the shared module lives here rather than under the
+#: distribution's `scripts/`, where a copy-mode install could not reach it. There is deliberately no
+#: fallback copy of the shape checks in this file: two readers of one subject is the defect the
+#: extraction removed, and an absent sibling is a named refusal instead.
+DETECTOR_NAME = "git_project_detector.py"
 
 # EXITS, as one derivation point (product-spec Implementation Decision 9; the machine-readable
 # `exit_codes` map that used to restate it went with the acquisition engine, so this comment and
@@ -80,34 +89,39 @@ class InspectionError(Exception):
     """The target cannot be inspected safely."""
 
 
-class NoAtimeError(Exception):
-    """A file cannot be read while preserving its access time."""
+def load_detector() -> ModuleType:
+    """Load the shared `.git` reader from beside this file, or refuse by name.
 
-
-def read_noatime(path: Path) -> bytes:
-    noatime = getattr(os, "O_NOATIME", None)
-    if noatime is None:
-        raise NoAtimeError
-    flags = os.O_RDONLY | noatime | getattr(os, "O_BINARY", 0)
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    An exact physical sibling, never resolved through ambient `sys.path` and never followed through a
+    link: the same admission shape the distribution's own modules use for their siblings. A missing
+    or linked sibling is an input failure (exit 2), because nothing was inspected.
+    """
+    path = Path(__file__).resolve().with_name(DETECTOR_NAME)
+    if path.is_symlink() or not path.is_file():
+        raise InspectionError(f"the shared git-metadata reader is absent or is a link: {path}")
+    specification = importlib.util.spec_from_file_location("_offline_inspect_git_detector", path)
+    if specification is None or specification.loader is None:
+        raise InspectionError(f"the shared git-metadata reader cannot be loaded: {path}")
+    module = importlib.util.module_from_spec(specification)
+    # Registered BEFORE execution, not as bookkeeping: `dataclasses` resolves a decorated class's
+    # module through `sys.modules`, so a module holding a `@dataclass` and executed unregistered dies
+    # with `'NoneType' object has no attribute '__dict__'`.
+    sys.modules[specification.name] = module
     try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        if exc.errno in (errno.EPERM, errno.EACCES, errno.EOPNOTSUPP, errno.ENOTSUP):
-            raise NoAtimeError from exc
-        raise
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError(errno.EINVAL, "not a regular file")
-        chunks = []
-        while chunk := os.read(descriptor, 1024 * 1024):
-            chunks.append(chunk)
-        return b"".join(chunks)
-    finally:
-        os.close(descriptor)
+        specification.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - an import failure here inspected nothing
+        raise InspectionError(f"the shared git-metadata reader failed to load: {path}: {exc}") from exc
+    return module
 
 
 def node_mode(path: Path) -> int | None:
+    """This tool's own stat helper, kept for the INSTRUCTION items after the git shape checks moved.
+
+    It differs from the shared reader's identically-named helper in exactly one way, and the
+    difference is the contract: an unreadable path here is an input failure this command reports at
+    exit 2 (`InspectionError`), where the shared reader propagates the `OSError` for its caller to
+    classify. `git_baseline` restores this behaviour at its own boundary.
+    """
     try:
         return path.lstat().st_mode
     except FileNotFoundError:
@@ -122,96 +136,24 @@ def regular_directory(path: Path, label: str) -> None:
         raise InspectionError(f"{label} must be an existing directory")
 
 
-def valid_git_head(path: Path) -> bool:
+def git_baseline(target: Path, detector: ModuleType) -> dict[str, str]:
+    """Render the shared reader's verdict in this tool's own three-action vocabulary.
+
+    The four verdicts map one-to-one onto what this tool already said, which is why the extraction
+    changed no output: `absent` is a baseline this activation would `create`, `admitted` is one it
+    would `adopt`, and the two refusals keep their own names. An `OSError` escaping the reader is
+    re-raised as this command's input failure, so a permission-denied target still lands on exit 2
+    exactly as the measured residual at the top of this file records.
+    """
     try:
-        raw = read_noatime(path / "HEAD")
-    except (NoAtimeError, OSError):
-        return False
-    try:
-        lines = raw.decode("utf-8", errors="strict").splitlines()
-    except UnicodeError:
-        return False
-    if len(lines) != 1 or not lines[0] or "\x00" in lines[0]:
-        return False
-    value = lines[0]
-    if value.startswith("ref: refs/"):
-        return len(value) > len("ref: refs/") and not value.endswith("/")
-    return len(value) in (40, 64) and all(character in "0123456789abcdefABCDEF" for character in value)
-
-
-def git_common_directory(path: Path) -> Path | None:
-    commondir_path = path / "commondir"
-    mode = node_mode(commondir_path)
-    if mode is None or not stat.S_ISREG(mode):
-        return None
-    try:
-        raw = read_noatime(commondir_path)
-    except (NoAtimeError, OSError):
-        return None
-    try:
-        lines = raw.decode("utf-8", errors="strict").splitlines()
-    except UnicodeError:
-        return None
-    if len(lines) != 1 or not lines[0] or "\x00" in lines[0]:
-        return None
-    common = Path(lines[0])
-    return common if common.is_absolute() else path / common
-
-
-def git_metadata_directory(path: Path) -> bool:
-    mode = node_mode(path)
-    if mode is None or not stat.S_ISDIR(mode):
-        return False
-    head_mode = node_mode(path / "HEAD")
-    if head_mode is None or not stat.S_ISREG(head_mode) or not valid_git_head(path):
-        return False
-    common = git_common_directory(path)
-    storage = common if common is not None else path
-    objects_mode = node_mode(storage / "objects")
-    refs_mode = node_mode(storage / "refs")
-    if objects_mode is None or not stat.S_ISDIR(objects_mode):
-        return False
-    return refs_mode is not None and stat.S_ISDIR(refs_mode)
-
-
-def gitfile_target(target: Path, path: Path) -> Path | None:
-    try:
-        raw = read_noatime(path)
-    except NoAtimeError:
-        return None
-    except OSError:
-        return None
-    try:
-        text = raw.decode("utf-8", errors="strict")
-    except UnicodeError:
-        return None
-    lines = text.splitlines()
-    if len(lines) != 1 or not lines[0].startswith("gitdir: "):
-        return None
-    value = lines[0][len("gitdir: "):]
-    if not value or "\x00" in value:
-        return None
-    gitdir = Path(value)
-    if not gitdir.is_absolute():
-        gitdir = target / gitdir
-    return gitdir
-
-
-def git_baseline(target: Path) -> dict[str, str]:
-    path = target / ".git"
-    mode = node_mode(path)
-    if mode is None:
+        admission = detector.admit(target)
+    except OSError as exc:
+        raise InspectionError(f"cannot inspect target path: {target / '.git'}") from exc
+    if admission.verdict == detector.ABSENT:
         return {"id": "git-baseline", "action": "create"}
-    if stat.S_ISDIR(mode):
-        valid = git_metadata_directory(path)
-    elif stat.S_ISREG(mode):
-        gitdir = gitfile_target(target, path)
-        valid = gitdir is not None and git_metadata_directory(gitdir)
-    else:
-        return {"id": "git-baseline", "action": "refuse", "reason": "unsafe-node"}
-    if valid:
+    if admission.verdict == detector.ADMITTED:
         return {"id": "git-baseline", "action": "adopt"}
-    return {"id": "git-baseline", "action": "refuse", "reason": "invalid-git-metadata"}
+    return {"id": "git-baseline", "action": "refuse", "reason": admission.verdict}
 
 
 def marker_status(text: str) -> str:
@@ -232,7 +174,13 @@ def marked_body(text: str) -> str:
     return text[start:end].strip("\n")
 
 
-def instruction_item(target: Path, name: str) -> dict[str, str]:
+def instruction_item(target: Path, name: str, detector: ModuleType) -> dict[str, str]:
+    """Preview one instruction file, reading it through the shared atime-preserving reader.
+
+    The reader's `kind` IS this tool's refusal reason for the two failures it distinguishes
+    (`no-atime-unavailable`, `unreadable`), so the vocabulary is carried across the seam rather than
+    re-derived from the prose of an exception.
+    """
     item_id = f"instructions:{name}"
     path = target / name
     mode = node_mode(path)
@@ -241,13 +189,11 @@ def instruction_item(target: Path, name: str) -> dict[str, str]:
     if not stat.S_ISREG(mode):
         return {"id": item_id, "action": "refuse", "reason": "unsafe-node"}
     try:
-        text = read_noatime(path).decode("utf-8", errors="strict")
-    except NoAtimeError:
-        return {"id": item_id, "action": "refuse", "reason": "no-atime-unavailable"}
+        text = detector.read_without_atime(path).decode("utf-8", errors="strict")
+    except detector.MetadataUnreadable as exc:
+        return {"id": item_id, "action": "refuse", "reason": exc.kind}
     except UnicodeError:
         return {"id": item_id, "action": "refuse", "reason": "non-utf8"}
-    except OSError:
-        return {"id": item_id, "action": "refuse", "reason": "unreadable"}
     status = marker_status(text)
     if status in ("duplicate-marker", "malformed-marker"):
         return {"id": item_id, "action": "refuse", "reason": status}
@@ -261,10 +207,11 @@ def instruction_item(target: Path, name: str) -> dict[str, str]:
 
 def inspect(target: Path) -> tuple[dict[str, object], int]:
     regular_directory(target, "target")
+    detector = load_detector()
     items: list[dict[str, object]] = [
-        git_baseline(target),
-        instruction_item(target, "AGENTS.md"),
-        instruction_item(target, "CLAUDE.md"),
+        git_baseline(target, detector),
+        instruction_item(target, "AGENTS.md", detector),
+        instruction_item(target, "CLAUDE.md", detector),
         {"id": "excluded-surfaces", "action": "skip", "scope": EXCLUDED_SURFACES},
     ]
     refusal = next((item for item in items if item["action"] == "refuse"), None)
