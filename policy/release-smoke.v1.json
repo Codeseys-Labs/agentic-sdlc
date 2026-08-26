@@ -320,14 +320,15 @@
       "platforms": [
         "Linux"
       ],
-      "environment": "host",
+      "environment": "scratch-state",
       "expect_exit": 3,
       "expect_stderr_present": [
         "refused before any effect",
         "no acquired candidate is available"
       ],
       "expect_stderr_absent": [
-        "expected direct -I -B execution"
+        "expected direct -I -B execution",
+        "is not trusted"
       ]
     },
     {

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import platform
 import re
 import shlex
@@ -32,6 +33,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 import yaml
 
@@ -144,6 +146,97 @@ class StubTree:
         dispatcher.chmod(0o755)
 
 
+#: A 64-hex acquisition receipt name, the only shape `acquisition_receipt_names` admits.
+SEEDED_ARCHIVE_SHA256 = "b" * 64
+
+
+class AcquisitionSensitiveTree:
+    """A stub ``bin/ccodex`` that answers from the ACQUISITION PLANES its environment points at.
+
+    The canned-output stub cannot test an environment mode, because its answer is a file. This one
+    re-expresses the shipped installer's own two-plane admission in twenty lines of bash: a sealed
+    receipt under ``XDG_STATE_HOME`` or a staged release root under ``XDG_DATA_HOME`` makes it
+    proceed, and only their joint absence produces the refusal the manifest case asserts. Both halves
+    are here because the product reaches for the second when the first is missing -- it mints a ticket
+    from a release root -- so a fixture watching only the receipts directory would call an isolation
+    complete while the other plane still decided the verdict.
+
+    It is a re-expression and not the product, so what it can prove is that the READER hands a case an
+    environment in which the operator's planes are unreachable. That the shipped dispatcher refuses
+    for the same reason is the workflow's job, against a real archive.
+    """
+
+    def __init__(self, base: Path):
+        self.root = base / "acquisition-sensitive-stub"
+        (self.root / "bin").mkdir(parents=True)
+        dispatcher = self.root / "bin" / "ccodex"
+        dispatcher.write_text(
+            "#!/usr/bin/env bash\n"
+            'receipts="${XDG_STATE_HOME:-$HOME/.local/state}/agentic-sdlc/acquisition/receipts"\n'
+            'candidates="${XDG_DATA_HOME:-$HOME/.local/share}/agentic-sdlc/acquisition/candidates"\n'
+            'for receipt in "$receipts"/*.json; do\n'
+            '  [ -e "$receipt" ] || continue\n'
+            "  printf 'PROCEEDING PAST THE REFUSAL: sealed acquisition receipt %s\\n' \"$receipt\"\n"
+            "  exit 0\n"
+            "done\n"
+            'for root in "$candidates"/*/root/manifest.json; do\n'
+            '  [ -e "$root" ] || continue\n'
+            "  printf 'PROCEEDING PAST THE REFUSAL: release root %s\\n' \"$root\"\n"
+            "  exit 0\n"
+            "done\n"
+            "printf 'refused before any effect: no acquired candidate is available: %s holds no"
+            " <archive-sha256>.json acquisition receipt and %s holds no release root to seal one"
+            " from\\n' \"$receipts\" \"$candidates\" >&2\n"
+            "exit 3\n",
+            encoding="utf-8",
+        )
+        dispatcher.chmod(0o755)
+
+
+def acquisition_case(**overrides: object) -> dict[str, object]:
+    """The shipped install case's assertions, against the stub above."""
+    case: dict[str, object] = {
+        "id": "install-refuses-before-effect-on-linux",
+        "argv": ["install", "--scope", "user", "--agent", "claude"],
+        "platforms": ["Darwin", "Linux"],
+        "environment": "scratch-state",
+        "expect_exit": 3,
+        "expect_stderr_present": [
+            "refused before any effect",
+            "no acquired candidate is available",
+        ],
+        "expect_stderr_absent": ["expected direct -I -B execution", "is not trusted"],
+    }
+    case.update(overrides)
+    return case
+
+
+def fixture_host_environment(home: Path) -> dict[str, str]:
+    """An invoking environment whose every operator plane is under `home`, never the real one.
+
+    Every test below runs the reader as a subprocess, and a subprocess that inherited this process's
+    HOME would read and could write the operator's own planes even on the runs that expect a refusal
+    first. So the fixture supplies all four XDG roots explicitly rather than letting any of them
+    re-derive.
+    """
+    environment = dict(os.environ)
+    environment["HOME"] = str(home)
+    for variable, tail in (
+        ("XDG_STATE_HOME", "state"),
+        ("XDG_DATA_HOME", "data"),
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_CACHE_HOME", "cache"),
+    ):
+        root = home / tail
+        root.mkdir(parents=True, exist_ok=True)
+        environment[variable] = str(root)
+    return environment
+
+
+def tree_snapshot(root: Path) -> set[str]:
+    return {str(path.relative_to(root)) for path in root.rglob("*")}
+
+
 def manifest_document(cases: list[dict[str, object]]) -> dict[str, object]:
     return {"schema_version": "release-smoke/v1", "cases": cases}
 
@@ -166,12 +259,15 @@ def admitted_case(**overrides: object) -> dict[str, object]:
     return case
 
 
-def run_smoke(tree: Path, manifest: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+def run_smoke(
+    tree: Path, manifest: Path, *extra: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(SMOKE_SCRIPT), "--tree", str(tree), "--policy", str(manifest), *extra],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -534,6 +630,168 @@ class VerdictTest(unittest.TestCase):
         completed = run_smoke(self.tree(admitted=True), self.manifest, "--case", "no-such-case")
         self.assertEqual(completed.returncode, 3, completed.stdout + completed.stderr)
         self.assertIn("no such case", completed.stderr)
+
+
+class ScratchStateEnvironmentTest(unittest.TestCase):
+    """The `scratch-state` mode, and the host state it exists to stop deciding a verdict.
+
+    Issue #9's install case asserted a refusal that only holds while the acquisition planes are empty
+    (agentic-sdlc-66ca). Under `host` that made the verdict a fact about the invoking machine: seed one
+    receipt and the same argv proceeds past the refusal, which on the real dispatcher means a live
+    activation into the operator's Claude home during a smoke run. Every test here seeds exactly that
+    state and then asks whether the mode still refuses.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.home = self.base / "invoking-home"
+        self.home.mkdir()
+        self.environment = fixture_host_environment(self.home)
+        self.tree = AcquisitionSensitiveTree(self.base).root
+        self.manifest = self.base / "manifest.json"
+        self.addCleanup(self.temporary.cleanup)
+
+    def seed_receipt(self) -> Path:
+        receipts = Path(self.environment["XDG_STATE_HOME"]) / "agentic-sdlc" / "acquisition" / "receipts"
+        receipts.mkdir(parents=True)
+        receipt = receipts / f"{SEEDED_ARCHIVE_SHA256}.json"
+        receipt.write_text(json.dumps({"schema_version": "acquisition-receipt/v1"}), encoding="utf-8")
+        return receipt
+
+    def seed_release_root(self) -> Path:
+        candidates = (
+            Path(self.environment["XDG_DATA_HOME"]) / "agentic-sdlc" / "acquisition" / "candidates"
+        )
+        root = candidates / SEEDED_ARCHIVE_SHA256 / "root"
+        root.mkdir(parents=True)
+        manifest = root / "manifest.json"
+        manifest.write_text(json.dumps({"version": "0.7.5"}), encoding="utf-8")
+        return manifest
+
+    def write_manifest(self, **overrides: object) -> None:
+        self.manifest.write_text(
+            json.dumps(manifest_document([acquisition_case(**overrides)])), encoding="utf-8"
+        )
+
+    def test_a_host_case_lets_a_seeded_receipt_decide_the_verdict(self) -> None:
+        """SENSITIVITY CONTROL: the seeded state must actually be able to change the answer.
+
+        Without this the isolation tests below prove nothing -- a refusal that was never at risk is
+        not evidence of isolation. This is also the defect itself, reproduced: the case as shipped
+        before this change would have gone RED on a host holding one receipt, and on the real
+        dispatcher it would instead have proceeded to a real install.
+        """
+        receipt = self.seed_receipt()
+        self.write_manifest(environment="host")
+        completed = run_smoke(self.tree, self.manifest, env=self.environment)
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("PROCEEDING PAST THE REFUSAL", completed.stdout)
+        self.assertIn(str(receipt), completed.stdout)
+
+    def test_scratch_state_still_refuses_with_a_receipt_seeded_on_the_invoking_host(self) -> None:
+        self.seed_receipt()
+        self.write_manifest()
+        completed = run_smoke(self.tree, self.manifest, env=self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("pass install-refuses-before-effect-on-linux", completed.stdout)
+        self.assertNotIn("PROCEEDING PAST THE REFUSAL", completed.stdout)
+
+    def test_scratch_state_still_refuses_with_a_release_root_staged_on_the_invoking_host(self) -> None:
+        """The second acquisition plane, which `XDG_STATE_HOME` alone does not cover.
+
+        The installer mints its own ticket from a staged release root when no receipt is filed, so a
+        mode that relocated only the receipts plane would still let the candidates plane under
+        `XDG_DATA_HOME` decide this verdict.
+        """
+        self.seed_release_root()
+        self.write_manifest()
+        completed = run_smoke(self.tree, self.manifest, env=self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("pass install-refuses-before-effect-on-linux", completed.stdout)
+
+    def test_scratch_state_refuses_naming_its_own_planes_and_not_the_invoking_hosts(self) -> None:
+        self.seed_receipt()
+        self.write_manifest(expect_exit=0, expect_stdout_present=["never"])
+        completed = run_smoke(self.tree, self.manifest, env=self.environment)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("no acquired candidate is available", completed.stdout)
+        self.assertNotIn(self.environment["XDG_STATE_HOME"], completed.stdout)
+        self.assertNotIn(self.environment["XDG_DATA_HOME"], completed.stdout)
+
+    def test_the_invoking_hosts_own_planes_are_untouched_by_a_scratch_state_run(self) -> None:
+        self.seed_receipt()
+        self.seed_release_root()
+        self.write_manifest()
+        before = tree_snapshot(self.home)
+        completed = run_smoke(self.tree, self.manifest, env=self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(tree_snapshot(self.home), before)
+
+    def test_scratch_state_relocates_every_operator_plane_into_the_cases_own_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch_name:
+            scratch = Path(scratch_name)
+            with mock.patch.dict(os.environ, self.environment, clear=True):
+                environment = smoke.case_environment(acquisition_case(), scratch)
+            base = scratch / "scratch-state" / "install-refuses-before-effect-on-linux"
+            self.assertEqual(environment["HOME"], str(base / "home"))
+            for variable, tail in smoke.SCRATCH_STATE_ROOTS:
+                with self.subTest(variable=variable):
+                    self.assertEqual(environment[variable], str(base.joinpath(*tail)))
+                    self.assertTrue(Path(environment[variable]).is_dir())
+                    self.assertEqual(tree_snapshot(Path(environment[variable])), set())
+
+    def test_scratch_state_pins_the_toolchains_own_directories_back_to_the_invoking_host(self) -> None:
+        """The hazard this mode had to engineer around, asserted rather than described.
+
+        mise keeps its trust store and its installed toolchain under the operator's XDG roots. Moving
+        those roots without pinning makes the dispatcher refuse `mise.toml is not trusted` -- exit 3,
+        the same code the case expects, for an unrelated reason -- and makes the pinned toolset read as
+        absent, so `auto_install` downloads it inside a smoke run. So every pin must point OUTSIDE the
+        case's scratch directory.
+        """
+        with tempfile.TemporaryDirectory() as scratch_name:
+            scratch = Path(scratch_name)
+            with mock.patch.dict(os.environ, self.environment, clear=True):
+                environment = smoke.case_environment(acquisition_case(), scratch)
+            self.assertTrue(smoke.TOOLCHAIN_PINS)
+            for variable, _xdg, _default, _leaf in smoke.TOOLCHAIN_PINS:
+                with self.subTest(variable=variable):
+                    self.assertIn(variable, environment)
+                    pinned = Path(environment[variable])
+                    self.assertTrue(pinned.is_absolute(), pinned)
+                    self.assertFalse(
+                        pinned.is_relative_to(scratch),
+                        f"{variable} was relocated with the case instead of pinned back to the host",
+                    )
+                    self.assertTrue(pinned.is_relative_to(self.home), pinned)
+
+    def test_an_explicit_toolchain_pin_in_the_environment_is_the_operators_own_and_is_kept(self) -> None:
+        chosen = self.base / "operator-chosen-mise-state"
+        self.environment["MISE_STATE_DIR"] = str(chosen)
+        with tempfile.TemporaryDirectory() as scratch_name:
+            with mock.patch.dict(os.environ, self.environment, clear=True):
+                environment = smoke.case_environment(acquisition_case(), Path(scratch_name))
+        self.assertEqual(environment["MISE_STATE_DIR"], str(chosen))
+
+    def test_an_unknown_environment_mode_is_refused_by_name(self) -> None:
+        self.write_manifest(environment="scratch")
+        completed = run_smoke(self.tree, self.manifest, env=self.environment)
+        self.assertEqual(completed.returncode, 3)
+        self.assertIn("environment must be one of", completed.stderr)
+        self.assertIn("scratch-state", completed.stderr)
+
+    def test_the_shipped_install_case_is_isolated_and_forbids_the_trust_refusal(self) -> None:
+        """The manifest this repository ships, not a fixture: the flip is the point of the change.
+
+        The trust text is forbidden because isolation alone cannot say WHY the dispatcher refused, and
+        a moved trust store answers at the same exit code with the same `refused:` prefix.
+        """
+        cases = {case["id"]: case for case in smoke.load_manifest(MANIFEST_PATH)}
+        case = cases["install-refuses-before-effect-on-linux"]
+        self.assertEqual(case["environment"], "scratch-state")
+        self.assertIn("no acquired candidate is available", case["expect_stderr_present"])
+        self.assertIn("is not trusted", case["expect_stderr_absent"])
 
 
 class MutationFixtureTest(unittest.TestCase):

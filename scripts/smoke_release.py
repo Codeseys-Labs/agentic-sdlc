@@ -25,6 +25,14 @@ CONTRACT.
   * ``stdout`` carries reports and ``stderr`` carries refusals, and the two are never conflated:
     ``bin/ccodex`` documents that mise resolution noise and a global-config lockfile ``WARN`` land
     on stderr deliberately.
+  * ``environment`` selects one of three: ``host`` inherits the invoking environment verbatim,
+    ``toolfree`` runs with a PATH holding only base utilities, and ``scratch-state`` inherits the host
+    but relocates HOME and every XDG root into the case's own directory while pinning mise's and uv's
+    own directories back.  A case whose verdict depends on whether an operator plane is EMPTY belongs
+    in ``scratch-state``: under ``host`` it is asserting a fact about the machine that ran it
+    (agentic-sdlc-66ca).  Isolation alone is not proof of the reason -- a moved trust store makes the
+    dispatcher refuse at the same exit code with a different body -- so such a case also forbids the
+    trust text on stderr.
   * ``forbid_finding_codes`` names the report's own ``findings[].code`` vocabulary.  Issue #9's
     design sketch called the field ``forbid_finding_ids``; the report spells them ``code``, so
     this manifest does too.
@@ -65,11 +73,38 @@ TREE_TOKEN = "{tree}"
 #: extracted ``bin/ccodex`` -- a bash script -- is even reachable on a Windows runner is unmeasured,
 #: and a case that named it would claim coverage nobody observed (issue #9, "Windows: out of scope").
 PLATFORMS = ("Darwin", "Linux")
-ENVIRONMENTS = ("host", "toolfree")
+ENVIRONMENTS = ("host", "scratch-state", "toolfree")
 #: The base utilities the dispatcher's tool-free verbs may use.  A ``toolfree`` case runs with a
 #: PATH holding only these, so passing genuinely proves no mise, uv, jq, or ocx was needed -- a
 #: positive isolation rather than a stripped environment.
 TOOLFREE_UTILITIES = ("bash", "cat", "dirname", "realpath")
+#: The operator-plane roots a ``scratch-state`` case relocates into its own scratch directory, each
+#: with the tail its XDG default appends to ``HOME``.  Both halves of the acquisition plane are here
+#: on purpose: a receipt lives under ``XDG_STATE_HOME`` and the release root it would be sealed from
+#: lives under ``XDG_DATA_HOME``, so isolating one and inheriting the other still lets host state
+#: decide the verdict.
+SCRATCH_STATE_ROOTS = (
+    ("XDG_STATE_HOME", ("state",)),
+    ("XDG_DATA_HOME", ("data",)),
+    ("XDG_CONFIG_HOME", ("config",)),
+    ("XDG_CACHE_HOME", ("cache",)),
+)
+#: What must be pinned BACK to the invoking host when those roots move, as (variable, XDG variable,
+#: that variable's default tail under ``HOME``, the tool's own leaf).  mise keeps its trust store and
+#: its installed toolchain under the operator's XDG roots, and uv keeps its cache and managed
+#: interpreters there, so relocating the roots without these pins breaks the run in two ways that both
+#: look like something else: mise reports the extracted tree's ``mise.toml`` as UNTRUSTED, so the
+#: dispatcher refuses at exit 3 with a body about trust rather than about the verb under test, and
+#: mise's install tree reads as absent, so ``auto_install`` downloads the whole pinned toolset inside
+#: a smoke run.  An explicit value already in the environment is the operator's own pin and is kept.
+TOOLCHAIN_PINS = (
+    ("MISE_CONFIG_DIR", "XDG_CONFIG_HOME", (".config",), ("mise",)),
+    ("MISE_DATA_DIR", "XDG_DATA_HOME", (".local", "share"), ("mise",)),
+    ("MISE_STATE_DIR", "XDG_STATE_HOME", (".local", "state"), ("mise",)),
+    ("MISE_CACHE_DIR", "XDG_CACHE_HOME", (".cache",), ("mise",)),
+    ("UV_CACHE_DIR", "XDG_CACHE_HOME", (".cache",), ("uv",)),
+    ("UV_PYTHON_INSTALL_DIR", "XDG_DATA_HOME", (".local", "share"), ("uv", "python")),
+)
 STRING_LIST_FIELDS = (
     "expect_stdout_present",
     "expect_stdout_absent",
@@ -199,9 +234,52 @@ def toolfree_path(scratch: Path) -> str:
     return str(directory)
 
 
+def host_default(xdg_variable: str, default_tail: tuple[str, ...]) -> Path:
+    """Where the INVOKING host resolves one XDG root, whether or not it names it explicitly."""
+    value = os.environ.get(xdg_variable)
+    if value and value.strip():
+        return Path(value)
+    return Path(os.path.expanduser("~")).joinpath(*default_tail)
+
+
+def scratch_state_environment(case: dict[str, Any], scratch: Path) -> dict[str, str]:
+    """The host environment with every operator plane moved into this case's own directory.
+
+    WHY THIS MODE EXISTS.  ``install-refuses-before-effect-on-linux`` asserts that the shipped
+    dispatcher refuses because no acquired candidate is available, and under ``host`` that verdict was
+    a fact about the invoking machine rather than about the artifact: the refusal holds only while the
+    acquisition planes are empty.  On a host holding a sealed receipt, or a staged release root the
+    installer would mint a ticket from, the same argv proceeds PAST that refusal and performs a real
+    activation into the operator's own Claude home during a smoke run.  No such host exists today,
+    which is exactly the shape of environmental luck this manifest has already been burned by twice
+    (agentic-sdlc-66ca, and the terminal-line case before it).
+
+    So the case gets its own HOME and its own XDG roots, and the toolchain that has to keep working
+    across that move is pinned back BY ITS OWN VARIABLES rather than left to re-derive.  What this
+    does NOT do is prove the refusal came from the right place -- an unpinned mise answers "not
+    trusted" at the same exit code -- so the manifest case carries the trust text in
+    ``expect_stderr_absent`` and the assertion lives there, where a reader can see it.
+    """
+    environment = dict(os.environ)
+    base = scratch / "scratch-state" / case["id"]
+    home = base / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    for variable, xdg_variable, default_tail, leaf in TOOLCHAIN_PINS:
+        if not environment.get(variable, "").strip():
+            environment[variable] = str(host_default(xdg_variable, default_tail).joinpath(*leaf))
+    environment["HOME"] = str(home)
+    for variable, tail in SCRATCH_STATE_ROOTS:
+        root = base.joinpath(*tail)
+        root.mkdir(parents=True, exist_ok=True)
+        environment[variable] = str(root)
+    return environment
+
+
 def case_environment(case: dict[str, Any], scratch: Path) -> dict[str, str]:
     if case["environment"] == "host":
         return dict(os.environ)
+    if case["environment"] == "scratch-state":
+        return scratch_state_environment(case, scratch)
     # An allowlist, not os.environ minus a blocklist: HOME is the only other value the tool-free
     # verbs may read, and inheriting more would let an ambient tool root re-enter the PATH.
     return {"PATH": toolfree_path(scratch), "HOME": os.environ.get("HOME", str(scratch))}

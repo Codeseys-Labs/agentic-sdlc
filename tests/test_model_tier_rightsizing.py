@@ -12,6 +12,18 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 ROUTER = ROOT / "skills" / "model-tier-rightsizing" / "SKILL.md"
 CALIBRATION = ROUTER.parent / "references" / "model-routing-calibration.md"
+#: The gate-enforced byte-identical mirror of the calibration reference. It is generated parity, not a
+#: second active matrix, so the no-second-matrix guard exempts it -- but only while it really is
+#: byte-identical, which that guard asserts for itself rather than delegating to `validate_plugin_tree`.
+PLUGIN_CALIBRATION = (
+    ROOT / "plugin" / "skills" / "model-tier-rightsizing" / "references" / CALIBRATION.name
+)
+#: The operational matrix's REAL header row, read off the calibration file rather than described.
+#: Every `.md` but the calibration file and its mirror is forbidden to carry it, and the guard asserts
+#: this string is PRESENT in the canonical file first: the invariant went unenforced from the day it
+#: was written because it forbade `| Consequence lane | Exact model ID |`, a header that exists
+#: nowhere in this tree, so the positive control is the part that keeps it honest (agentic-sdlc-7b82).
+ACTIVE_MATRIX_HEADER = "| Consequence lane | Eligible primary exact IDs |"
 WORKFLOW_PROMPT_BUDGET = ROUTER.parent / "references" / "workflow-prompt-budget.md"
 FLAGSHIP = ROOT / "skills" / "agentic-sdlc" / "references" / "tiered-orchestration.md"
 RIGHTSIZE_COMMAND = ROOT / "commands" / "sdlc-rightsize.md"
@@ -621,7 +633,8 @@ class ModelTierRightsizingTests(unittest.TestCase):
         self.assertIn("same class and\ncontrol predicate", router)
         self.assertIn("does not restate a routing matrix", flagship)
         self.assertIn("Sol/Fable, Terra/Opus, and Luna/Sonnet", flagship)
-        self.assertNotIn("| Consequence lane | Exact model ID |", flagship)
+        self.assertIn(ACTIVE_MATRIX_HEADER, CALIBRATION.read_text(encoding="utf-8"))
+        self.assertNotIn(ACTIVE_MATRIX_HEADER, flagship)
         self.assertIn("certified bounded frontier/adversarial", router)
         self.assertIn("stops or reduces scope", router)
         _assert_no_unsafe_operational_prose(router)
@@ -893,11 +906,20 @@ await agent(calibrationExample, { model: 'gpt-5.6-terra[1m]', effort: 'ultra' })
             for target in links:
                 with self.subTest(source=source, target=target):
                     self.assertTrue((source.parent / target).resolve().is_file())
+        # POSITIVE CONTROL FIRST. Without it this loop is satisfied by a header that no longer exists
+        # anywhere, which is how the invariant shipped unenforced: the forbidden string named a column
+        # (`| Exact model ID |`) the calibration file has never had (agentic-sdlc-7b82).
+        canonical = CALIBRATION.read_text(encoding="utf-8")
+        self.assertIn(ACTIVE_MATRIX_HEADER, canonical)
+        # The mirror is exempt because it is PARITY, and the exemption is conditional on that being
+        # true here and now: a drifted mirror would be a divergent second active matrix, so it falls
+        # back under the ban rather than out of it.
+        self.assertEqual(PLUGIN_CALIBRATION.read_bytes(), CALIBRATION.read_bytes())
         for path in ROOT.rglob("*.md"):
-            if path == CALIBRATION:
+            if path in (CALIBRATION, PLUGIN_CALIBRATION):
                 continue
             with self.subTest(path=path):
-                self.assertNotIn("| Consequence lane | Exact model ID |", path.read_text(encoding="utf-8"))
+                self.assertNotIn(ACTIVE_MATRIX_HEADER, path.read_text(encoding="utf-8"))
 
     def test_mutations_fail_for_primary_allocation_fable_constraints_and_history(self) -> None:
         original = CALIBRATION.read_text(encoding="utf-8")

@@ -65,7 +65,21 @@ with the same upward clamp used here, so they no longer carry the defect; grep
 `anchor: int | None = None` in `tests/test_research_os_lifecycle.py` to confirm rather than trusting
 this sentence. There were two such helpers; the `tests/test_install_skill_bundle.py` one went with
 that module's witness tests in demolition rank 4, so only the research-os helper remains.
-Measured on this host, which is NOT a coarse-btime host:
+
+MEASURED 2026-08-06, ON A HOST THAT NO LONGER ANSWERS THIS WAY. The bullets below are kept because
+the anchor design is their conclusion, but do not read them as a current description of the
+development host. Re-measured 2026-08-26 against the same seam on the same repository (kernel
+6.18.33.2, WSL2, `/tmp`): 40 back-to-back creates under distinct names reported TWO distinct
+witnesses separated by one 4,099,685ns step, a 1ms gap split two creates in 2 trials of 5, and 10ms
+split 5 of 5. So this host is now a coarse-btime host at millisecond scale, the "NOT a coarse-btime
+host" claim in the next line has rotted, and the 4ms `CLOCK_REALTIME_COARSE` tick the bullets rule
+out as the source is the same magnitude now observed. Two further readings keep this from becoming a
+new tidy story: 3000 unlink-and-recreate cycles on ONE path reported 3000 distinct witnesses stepping
+by about 50us, so the granularity depends on the operation; and across 3000 fresh names the steps
+ranged from 53us to 4.112ms rather than holding one value. The mechanism is NOT established, and
+nothing here claims one (seed `agentic-sdlc-ab35`).
+
+Measured on this host 2026-08-06, when it was NOT a coarse-btime host:
 
   * btime here is fine-grained: 200 creates in 8.6ms produced 200/200 distinct witnesses, minimum
     delta 12,580ns, and the nsec fields are not multiples of any 4ms tick.
@@ -145,6 +159,34 @@ makes a wall-clock-anchored simulated clock split a real quantum. It reproduces
 `--anchor epoch --quantum 0.05`, each with the same one-quantum split CI showed), and it is
 intermittent by construction, so it is a diagnostic and never a gate.
 
+HOW THE SELF-PROOF DISCRIMINATES
+-------------------------------
+Before any test runs, the forced clock proves itself: two probe objects must come back carrying one
+witness. That proof used to create both probes BACK TO BACK, which made it worthless on exactly the
+hosts this lever is for. A host that stamps every create inside one 4ms granule identically collapses
+the pair by itself, so the assertion held whatever the lever did -- verified by mutation on
+2026-08-26, where `coarsen` returning its argument untouched still printed `collapse proved` and
+exited 0 (seed `agentic-sdlc-ab35`).
+
+So each probe pair now carries its OWN control. The unpatched seam is captured before patching and
+read against the same two files the forced seam reads, and the proof holds only when the two
+readings disagree with each other in the right direction: two distinct real birth timestamps, one
+forced witness. While the host reports ONE timestamp for the pair, the pair proves nothing, so the
+gap between the probes widens up a doubling ladder (back to back first, then 1us upward, capped at
+half a quantum) and the pair is retried.
+
+The control is measured on the objects under judgement rather than derived from a granule
+measurement, and that is the load-bearing choice. An estimate cannot be trusted on this host: its
+birth clock does not step by one constant, so a gap derived from a measured granule came out
+anywhere from 0.4ms to 15ms across consecutive runs, and one of those runs chose 2.65ms -- under the
+host's own 4.1ms tick -- after passing a three-trial pre-check by luck. A pre-check samples other
+pairs; the control samples this one.
+
+One honest limit, reported rather than hidden. When no gap on the ladder makes the host resolve a
+pair, the proof reports `NOT DISCRIMINATING` in its own line and the run continues. It is not a
+refusal, because the coarse path still executes on such a host -- the collapse is simply the host's
+work rather than the lever's, and the run must not claim otherwise.
+
 WHAT THIS DOES NOT SIMULATE
 ---------------------------
 It fakes a clock. It does not fake a kernel, a filesystem, or an allocator.
@@ -180,6 +222,7 @@ import functools
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -328,36 +371,150 @@ def _seam_reports_birth(module: Any, attribute: str) -> bool:
         return getattr(module, attribute)(os.fsencode(probe)) is not None
 
 
-def _prove_collapse(module: Any, attribute: str, *, attempts: int = 1) -> str:
-    """Positive control: two objects created back to back must now share one witness.
+def _birth_of(seam: Callable[..., Any], path: Path) -> int | None:
+    result = seam(os.fsencode(path))
+    return None if result is None else result.stx_btime.tv_sec * 10**9 + result.stx_btime.tv_nsec
 
-    A lever that silently does nothing is the same failure mode that let this class of defect
-    ship, so the forced clock proves itself through the patched seam before any test runs.
 
-    `attempts` exists for the `epoch` anchor only, where two probes microseconds apart can
-    legitimately straddle an absolute grid line. Retrying the PROBE is honest; a retry that never
-    collapses still refuses.
+#: The probe separations the collapse proof walks, in nanoseconds: back to back first, then a
+#: doubling ladder. Back to back FIRST because on a genuinely fine-grained host it already gives the
+#: host two distinct witnesses to collapse, and sleeping would only slow the lever down.
+PROBE_GAP_LADDER_START_NS = 1_000
+#: The ladder stops at half a quantum rather than at one. The real birth-timestamp distance between
+#: two probes is not the sleep between them -- it is the sleep rounded up to whatever the host's own
+#: clock does next -- so a gap allowed all the way to the quantum could put the second probe in the
+#: NEXT forced bucket and fail the collapse it was chosen to prove.
+PROBE_GAP_QUANTUM_FRACTION = 2
+
+
+class _NativeControlUnavailable(RuntimeError):
+    """The HOST stamped these two probes identically, so this pair can prove nothing about the lever.
+
+    Not a failure of the lever and not a property of the host alone: it is a statement about ONE
+    probe pair, which is why the caller answers it by widening the gap rather than by refusing.
     """
-    last: RuntimeError | None = None
-    for _ in range(max(1, attempts)):
-        try:
-            return _probe_collapse_once(module, attribute)
-        except RuntimeError as error:
-            last = error
-    assert last is not None
-    raise last
 
 
-def _probe_collapse_once(module: Any, attribute: str) -> str:
+class CollapseProof:
+    """One seam's self-proof: the witness it collapsed onto, and whether that proved anything.
+
+    `discriminating` is the whole point. It is true only when the SAME two probe files this proof
+    judged were read through the UNPATCHED seam in the same run and came back with two DIFFERENT
+    real birth timestamps. That is what makes the single forced witness attributable to the lever:
+    the host resolved this exact pair, and the lever collapsed it anyway.
+
+    Measuring the control on the same objects rather than deriving a gap from a granule estimate is
+    deliberate, and measured. This host's birth clock does not step by one constant -- 2026-08-26 on
+    kernel 6.18.33.2 (WSL2, `/tmp`), 3000 creates under distinct names stepped by 4.112ms in 13 of
+    the 286 steps observed while the smallest step was 53us -- so a gap derived from an estimate came
+    out anywhere from 0.4ms to 15ms across consecutive runs, and one run's 2.65ms gap sat UNDER the
+    host's own tick while passing a three-trial pre-check by luck. An estimate cannot be trusted on
+    such a host; the pair under judgement can be, because it is the evidence rather than a proxy for
+    it (seed `agentic-sdlc-ab35`).
+    """
+
+    def __init__(
+        self, witness: str, *, separation_ns: int | None, native_witnesses: tuple[str, str] | None
+    ) -> None:
+        self.witness = witness
+        self.separation_ns = separation_ns
+        self.native_witnesses = native_witnesses
+
+    @property
+    def discriminating(self) -> bool:
+        return self.native_witnesses is not None
+
+    def describe(self) -> str:
+        gap = (
+            "back to back"
+            if not self.separation_ns
+            else f"{self.separation_ns / 10**6:g}ms apart"
+        )
+        if self.native_witnesses is None:
+            return (
+                f"witness {self.witness} but NOT DISCRIMINATING: no probe gap up to half the quantum"
+                " made this host stamp two creates differently, so the collapse is the host's own"
+                " coarseness rather than evidence about the lever"
+            )
+        return (
+            f"witness {self.witness}, discriminating: two probes {gap} that the unpatched seam read"
+            f" as {self.native_witnesses[0]} and {self.native_witnesses[1]} came back as one"
+        )
+
+
+def _probe_gap_ladder(quantum_ns: int) -> list[int]:
+    ceiling = quantum_ns / PROBE_GAP_QUANTUM_FRACTION
+    ladder = [0]
+    gap = PROBE_GAP_LADDER_START_NS
+    while gap <= ceiling:
+        ladder.append(gap)
+        gap *= 2
+    return ladder
+
+
+def _prove_collapse(
+    module: Any, attribute: str, real: Callable[..., Any], *, quantum_ns: int, attempts: int = 1
+) -> CollapseProof:
+    """Positive control: two objects the HOST ITSELF discriminates must now share one witness.
+
+    A lever that silently does nothing is the same failure mode that let this class of defect ship,
+    so the forced clock proves itself through the patched seam before any test runs. What that proof
+    used to be worth depended on the host: it created its two probes BACK TO BACK, and a host that
+    stamps everything inside one 4ms granule identically collapsed the pair by itself, so an identity
+    `coarsen` still printed `collapse proved` and exited 0 (measured 2026-08-26, seed
+    `agentic-sdlc-ab35`).
+
+    So each attempt now reads the same two probes through BOTH seams. The unpatched `real` is the
+    control: while it reports one witness for the pair, the pair is widened and retried up the
+    ladder. Once it reports two, the forced seam must answer with one, and that is a discriminating
+    proof. Exhausting the ladder is not a refusal -- the coarse path still executes on a host that
+    coarse, and the proof says so instead of claiming what it did not show.
+
+    `attempts` exists for the `epoch` anchor, where two probes can legitimately straddle an absolute
+    grid line. Retrying the PROBE is honest; a retry that never collapses still refuses.
+    """
+    last_uncontrolled: CollapseProof | None = None
+    for gap in _probe_gap_ladder(quantum_ns):
+        failure: RuntimeError | None = None
+        for _ in range(max(1, attempts)):
+            try:
+                return _probe_collapse_once(module, attribute, real, separation_ns=gap)
+            except _NativeControlUnavailable as uncontrolled:
+                # This gap proves nothing, but the forced seam still collapsed the pair, so keep the
+                # weakest honest result in case the whole ladder answers the same way.
+                last_uncontrolled = CollapseProof(
+                    str(uncontrolled.args[1]), separation_ns=gap, native_witnesses=None
+                )
+                failure = None
+                break
+            except RuntimeError as error:
+                failure = error
+        if failure is not None:
+            raise failure
+    if last_uncontrolled is None:
+        raise RuntimeError(
+            f"{module.__name__}.{attribute} never produced a comparable probe pair on this host"
+        )
+    return last_uncontrolled
+
+
+def _probe_collapse_once(
+    module: Any, attribute: str, real: Callable[..., Any], *, separation_ns: int
+) -> CollapseProof:
     with tempfile.TemporaryDirectory(prefix="coarse-birth-probe-") as directory:
         root = Path(directory)
         first = root / "first"
         second = root / "second"
         first.write_bytes(b"")
+        if separation_ns:
+            time.sleep(separation_ns / 10**9)
         second.write_bytes(b"")
         seam = getattr(module, attribute)
+        # Read the control FIRST, so a forced reading can never be mistaken for a native one, and
+        # read both from the same two files: a birth timestamp does not move after creation.
+        native = tuple(_birth_of(real, probe) for probe in (first, second))
         results = (seam(os.fsencode(first)), seam(os.fsencode(second)))
-        if any(result is None for result in results):
+        if any(result is None for result in results) or None in native:
             raise RuntimeError(
                 f"{module.__name__}.{attribute} reported no birth timestamp for a file it "
                 "just created; this host cannot host a birth-witness reproduction"
@@ -365,12 +522,23 @@ def _probe_collapse_once(module: Any, attribute: str) -> str:
         witnesses = tuple(
             f"{result.stx_btime.tv_sec}.{result.stx_btime.tv_nsec}" for result in results
         )
-        if witnesses[0] is None or witnesses[0] != witnesses[1]:
+        separated = "back to back" if not separation_ns else f"{separation_ns / 10**6:g}ms apart"
+        if witnesses[0] != witnesses[1]:
             raise RuntimeError(
-                f"forced coarse clock did not collapse two back-to-back creates through "
+                f"forced coarse clock did not collapse two creates {separated} through "
                 f"{module.__name__}.{attribute}: {witnesses[0]!r} != {witnesses[1]!r}"
             )
-        return str(witnesses[0])
+        if native[0] == native[1]:
+            raise _NativeControlUnavailable(
+                f"this host stamped two creates {separated} with one birth timestamp, so their"
+                " collapse is not evidence about the lever",
+                witnesses[0],
+            )
+        return CollapseProof(
+            str(witnesses[0]),
+            separation_ns=separation_ns,
+            native_witnesses=(str(native[0]), str(native[1])),
+        )
 
 
 class ForcedClock:
@@ -380,7 +548,7 @@ class ForcedClock:
         self.quantum_seconds = quantum_seconds
         self.grid = grid
         self.seams = seams
-        self.proofs: dict[str, str] = {}
+        self.proofs: dict[str, CollapseProof] = {}
 
 
 @contextlib.contextmanager
@@ -420,6 +588,10 @@ def forced_coarse_birth_clock(
                 f"module that imports {RESEARCH_OS_INSTALLER.name}, or pass --allow-unpatched to "
                 "run an unrelated target under a clock that is not actually forced."
             )
+        # CAPTURED BEFORE PATCHING: the self-proof's native control needs an unforced reading of the
+        # very files it judges, and once the seam is patched there is no unforced reading left to
+        # take. The patched seam wraps this exact function, so it is the same clock, unmediated.
+        unforced = {id(module): getattr(module, attribute) for module, attribute, _ in seams}
         for module, attribute, factory in seams:
             stack.enter_context(
                 mock.patch.object(module, attribute, factory(getattr(module, attribute), grid))
@@ -428,7 +600,11 @@ def forced_coarse_birth_clock(
         attempts = 5 if grid.anchor == EPOCH_ANCHOR else 1
         for module, attribute, _ in seams:
             clock.proofs[f"{module.__name__}.{attribute}"] = _prove_collapse(
-                module, attribute, attempts=attempts
+                module,
+                attribute,
+                unforced[id(module)],
+                quantum_ns=grid.quantum_ns,
+                attempts=attempts,
             )
         grid.reset()
         yield clock
@@ -522,9 +698,9 @@ def main(argv: list[str] | None = None) -> int:
             f"seams={', '.join(clock.seams) or 'NONE (unforced)'}",
             file=sys.stderr,
         )
-        for name, witness in clock.proofs.items():
+        for name, proof in clock.proofs.items():
             print(
-                f"coarse-birth-clock: collapse proved through {name} at witness {witness}",
+                f"coarse-birth-clock: collapse proved through {name} at {proof.describe()}",
                 file=sys.stderr,
             )
         sys.stderr.flush()
