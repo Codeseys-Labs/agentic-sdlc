@@ -8,11 +8,16 @@ That isolation does NOT cover ``core.autocrlf``, and this docstring used to clai
 windows-2025 autocrlf was active anyway -- git warned ``LF will be replaced by CRLF`` and
 ``git archive`` emitted CRLF for a working tree that was already LF -- so the archived bytes these
 assertions compare were decided by host config after all (agentic-sdlc-5ce7). Neutralizing the two
-config FILES leaves at least the repository-local config `git init` writes and any
-``GIT_CONFIG_COUNT``/``GIT_CONFIG_KEY_n`` pair in the inherited environment, and which of those the
-runner used is not observable from a Linux host. The fixture therefore pins eol the way the real
-repository does, with a ``.gitattributes`` rule: attributes beat every config source, so this one is
-a guarantee rather than a hope.
+config FILES leaves the repository-local config ``git init`` writes, and which source the runner used
+is not observable from a Linux host. The fixture therefore pins eol the way the real repository does,
+with a ``.gitattributes`` rule: attributes beat every config source, so this one is a guarantee
+rather than a hope.
+
+The environment channel that same investigation named is now closed rather than disclosed:
+``git_environment`` drops every inherited ``GIT_*``, so ``GIT_CONFIG_COUNT`` with its
+``GIT_CONFIG_KEY_n``/``GIT_CONFIG_VALUE_n`` pairs and ``GIT_CONFIG_PARAMETERS`` cannot override the
+neutralized files any more (agentic-sdlc-3960). ``GitEnvironmentIsolationTest`` proves it against a
+measured ambient control, because an absence assertion with no sensitivity control proves nothing.
 """
 
 from __future__ import annotations
@@ -55,7 +60,18 @@ STEM = f"agentic-sdlc-{VERSION}"
 
 
 def git_environment(home: Path) -> dict[str, str]:
-    environment = dict(os.environ)
+    """A hermetic git environment: no INHERITED ``GIT_*`` at all, then the names this fixture needs.
+
+    Every inherited ``GIT_*`` is dropped rather than enumerated, because ``GIT_CONFIG_GLOBAL`` and
+    ``GIT_CONFIG_NOSYSTEM`` neutralize the two config FILES and nothing else: ``GIT_CONFIG_COUNT``
+    with its ``GIT_CONFIG_KEY_n``/``GIT_CONFIG_VALUE_n`` pairs, and the ``GIT_CONFIG_PARAMETERS``
+    channel ``git -c`` propagates through, each override files from any source, so an ambient one
+    decided whether this module's determinism assertions held (agentic-sdlc-3960). The load-bearing
+    ``GIT_*`` names here are the ones this helper sets ITSELF, applied after the drop; an enumeration
+    would have to grow with every channel git adds. ``GitEnvironmentIsolationTest`` is the proof,
+    with the ambient-channel sensitivity control that assertion needs.
+    """
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     environment |= {
         "HOME": str(home),
         "GIT_CONFIG_GLOBAL": os.devnull,
@@ -69,8 +85,12 @@ def git_environment(home: Path) -> dict[str, str]:
         "GIT_AUTHOR_DATE": "2026-01-02T03:04:05+00:00",
         "GIT_COMMITTER_DATE": "2026-01-02T03:04:05+00:00",
     }
-    for name in ("XDG_CONFIG_HOME", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
-        environment.pop(name, None)
+    # `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` used to be popped here by name; the blanket
+    # `GIT_*` drop above covers them, and a leaked `GIT_DIR` pointing a fixture's `git init` at this
+    # repository is the reason that list existed. `XDG_CONFIG_HOME` is not a `GIT_*` name and still is
+    # not one: git reads `$XDG_CONFIG_HOME/git/config` when no `GIT_CONFIG_GLOBAL` is set, and
+    # dropping it keeps that true of a future edit that stops setting the global file.
+    environment.pop("XDG_CONFIG_HOME", None)
     return environment
 
 
@@ -357,6 +377,111 @@ class HeadAnchorTest(BuilderFixture):
         # POSITIVE CONTROL: the commit argument really is what selects the content, so the assertion
         # above is about the pin and not about a fixture carrying only one version of the file.
         self.assertEqual(licence_archived_from(moved), b"relicensed\n")
+
+
+#: TWO payloads through the count channel, because one value has to carry each half of the claim.
+#: ``commit.gpgsign=true`` is VISIBLY FATAL -- a commit exits 128 on ``gpg failed to sign the data``
+#: (or on an absent gpg), so a fixture that let it through would not merely differ, it would die, and
+#: every ``BuilderFixture`` in this module commits. ``fixture.countchannel`` is the unambiguous
+#: READABLE probe: no real gitconfig sets that name, so finding it can only mean the injected channel
+#: was honoured, where ``commit.gpgsign`` could also have come from the host's own config.
+#: ``GIT_CONFIG_PARAMETERS`` is the third channel, the one ``git -c`` propagates through; it is
+#: measured because it survives file isolation identically and the seed's named list omitted it.
+INJECTED_GIT_CONFIG_CHANNEL = {
+    "GIT_CONFIG_COUNT": "2",
+    "GIT_CONFIG_KEY_0": "commit.gpgsign",
+    "GIT_CONFIG_VALUE_0": "true",
+    "GIT_CONFIG_KEY_1": "fixture.countchannel",
+    "GIT_CONFIG_VALUE_1": "yes",
+    "GIT_CONFIG_PARAMETERS": "'fixture.parameterschannel=yes'",
+}
+CHANNEL_PROBES = ("fixture.countchannel", "fixture.parameterschannel")
+
+
+class GitEnvironmentIsolationTest(unittest.TestCase):
+    """``git_environment`` neutralizes the config ENVIRONMENT channel, not just the config files.
+
+    ``GIT_CONFIG_GLOBAL=/dev/null`` plus ``GIT_CONFIG_NOSYSTEM=1`` disarm the two config FILES and
+    nothing else, so an ambient ``GIT_CONFIG_COUNT`` pair or ``GIT_CONFIG_PARAMETERS`` decided whether
+    this module's determinism and byte assertions held (agentic-sdlc-3960).
+
+    The strip list is "every inherited ``GIT_*``" rather than an enumeration, and the reasoning is what
+    makes that safe: the load-bearing ``GIT_*`` names here are the ones the helper sets ITSELF
+    (identity, dates, the two config files, the prompt guard), and those are applied AFTER the drop.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name) / "home"
+        self.home.mkdir()
+
+    def read_config(self, environment: dict[str, str], key: str) -> str:
+        completed = subprocess.run(
+            ["git", "config", "--get", key],
+            env=environment,
+            cwd=self.temporary.name,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return completed.stdout.strip()
+
+    def test_the_helper_drops_the_config_environment_channel(self) -> None:
+        with mock.patch.dict(os.environ, INJECTED_GIT_CONFIG_CHANNEL):
+            environment = git_environment(self.home)
+        # NAMES, never the mapping. `assertNotIn(name, environment)` renders the whole environment
+        # into the failure message, and this helper copies `os.environ` -- so the one run that proves
+        # a regression would print the host's own API tokens into a CI log. Measured, not theorised:
+        # re-admitting the channel during this change did exactly that.
+        self.assertEqual(
+            sorted(name for name in INJECTED_GIT_CONFIG_CHANNEL if name in environment), []
+        )
+
+    def test_git_honours_the_channel_ambiently_and_never_through_the_helper(self) -> None:
+        """The sensitivity control the absence assertion above needs.
+
+        "The injected key is not visible" proves nothing until the same read is shown to FIND it for a
+        known cause, so the ambient environment is measured first. Without that half, a git that had
+        stopped honouring these channels entirely would pass this file while the hole stayed open.
+        """
+        with mock.patch.dict(os.environ, INJECTED_GIT_CONFIG_CHANNEL):
+            ambient = dict(os.environ) | {"HOME": str(self.home)}
+            isolated = git_environment(self.home)
+            for probe in CHANNEL_PROBES:
+                with self.subTest(probe=probe, environment="ambient"):
+                    self.assertEqual(self.read_config(ambient, probe), "yes")
+        for probe in CHANNEL_PROBES:
+            with self.subTest(probe=probe, environment="isolated"):
+                self.assertEqual(self.read_config(isolated, probe), "")
+        self.assertEqual(self.read_config(isolated, "commit.gpgsign"), "")
+
+
+class InjectedGitConfigChannelBuildTest(BuilderFixture):
+    """The whole fixture path under a live injection: it builds, and the archive is unchanged.
+
+    This is the end-to-end half of the claim above, and it is not decorative. ``BuilderFixture.setUp``
+    commits, so with the channel reaching git the injected ``commit.gpgsign`` fails that commit at
+    exit 128 and every test in this class ERRORS in setUp. Passing is therefore evidence the drop
+    happens before git is invoked, on the real fixture rather than on a synthetic mapping.
+    """
+
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ, INJECTED_GIT_CONFIG_CHANNEL)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def test_the_fixture_repository_never_sees_a_channel_this_process_is_carrying(self) -> None:
+        # The channel really is in THIS process's environment; without that the class proves nothing,
+        # and `setUp` having reached this point is already the commit surviving a forced signature.
+        self.assertEqual(os.environ["GIT_CONFIG_COUNT"], "2")
+        for probe in CHANNEL_PROBES:
+            with self.subTest(probe=probe):
+                self.assertEqual(self.git("config", "--get", "--default", "", probe).strip(), "")
+        self.assertEqual(self.git("config", "--get", "--default", "", "commit.gpgsign").strip(), "")
+        archive = self.build(Path(self.temporary.name) / "dist")
+        self.assertEqual(self.manifest(archive)["source"]["commit"], self.commit)
 
 
 if __name__ == "__main__":

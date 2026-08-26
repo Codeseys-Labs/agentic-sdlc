@@ -29,6 +29,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
@@ -91,7 +92,18 @@ STEM = f"agentic-sdlc-{POLICY['manifest']['product_version']}"
 
 
 def git_environment(home: Path) -> dict[str, str]:
-    environment = dict(os.environ)
+    """A hermetic git environment: no INHERITED ``GIT_*`` at all, then the names this fixture needs.
+
+    Every inherited ``GIT_*`` is dropped rather than enumerated, because ``GIT_CONFIG_GLOBAL`` and
+    ``GIT_CONFIG_NOSYSTEM`` neutralize the two config FILES and nothing else: ``GIT_CONFIG_COUNT``
+    with its ``GIT_CONFIG_KEY_n``/``GIT_CONFIG_VALUE_n`` pairs, and the ``GIT_CONFIG_PARAMETERS``
+    channel ``git -c`` propagates through, each override files from any source, so an ambient one
+    decided whether this module's assertions held (agentic-sdlc-3960). The load-bearing ``GIT_*``
+    names here are the ones this helper sets ITSELF, applied after the drop; an enumeration would
+    have to grow with every channel git adds. ``GitEnvironmentIsolationTest`` is the proof, with the
+    ambient-channel sensitivity control that assertion needs.
+    """
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     environment |= {
         "HOME": str(home),
         "GIT_CONFIG_GLOBAL": os.devnull,
@@ -105,8 +117,11 @@ def git_environment(home: Path) -> dict[str, str]:
         "GIT_AUTHOR_DATE": "2026-01-02T03:04:05+00:00",
         "GIT_COMMITTER_DATE": "2026-01-02T03:04:05+00:00",
     }
-    for name in ("XDG_CONFIG_HOME", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
-        environment.pop(name, None)
+    # `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` used to be popped here by name; the blanket
+    # `GIT_*` drop above covers them. `XDG_CONFIG_HOME` is not a `GIT_*` name and still is not one:
+    # git reads `$XDG_CONFIG_HOME/git/config` when no `GIT_CONFIG_GLOBAL` is set, and dropping it
+    # keeps that true of a future edit that stops setting the global file.
+    environment.pop("XDG_CONFIG_HOME", None)
     return environment
 
 
@@ -181,11 +196,21 @@ class ExtractedTreeFixture(unittest.TestCase):
         self.extracted = Path(os.path.realpath(base / "extract" / STEM))
         self.ccodex = self.extracted / "bin" / "ccodex"
 
-    def toolless_path(self) -> str:
-        """An allowlist PATH: only the base utilities the dispatcher's tool-free verbs may use."""
-        scratch = Path(self.temporary.name) / "toolless-bin"
+    #: The base utilities the dispatcher may use. NOT a tool list: mise, uv, jq and ocx are exactly
+    #: what an allowlist PATH must withhold, which is what makes a passing tool-free verb evidence.
+    BASE_UTILITIES = ("bash", "cat", "dirname", "realpath")
+
+    def toolless_path(self, extra: tuple[str, ...] = ()) -> str:
+        """An allowlist PATH: only the base utilities the dispatcher's tool-free verbs may use.
+
+        ``extra`` names further base utilities a specific route needs (the catalog readers use ``tr``
+        and ``grep``). It keeps its own scratch directory, so widening one route's allowlist cannot
+        quietly widen the tool-free verbs' one.
+        """
+        suffix = f"-{'-'.join(extra)}" if extra else ""
+        scratch = Path(self.temporary.name) / f"toolless-bin{suffix}"
         scratch.mkdir(exist_ok=True)
-        for tool in ("bash", "cat", "dirname", "realpath"):
+        for tool in self.BASE_UTILITIES + extra:
             resolved = shutil.which(tool)
             if resolved and not (scratch / tool).exists():
                 os.symlink(resolved, scratch / tool)
@@ -457,6 +482,440 @@ class IsolatedSdlcExecTest(ExtractedTreeFixture):
             ],
             "a failed find must be followed by exactly one explicit install and one retry",
         )
+
+
+@unittest.skipIf(os.name == "nt", DISPATCHER_IS_POSIX_SHELL_SKIP_REASON)
+@unittest.skipUnless(
+    shutil.which("jq"),
+    "the catalog projection under test IS a jq program, so a real jq must serve the pinned"
+    " `mise exec -- jq` route; a stub answering it would test the stub's idea of the program",
+)
+class GatewayCatalogFixture(ExtractedTreeFixture):
+    """A stubbed gateway for the two verbs that read its live catalog.
+
+    THE GATEWAY IS A FIXTURE, NOT AN ASSUMPTION. Nothing here contacts a real gateway or a real
+    network: the stub ``mise`` answers the trust probe, serves the pinned ``jq`` route from a real jq,
+    and answers ``ocx``; the stub ``curl`` serves a catalog constant for ``/v1/models`` and exits 22
+    for everything else, which is what an unreachable gateway looks like. The seed that closes the
+    preflight (agentic-sdlc-3135) named the ABSENCE of exactly this fixture as the reason the check
+    could not be ported into this harness, so it is built here rather than borrowed.
+    """
+
+    #: Shape copied from the real `GET /v1/models`: bare native rows, a namespaced routed row, and a
+    #: two-slash routed row of the kind OpenRouter ids actually take.
+    CATALOG = {
+        "data": [
+            {"id": "gpt-5.5"},
+            {"id": "muse/muse-spark-1.2"},
+            {"id": "openrouter/~anthropic/claude-fable-latest"},
+        ]
+    }
+    #: `openai` is DEFAULT and serves BARE ids, so it is absent from the catalog's prefix set by
+    #: construction -- the exemption that stops `openai/gpt-5.5` from being a false refusal.
+    #: `cerebras` is configured but unpublished; `muse` is both configured and live.
+    PROVIDERS = {
+        "configured": [
+            {"name": "openai", "isDefault": True},
+            {"name": "muse"},
+            {"name": "cerebras"},
+        ]
+    }
+
+    def setUp(self) -> None:
+        super().setUp()
+        base = Path(self.temporary.name)
+        # Named before any stub is planted, so the "nothing was written" assertions read the same
+        # absent file whether or not a test ever reaches the stubs.
+        self.mise_log = base / "gateway-mise-argv.log"
+        self.write_log = base / "small-fast-writes.log"
+        self.curl_log = base / "curl-argv.log"
+
+    def gateway_environment(self) -> dict[str, str]:
+        """A PATH whose ``mise`` and ``curl`` are stubs, and whose only real tool is jq via mise."""
+        base = Path(self.temporary.name)
+        stub_bin = base / "gateway-stub-bin"
+        stub_bin.mkdir(exist_ok=True)
+        root = str(self.extracted)
+        mise = stub_bin / "mise"
+        mise.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -eu\n"
+            "printf '%s\\n' \"$*\" >> \"$MISE_ARGV_LOG\"\n"
+            f"case \"$*\" in '-C {root} tasks') exit 0 ;; esac\n"
+            'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done\n'
+            '[ "${1:-}" = -- ] && shift\n'
+            'case "${1:-}" in\n'
+            '  jq) shift; exec "$TEST_REAL_JQ" "$@" ;;\n'
+            "  ocx) shift ;;\n"
+            "  *) printf 'unexpected pinned tool: %s\\n' \"${1:-}\" >&2; exit 97 ;;\n"
+            "esac\n"
+            'case "$*" in\n'
+            "  'config get port') printf '%s\\n' \"$STUB_PORT\"; exit 0 ;;\n"
+            "  'provider list --json') printf '%s\\n' \"$STUB_PROVIDERS_JSON\"; exit 0 ;;\n"
+            "  'claude config set --small-fast-model '*)\n"
+            "    printf '%s\\n' \"$*\" >> \"$STUB_WRITE_LOG\"; exit 0 ;;\n"
+            "  *) printf 'unexpected ocx argv: %s\\n' \"$*\" >&2; exit 97 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        mise.chmod(0o755)
+        curl = stub_bin / "curl"
+        curl.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -eu\n"
+            "printf '%s\\n' \"$*\" >> \"$CURL_ARGV_LOG\"\n"
+            'for argument in "$@"; do\n'
+            '  case "$argument" in\n'
+            "    */v1/models)\n"
+            '      [ -n "${STUB_CATALOG_JSON:-}" ] || exit 22\n'
+            "      printf '%s\\n' \"$STUB_CATALOG_JSON\"; exit 0 ;;\n"
+            "  esac\n"
+            "done\n"
+            "exit 22\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        curl.chmod(0o755)
+        real_jq = shutil.which("jq")
+        assert real_jq is not None  # guarded by the class-level skipUnless
+        return {
+            # `tr` and `grep` are the base utilities the port probe and the refusal branch use, so
+            # they join the allowlist on their own scratch directory. There is still no jq, ocx, uv,
+            # or real mise on this PATH, and no ambient `/usr/bin`: a route that needs a tool this
+            # fixture did not name fails here rather than borrowing the developer's machine.
+            "PATH": f"{stub_bin}{os.pathsep}{self.toolless_path(('tr', 'grep'))}",
+            "HOME": str(base / "home"),
+            "TEST_REAL_JQ": real_jq,
+            "MISE_ARGV_LOG": str(self.mise_log),
+            "STUB_WRITE_LOG": str(self.write_log),
+            "CURL_ARGV_LOG": str(self.curl_log),
+            "STUB_PORT": "10100",
+            "STUB_CATALOG_JSON": json.dumps(self.CATALOG),
+            "STUB_PROVIDERS_JSON": json.dumps(self.PROVIDERS),
+        }
+
+    def unreadable_gateway_environment(self, **overrides: str) -> dict[str, str]:
+        """The same stubs with the catalog unreadable: curl exits 22, as for a gateway that is down.
+
+        ``STUB_PORT=""`` overrides the other unreadable cause, an ocx reporting no configured port.
+        """
+        environment = self.gateway_environment()
+        environment |= {"STUB_CATALOG_JSON": "", **overrides}
+        return environment
+
+    def written_ids(self) -> list[str]:
+        if not self.write_log.exists():
+            return []
+        return [
+            line.split("--small-fast-model ", 1)[1]
+            for line in self.write_log.read_text(encoding="utf-8").splitlines()
+            if "--small-fast-model " in line
+        ]
+
+    def assert_isolated_home_is_untouched(self) -> None:
+        """Nothing in this verb writes to a home directory, admitted or refused.
+
+        The whole family routes its one mutation through `ocx`, which is a stub here, so a stray file
+        under the fixture's own `HOME` would mean the dispatcher created state of its own -- exactly
+        what an isolated fixture home exists to detect.
+        """
+        home = Path(self.temporary.name) / "home"
+        self.assertEqual(sorted(entry.name for entry in home.iterdir()), [])
+
+    def assert_wrote(self, completed: subprocess.CompletedProcess[str], identifier: str) -> None:
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(self.written_ids(), [identifier])
+        self.assert_isolated_home_is_untouched()
+
+    def assert_refused_without_writing(
+        self, completed: subprocess.CompletedProcess[str], *expected: str
+    ) -> None:
+        self.assertEqual(completed.returncode, 3, completed.stdout + completed.stderr)
+        for fragment in expected:
+            self.assertIn(fragment, completed.stderr)
+        # The refusal's whole point: the operator's configuration was NOT touched.
+        self.assertEqual(self.written_ids(), [])
+        self.assert_isolated_home_is_untouched()
+
+
+class FastModelCatalogPreflightTest(GatewayCatalogFixture):
+    """``set-fast-model``'s live-catalog preflight, and the ONE arm where it is weaker than launch.
+
+    THE ASYMMETRY IS THE SUBJECT, not an accident to be normalized away. ``assert_selected_model_is_served``
+    in ``scripts/opencodex-claude.sh`` refuses an unreadable catalog on the launch path, because a
+    launch is about to SEND a request and a check that could not run has established nothing. This verb
+    sends none -- it writes a configuration slot, and writing that slot while the gateway is down is
+    legitimate -- so an unreadable catalog WARNS and the write still happens. Both halves are asserted,
+    and once together, because either alone reads as the other arm being missing.
+    """
+
+    # --- refusals: an id the RUNNING gateway is known not to serve --------------------------
+
+    def test_an_unknown_provider_prefix_refuses_before_the_write(self) -> None:
+        completed = self.run_ccodex(
+            ["set-fast-model", "nosuch/model-1"], self.gateway_environment()
+        )
+        self.assert_refused_without_writing(
+            completed,
+            "names the provider `nosuch`",
+            "serves no provider of that name",
+            "BILLED against the wrong",
+        )
+
+    def test_a_configured_but_unpublished_prefix_refuses_naming_the_publish_step(self) -> None:
+        """The remedy is what separates configuration drift from a typo, so it is asserted."""
+        completed = self.run_ccodex(
+            ["set-fast-model", "cerebras/llama-3.3-70b"], self.gateway_environment()
+        )
+        self.assert_refused_without_writing(
+            completed,
+            "names the provider `cerebras`",
+            "is CONFIGURED but is not in the running gateway's catalog",
+            "`ocx sync`",
+            "`ccodex restart`",
+        )
+
+    # --- admitted ids: no warning, and the write happens ------------------------------------
+
+    def test_every_admitted_shape_reaches_the_write_with_no_warning(self) -> None:
+        for identifier, why in (
+            ("claude-haiku-4-5-20251001", "a BARE id is the native passthrough this verb exists for"),
+            ("haiku", "a Claude family alias carries no slash either"),
+            ("-", "the clear must never be checked against a catalog"),
+            ("muse/muse-spark-1.2", "an exact catalog row"),
+            ("muse/some-model-the-listing-omits", "a LIVE prefix serves models the listing omits"),
+            ("openrouter/~anthropic/claude-fable-latest", "a two-slash routed row"),
+            ("openai/gpt-5.5", "the DEFAULT provider serves bare ids, so it is never a prefix"),
+            ("policy/cheap-background", "a routing profile resolves before the prefix branch"),
+        ):
+            with self.subTest(identifier=identifier, why=why):
+                environment = self.gateway_environment()
+                self.write_log.unlink(missing_ok=True)
+                completed = self.run_ccodex(["set-fast-model", identifier], environment)
+                self.assert_wrote(completed, identifier)
+                self.assertNotIn("warning:", completed.stderr)
+                self.assertNotIn("refused:", completed.stderr)
+
+    def test_a_bare_id_never_reads_the_catalog_at_all(self) -> None:
+        """The negative control for the reads above: no slash means no gateway contact.
+
+        Without this, "a bare id is admitted" would hold even if the check were reading a catalog and
+        admitting on some other ground, and a host with no gateway would pay for a probe that cannot
+        change the answer.
+        """
+        environment = self.gateway_environment()
+        completed = self.run_ccodex(["set-fast-model", "claude-haiku-4-5-20251001"], environment)
+        self.assert_wrote(completed, "claude-haiku-4-5-20251001")
+        self.assertFalse(self.curl_log.exists(), "a bare id must contact no gateway")
+        self.assertEqual(
+            self.mise_log.read_text(encoding="utf-8").splitlines(),
+            [
+                f"-C {self.extracted} tasks",
+                f"-C {self.extracted} exec -- ocx claude config set --small-fast-model"
+                " claude-haiku-4-5-20251001",
+            ],
+            "one trust probe and one write: no port probe, no jq, and no second `tasks`",
+        )
+
+    # --- the WEAKER arm: an unreadable catalog warns and still writes -------------------------
+
+    def test_an_unreachable_gateway_warns_and_still_writes(self) -> None:
+        completed = self.run_ccodex(
+            ["set-fast-model", "nosuch/model-1"], self.unreadable_gateway_environment()
+        )
+        # Same id the readable-catalog case refuses. ONLY the catalog's readability differs.
+        self.assert_wrote(completed, "nosuch/model-1")
+        self.assertIn("warning:", completed.stderr)
+        self.assertIn("served no catalog", completed.stderr)
+        self.assertIn("configuring it while the gateway is down is legitimate", completed.stderr)
+        self.assertNotIn("refused:", completed.stderr)
+
+    def test_no_configured_port_warns_and_still_writes(self) -> None:
+        completed = self.run_ccodex(
+            ["set-fast-model", "nosuch/model-1"], self.unreadable_gateway_environment(STUB_PORT="")
+        )
+        self.assert_wrote(completed, "nosuch/model-1")
+        self.assertIn("no gateway port is configured", completed.stderr)
+        self.assertNotIn("refused:", completed.stderr)
+
+    def test_the_weaker_arm_is_the_only_asymmetry_with_the_launch_check(self) -> None:
+        """The pair, in one place: readable catalog refuses, unreadable catalog writes.
+
+        This is the assertion a later reviewer needs, because reading either test alone invites
+        "normalizing" the warning into the launch side's refusal.
+        """
+        readable = self.run_ccodex(["set-fast-model", "nosuch/model-1"], self.gateway_environment())
+        self.assertEqual(readable.returncode, 3, readable.stdout + readable.stderr)
+        self.assertEqual(self.written_ids(), [])
+        self.write_log.unlink(missing_ok=True)
+        unreadable = self.run_ccodex(
+            ["set-fast-model", "nosuch/model-1"], self.unreadable_gateway_environment()
+        )
+        self.assertEqual(unreadable.returncode, 0, unreadable.stdout + unreadable.stderr)
+        self.assertEqual(self.written_ids(), ["nosuch/model-1"])
+
+    # --- the trust boundary still comes FIRST -------------------------------------------------
+
+    def test_the_bare_form_is_refused_before_any_tool_is_resolved(self) -> None:
+        completed = self.run_ccodex(["set-fast-model"], self.toolless_environment())
+        self.assertEqual(completed.returncode, 3, completed.stdout + completed.stderr)
+        self.assertIn("no interactive model selector", completed.stderr)
+        self.assertEqual(self.written_ids(), [])
+        self.assert_isolated_home_is_untouched()
+
+    def test_a_second_argument_is_a_usage_error_before_any_tool_is_resolved(self) -> None:
+        completed = self.run_ccodex(
+            ["set-fast-model", "muse/muse-spark-1.2", "extra"], self.toolless_environment()
+        )
+        self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+        self.assertIn("usage: ccodex set-fast-model", completed.stderr)
+        self.assertEqual(self.written_ids(), [])
+        self.assert_isolated_home_is_untouched()
+
+
+class LiveCatalogDisplayTest(GatewayCatalogFixture):
+    """``ccodex models`` renders the SAME projection ``set-fast-model`` checks against.
+
+    The two share one port probe and one jq program as of this change, so the display is covered here
+    rather than left to be re-derived: a drift between what ``models`` prints and what
+    ``set-fast-model`` admits would send an operator to copy an id the very next command refuses.
+    """
+
+    def test_the_display_lists_exactly_the_ids_the_preflight_admits(self) -> None:
+        completed = self.run_ccodex(["models"], self.gateway_environment())
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("live catalog served by the gateway at 127.0.0.1:10100", completed.stdout)
+        for row in self.CATALOG["data"]:
+            self.assertIn(f"  {row['id']}\n", completed.stdout)
+
+    def test_an_unreachable_gateway_is_an_error_here_rather_than_a_warning(self) -> None:
+        """The display's contract is unchanged by the preflight sharing its readers."""
+        completed = self.run_ccodex(["models"], self.unreadable_gateway_environment())
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertIn("did not serve a catalog", completed.stderr)
+
+
+class GitEnvironmentIsolationTest(unittest.TestCase):
+    """``git_environment`` neutralizes the config ENVIRONMENT channel, not just the config files.
+
+    ``GIT_CONFIG_GLOBAL=/dev/null`` plus ``GIT_CONFIG_NOSYSTEM=1`` disarm the two config FILES and
+    nothing else. ``GIT_CONFIG_COUNT`` with its ``GIT_CONFIG_KEY_n``/``GIT_CONFIG_VALUE_n`` pairs, and
+    the ``GIT_CONFIG_PARAMETERS`` channel ``git -c`` uses to reach subprocesses, both override files
+    from any source -- so an operator or CI runner carrying either decided whether these fixtures'
+    assertions held (agentic-sdlc-3960).
+
+    The strip list is "every inherited ``GIT_*``" rather than an enumeration, and the reasoning is
+    what makes that safe: the load-bearing ``GIT_*`` names here are the ones the helper sets ITSELF
+    (identity, dates, the two config files, the prompt guard), and those are applied AFTER the drop.
+    An enumeration would have to grow with every channel git adds, and this class is the proof it
+    does not have to.
+    """
+
+    #: TWO payloads through the count channel, because one value has to carry each half of the claim.
+    #: `commit.gpgsign=true` is VISIBLY FATAL -- a commit exits 128 on `gpg failed to sign the data`
+    #: (or on an absent gpg), so a fixture that let it through would not merely differ, it would die.
+    #: `fixture.countchannel` is the unambiguous READABLE probe: no real gitconfig sets that name, so
+    #: finding it can only mean the injected channel was honoured, where `commit.gpgsign` could also
+    #: have come from the host's own config. `GIT_CONFIG_PARAMETERS` is the third channel, the one
+    #: `git -c` propagates through; it is measured because it survives file isolation identically and
+    #: the seed's named list did not mention it.
+    INJECTED = {
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "commit.gpgsign",
+        "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "fixture.countchannel",
+        "GIT_CONFIG_VALUE_1": "yes",
+        "GIT_CONFIG_PARAMETERS": "'fixture.parameterschannel=yes'",
+    }
+    PROBES = ("fixture.countchannel", "fixture.parameterschannel")
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name) / "home"
+        self.home.mkdir()
+
+    def read_config(self, environment: dict[str, str], key: str) -> str:
+        completed = subprocess.run(
+            ["git", "config", "--get", key],
+            env=environment,
+            cwd=self.temporary.name,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return completed.stdout.strip()
+
+    def commit_in_a_scratch_repo(
+        self, environment: dict[str, str], name: str
+    ) -> subprocess.CompletedProcess[str]:
+        repo = Path(self.temporary.name) / name
+        repo.mkdir()
+        for arguments in (
+            ["init", "--quiet", "--initial-branch", "main"],
+            ["commit", "--quiet", "--no-verify", "--allow-empty", "-m", "fixture"],
+        ):
+            completed = subprocess.run(
+                ["git", "-C", str(repo), *arguments],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                return completed
+        return completed
+
+    def test_the_helper_drops_the_config_environment_channel(self) -> None:
+        with mock.patch.dict(os.environ, self.INJECTED):
+            environment = git_environment(self.home)
+        # NAMES, never the mapping. `assertNotIn(name, environment)` renders the whole environment
+        # into the failure message, and this helper copies `os.environ` -- so the one run that proves
+        # a regression would print the host's own API tokens into a CI log. Measured, not theorised:
+        # re-admitting the channel during this change did exactly that.
+        self.assertEqual(sorted(name for name in self.INJECTED if name in environment), [])
+
+    def test_git_honours_the_channel_ambiently_and_never_through_the_helper(self) -> None:
+        """The sensitivity control the absence assertion above needs.
+
+        "The injected key is not visible" proves nothing until the same read is shown to FIND it for a
+        known cause, so the ambient environment is measured first. Without that half, a git that had
+        stopped honouring these channels entirely would pass this file while the hole stayed open.
+        """
+        with mock.patch.dict(os.environ, self.INJECTED):
+            ambient = dict(os.environ) | {"HOME": str(self.home)}
+            isolated = git_environment(self.home)
+            for probe in self.PROBES:
+                with self.subTest(probe=probe, environment="ambient"):
+                    self.assertEqual(self.read_config(ambient, probe), "yes")
+        for probe in self.PROBES:
+            with self.subTest(probe=probe, environment="isolated"):
+                self.assertEqual(self.read_config(isolated, probe), "")
+        self.assertEqual(self.read_config(isolated, "commit.gpgsign"), "")
+
+    def test_an_injected_signing_requirement_kills_an_ambient_commit_but_not_a_fixture_one(
+        self,
+    ) -> None:
+        """The behavioural pair, in one test: the channel is fatal ambiently and inert through here.
+
+        The identity variables are supplied to the ambient half too, so its failure is the SIGNING it
+        was injected to force rather than an unrelated missing `user.email`.
+        """
+        identity = {
+            "GIT_AUTHOR_NAME": "Fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        }
+        with mock.patch.dict(os.environ, self.INJECTED):
+            ambient = dict(os.environ) | identity | {"HOME": str(self.home)}
+            isolated = git_environment(self.home)
+        exposed = self.commit_in_a_scratch_repo(ambient, "ambient-repo")
+        self.assertNotEqual(exposed.returncode, 0, exposed.stdout + exposed.stderr)
+        self.assertIn("gpg", (exposed.stdout + exposed.stderr).lower())
+        protected = self.commit_in_a_scratch_repo(isolated, "isolated-repo")
+        self.assertEqual(protected.returncode, 0, protected.stdout + protected.stderr)
 
 
 class ValidatorCoverageTest(unittest.TestCase):

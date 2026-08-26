@@ -129,7 +129,14 @@ require_launcher() {
 # Fail closed, by name, before any effect: a missing mise and an untrusted root are both caught
 # here so no route half-runs. The probe (`mise tasks`) parses the config without resolving or
 # installing a tool, and its stdin is closed so mise cannot answer its own trust prompt.
+#
+# Memoized, because a verb may now assert the boundary and THEN take a route that asserts it again:
+# `set-fast-model` reads the live catalog before handing the write to `run_ocx`, and trust cannot
+# change between the two calls inside one process. Without the memo that verb parses the tree's
+# config twice and its observable mise argv carries a second `tasks` probe that stands for nothing.
+toolchain_checked=
 require_toolchain() {
+  [ -z "$toolchain_checked" ] || return 0
   command -v mise >/dev/null 2>&1 || {
     printf 'refused: mise is not on PATH, and every tool-needing verb resolves its pinned tools\n' >&2
     printf 'through this tree'"'"'s mise.toml + mise.lock. Install mise, then re-run this command.\n' >&2
@@ -157,6 +164,7 @@ require_toolchain() {
         ;;
     esac
   fi
+  toolchain_checked=1
 }
 
 # uv-backed Python route, resolved through the tree's own pinned toolchain rather than an
@@ -218,9 +226,178 @@ prompting; pass - to clear it. Ids come from `ccodex models` or a Claude family 
 (sonnet|opus|fable). There is no interactive selector: the one that existed shipped only with
 the deleted operator-tools plane and was not ported, so the bare form is refused by name.
 
+A namespaced `<provider>/<model>` id is checked against the running gateway's live catalog first,
+because the router does not fail closed on an unserved provider prefix -- it forwards the id to
+whichever provider is DEFAULT and bills that account. An id the gateway is known not to serve is
+refused. An unreadable catalog only WARNS and still writes: setting this slot while the gateway is
+down is legitimate. Bare ids, exact catalog ids, `policy/<id>`, and `-` are never refused.
+
 This is not the Auto mode permission classifier. A selection persists operator
 configuration; help and cancellation do not.
 EOF
+}
+
+# --- the live catalog, read once and spelled once --------------------------------------------
+#
+# Both readers assume `require_toolchain` has already run: they invoke mise directly, so calling
+# them on an untrusted root would report an unreadable catalog for a tree whose real answer is the
+# trust refusal. Every caller asserts the boundary first.
+#
+# The `models` display and the `set-fast-model` preflight below MUST agree on what the running
+# gateway serves, so the port probe and the id projection have one definition each. Two spellings of
+# the same jq program would be free to drift into disagreeing about a write.
+
+live_catalog_port() {
+  mise -C "$root" exec -- ocx config get port 2>/dev/null | tr -d '[:space:]' | grep -E '^[0-9]+$' || true
+}
+
+# Model ids the RUNNING gateway serves, one per line: namespaced `<provider>/<model>` for a custom
+# provider, bare for the default one. EMPTY output means the catalog could not be read at all -- no
+# curl, a gateway that is down, or a payload jq could not parse -- and never "the gateway serves
+# nothing". The two facts are indistinguishable from here, so every caller treats empty as
+# unreadable rather than as an empty catalog.
+live_catalog_model_ids() {
+  local port="$1" catalog
+  [ -n "$port" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  catalog="$(curl -fsS --max-time 6 "http://127.0.0.1:${port}/v1/models" 2>/dev/null || true)"
+  [ -n "$catalog" ] || return 0
+  printf '%s' "$catalog" \
+    | mise -C "$root" exec -- jq -r '(.data // []) | .[] | select(.id != null) | .id' 2>/dev/null \
+    || true
+}
+
+# Does a catalog listing supplied on stdin serve at least one model under `<wanted>/`? Pure bash
+# rather than the `sed`-and-`grep` spelling `scripts/opencodex-claude.sh` uses for the same
+# question: this dispatcher resolves no tool it does not already need, and the two must agree on
+# SEMANTICS -- at least one non-slash character before the first `/` -- not on an implementation.
+catalog_serves_prefix() {
+  local wanted="$1" id
+  while IFS= read -r id; do
+    case "$id" in
+      /*) ;;
+      */*) [ "${id%%/*}" = "$wanted" ] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# The configured provider names, and the configured DEFAULT provider's name. Read only on the
+# refusal branch below, so an admitted id costs no extra `ocx` call.
+configured_provider_names() {
+  mise -C "$root" exec -- ocx provider list --json 2>/dev/null \
+    | mise -C "$root" exec -- jq -r '(.configured // []) | .[] | select(.name != null) | .name' 2>/dev/null \
+    || true
+}
+
+default_provider_name() {
+  mise -C "$root" exec -- ocx provider list --json 2>/dev/null \
+    | mise -C "$root" exec -- jq -r '(.configured // []) | map(select(.isDefault == true)) | (first | .name) // ""' 2>/dev/null \
+    || true
+}
+
+# --- the small-fast slot's catalog preflight ---------------------------------------------------
+#
+# THE SAME MISROUTE, A DELIBERATELY WEAKER CONTRACT, and the asymmetry is the point rather than an
+# omission. The gateway's router takes a `<provider>/<model>` id's prefix, finds no provider of that
+# name, DISCARDS that negative result, and forwards the string verbatim to whichever provider is
+# DEFAULT as `routeKind: "default-provider"` -- so on a host whose default is credentialed the
+# request is answered and billed against the wrong account while attribution records the wrong
+# provider (docs/research/2026-08-24-gateway-default-provider-misroute.md). The small-fast slot
+# feeds Claude Code's own background turns, so an unserved id written here misroutes silently and
+# repeatedly, with no operator in the loop to notice.
+#
+# `scripts/opencodex-claude.sh`'s assert_selected_model_is_served refuses an UNREADABLE catalog too,
+# because a launch is about to SEND a request: a check that could not run has established nothing,
+# and guessing is what puts that request on the wrong account. THIS VERB SENDS NO REQUEST. It writes
+# a configuration slot, and writing it while the gateway is down is a legitimate thing to do --
+# refusing would make an operator start a gateway just to record a preference. So an unreadable
+# catalog WARNS and still writes, while an id the running gateway is known NOT to serve refuses.
+# The code cannot show why the weaker arm is deliberate, which is why it is stated here: do not
+# "repair" this into the launch-side refusal.
+#
+# The admitted set is the launch check's, narrow for the same reasons: no slash (the native
+# `claude-*` passthrough and the Claude family aliases this verb exists to accept), a LEADING slash
+# (never the router's prefix branch either), a live `<provider>/` prefix, the DEFAULT provider's own
+# name (it serves BARE ids, so it never appears as a prefix, yet the router matches it by name and
+# routes there explicitly), and `policy/<id>` (routing profiles resolve before the prefix branch and
+# already fail closed upstream). An EXACT catalog row is admitted too, and needs no test of its own:
+# any row `<a>/<b>` puts `<a>` in the live prefix set by construction, so the two-slash routed ids
+# `/v1/models` really serves -- `openrouter/~anthropic/claude-fable-latest` -- pass on their own
+# prefix. LIMIT, stated rather than hidden: a configured COMBO alias carrying a slash also resolves
+# before that branch, and this check does not read the combo table, so such an alias WOULD be refused
+# here; pass the resolved id instead.
+#
+# Prints `<verdict><tab><detail>` and exits 0 when the id needs the caller's attention; exits 1 when
+# it is admissible with no comment. `-` reaches the no-slash arm and is admitted, as a clear must be.
+unservable_fast_model_id() {
+  local requested="$1" port catalog prefix configured
+  case "$requested" in
+    /*) return 1 ;;
+    */*) ;;
+    *) return 1 ;;
+  esac
+  prefix="${requested%%/*}"
+  [ "$prefix" = policy ] && return 1
+  command -v curl >/dev/null 2>&1 || { printf 'unreadable\tno curl is available to read it'; return 0; }
+  port="$(live_catalog_port)"
+  [ -n "$port" ] || { printf 'unreadable\tno gateway port is configured'; return 0; }
+  catalog="$(live_catalog_model_ids "$port")"
+  [ -n "$catalog" ] \
+    || { printf 'unreadable\tthe gateway at 127.0.0.1:%s served no catalog, so it may be down' "$port"; return 0; }
+  # Here-strings rather than pipes into a reader that stops early: under `set -o pipefail` a
+  # SIGPIPE'd writer makes a SUCCESSFUL search report failure.
+  catalog_serves_prefix "$prefix" <<<"$catalog" && return 1
+  [ "$prefix" = "$(default_provider_name)" ] && return 1
+  # Configuration drift and a typo are the same misroute with different remedies, and one read on a
+  # branch that is already refusing is what tells them apart.
+  configured="$(configured_provider_names)"
+  if grep -qxF "$prefix" <<<"$configured"; then
+    printf 'not-live\t%s' "$prefix"
+    return 0
+  fi
+  printf 'unknown\t%s' "$prefix"
+}
+
+refuse_fast_model_misroute() {
+  printf 'refused: %s\n' "$1" >&2
+  cat >&2 <<'EOF'
+The gateway does not fail closed on this. Its router takes the provider prefix, finds no provider of
+that name, discards that result, and forwards your model string VERBATIM to whichever provider is
+DEFAULT. The credential check that follows belongs to that default provider, not to the one you
+named, so where the default is credentialed the request is answered and BILLED against the wrong
+account. This slot feeds Claude Code's background turns, so writing it would make that silent and
+repeated; this refusal makes it loud.
+
+Pick an id the running gateway actually serves:
+  ccodex models            the live catalog, which is what a session can pick from
+  ccodex status            configured providers vs the ones the running gateway serves
+
+A bare id is never refused here: `claude-*` ids and the Claude family aliases pass through to
+Anthropic on your own subscription, and this check governs only a namespaced `<provider>/<model>`
+selection. `-` clears the slot and is never refused.
+EOF
+  exit 3
+}
+
+assert_fast_model_is_servable() {
+  local requested="$1" result verdict detail
+  result="$(unservable_fast_model_id "$requested")" || return 0
+  verdict="${result%%$'\t'*}"
+  detail="${result#*$'\t'}"
+  case "$verdict" in
+    unreadable)
+      # The weaker arm. Named, on stderr, and NOT a refusal: the write proceeds.
+      printf 'warning: `%s` was not checked against the running gateway'"'"'s live catalog (%s).\n' \
+        "$requested" "$detail" >&2
+      printf 'Writing the slot anyway -- configuring it while the gateway is down is legitimate.\n' >&2
+      printf 'Confirm the id is served once the gateway is up:  ccodex models\n' >&2
+      ;;
+    not-live)
+      refuse_fast_model_misroute "\`$requested\` names the provider \`$detail\`, which is CONFIGURED but is not in the running gateway's catalog, so the gateway does not serve it -- run \`ocx sync\` and then \`ccodex restart\` to publish it, each as its own authorized step, and confirm with \`ccodex status\`" ;;
+    unknown)
+      refuse_fast_model_misroute "\`$requested\` names the provider \`$detail\`, and the running gateway serves no provider of that name" ;;
+  esac
 }
 
 # Long-form verb name for the supervised launcher, or nonzero for a spelling it does not serve.
@@ -362,6 +539,12 @@ case "$route" in
       printf 'Pass an exact id from `ccodex models` or a Claude family alias, or - to clear.\n' >&2
       exit 3
     fi
+    # The boundary is asserted BEFORE the catalog read, not left to `run_ocx`: on an untrusted root
+    # the real answer is the trust refusal, and a preflight that ran first would report an unreadable
+    # catalog for a tree that was never asked. `require_toolchain` is memoized, so `run_ocx` below
+    # adds no second probe.
+    require_toolchain
+    assert_fast_model_is_servable "$1"
     run_ocx claude config set --small-fast-model "$1"
     ;;
   # The LIVE catalog, read from the running gateway's own `GET /v1/models` -- deliberately NOT
@@ -370,13 +553,16 @@ case "$route" in
   models)
     shift
     require_toolchain
-    port="$(mise -C "$root" exec -- ocx config get port 2>/dev/null | tr -d '[:space:]' | grep -E '^[0-9]+$' || true)"
+    port="$(live_catalog_port)"
     if [ -z "$port" ] || ! command -v curl >/dev/null 2>&1; then
       printf 'error: cannot read the live catalog (no configured port, or curl is unavailable)\n' >&2
       printf 'Configured (NOT proof of what is served): ccodex providers\n' >&2
       exit 1
     fi
-    catalog="$(curl -fsS --max-time 6 "http://127.0.0.1:${port}/v1/models" 2>/dev/null || true)"
+    # The SAME projection `set-fast-model` checks against, so what this prints is exactly the set
+    # that verb admits. The indent is applied here rather than inside the jq program, which is what
+    # lets the one program serve a display and a comparison.
+    catalog="$(live_catalog_model_ids "$port")"
     if [ -z "$catalog" ]; then
       printf 'error: the gateway at 127.0.0.1:%s did not serve a catalog. It may be down.\n' "$port" >&2
       printf 'Start it and re-check:  ccodex status\n' >&2
@@ -384,7 +570,7 @@ case "$route" in
     fi
     printf 'live catalog served by the gateway at 127.0.0.1:%s\n' "$port"
     printf '(any id below can be selected with `ccodex launch --model <id>` or the /model picker)\n\n'
-    printf '%s' "$catalog" | mise -C "$root" exec -- jq -r '(.data // []) | .[] | select(.id != null) | "  " + .id'
+    while IFS= read -r id; do printf '  %s\n' "$id"; done <<<"$catalog"
     printf '\nA namespaced id (provider/model) is an ordinary catalog entry: a provider such as\n'
     printf 'muse is one row in `ccodex providers`, never a separate plane or launcher.\n'
     printf '\nThis is reachability, not authorization, and it is not a capability claim.\n'
