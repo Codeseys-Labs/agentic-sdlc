@@ -209,7 +209,6 @@
         "claude"
       ],
       "platforms": [
-        "Darwin",
         "Linux"
       ],
       "environment": "host",
@@ -224,6 +223,33 @@
         "expected direct -I -B execution",
         "Traceback",
         "usage: ccodex"
+      ]
+    },
+    {
+      "id": "project-scope-refuses-off-linux-naming-the-typed-scope",
+      "argv": [
+        "install",
+        "--scope",
+        "project",
+        "--agent",
+        "claude"
+      ],
+      "platforms": [
+        "Darwin"
+      ],
+      "environment": "host",
+      "expect_exit": 3,
+      "expect_stderr_present": [
+        "refused before any effect",
+        "certified only on Linux",
+        "--scope project",
+        "refused rather than attempted"
+      ],
+      "expect_stderr_absent": [
+        "project-scope-not-yet-wired",
+        "--scope user",
+        "expected direct -I -B execution",
+        "Traceback"
       ]
     },
     {
